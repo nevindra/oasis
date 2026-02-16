@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::agent::AgentManager;
 use crate::service::ingest::pipeline::IngestPipeline;
 use crate::service::llm::{Embedder, LlmDispatch};
 use crate::service::memory::MemoryStore;
@@ -37,6 +38,7 @@ pub struct Brain {
     pub(crate) embedder: Arc<Embedder>,
     pub(crate) search_tool: Arc<SearchTool>,
     pub(crate) memory_tool: Arc<MemoryTool>,
+    pub(crate) agent_manager: Arc<AgentManager>,
 }
 
 impl Brain {
@@ -119,6 +121,8 @@ impl Brain {
             Box::new(Arc::clone(&memory_tool)),
         ]);
 
+        let agent_manager = Arc::new(AgentManager::new(3));
+
         Ok(Self {
             store,
             tasks,
@@ -130,6 +134,7 @@ impl Brain {
             embedder,
             search_tool,
             memory_tool,
+            agent_manager,
         })
     }
 }

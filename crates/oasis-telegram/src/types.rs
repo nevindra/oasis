@@ -7,14 +7,14 @@ pub struct TelegramResponse<T> {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct User {
     pub id: i64,
     pub first_name: String,
     pub username: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Chat {
     pub id: i64,
 }
@@ -27,7 +27,7 @@ pub struct MessageEntity {
     pub length: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TelegramMessage {
     pub message_id: i64,
     pub from: Option<User>,
@@ -35,9 +35,10 @@ pub struct TelegramMessage {
     pub text: Option<String>,
     pub document: Option<TelegramDocument>,
     pub caption: Option<String>,
+    pub reply_to_message: Option<Box<TelegramMessage>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TelegramDocument {
     pub file_id: String,
     pub file_name: Option<String>,

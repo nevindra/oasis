@@ -9,6 +9,7 @@ macro_rules! log {
     }};
 }
 
+pub mod agent;
 pub mod brain;
 pub mod service;
 pub mod tool;

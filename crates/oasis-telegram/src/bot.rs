@@ -212,6 +212,59 @@ impl TelegramBot {
         Ok(msg_id)
     }
 
+    /// Send a message as a reply to another message and return the new message_id.
+    pub async fn send_reply_with_id(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to_message_id: i64,
+    ) -> Result<i64> {
+        let url = format!("{}/sendMessage", self.base_url);
+
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_to_message_id": reply_to_message_id,
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| OasisError::Telegram(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(OasisError::Http {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let telegram_response: TelegramResponse<serde_json::Value> = response
+            .json()
+            .await
+            .map_err(|e| OasisError::Telegram(e.to_string()))?;
+
+        if !telegram_response.ok {
+            return Err(OasisError::Telegram(
+                telegram_response
+                    .description
+                    .unwrap_or_else(|| "unknown error".to_string()),
+            ));
+        }
+
+        let msg_id = telegram_response
+            .result
+            .and_then(|r| r["message_id"].as_i64())
+            .ok_or_else(|| OasisError::Telegram("missing message_id in response".to_string()))?;
+
+        Ok(msg_id)
+    }
+
     /// Edit a message as plain text (no formatting). Use for streaming intermediate edits
     /// where markdown is likely incomplete.
     pub async fn edit_message(&self, chat_id: i64, message_id: i64, text: &str) -> Result<()> {

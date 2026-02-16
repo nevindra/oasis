@@ -2,16 +2,41 @@ use oasis_core::error::Result;
 use oasis_core::types::*;
 
 use super::Brain;
+use crate::agent::AgentStatus;
+
+/// Tool definition for ask_user, injected alongside registry tools.
+fn ask_user_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "ask_user".to_string(),
+        description: "Ask the user a clarifying question when you need more information to proceed.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the user"
+                }
+            },
+            "required": ["question"]
+        }),
+    }
+}
 
 impl Brain {
-    /// Handle an action intent: run the generic tool execution loop.
+    /// Handle an action intent as a sub-agent with ask_user support.
     pub(crate) async fn handle_action(
         &self,
         chat_id: i64,
         text: &str,
         conversation_id: &str,
+        agent_id: &str,
+        ack_message_id: i64,
+        original_message_id: i64,
+        input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
     ) -> Result<String> {
-        let tools = self.tools.definitions();
+        let mut tools = self.tools.definitions();
+        tools.push(ask_user_definition());
+
         let task_summary = self
             .tasks
             .get_active_task_summary(self.config.brain.timezone_offset)
@@ -45,20 +70,19 @@ impl Brain {
                  - **Browser tips**: Use short keywords (1-2 words) when typing into search fields. \
                  If a site shows autocomplete suggestions, click the best match before clicking search. \
                  If \"no results\", try a shorter keyword. browse_url already returns page content, no need for page_read after it. \
-                 Once browsing, keep using browser tools — do not switch to web_search.\n",
+                 Once browsing, keep using browser tools — do not switch to web_search.\n\
+                 - **ask_user**: Use when you need clarification from the user before proceeding. \
+                 The user will be notified and can reply. Only use when truly needed.\n",
             );
         }
 
         messages.push(ChatMessage::text("user", text));
 
-        // Send placeholder
-        let msg_id = self.bot.send_message_with_id(chat_id, "...").await?;
-
         const MAX_ITERATIONS: usize = 10;
         let mut final_text = String::new();
 
         for iteration in 0..MAX_ITERATIONS {
-            log!(" [action] iteration {}/{MAX_ITERATIONS}", iteration + 1);
+            log!(" [agent:{agent_id}] iteration {}/{MAX_ITERATIONS}", iteration + 1);
 
             let request = ChatRequest {
                 messages: messages.clone(),
@@ -69,7 +93,7 @@ impl Brain {
             let response = match self.llm.chat_with_tools(request, &tools).await {
                 Ok(r) => r,
                 Err(e) => {
-                    log!(" [action] LLM error: {e}");
+                    log!(" [agent:{agent_id}] LLM error: {e}");
                     final_text = "Sorry, something went wrong. Please try again.".to_string();
                     break;
                 }
@@ -88,31 +112,84 @@ impl Brain {
             }
             messages.push(assistant_msg);
 
-            // Execute each tool call via the registry
+            // Execute each tool call
             let mut last_output = String::new();
             for tool_call in &response.tool_calls {
-                log!(" [tool] {}({})", tool_call.name, tool_call.arguments);
-                let _ = self
-                    .bot
-                    .edit_message(
-                        chat_id,
-                        msg_id,
-                        &format!("Using {}...", tool_call.name),
+                if tool_call.name == "ask_user" {
+                    // --- ask_user: send question, wait for reply ---
+                    let question = tool_call
+                        .arguments
+                        .get("question")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Could you clarify?");
+
+                    log!(" [agent:{agent_id}] ask_user: {question}");
+
+                    let bot_msg_id = match self
+                        .bot
+                        .send_reply_with_id(chat_id, question, original_message_id)
+                        .await
+                    {
+                        Ok(id) => id,
+                        Err(e) => {
+                            log!(" [agent:{agent_id}] failed to send question: {e}");
+                            let output = "Error: failed to send question to user.";
+                            messages.push(ChatMessage::tool_result(&tool_call.id, output));
+                            last_output = output.to_string();
+                            continue;
+                        }
+                    };
+
+                    // Register for reply routing
+                    self.agent_manager.register_message(bot_msg_id, agent_id.to_string());
+                    self.agent_manager.set_status(agent_id, AgentStatus::WaitingForInput);
+
+                    // Wait for user reply with 5-minute timeout
+                    let answer = tokio::time::timeout(
+                        std::time::Duration::from_secs(300),
+                        input_rx.recv(),
                     )
                     .await;
 
-                let result = self
-                    .tools
-                    .execute(&tool_call.name, &tool_call.arguments)
-                    .await;
-                log!(" [tool] {} → {} chars", tool_call.name, result.output.len());
-                last_output = result.output.clone();
+                    self.agent_manager.set_status(agent_id, AgentStatus::Running);
 
-                messages.push(ChatMessage::tool_result(&tool_call.id, &result.output));
+                    let output = match answer {
+                        Ok(Some(text)) => {
+                            log!(" [agent:{agent_id}] got user reply: {}", &text[..text.len().min(80)]);
+                            format!("User replied: {text}")
+                        }
+                        Ok(None) => {
+                            log!(" [agent:{agent_id}] input channel closed");
+                            "User did not respond. Proceed with your best judgment.".to_string()
+                        }
+                        Err(_) => {
+                            log!(" [agent:{agent_id}] ask_user timed out");
+                            "User did not respond within 5 minutes. Proceed with your best judgment.".to_string()
+                        }
+                    };
+
+                    last_output = output.clone();
+                    messages.push(ChatMessage::tool_result(&tool_call.id, &output));
+                } else {
+                    // --- Regular tool execution ---
+                    log!(" [tool] {}({})", tool_call.name, tool_call.arguments);
+
+                    let result = self
+                        .tools
+                        .execute(&tool_call.name, &tool_call.arguments)
+                        .await;
+                    log!(" [tool] {} -> {} chars", tool_call.name, result.output.len());
+                    last_output = result.output.clone();
+
+                    messages.push(ChatMessage::tool_result(&tool_call.id, &result.output));
+                }
             }
 
             // Short-circuit for single simple tools
-            if response.tool_calls.len() == 1 && !last_output.starts_with("Error:") {
+            if response.tool_calls.len() == 1
+                && !last_output.starts_with("Error:")
+                && response.tool_calls[0].name != "ask_user"
+            {
                 let is_simple = matches!(
                     response.tool_calls[0].name.as_str(),
                     "task_create"
@@ -126,7 +203,7 @@ impl Brain {
                         | "schedule_delete"
                 );
                 if is_simple {
-                    log!(" [action] short-circuit: simple tool, skipping LLM synthesis");
+                    log!(" [agent:{agent_id}] short-circuit: simple tool, skipping LLM synthesis");
                     final_text = last_output;
                     break;
                 }
@@ -135,7 +212,7 @@ impl Brain {
 
         // If we exhausted iterations without a final text, force one
         if final_text.is_empty() {
-            log!(" [action] forcing final response (max iterations reached)");
+            log!(" [agent:{agent_id}] forcing final response (max iterations reached)");
             messages.push(ChatMessage::text(
                 "user",
                 "You have used all available tool calls. Now summarize what you found and respond to the user. \
@@ -149,7 +226,7 @@ impl Brain {
             match self.llm.chat_with_tools(request, &[]).await {
                 Ok(r) => final_text = r.content,
                 Err(e) => {
-                    log!(" [action] final LLM error: {e}");
+                    log!(" [agent:{agent_id}] final LLM error: {e}");
                     final_text = "Sorry, something went wrong. Please try again.".to_string();
                 }
             }
@@ -159,11 +236,19 @@ impl Brain {
             final_text = "Done.".to_string();
         }
 
+        // Send result as a reply to the original message
         let _ = self
             .bot
-            .edit_message_formatted(chat_id, msg_id, &final_text)
+            .send_reply_with_id(chat_id, &final_text, original_message_id)
             .await;
-        log!(" [send] {} chars (action)", final_text.len());
+
+        // Update ack message to "Done"
+        let _ = self
+            .bot
+            .edit_message(chat_id, ack_message_id, "Done.")
+            .await;
+
+        log!(" [agent:{agent_id}] sent {} chars (action)", final_text.len());
 
         // Close any active browser session to free resources
         self.search_tool.close_browse_session().await;
