@@ -77,9 +77,24 @@ impl GeminiLlm {
                     }]
                 }));
             } else {
+                let mut parts: Vec<serde_json::Value> = Vec::new();
+                if !m.content.is_empty() {
+                    parts.push(json!({ "text": m.content }));
+                }
+                for img in &m.images {
+                    parts.push(json!({
+                        "inlineData": {
+                            "mimeType": img.mime_type,
+                            "data": img.base64,
+                        }
+                    }));
+                }
+                if parts.is_empty() {
+                    parts.push(json!({ "text": "" }));
+                }
                 contents.push(json!({
                     "role": Self::map_role(&m.role),
-                    "parts": [{ "text": m.content }],
+                    "parts": parts,
                 }));
             }
         }

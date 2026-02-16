@@ -16,6 +16,7 @@ impl Brain {
         message: &str,
         recent_messages: &[Message],
         context: &str,
+        images: Vec<oasis_core::types::ImageData>,
     ) -> Result<String> {
         let task_summary = self
             .tasks
@@ -40,7 +41,11 @@ impl Brain {
         let messages = self.build_system_prompt(&task_summary, &full_context, recent_messages);
 
         let mut all_messages = messages;
-        all_messages.push(ChatMessage::text("user", message));
+        if images.is_empty() {
+            all_messages.push(ChatMessage::text("user", message));
+        } else {
+            all_messages.push(ChatMessage::with_images(message, images));
+        }
 
         let request = ChatRequest {
             messages: all_messages,

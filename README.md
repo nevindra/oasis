@@ -10,15 +10,17 @@ A personal AI assistant accessed via Telegram, built in Rust. Combines conversat
 - **Web Search & Browsing** — Search the web and browse pages using headless Chromium
 - **Long-term Memory** — Automatically extracts and recalls facts about the user across conversations
 - **Scheduled Actions** — Set reminders and recurring tasks with proactive notifications
+- **Service Integrations** — Linear (issue management), Google Calendar (events), Gmail (search, read, send) — all accessible via natural language
 - **Intent Classification** — Routes messages to the right handler (chat vs. tool use) using a lightweight classifier model
 
 ## Architecture
 
 ```
 src/main.rs → oasis-brain
-                ├── oasis-llm       (LLM & embedding providers)
-                ├── oasis-telegram  (Telegram bot client)
-                └── oasis-core      (shared types, config, errors)
+                ├── oasis-integrations  (Linear, Google Calendar, Gmail clients)
+                ├── oasis-llm           (LLM & embedding providers)
+                ├── oasis-telegram      (Telegram bot client)
+                └── oasis-core          (shared types, config, errors)
 ```
 
 **oasis-brain** is organized into three layers:
@@ -26,7 +28,7 @@ src/main.rs → oasis-brain
 | Layer | Directory | Responsibility |
 |-------|-----------|----------------|
 | L1: Orchestration | `brain/` | Message routing, streaming chat, action dispatch, scheduling |
-| L2: Extension | `tool/` | Tool trait, registry, and 5 built-in tools |
+| L2: Extension | `tool/` | Tool trait, registry, and 8 tool modules (29 tools total) |
 | L3: Infrastructure | `service/` | Storage, task management, memory, LLM dispatch, search, ingestion |
 
 The system uses three separate LLM models:
@@ -63,7 +65,14 @@ OASIS_TURSO_TOKEN=
 # Optional — separate keys for intent/action models
 OASIS_INTENT_API_KEY=your-intent-api-key
 OASIS_ACTION_API_KEY=your-action-api-key
+
+# Optional — service integrations
+OASIS_LINEAR_API_KEY=your-linear-api-key
+OASIS_GOOGLE_CLIENT_ID=your-google-client-id
+OASIS_GOOGLE_CLIENT_SECRET=your-google-client-secret
 ```
+
+See `.env.development` for a complete template with all available variables.
 
 Adjust `oasis.toml` for model selection, chunking parameters, and other settings. Config loading order: **defaults → `oasis.toml` → environment variables** (env vars win).
 

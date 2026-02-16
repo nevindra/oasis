@@ -95,6 +95,12 @@ pub struct Message {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageData {
+    pub mime_type: String,
+    pub base64: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChatMessage {
     pub role: String,
@@ -105,6 +111,9 @@ pub struct ChatMessage {
     /// The tool call ID this message is a result for (set when role="tool").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Inline images for multimodal messages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageData>,
 }
 
 impl ChatMessage {
@@ -115,6 +124,18 @@ impl ChatMessage {
             content: content.into(),
             tool_calls: vec![],
             tool_call_id: None,
+            images: vec![],
+        }
+    }
+
+    /// Create a user message with text and inline images.
+    pub fn with_images(content: impl Into<String>, images: Vec<ImageData>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: content.into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+            images,
         }
     }
 
@@ -125,6 +146,7 @@ impl ChatMessage {
             content: content.into(),
             tool_calls: vec![],
             tool_call_id: Some(tool_call_id.into()),
+            images: vec![],
         }
     }
 
@@ -135,6 +157,7 @@ impl ChatMessage {
             content: String::new(),
             tool_calls,
             tool_call_id: None,
+            images: vec![],
         }
     }
 }

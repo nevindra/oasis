@@ -288,10 +288,13 @@ fn merge_with_overlap(segments: &[String], config: &ChunkerConfig) -> Vec<String
             if !current_chunk.is_empty() {
                 chunks.push(current_chunk.clone());
 
-                // Start new chunk with overlap from previous chunk
+                // Start new chunk with overlap from previous chunk,
+                // but only if it leaves room for the next segment
                 let overlap = get_overlap_suffix(&current_chunk, config.overlap_chars);
                 current_chunk = String::new();
-                if !overlap.is_empty() {
+                if !overlap.is_empty()
+                    && overlap.len() + 1 + segment.len() <= config.max_chars
+                {
                     current_chunk.push_str(&overlap);
                     current_chunk.push('\n');
                 }
@@ -322,7 +325,9 @@ fn merge_with_overlap(segments: &[String], config: &ChunkerConfig) -> Vec<String
                             let overlap =
                                 get_overlap_suffix(&current_chunk, config.overlap_chars);
                             current_chunk = String::new();
-                            if !overlap.is_empty() {
+                            if !overlap.is_empty()
+                                && overlap.len() + 1 + sub.len() <= config.max_chars
+                            {
                                 current_chunk.push_str(&overlap);
                                 current_chunk.push('\n');
                             }

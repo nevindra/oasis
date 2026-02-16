@@ -21,6 +21,47 @@ fn map_err(e: libsql::Error) -> OasisError {
     OasisError::Database(e.to_string())
 }
 
+const MAX_DB_RETRIES: u32 = 3;
+
+fn is_transient_db_error(err: &OasisError) -> bool {
+    match err {
+        OasisError::Database(msg) => {
+            msg.contains("Bad Gateway")
+                || msg.contains("Service Unavailable")
+                || msg.contains("Gateway Timeout")
+                || msg.contains("timed out")
+                || msg.contains("connection")
+                || msg.contains("STREAM_EXPIRED")
+        }
+        _ => false,
+    }
+}
+
+/// Retry an async database operation with exponential backoff on transient errors.
+async fn with_retry<F, Fut, T>(f: F) -> Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_err = None;
+    for attempt in 0..=MAX_DB_RETRIES {
+        if attempt > 0 {
+            let delay = std::time::Duration::from_secs(1 << (attempt - 1));
+            log!(" [db] retry {attempt}/{MAX_DB_RETRIES} in {}s", delay.as_secs());
+            tokio::time::sleep(delay).await;
+        }
+        match f().await {
+            Ok(val) => return Ok(val),
+            Err(e) if is_transient_db_error(&e) && attempt < MAX_DB_RETRIES => {
+                log!(" [db] transient error: {e}");
+                last_err = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.unwrap())
+}
+
 impl VectorStore {
     /// Open a local libsql database at the given file path.
     pub async fn new(path: &str) -> Result<Self> {
@@ -186,42 +227,48 @@ impl VectorStore {
 
     /// Insert a document record.
     pub async fn insert_document(&self, doc: &Document) -> Result<()> {
-        self.conn()?
-            .execute(
-                "INSERT INTO documents (id, source_type, source_ref, title, raw_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                libsql::params![
-                    doc.id.clone(),
-                    doc.source_type.clone(),
-                    doc.source_ref.clone(),
-                    doc.title.clone(),
-                    doc.raw_content.clone(),
-                    doc.created_at,
-                    doc.updated_at,
-                ],
-            )
-            .await
-            .map_err(map_err)?;
-        Ok(())
+        with_retry(|| async {
+            self.conn()?
+                .execute(
+                    "INSERT INTO documents (id, source_type, source_ref, title, raw_content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    libsql::params![
+                        doc.id.clone(),
+                        doc.source_type.clone(),
+                        doc.source_ref.clone(),
+                        doc.title.clone(),
+                        doc.raw_content.clone(),
+                        doc.created_at,
+                        doc.updated_at,
+                    ],
+                )
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+        .await
     }
 
     /// Insert a chunk with its embedding vector.
     pub async fn insert_chunk(&self, chunk: &Chunk, embedding: &[f32]) -> Result<()> {
         let embedding_json = embedding_to_json(embedding);
-        self.conn()?
-            .execute(
-                "INSERT INTO chunks (id, document_id, content, embedding, chunk_index, created_at) VALUES (?, ?, ?, vector(?), ?, ?)",
-                libsql::params![
-                    chunk.id.clone(),
-                    chunk.document_id.clone(),
-                    chunk.content.clone(),
-                    embedding_json,
-                    chunk.chunk_index,
-                    chunk.created_at,
-                ],
-            )
-            .await
-            .map_err(map_err)?;
-        Ok(())
+        with_retry(|| async {
+            self.conn()?
+                .execute(
+                    "INSERT INTO chunks (id, document_id, content, embedding, chunk_index, created_at) VALUES (?, ?, ?, vector(?), ?, ?)",
+                    libsql::params![
+                        chunk.id.clone(),
+                        chunk.document_id.clone(),
+                        chunk.content.clone(),
+                        embedding_json.clone(),
+                        chunk.chunk_index,
+                        chunk.created_at,
+                    ],
+                )
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+        .await
     }
 
     /// Search chunks by vector similarity, returning the top_k most similar chunks.
@@ -310,40 +357,43 @@ impl VectorStore {
         msg: &Message,
         embedding: Option<&[f32]>,
     ) -> Result<()> {
-        let conn = self.conn()?;
-        match embedding {
-            Some(emb) => {
-                let embedding_json = embedding_to_json(emb);
-                conn.execute(
-                    "INSERT INTO messages (id, conversation_id, role, content, embedding, created_at) VALUES (?, ?, ?, ?, vector(?), ?)",
-                    libsql::params![
-                        msg.id.clone(),
-                        msg.conversation_id.clone(),
-                        msg.role.clone(),
-                        msg.content.clone(),
-                        embedding_json,
-                        msg.created_at,
-                    ],
-                )
-                .await
-                .map_err(map_err)?;
+        with_retry(|| async {
+            let conn = self.conn()?;
+            match embedding {
+                Some(emb) => {
+                    let embedding_json = embedding_to_json(emb);
+                    conn.execute(
+                        "INSERT INTO messages (id, conversation_id, role, content, embedding, created_at) VALUES (?, ?, ?, ?, vector(?), ?)",
+                        libsql::params![
+                            msg.id.clone(),
+                            msg.conversation_id.clone(),
+                            msg.role.clone(),
+                            msg.content.clone(),
+                            embedding_json,
+                            msg.created_at,
+                        ],
+                    )
+                    .await
+                    .map_err(map_err)?;
+                }
+                None => {
+                    conn.execute(
+                        "INSERT INTO messages (id, conversation_id, role, content, embedding, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
+                        libsql::params![
+                            msg.id.clone(),
+                            msg.conversation_id.clone(),
+                            msg.role.clone(),
+                            msg.content.clone(),
+                            msg.created_at,
+                        ],
+                    )
+                    .await
+                    .map_err(map_err)?;
+                }
             }
-            None => {
-                conn.execute(
-                    "INSERT INTO messages (id, conversation_id, role, content, embedding, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
-                    libsql::params![
-                        msg.id.clone(),
-                        msg.conversation_id.clone(),
-                        msg.role.clone(),
-                        msg.content.clone(),
-                        msg.created_at,
-                    ],
-                )
-                .await
-                .map_err(map_err)?;
-            }
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Get the most recent messages for a conversation, returned in chronological order.
@@ -406,14 +456,17 @@ impl VectorStore {
 
     /// Set a configuration value (insert or replace).
     pub async fn set_config(&self, key: &str, value: &str) -> Result<()> {
-        self.conn()?
-            .execute(
-                "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
-                libsql::params![key.to_string(), value.to_string()],
-            )
-            .await
-            .map_err(map_err)?;
-        Ok(())
+        with_retry(|| async {
+            self.conn()?
+                .execute(
+                    "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                    libsql::params![key.to_string(), value.to_string()],
+                )
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+        .await
     }
 
     /// Get a configuration value by key.

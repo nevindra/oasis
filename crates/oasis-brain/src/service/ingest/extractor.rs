@@ -381,7 +381,7 @@ fn strip_html(content: &str) -> String {
 
         if in_tag {
             if collecting_tag_name {
-                if chars[i].is_whitespace() || chars[i] == '>' || chars[i] == '/' {
+                if chars[i].is_whitespace() || chars[i] == '>' || (chars[i] == '/' && !tag_name.is_empty()) {
                     collecting_tag_name = false;
                     let lower = tag_name.to_lowercase();
                     if lower == "script" {

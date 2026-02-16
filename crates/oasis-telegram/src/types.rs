@@ -34,6 +34,7 @@ pub struct TelegramMessage {
     pub chat: Chat,
     pub text: Option<String>,
     pub document: Option<TelegramDocument>,
+    pub photo: Option<Vec<PhotoSize>>,
     pub caption: Option<String>,
     pub reply_to_message: Option<Box<TelegramMessage>>,
 }
@@ -43,6 +44,15 @@ pub struct TelegramDocument {
     pub file_id: String,
     pub file_name: Option<String>,
     pub mime_type: Option<String>,
+    pub file_size: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PhotoSize {
+    pub file_id: String,
+    pub file_unique_id: String,
+    pub width: i32,
+    pub height: i32,
     pub file_size: Option<i64>,
 }
 

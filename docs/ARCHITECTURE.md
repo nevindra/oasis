@@ -21,6 +21,7 @@ graph TB
     Tools --> Search[service/search/]
     Tools --> Ingest[service/ingest/]
     Tools --> Store[service/store]
+    Tools --> Integrations[oasis-integrations]
 
     Brain --> Memory[service/memory]
     Brain --> Scheduler[service/scheduler]
@@ -31,11 +32,15 @@ graph TB
     Memory --> DB
     Scheduler --> DB
 
+    Integrations --> LinearAPI[Linear GraphQL API]
+    Integrations --> GoogleAPI[Google Calendar / Gmail API]
+    Integrations --> OAuthServer[OAuth Callback Server]
+
     Search --> Chrome[Headless Chromium]
     LLM --> APIs[LLM APIs]
 ```
 
-## Crate Dependency Graph (4 crates)
+## Crate Dependency Graph (5 crates)
 
 ```mermaid
 graph LR
@@ -43,8 +48,10 @@ graph LR
 
     brain --> llm[oasis-llm]
     brain --> telegram[oasis-telegram]
+    brain --> integrations[oasis-integrations]
     brain --> core[oasis-core]
 
+    integrations --> core
     llm --> core
     telegram --> core
 ```
@@ -52,7 +59,7 @@ graph LR
 oasis-brain is organized in three layers:
 
 - **`brain/`** (L1: Orchestration) — Message routing, intent dispatch, streaming chat, action loop, scheduled actions, background storage
-- **`tool/`** (L2: Extension point) — `Tool` trait + `ToolRegistry` for dynamic dispatch, with implementations: `TaskTool`, `SearchTool`, `KnowledgeTool`, `ScheduleTool`, `MemoryTool`
+- **`tool/`** (L2: Extension point) — `Tool` trait + `ToolRegistry` for dynamic dispatch, with implementations: `TaskTool`, `SearchTool`, `KnowledgeTool`, `ScheduleTool`, `MemoryTool`, `LinearTool`, `CalendarTool`, `GmailTool`
 - **`service/`** (L3: Infrastructure) — `store`, `tasks`, `memory`, `llm` (LlmDispatch + Embedder), `search/`, `ingest/`, `intent`, `scheduler`
 
 ## Message Processing Flow
@@ -124,6 +131,22 @@ When the Action LLM runs, it has access to these tools:
 | `page_click` | Click an interactive element on the current page |
 | `page_type` | Type text into an input field on the current page |
 | `page_read` | Re-read current page state without interaction |
+| **Linear** (conditional — requires `OASIS_LINEAR_API_KEY`) | |
+| `linear_create_issue` | Create a Linear issue with title, description, team, priority |
+| `linear_list_issues` | List issues with filters; also lists available teams |
+| `linear_update_issue` | Update issue state, assignee, or priority |
+| `linear_search` | Full-text search across Linear issues |
+| **Google** (conditional — requires `OASIS_GOOGLE_CLIENT_ID`) | |
+| `google_connect` | Get OAuth authorization URL to connect Google account |
+| `calendar_list_events` | List Google Calendar events for a date range |
+| `calendar_create_event` | Create a calendar event with attendees |
+| `calendar_update_event` | Update an existing calendar event |
+| `calendar_delete_event` | Delete a calendar event |
+| `gmail_search` | Search emails using Gmail query syntax |
+| `gmail_read` | Read full content of a specific email |
+| `gmail_draft` | Create a draft email |
+| `gmail_send` | Send an email (LLM confirms with user via ask_user first) |
+| `gmail_reply` | Reply to an email thread |
 
 ## Database Schema
 
@@ -137,7 +160,7 @@ All data is stored in libSQL (SQLite-compatible) with vector extensions. Support
 | `tasks` | store | Task items with status, priority, due dates |
 | `conversations` | store | Telegram chat sessions |
 | `messages` | store | Chat messages with optional embedding vectors |
-| `config` | store | Key-value store (telegram_offset, owner_user_id) |
+| `config` | store | Key-value store (telegram_offset, owner_user_id, OAuth tokens) |
 | `scheduled_actions` | store | Recurring automated actions |
 | `user_facts` | memory | Extracted user facts with confidence scores |
 | `conversation_topics` | memory | Tracked conversation topics |
@@ -158,6 +181,9 @@ Config loads in order: **defaults -> `oasis.toml` -> environment variables** (en
 | `[chunking]` | - | max_tokens (512), overlap_tokens (50) |
 | `[brain]` | - | context_window (20), vector_top_k (10), timezone_offset (7) |
 | `[ollama]` | - | base_url for local Ollama |
+| `[integrations.linear]` | `OASIS_LINEAR_API_KEY` | Linear API key for issue management |
+| `[integrations.google]` | `OASIS_GOOGLE_CLIENT_ID`, `OASIS_GOOGLE_CLIENT_SECRET` | Google OAuth for Calendar + Gmail |
+| `[integrations.server]` | - | OAuth callback server port (default 8080) |
 
 ## Per-System Documentation
 
@@ -165,6 +191,7 @@ Config loads in order: **defaults -> `oasis.toml` -> environment variables** (en
 - [oasis-brain](systems/brain.md) - Orchestration layer, message routing, system prompt
 - [oasis-llm](systems/llm.md) - LLM and embedding provider implementations
 - [oasis-telegram](systems/telegram.md) - Telegram bot client, message formatting
+- [oasis-integrations](systems/integrations.md) - External service clients (Linear, Google Calendar, Gmail), OAuth, callback server
 
 oasis-brain internal layers:
 
@@ -196,3 +223,5 @@ oasis-brain internal layers:
 - **ULID-like IDs**: `new_id()` generates time-sortable IDs from timestamp + `/dev/urandom`.
 - **Background storage**: `spawn_store()` embeds and persists messages after responding, so user doesn't wait.
 - **Separate DB handles**: Each component (VectorStore, TaskManager, MemoryStore, Scheduler) opens its own libsql connection to avoid contention.
+- **Conditional tool registration**: Integration tools (Linear, Calendar, Gmail) are only registered in the ToolRegistry when their credentials are configured. No API key = no tools loaded.
+- **TokenStore abstraction**: `oasis-integrations` defines a `TokenStore` trait for OAuth token persistence. Brain implements it via VectorStore's `config` table, keeping integration code decoupled from database internals.
