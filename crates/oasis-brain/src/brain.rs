@@ -825,7 +825,7 @@ impl Brain {
             id: new_id(),
             description: description.to_string(),
             schedule: schedule.clone(),
-            tool_calls: tools.to_string(),
+            tool_calls: normalize_tool_calls(tools),
             synthesis_prompt: synthesis_prompt.map(|s| s.to_string()),
             enabled: true,
             last_run: None,
@@ -992,7 +992,7 @@ impl Brain {
         // Send placeholder
         let msg_id = self.bot.send_message_with_id(chat_id, "...").await?;
 
-        const MAX_ITERATIONS: usize = 5;
+        const MAX_ITERATIONS: usize = 10;
         let mut final_text = String::new();
 
         for iteration in 0..MAX_ITERATIONS {
@@ -1067,6 +1067,11 @@ impl Brain {
         // If we exhausted iterations without a final text, force one without tools
         if final_text.is_empty() {
             log!(" [action] forcing final response (max iterations reached)");
+            messages.push(ChatMessage::text(
+                "user",
+                "You have used all available tool calls. Now summarize what you found and respond to the user. \
+                 If you found useful information, present it clearly. If you could not complete the task, explain what happened."
+            ));
             let request = ChatRequest {
                 messages: messages.clone(),
                 max_tokens: Some(4096),
@@ -1090,6 +1095,9 @@ impl Brain {
             .edit_message_formatted(chat_id, msg_id, &final_text)
             .await;
         log!(" [send] {} chars (action)", final_text.len());
+
+        // Close any active browser session to free resources
+        self.search.close_browse_session().await;
 
         Ok(final_text)
     }
@@ -1186,6 +1194,64 @@ impl Brain {
                 let query = args["description_query"].as_str().unwrap_or("");
                 match self.handle_schedule_delete(query).await {
                     Ok(r) => ToolResult::ok(r),
+                    Err(e) => ToolResult::err(e.to_string()),
+                }
+            }
+            "browse_url" => {
+                let url = args["url"].as_str().unwrap_or("");
+                match self.search.browse_to(url).await {
+                    Ok(snapshot) => {
+                        let llm_text = snapshot.to_llm_text();
+                        eprintln!("[browse_url] url={} title={:?} text_len={} elements={} llm_chars={}",
+                            snapshot.url, snapshot.title, snapshot.text_content.len(),
+                            snapshot.elements.len(), llm_text.len());
+
+                        ToolResult::ok(llm_text)
+                    }
+                    Err(e) => ToolResult::err(e.to_string()),
+                }
+            }
+            "page_click" => {
+                let element = args["element"].as_str().unwrap_or("0");
+                let idx = oasis_search::search::parse_element_ref(element);
+                match self.search.page_click(idx).await {
+                    Ok(snapshot) => {
+                        let llm_text = snapshot.to_llm_text();
+                        eprintln!("[page_click] element={} url={} text_len={} elements={} llm_chars={}",
+                            element, snapshot.url, snapshot.text_content.len(),
+                            snapshot.elements.len(), llm_text.len());
+
+                        ToolResult::ok(llm_text)
+                    }
+                    Err(e) => ToolResult::err(e.to_string()),
+                }
+            }
+            "page_type" => {
+                let element = args["element"].as_str().unwrap_or("0");
+                let text = args["text"].as_str().unwrap_or("");
+                let idx = oasis_search::search::parse_element_ref(element);
+                match self.search.page_type_into(idx, text).await {
+                    Ok(snapshot) => {
+                        let llm_text = snapshot.to_llm_text();
+                        eprintln!("[page_type] element={} typed={:?} url={} text_len={} elements={} llm_chars={}",
+                            element, text, snapshot.url, snapshot.text_content.len(),
+                            snapshot.elements.len(), llm_text.len());
+
+                        ToolResult::ok(llm_text)
+                    }
+                    Err(e) => ToolResult::err(e.to_string()),
+                }
+            }
+            "page_read" => {
+                match self.search.read_page().await {
+                    Ok(snapshot) => {
+                        let llm_text = snapshot.to_llm_text();
+                        eprintln!("[page_read] url={} text_len={} elements={} llm_chars={}",
+                            snapshot.url, snapshot.text_content.len(),
+                            snapshot.elements.len(), llm_text.len());
+
+                        ToolResult::ok(llm_text)
+                    }
                     Err(e) => ToolResult::err(e.to_string()),
                 }
             }
@@ -1444,37 +1510,38 @@ impl Brain {
         request: ChatRequest,
         tools: &[ToolDefinition],
     ) -> Result<ChatResponse> {
-        match config.llm.provider.as_str() {
+        let action = &config.action;
+        match action.provider.as_str() {
             "gemini" => {
                 let provider = GeminiLlm::new(
-                    config.llm.api_key.clone(),
-                    config.llm.model.clone(),
+                    action.api_key.clone(),
+                    action.model.clone(),
                 );
                 provider.chat_with_tools(request, tools).await
             }
             "anthropic" => {
                 let provider = AnthropicLlm::new(
-                    config.llm.api_key.clone(),
-                    config.llm.model.clone(),
+                    action.api_key.clone(),
+                    action.model.clone(),
                 );
                 provider.chat_with_tools(request, tools).await
             }
             "openai" => {
                 let provider = OpenAiLlm::new(
-                    config.llm.api_key.clone(),
-                    config.llm.model.clone(),
+                    action.api_key.clone(),
+                    action.model.clone(),
                 );
                 provider.chat_with_tools(request, tools).await
             }
             "ollama" => {
                 let provider = OllamaLlm::new(
                     config.ollama.base_url.clone(),
-                    config.llm.model.clone(),
+                    action.model.clone(),
                 );
                 provider.chat_with_tools(request, tools).await
             }
             other => Err(OasisError::Config(format!(
-                "unknown LLM provider: '{other}'"
+                "unknown action LLM provider: '{other}'"
             ))),
         }
     }
@@ -1584,6 +1651,17 @@ impl Brain {
         let mut system = format!(
             "You are Oasis, a personal AI assistant. You are helpful, concise, and friendly.\n\
              Current date and time: {today}\n\n\
+             ## Tool usage guidelines\n\
+             - **web_search**: Use for general information lookup, quick answers, and finding URLs.\n\
+             - **Browser tools** (browse_url, page_type, page_click, page_read): Use when the user asks to interact with a specific website. \
+             If the user mentions a site name, use browse_url to go there directly.\n\
+             - **CRITICAL — When to stop browsing**: If the page content already shows a list of results with names and prices, \
+             you MUST stop calling tools immediately and summarize that data. Do NOT click into individual items. \
+             The search results page IS the answer — extract the data from it.\n\
+             - **Browser tips**: Use short keywords (1-2 words) when typing into search fields. \
+             If a site shows autocomplete suggestions, click the best match before clicking search. \
+             If \"no results\", try a shorter keyword. browse_url already returns page content, no need for page_read after it. \
+             Once browsing, keep using browser tools — do not switch to web_search.\n\n\
              ## Active tasks\n\
              {task_summary}\n"
         );
@@ -1645,9 +1723,31 @@ impl Brain {
 
             let tool_calls: Vec<ScheduledToolCall> = match serde_json::from_str(&action.tool_calls) {
                 Ok(tc) => tc,
-                Err(e) => {
-                    log!(" [sched] invalid tool_calls JSON: {e}");
-                    continue;
+                Err(_) => {
+                    // LLM sometimes produces string-encoded objects instead of actual objects,
+                    // e.g. ["{\"tool\":\"web_search\",...}"] instead of [{"tool":"web_search",...}]
+                    match serde_json::from_str::<Vec<String>>(&action.tool_calls) {
+                        Ok(strings) => {
+                            let mut parsed = Vec::new();
+                            let mut ok = true;
+                            for s in &strings {
+                                match serde_json::from_str::<ScheduledToolCall>(s) {
+                                    Ok(tc) => parsed.push(tc),
+                                    Err(e2) => {
+                                        log!(" [sched] invalid tool_calls JSON: {e2}");
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !ok { continue; }
+                            parsed
+                        }
+                        Err(e) => {
+                            log!(" [sched] invalid tool_calls JSON: {e}");
+                            continue;
+                        }
+                    }
                 }
             };
 
@@ -1949,6 +2049,25 @@ fn unix_days_to_date(days: i64) -> (i64, i64, i64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m as i64, d as i64)
+}
+
+/// Normalize tool_calls JSON: if the LLM produced string-encoded objects
+/// (e.g. `["{\"tool\":...}"]`), parse and re-serialize as proper objects.
+fn normalize_tool_calls(tools: &serde_json::Value) -> String {
+    if let Some(arr) = tools.as_array() {
+        if arr.iter().all(|v| v.is_string()) {
+            // Try to parse each string as a JSON object
+            let parsed: Option<Vec<serde_json::Value>> = arr
+                .iter()
+                .map(|v| serde_json::from_str(v.as_str().unwrap_or("")))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .ok();
+            if let Some(objects) = parsed {
+                return serde_json::Value::Array(objects).to_string();
+            }
+        }
+    }
+    tools.to_string()
 }
 
 /// Compute the next run time (UTC) for a schedule string.

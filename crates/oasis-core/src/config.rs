@@ -21,6 +21,10 @@ pub struct Config {
     pub brain: BrainConfig,
     #[serde(default)]
     pub intent: IntentConfig,
+    /// Optional separate model for agentic tool use (action loop).
+    /// Falls back to `llm` if not configured.
+    #[serde(default)]
+    pub action: ActionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +235,28 @@ impl Default for IntentConfig {
     }
 }
 
+/// Separate model config for agentic tool-use (action loop).
+/// Empty provider/model means "fall back to [llm]".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionConfig {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub api_key: String,
+}
+
+impl Default for ActionConfig {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            model: String::new(),
+            api_key: String::new(),
+        }
+    }
+}
+
 impl Config {
     /// Load config: defaults → oasis.toml → env vars (env wins).
     pub fn load(path: &Path) -> Result<Self> {
@@ -263,9 +289,22 @@ impl Config {
             config.intent.api_key = v;
         }
 
+        if let Ok(v) = std::env::var("OASIS_ACTION_API_KEY") {
+            config.action.api_key = v;
+        }
+
         // Fallback: intent model uses the LLM API key if not separately configured
         if config.intent.api_key.is_empty() {
             config.intent.api_key = config.llm.api_key.clone();
+        }
+
+        // Fallback: action model uses the LLM config if not separately configured
+        if config.action.provider.is_empty() {
+            config.action.provider = config.llm.provider.clone();
+            config.action.model = config.llm.model.clone();
+        }
+        if config.action.api_key.is_empty() {
+            config.action.api_key = config.llm.api_key.clone();
         }
 
         Ok(config)
@@ -283,6 +322,7 @@ impl Default for Config {
             chunking: ChunkingConfig::default(),
             brain: BrainConfig::default(),
             intent: IntentConfig::default(),
+            action: ActionConfig::default(),
         }
     }
 }

@@ -22,6 +22,10 @@ path = "oasis.db"
 max_tokens = 512
 overlap_tokens = 50
 
+[action]
+provider = "gemini"
+model = "gemini-3-flash-preview"
+
 [brain]
 context_window = 20
 vector_top_k = 10

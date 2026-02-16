@@ -30,6 +30,10 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         schedule_list_def(),
         schedule_update_def(),
         schedule_delete_def(),
+        browse_url_def(),
+        page_click_def(),
+        page_type_def(),
+        page_read_def(),
     ]
 }
 
@@ -203,6 +207,60 @@ fn schedule_delete_def() -> ToolDefinition {
                 "description_query": { "type": "string", "description": "Substring to match the description, or '*' for all" }
             },
             "required": ["description_query"]
+        }),
+    }
+}
+
+fn browse_url_def() -> ToolDefinition {
+    ToolDefinition {
+        name: "browse_url".to_string(),
+        description: "Open a URL in a browser and return the page content with interactive elements. Use to interact with web pages, fill forms, check prices, etc.".to_string(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "url": { "type": "string", "description": "The URL to navigate to" }
+            },
+            "required": ["url"]
+        }),
+    }
+}
+
+fn page_click_def() -> ToolDefinition {
+    ToolDefinition {
+        name: "page_click".to_string(),
+        description: "Click an interactive element on the current browser page by its number from the elements list. Use after browse_url.".to_string(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "element": { "type": "string", "description": "Element number to click (e.g. '3' for element [3])" }
+            },
+            "required": ["element"]
+        }),
+    }
+}
+
+fn page_type_def() -> ToolDefinition {
+    ToolDefinition {
+        name: "page_type".to_string(),
+        description: "Type text into an input field on the current browser page by its element number. Replaces existing text. Use after browse_url.".to_string(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "element": { "type": "string", "description": "Element number to type into (e.g. '1' for element [1])" },
+                "text": { "type": "string", "description": "Text to type into the element" }
+            },
+            "required": ["element", "text"]
+        }),
+    }
+}
+
+fn page_read_def() -> ToolDefinition {
+    ToolDefinition {
+        name: "page_read".to_string(),
+        description: "Read the current browser page content and interactive elements without any interaction. Use to refresh the view after waiting or to re-read the page.".to_string(),
+        parameters: json!({
+            "type": "object",
+            "properties": {}
         }),
     }
 }
