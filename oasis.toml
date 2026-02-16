@@ -1,0 +1,28 @@
+# oasis.toml
+
+[telegram]
+allowed_user_id = 0  # 0 = auto-register first user as owner
+
+[llm]
+provider = "gemini"
+model = "gemini-2.5-flash-preview-09-2025"
+
+[embedding]
+provider = "gemini"
+model = "gemini-embedding-001"
+dimensions = 1536
+
+[ollama]
+base_url = "http://localhost:11434"
+
+[database]
+path = "oasis.db"
+
+[chunking]
+max_tokens = 512
+overlap_tokens = 50
+
+[brain]
+context_window = 20
+vector_top_k = 10
+timezone_offset = 7  # WIB (UTC+7)
