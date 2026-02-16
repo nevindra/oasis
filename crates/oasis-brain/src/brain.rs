@@ -1,22 +1,22 @@
 use std::sync::Arc;
 
+use crate::ingest::pipeline::IngestPipeline;
 use crate::intent::{parse_intent, Intent};
+use crate::memory::MemoryStore;
+use crate::search::WebSearch;
+use crate::store::VectorStore;
+use crate::tasks::TaskManager;
+use crate::tools::{builtin_tool_definitions, ToolResult};
 use oasis_core::config::Config;
 use oasis_core::error::{OasisError, Result};
 use oasis_core::types::*;
-use oasis_ingest::pipeline::IngestPipeline;
 use oasis_llm::anthropic::AnthropicLlm;
 use oasis_llm::gemini::{GeminiEmbedding, GeminiLlm};
 use oasis_llm::ollama::{OllamaEmbedding, OllamaLlm};
 use oasis_llm::openai::{OpenAiEmbedding, OpenAiLlm};
 use oasis_llm::provider::{EmbeddingProvider, LlmProvider};
-use oasis_tasks::manager::TaskManager;
 use oasis_telegram::bot::TelegramBot;
 use oasis_telegram::types::TelegramDocument;
-use oasis_memory::memory::MemoryStore;
-use oasis_search::search::WebSearch;
-use oasis_tools::tool::{builtin_tool_definitions, ToolResult};
-use oasis_vector::store::VectorStore;
 
 /// Intent classification prompt sent to Flash-Lite.
 /// Simplified to just Chat vs Action — the main LLM handles tool selection.
@@ -458,7 +458,7 @@ impl Brain {
             Err(_) => Vec::new(),
         };
 
-        let mut prompt = oasis_memory::memory::EXTRACT_FACTS_PROMPT.to_string();
+        let mut prompt = crate::memory::EXTRACT_FACTS_PROMPT.to_string();
         if !existing.is_empty() {
             prompt.push_str("\n\n## Already known facts (do NOT re-extract these)\n");
             for f in &existing {
@@ -505,10 +505,10 @@ impl Brain {
     async fn rank_search_results(
         &self,
         query: &str,
-        results: &[oasis_search::search::SearchResultWithContent],
+        results: &[crate::search::SearchResultWithContent],
     ) -> Vec<RankedChunk> {
         // Chunk config: ~500 chars per chunk, no overlap (we want independent chunks)
-        let chunk_config = oasis_ingest::chunker::ChunkerConfig {
+        let chunk_config = crate::ingest::chunker::ChunkerConfig {
             max_chars: 500,
             overlap_chars: 0,
         };
@@ -528,7 +528,7 @@ impl Brain {
 
             // Chunk the page content
             if let Some(ref content) = r.content {
-                let chunks = oasis_ingest::chunker::chunk_text(content, &chunk_config);
+                let chunks = crate::ingest::chunker::chunk_text(content, &chunk_config);
                 for chunk_text in chunks {
                     if chunk_text.len() < 50 {
                         continue; // skip tiny chunks
@@ -1213,7 +1213,7 @@ impl Brain {
             }
             "page_click" => {
                 let element = args["element"].as_str().unwrap_or("0");
-                let idx = oasis_search::search::parse_element_ref(element);
+                let idx = crate::search::parse_element_ref(element);
                 match self.search.page_click(idx).await {
                     Ok(snapshot) => {
                         let llm_text = snapshot.to_llm_text();
@@ -1229,7 +1229,7 @@ impl Brain {
             "page_type" => {
                 let element = args["element"].as_str().unwrap_or("0");
                 let text = args["text"].as_str().unwrap_or("");
-                let idx = oasis_search::search::parse_element_ref(element);
+                let idx = crate::search::parse_element_ref(element);
                 match self.search.page_type_into(idx, text).await {
                     Ok(snapshot) => {
                         let llm_text = snapshot.to_llm_text();
@@ -1304,7 +1304,7 @@ impl Brain {
     /// Format ranked chunks into a text response for the LLM.
     fn format_ranked_results(
         ranked: &[RankedChunk],
-        results: &[oasis_search::search::SearchResultWithContent],
+        results: &[crate::search::SearchResultWithContent],
     ) -> String {
         let mut output = String::new();
         let mut seen_sources: Vec<usize> = Vec::new();

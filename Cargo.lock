@@ -1664,8 +1664,6 @@ dependencies = [
  "libsql",
  "oasis-brain",
  "oasis-core",
- "oasis-scheduler",
- "oasis-tasks",
  "oasis-telegram",
  "tokio",
 ]
@@ -1674,16 +1672,14 @@ dependencies = [
 name = "oasis-brain"
 version = "0.1.0"
 dependencies = [
+ "chromiumoxide",
+ "futures",
  "libsql",
  "oasis-core",
- "oasis-ingest",
  "oasis-llm",
- "oasis-memory",
- "oasis-search",
- "oasis-tasks",
  "oasis-telegram",
- "oasis-tools",
- "oasis-vector",
+ "readability-rust",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -1699,18 +1695,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oasis-ingest"
-version = "0.1.0"
-dependencies = [
- "oasis-core",
- "oasis-llm",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "oasis-llm"
 version = "0.1.0"
 dependencies = [
@@ -1723,78 +1707,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "oasis-memory"
-version = "0.1.0"
-dependencies = [
- "libsql",
- "oasis-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "oasis-scheduler"
-version = "0.1.0"
-dependencies = [
- "libsql",
- "oasis-core",
- "oasis-tasks",
- "oasis-telegram",
- "tokio",
-]
-
-[[package]]
-name = "oasis-search"
-version = "0.1.0"
-dependencies = [
- "chromiumoxide",
- "futures",
- "oasis-core",
- "readability-rust",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "oasis-tasks"
-version = "0.1.0"
-dependencies = [
- "libsql",
- "oasis-core",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "oasis-telegram"
 version = "0.1.0"
 dependencies = [
  "oasis-core",
  "pulldown-cmark",
  "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "oasis-tools"
-version = "0.1.0"
-dependencies = [
- "oasis-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "oasis-vector"
-version = "0.1.0"
-dependencies = [
- "libsql",
- "oasis-core",
  "serde",
  "serde_json",
  "tokio",

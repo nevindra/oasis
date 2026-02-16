@@ -20,11 +20,10 @@ source .env && cargo run
 cargo test --workspace
 
 # Run tests for a single crate
-cargo test -p oasis-ingest
 cargo test -p oasis-brain
 
 # Run a single test by name
-cargo test -p oasis-ingest test_ingest_html
+cargo test -p oasis-brain test_ingest_html
 
 # Check without building
 cargo check --workspace
@@ -53,23 +52,25 @@ Secrets are set via environment variables (see `.env`):
 
 ```
 src/main.rs → oasis-brain
-oasis-brain → oasis-llm, oasis-vector, oasis-tasks, oasis-ingest, oasis-telegram
-oasis-ingest → oasis-core, oasis-llm
+oasis-brain → oasis-core, oasis-llm, oasis-telegram
 oasis-telegram → oasis-core
 oasis-llm → oasis-core
-oasis-vector → oasis-core
-oasis-tasks → oasis-core
 ```
 
-### Crate Responsibilities
+### Crate Responsibilities (4 crates)
 
 - **oasis-core** — Shared types (`Document`, `Chunk`, `Task`, `Message`, `ChatRequest`/`ChatResponse`), `Config` loading, `OasisError` enum, and utility functions (`new_id`, `now_unix`).
 - **oasis-llm** — `LlmProvider` and `EmbeddingProvider` traits with implementations for Anthropic, OpenAI, Gemini, and Ollama. All providers use raw HTTP (reqwest) with no SDK dependencies. Gemini supports streaming via SSE.
-- **oasis-vector** — `VectorStore` wrapping libSQL with DiskANN vector indexes. Handles all database tables (documents, chunks, conversations, messages, config). Supports both local SQLite and remote Turso.
-- **oasis-tasks** — `TaskManager` for CRUD on projects and tasks. Uses a separate `libsql::Database` handle from VectorStore. Task statuses: `todo`, `in_progress`, `done`.
-- **oasis-ingest** — `IngestPipeline` for text extraction (plain text, Markdown, HTML) and recursive chunking with overlap. Does NOT embed or store — the caller handles that.
 - **oasis-telegram** — `TelegramBot` client using long polling. Hand-rolled, no bot framework. Handles message splitting for Telegram's 4096-char limit.
-- **oasis-brain** — The orchestration layer (`Brain` struct). Owns all other components. Runs the Telegram polling loop, routes messages by keyword matching, handles RAG queries, task operations, file/URL ingestion, and streaming chat responses.
+- **oasis-brain** — The orchestration layer (`Brain` struct) plus all business logic modules:
+  - `brain.rs` — Message routing, intent dispatch, LLM/embedding dispatch, streaming chat
+  - `store.rs` — `VectorStore` wrapping libSQL with DiskANN vector indexes (documents, chunks, conversations, messages, config)
+  - `tasks.rs` — `TaskManager` for CRUD on projects and tasks
+  - `memory.rs` — `MemoryStore` for user fact extraction and memory
+  - `search.rs` — `WebSearch` with headless Chromium for web search and browsing
+  - `tools.rs` — Tool definitions for LLM function calling
+  - `scheduler.rs` — `Scheduler` for proactive task reminders
+  - `ingest/` — `IngestPipeline` for text extraction (plain text, Markdown, HTML) and recursive chunking with overlap
 
 ### Key Design Patterns
 
@@ -77,7 +78,7 @@ oasis-tasks → oasis-core
 - **Custom error type without anyhow/thiserror** — `OasisError` enum with manual `Display` impl. All crates use `oasis_core::error::Result<T>`.
 - **ULID-like IDs** — `new_id()` generates time-sortable IDs using timestamp + random bytes from `/dev/urandom`, no external crate.
 - **Background message storage** — `spawn_store()` fires a tokio task to embed and persist message pairs after responding, so the user doesn't wait for embedding.
-- **Keyword-based routing** — `Brain::handle_message` routes via string prefix matching (e.g., "todo ", "done ", "remember"), not LLM intent classification. The `Intent` enum in `oasis-brain/src/intent.rs` exists for future LLM-based routing but is not yet used in the main path.
+- **LLM-based intent routing** — `Brain::handle_message` classifies user messages via a lightweight intent LLM (Gemini Flash-Lite) into Chat vs Action intents, then dispatches accordingly.
 
 ### Database
 

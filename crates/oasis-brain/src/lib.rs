@@ -1,2 +1,9 @@
 pub mod brain;
+pub mod ingest;
 pub mod intent;
+pub mod memory;
+pub mod scheduler;
+pub mod search;
+pub mod store;
+pub mod tasks;
+pub mod tools;

@@ -1,8 +1,8 @@
 use oasis_core::error::{OasisError, Result};
 use oasis_core::types::*;
 
-use crate::chunker::{self, ChunkerConfig};
-use crate::extractor::{self, ContentType};
+use super::chunker::{self, ChunkerConfig};
+use super::extractor::{self, ContentType};
 
 /// The ingestion pipeline: extract text, chunk it, and produce Document + Chunk structs.
 ///

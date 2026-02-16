@@ -2,15 +2,8 @@
 members = [
     "crates/oasis-core",
     "crates/oasis-llm",
-    "crates/oasis-vector",
-    "crates/oasis-tasks",
-    "crates/oasis-ingest",
     "crates/oasis-telegram",
     "crates/oasis-brain",
-    "crates/oasis-scheduler",
-    "crates/oasis-memory",
-    "crates/oasis-search",
-    "crates/oasis-tools",
 ]
 resolver = "2"
 
@@ -22,8 +15,6 @@ edition = "2021"
 [dependencies]
 oasis-core = { path = "crates/oasis-core" }
 oasis-brain = { path = "crates/oasis-brain" }
-oasis-scheduler = { path = "crates/oasis-scheduler" }
-oasis-tasks = { path = "crates/oasis-tasks" }
 oasis-telegram = { path = "crates/oasis-telegram" }
 libsql = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
