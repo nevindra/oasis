@@ -9,6 +9,7 @@ pub enum OasisError {
     Ingest(String),
     Config(String),
     Http { status: u16, body: String },
+    Integration(String),
 }
 
 impl fmt::Display for OasisError {
@@ -21,6 +22,7 @@ impl fmt::Display for OasisError {
             Self::Ingest(msg) => write!(f, "ingest error: {msg}"),
             Self::Config(msg) => write!(f, "config error: {msg}"),
             Self::Http { status, body } => write!(f, "http error ({status}): {body}"),
+            Self::Integration(msg) => write!(f, "integration error: {msg}"),
         }
     }
 }

@@ -2,10 +2,14 @@ use oasis_core::error::Result;
 use oasis_core::types::*;
 
 use super::Brain;
+use crate::service::llm::is_transient_error;
+
+const MAX_STREAM_RETRIES: u32 = 3;
 
 impl Brain {
     /// Handle chat with streaming: send an initial placeholder message,
     /// then edit it as tokens arrive from the LLM.
+    /// Retries up to MAX_STREAM_RETRIES times on transient errors (429, 5xx).
     pub(crate) async fn handle_chat_stream(
         &self,
         chat_id: i64,
@@ -44,91 +48,134 @@ impl Brain {
             temperature: Some(0.7),
         };
 
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-        let llm_handle = {
-            let llm = self.llm.clone();
-            tokio::spawn(async move {
-                llm.chat_stream(request, tx).await
-            })
-        };
-
         let msg_id = self
             .bot
             .send_message_with_id(chat_id, "Thinking...")
             .await?;
-        let mut accumulated = String::new();
-        let mut last_edit = std::time::Instant::now();
-        let edit_interval = std::time::Duration::from_secs(1);
 
-        while let Some(chunk) = rx.recv().await {
-            accumulated.push_str(&chunk);
+        let mut last_err = None;
 
-            if last_edit.elapsed() >= edit_interval {
-                let _ = self.bot.edit_message(chat_id, msg_id, &accumulated).await;
-                last_edit = std::time::Instant::now();
+        for attempt in 0..=MAX_STREAM_RETRIES {
+            if attempt > 0 {
+                let delay = std::time::Duration::from_secs(1 << (attempt - 1));
+                log!(
+                    " [chat-llm] retry {attempt}/{MAX_STREAM_RETRIES} in {}s",
+                    delay.as_secs()
+                );
+                let _ = self
+                    .bot
+                    .edit_message(
+                        chat_id,
+                        msg_id,
+                        &format!("Retrying... (attempt {}/{})", attempt + 1, MAX_STREAM_RETRIES + 1),
+                    )
+                    .await;
+                tokio::time::sleep(delay).await;
+            }
+
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+            let llm_handle = {
+                let llm = self.llm.clone();
+                let req = request.clone();
+                tokio::spawn(async move { llm.chat_stream(req, tx).await })
+            };
+
+            let mut accumulated = String::new();
+            let mut last_edit = std::time::Instant::now();
+            let edit_interval = std::time::Duration::from_secs(1);
+
+            while let Some(chunk) = rx.recv().await {
+                accumulated.push_str(&chunk);
+
+                if last_edit.elapsed() >= edit_interval {
+                    let _ = self.bot.edit_message(chat_id, msg_id, &accumulated).await;
+                    last_edit = std::time::Instant::now();
+                }
+            }
+
+            if !accumulated.is_empty() {
+                let _ = self
+                    .bot
+                    .edit_message_formatted(chat_id, msg_id, &accumulated)
+                    .await;
+            }
+            log!(" [send] {} chars (streamed)", accumulated.len());
+
+            match llm_handle.await {
+                Ok(Ok(resp)) => {
+                    if let Some(ref u) = resp.usage {
+                        log!(
+                            " [llm] tokens: in={} out={}",
+                            u.input_tokens,
+                            u.output_tokens
+                        );
+                    }
+                    if accumulated.is_empty() {
+                        log!(" [llm] stream returned empty content");
+                        let _ = self
+                            .bot
+                            .edit_message(
+                                chat_id,
+                                msg_id,
+                                "Sorry, I got an empty response. Please try again.",
+                            )
+                            .await;
+                    }
+                    return Ok(accumulated);
+                }
+                Ok(Err(e)) => {
+                    log!(" [llm] stream error: {e}");
+                    if accumulated.is_empty()
+                        && is_transient_error(&e)
+                        && attempt < MAX_STREAM_RETRIES
+                    {
+                        last_err = Some(e);
+                        continue;
+                    }
+                    if accumulated.is_empty() {
+                        let _ = self
+                            .bot
+                            .edit_message(
+                                chat_id,
+                                msg_id,
+                                "Sorry, something went wrong. Please try again.",
+                            )
+                            .await;
+                        return Err(e);
+                    }
+                    return Ok(accumulated);
+                }
+                Err(e) => {
+                    log!(" [llm] stream task panicked: {e}");
+                    if accumulated.is_empty() {
+                        let _ = self
+                            .bot
+                            .edit_message(
+                                chat_id,
+                                msg_id,
+                                "Sorry, something went wrong. Please try again.",
+                            )
+                            .await;
+                    }
+                    return Ok(accumulated);
+                }
             }
         }
 
-        if !accumulated.is_empty() {
-            let _ = self
-                .bot
-                .edit_message_formatted(chat_id, msg_id, &accumulated)
-                .await;
-        }
-        log!(" [send] {} chars (streamed)", accumulated.len());
-
-        match llm_handle.await {
-            Ok(Ok(resp)) => {
-                if let Some(ref u) = resp.usage {
-                    log!(
-                        " [llm] tokens: in={} out={}",
-                        u.input_tokens,
-                        u.output_tokens
-                    );
-                }
-                if accumulated.is_empty() {
-                    log!(" [llm] stream returned empty content");
-                    let _ = self
-                        .bot
-                        .edit_message(
-                            chat_id,
-                            msg_id,
-                            "Sorry, I got an empty response. Please try again.",
-                        )
-                        .await;
-                }
-            }
-            Ok(Err(e)) => {
-                log!(" [llm] stream error: {e}");
-                if accumulated.is_empty() {
-                    let _ = self
-                        .bot
-                        .edit_message(
-                            chat_id,
-                            msg_id,
-                            "Sorry, something went wrong. Please try again.",
-                        )
-                        .await;
-                    return Err(e);
-                }
-            }
-            Err(e) => {
-                log!(" [llm] stream task panicked: {e}");
-                if accumulated.is_empty() {
-                    let _ = self
-                        .bot
-                        .edit_message(
-                            chat_id,
-                            msg_id,
-                            "Sorry, something went wrong. Please try again.",
-                        )
-                        .await;
-                }
-            }
-        }
-
-        Ok(accumulated)
+        // All retries exhausted
+        let _ = self
+            .bot
+            .edit_message(
+                chat_id,
+                msg_id,
+                "Sorry, the service is temporarily unavailable. Please try again later.",
+            )
+            .await;
+        Err(last_err.unwrap_or_else(|| oasis_core::error::OasisError::Llm {
+            provider: self.config.llm.provider.clone(),
+            message: "max retries exceeded".to_string(),
+        }))
     }
 
     /// Build the dynamic system prompt with task summary, knowledge context,

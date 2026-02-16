@@ -25,6 +25,8 @@ pub struct Config {
     /// Falls back to `llm` if not configured.
     #[serde(default)]
     pub action: ActionConfig,
+    #[serde(default)]
+    pub integrations: IntegrationsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,6 +259,82 @@ impl Default for ActionConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationsConfig {
+    #[serde(default)]
+    pub linear: LinearConfig,
+    #[serde(default)]
+    pub google: GoogleConfig,
+    #[serde(default)]
+    pub server: IntegrationServerConfig,
+}
+
+impl Default for IntegrationsConfig {
+    fn default() -> Self {
+        Self {
+            linear: LinearConfig::default(),
+            google: GoogleConfig::default(),
+            server: IntegrationServerConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinearConfig {
+    #[serde(default)]
+    pub api_key: String,
+}
+
+impl Default for LinearConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoogleConfig {
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+    #[serde(default = "default_callback_url")]
+    pub callback_url: String,
+}
+
+fn default_callback_url() -> String {
+    "http://localhost:8080/oauth/callback".to_string()
+}
+
+impl Default for GoogleConfig {
+    fn default() -> Self {
+        Self {
+            client_id: String::new(),
+            client_secret: String::new(),
+            callback_url: default_callback_url(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationServerConfig {
+    #[serde(default = "default_server_port")]
+    pub port: u16,
+}
+
+fn default_server_port() -> u16 {
+    8080
+}
+
+impl Default for IntegrationServerConfig {
+    fn default() -> Self {
+        Self {
+            port: default_server_port(),
+        }
+    }
+}
+
 impl Config {
     /// Load config: defaults → oasis.toml → env vars (env wins).
     pub fn load(path: &Path) -> Result<Self> {
@@ -292,6 +370,15 @@ impl Config {
         if let Ok(v) = std::env::var("OASIS_ACTION_API_KEY") {
             config.action.api_key = v;
         }
+        if let Ok(v) = std::env::var("OASIS_LINEAR_API_KEY") {
+            config.integrations.linear.api_key = v;
+        }
+        if let Ok(v) = std::env::var("OASIS_GOOGLE_CLIENT_ID") {
+            config.integrations.google.client_id = v;
+        }
+        if let Ok(v) = std::env::var("OASIS_GOOGLE_CLIENT_SECRET") {
+            config.integrations.google.client_secret = v;
+        }
 
         // Fallback: intent model uses the LLM API key if not separately configured
         if config.intent.api_key.is_empty() {
@@ -323,6 +410,7 @@ impl Default for Config {
             brain: BrainConfig::default(),
             intent: IntentConfig::default(),
             action: ActionConfig::default(),
+            integrations: IntegrationsConfig::default(),
         }
     }
 }

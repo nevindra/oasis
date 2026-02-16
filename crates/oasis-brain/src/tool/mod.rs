@@ -3,6 +3,9 @@ pub mod search;
 pub mod knowledge;
 pub mod schedule;
 pub mod memory_tool;
+pub mod linear;
+pub mod calendar;
+pub mod gmail;
 
 use std::sync::Arc;
 

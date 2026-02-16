@@ -7,6 +7,7 @@ edition = "2021"
 oasis-core = { path = "../oasis-core" }
 oasis-llm = { path = "../oasis-llm" }
 oasis-telegram = { path = "../oasis-telegram" }
+oasis-integrations = { path = "../oasis-integrations" }
 
 # Dependencies from absorbed crates
 libsql = "0.6"

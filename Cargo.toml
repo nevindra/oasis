@@ -3,6 +3,7 @@ members = [
     "crates/oasis-core",
     "crates/oasis-llm",
     "crates/oasis-telegram",
+    "crates/oasis-integrations",
     "crates/oasis-brain",
 ]
 resolver = "2"
