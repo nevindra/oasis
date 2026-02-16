@@ -430,18 +430,8 @@ impl WebSearch {
             .map(|v| v.into_value().unwrap_or_default())
             .unwrap_or_default();
         if url_after != url_before {
+            // Navigation happened — wait longer for new page to load
             tokio::time::sleep(BROWSER_PAGE_WAIT).await;
-            // Scroll incrementally to trigger lazy/virtual scroll loading
-            let _ = page.evaluate(
-                r#"(async () => {
-                    for (let i = 0; i < 5; i++) {
-                        window.scrollBy(0, window.innerHeight);
-                        await new Promise(r => setTimeout(r, 400));
-                    }
-                    window.scrollTo(0, 0);
-                })()"#
-            ).await;
-            tokio::time::sleep(Duration::from_secs(3)).await;
         }
 
         extract_page_snapshot(page).await
