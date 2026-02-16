@@ -15,15 +15,15 @@ graph TB
 
     Stream --> LLM[oasis-llm]
     ToolLoop --> LLM
-    ToolLoop --> Tools[tools module]
+    ToolLoop --> Tools[tool/ — ToolRegistry]
 
-    Tools --> Tasks[tasks module]
-    Tools --> Search[search module]
-    Tools --> Ingest[ingest module]
-    Tools --> Store[store module]
+    Tools --> Tasks[service/tasks]
+    Tools --> Search[service/search/]
+    Tools --> Ingest[service/ingest/]
+    Tools --> Store[service/store]
 
-    Brain --> Memory[memory module]
-    Brain --> Scheduler[scheduler module]
+    Brain --> Memory[service/memory]
+    Brain --> Scheduler[service/scheduler]
     Brain --> Store
 
     Store --> DB[(libSQL / Turso)]
@@ -49,7 +49,11 @@ graph LR
     telegram --> core
 ```
 
-oasis-brain contains all business logic as internal modules: `store`, `tasks`, `memory`, `search`, `tools`, `scheduler`, `ingest/`.
+oasis-brain is organized in three layers:
+
+- **`brain/`** (L1: Orchestration) — Message routing, intent dispatch, streaming chat, action loop, scheduled actions, background storage
+- **`tool/`** (L2: Extension point) — `Tool` trait + `ToolRegistry` for dynamic dispatch, with implementations: `TaskTool`, `SearchTool`, `KnowledgeTool`, `ScheduleTool`, `MemoryTool`
+- **`service/`** (L3: Infrastructure) — `store`, `tasks`, `memory`, `llm` (LlmDispatch + Embedder), `search/`, `ingest/`, `intent`, `scheduler`
 
 ## Message Processing Flow
 
@@ -162,18 +166,29 @@ Config loads in order: **defaults -> `oasis.toml` -> environment variables** (en
 - [oasis-llm](systems/llm.md) - LLM and embedding provider implementations
 - [oasis-telegram](systems/telegram.md) - Telegram bot client, message formatting
 
-oasis-brain internal modules (formerly separate crates):
+oasis-brain internal layers:
+
+**brain/** (orchestration):
+
+- [brain](systems/brain.md) - Message routing, intent dispatch, streaming chat, action loop
+
+**tool/** (extension point):
+
+- [tools](systems/tools.md) - Tool trait, ToolRegistry, and tool implementations
+
+**service/** (infrastructure):
 
 - [store](systems/vector.md) - Vector store, database, all table operations
 - [tasks](systems/tasks.md) - Task and project management
 - [memory](systems/memory.md) - User fact extraction and memory
 - [search](systems/search.md) - Web search and interactive browser
 - [ingest](systems/ingest.md) - Text extraction, chunking pipeline
-- [tools](systems/tools.md) - Tool definitions for LLM function calling
 - [scheduler](systems/scheduler.md) - Proactive task reminders
 
 ## Key Design Decisions
 
+- **Three-layer module structure**: `brain/` (orchestration) → `tool/` (extension point) → `service/` (infrastructure). Dependency flows downward only.
+- **Tool trait pattern**: `Tool` trait with `definitions()` + `execute()` methods, `ToolRegistry` for dynamic dispatch. Blanket `impl<T: Tool> Tool for Arc<T>` allows sharing tools between Brain fields and the registry.
 - **No async trait objects**: LLM/embedding providers are created on-the-fly via match dispatch, avoiding `dyn` complexity.
 - **No external crates for errors**: Custom `OasisError` enum with manual `Display` impl.
 - **No bot framework**: Hand-rolled Telegram client using raw HTTP (reqwest).

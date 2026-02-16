@@ -1,7 +1,7 @@
 use libsql::Database;
 use oasis_core::error::{OasisError, Result};
 use oasis_core::types::*;
-use crate::tasks::TaskManager;
+use super::tasks::TaskManager;
 use oasis_telegram::bot::TelegramBot;
 use std::time::Duration;
 

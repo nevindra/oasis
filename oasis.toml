@@ -24,7 +24,7 @@ overlap_tokens = 50
 
 [action]
 provider = "gemini"
-model = "gemini-3-flash-preview"
+model = "gemini-2.5-flash-preview-09-2025"
 
 [brain]
 context_window = 20

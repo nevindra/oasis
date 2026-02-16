@@ -17,3 +17,4 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 chromiumoxide = { version = "0.8", default-features = false, features = ["tokio-runtime"] }
 futures = "0.3"
 readability-rust = "0.1.0"
+async-trait = "0.1"

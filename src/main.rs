@@ -62,7 +62,7 @@ async fn main() {
 /// Returns None if initialization fails (non-fatal — brain runs without scheduler).
 async fn create_scheduler(
     config: &Config,
-) -> Option<oasis_brain::scheduler::Scheduler> {
+) -> Option<oasis_brain::service::scheduler::Scheduler> {
     // Open a separate DB handle for the scheduler
     let db = if !config.database.turso_url.is_empty() {
         libsql::Builder::new_remote(
@@ -109,7 +109,7 @@ async fn create_scheduler(
         }
     };
 
-    let tasks = oasis_brain::tasks::TaskManager::new(task_db);
+    let tasks = oasis_brain::service::tasks::TaskManager::new(task_db);
 
     // Separate bot instance for the scheduler
     let bot = oasis_telegram::bot::TelegramBot::new(
@@ -150,7 +150,7 @@ async fn create_scheduler(
     };
 
     let scheduler =
-        oasis_brain::scheduler::Scheduler::new(db, tasks, bot, chat_id, config.brain.timezone_offset);
+        oasis_brain::service::scheduler::Scheduler::new(db, tasks, bot, chat_id, config.brain.timezone_offset);
 
     if let Err(e) = scheduler.init().await {
         eprintln!("oasis: scheduler table init failed (non-fatal): {e}");
