@@ -93,18 +93,37 @@ impl Brain {
             }
 
             let tz = self.config.brain.timezone_offset;
-            let next_run = compute_next_run(&action.schedule, now, tz).unwrap_or(now + 86400);
+            let is_once = action.schedule.ends_with(" once");
 
-            if let Err(e) = self
-                .store
-                .update_scheduled_action_run(&action.id, now, next_run)
-                .await
-            {
-                log!(" [sched] update run failed: {e}");
+            if is_once {
+                // One-time schedule: disable after execution
+                if let Err(e) = self
+                    .store
+                    .update_scheduled_action_run(&action.id, now, now)
+                    .await
+                {
+                    log!(" [sched] update run failed: {e}");
+                }
+                if let Err(e) = self
+                    .store
+                    .update_scheduled_action_enabled(&action.id, false)
+                    .await
+                {
+                    log!(" [sched] disable once-schedule failed: {e}");
+                }
+                log!(" [sched] done (once): {}, now disabled", action.description);
+            } else {
+                let next_run = compute_next_run(&action.schedule, now, tz).unwrap_or(now + 86400);
+                if let Err(e) = self
+                    .store
+                    .update_scheduled_action_run(&action.id, now, next_run)
+                    .await
+                {
+                    log!(" [sched] update run failed: {e}");
+                }
+                let next_str = format_due(next_run, tz);
+                log!(" [sched] done: {}, next: {next_str}", action.description);
             }
-
-            let next_str = format_due(next_run, tz);
-            log!(" [sched] done: {}, next: {next_str}", action.description);
         }
 
         Ok(())

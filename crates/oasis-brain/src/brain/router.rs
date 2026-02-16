@@ -15,12 +15,17 @@ Return a JSON object with a single "intent" field:
 1. **chat** — Conversation, questions, opinions, recommendations, explanations, or anything the assistant can answer from its own knowledge. This includes: "what is X?", "recommend me Y", "what do you think about Z?", "tell me about...", follow-up questions, casual talk, greetings.
    Return: `{"intent":"chat"}`
 
-2. **action** — The user explicitly wants to CREATE, UPDATE, DELETE, or SEARCH for something using a tool. Examples: "buatkan task ...", "tandai ... selesai", "hapus task ...", "cari di internet ...", "ingatkan aku ...", "cari di knowledge base".
+2. **action** — The user wants to CREATE, UPDATE, DELETE, SEARCH, SCHEDULE, or MONITOR something using a tool. This includes:
+   - Task operations: "buatkan task ...", "tandai ... selesai", "hapus task ..."
+   - Search: "cari di internet ...", "cari di knowledge base"
+   - Reminders and scheduling: "ingatkan aku ...", "cek lagi nanti ...", "tolong pantau ...", "kabari kalau ...", "remind me ...", "check later ..."
+   - Any request that implies a deferred or future action the assistant should perform
    Return: `{"intent":"action"}`
 
 ## Rules
 - If the user is asking a question or having a conversation, it's CHAT — even if the topic involves tasks, books, schedules, etc.
-- Action is ONLY when the user wants to PERFORM an operation (create, update, delete, search, save).
+- Action is when the user wants to PERFORM an operation (create, update, delete, search, save, schedule, monitor).
+- Requests to do something later or check on something in the future are ACTION, not CHAT.
 - If in doubt, prefer CHAT.
 - Respond with ONLY the JSON object, no extra text.
 - The user may write in English or Indonesian."#;

@@ -32,8 +32,8 @@ impl Tool for ScheduleTool {
                     "properties": {
                         "description": { "type": "string", "description": "Human-readable description of what this scheduled action does" },
                         "time": { "type": "string", "description": "Time in HH:MM format (24-hour, user's local timezone)" },
-                        "recurrence": { "type": "string", "enum": ["daily", "weekly", "monthly"], "description": "How often to run" },
-                        "day": { "type": "string", "description": "Day for weekly (monday-sunday/senin-minggu) or day number for monthly (1-31). Required for weekly/monthly." },
+                        "recurrence": { "type": "string", "enum": ["once", "daily", "custom", "weekly", "monthly"], "description": "How often to run. Use 'once' for one-time actions. Use 'custom' to pick specific days of the week." },
+                        "day": { "type": "string", "description": "For weekly: single day name (monday/senin). For custom: comma-separated day names (e.g. 'senin,rabu,kamis' or 'monday,wednesday,friday'). For monthly: day number (1-31)." },
                         "tools": {
                             "type": "array",
                             "items": {
@@ -68,8 +68,8 @@ impl Tool for ScheduleTool {
                         "description_query": { "type": "string", "description": "Substring to match the scheduled action description" },
                         "enabled": { "type": "boolean", "description": "Set to true to enable, false to disable/pause" },
                         "time": { "type": "string", "description": "New time in HH:MM format (optional)" },
-                        "recurrence": { "type": "string", "enum": ["daily", "weekly", "monthly"], "description": "New recurrence (optional)" },
-                        "day": { "type": "string", "description": "New day for weekly/monthly (optional)" }
+                        "recurrence": { "type": "string", "enum": ["once", "daily", "custom", "weekly", "monthly"], "description": "New recurrence (optional)" },
+                        "day": { "type": "string", "description": "New day(s) — single for weekly, comma-separated for custom, number for monthly (optional)" }
                     },
                     "required": ["description_query"]
                 }),
@@ -132,6 +132,12 @@ impl ScheduleTool {
         synthesis_prompt: Option<&str>,
     ) -> Result<String> {
         let schedule = match recurrence {
+            "once" => format!("{time} once"),
+            "custom" => {
+                let d = day.unwrap_or("monday,wednesday,friday");
+                let normalized = normalize_day_list(d);
+                format!("{time} custom({normalized})")
+            }
             "weekly" => {
                 let d = day.unwrap_or("monday");
                 format!("{time} weekly({d})")
@@ -222,6 +228,12 @@ impl ScheduleTool {
             let new_time = time.unwrap_or(current_parts.first().copied().unwrap_or("08:00"));
             let new_rec = recurrence
                 .map(|r| match r {
+                    "once" => "once".to_string(),
+                    "custom" => {
+                        let d = day.unwrap_or("monday,wednesday,friday");
+                        let normalized = normalize_day_list(d);
+                        format!("custom({normalized})")
+                    }
                     "weekly" => {
                         let d = day.unwrap_or("monday");
                         format!("weekly({d})")
@@ -326,12 +338,37 @@ pub fn compute_next_run(schedule: &str, now: i64, tz_offset: i32) -> Option<i64>
     let recurrence = parts[1].trim();
 
     match recurrence {
-        "daily" => {
+        "once" | "daily" => {
             let target_day = if local_time_of_day >= target_time_of_day {
                 local_days + 1
             } else {
                 local_days
             };
+            let local_ts = target_day * 86400 + target_time_of_day;
+            Some(local_ts - offset_secs)
+        }
+        s if s.starts_with("custom(") => {
+            let days_str = s.trim_start_matches("custom(").trim_end_matches(')');
+            let current_dow = ((local_days % 7) + 3) % 7;
+            let mut best_ahead: Option<i64> = None;
+
+            for day_name in days_str.split(',') {
+                let target_dow = day_name_to_dow(day_name.trim())?;
+                let mut ahead = target_dow - current_dow;
+                if ahead < 0 {
+                    ahead += 7;
+                }
+                if ahead == 0 && local_time_of_day >= target_time_of_day {
+                    ahead = 7;
+                }
+                best_ahead = Some(match best_ahead {
+                    Some(b) if b <= ahead => b,
+                    _ => ahead,
+                });
+            }
+
+            let days_ahead = best_ahead?;
+            let target_day = local_days + days_ahead;
             let local_ts = target_day * 86400 + target_time_of_day;
             Some(local_ts - offset_secs)
         }
@@ -373,6 +410,15 @@ pub fn compute_next_run(schedule: &str, now: i64, tz_offset: i32) -> Option<i64>
         }
         _ => None,
     }
+}
+
+/// Normalize comma-separated day names to lowercase, trimmed.
+fn normalize_day_list(input: &str) -> String {
+    input
+        .split(',')
+        .map(|d| d.trim().to_lowercase())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn day_name_to_dow(name: &str) -> Option<i64> {
