@@ -2,9 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Documentation
+
+**Always read and follow these docs before making changes:**
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Full system architecture: crate graph, brain 3-layer structure, message processing flows, LLM dispatch, subsystems (memory, ingestion, search, scheduling), database schema, configuration, and design decisions.
+- **[docs/CONVENTIONS.md](docs/CONVENTIONS.md)** — Coding best practices: error handling, module structure, import ordering, trait patterns, how to add tools/providers, async patterns, logging, string/type/config conventions, testing rules, and things to never do.
+
+**When you make architectural or convention changes, update the corresponding doc file to keep them in sync.**
+
 ## What is Oasis
 
-Oasis is a personal AI assistant accessed via Telegram. It combines a knowledge base (RAG), task management, and conversational memory. Built in Rust as a single binary with modular library crates, deployed as a Docker image on Zeabur.
+Oasis is a personal AI assistant accessed via Telegram. It combines conversational AI, a knowledge base (RAG), task management, scheduled automations, web browsing, and conversational memory. Built in Rust as a single binary with modular library crates, deployed as a Docker image on Zeabur.
 
 ## Build & Run Commands
 
@@ -46,40 +55,44 @@ Secrets are set via environment variables (see `.env`):
 - `OASIS_TURSO_URL` / `OASIS_TURSO_TOKEN` - optional remote libSQL database
 - `OASIS_CONFIG` - path to config file (defaults to `oasis.toml`)
 
-## Architecture
+## Architecture (quick reference)
 
-### Crate Dependency Flow (no cycles)
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
+
+### Crate Dependency Flow (5 crates, no cycles)
 
 ```
 src/main.rs → oasis-brain
-oasis-brain → oasis-core, oasis-llm, oasis-telegram
+oasis-brain → oasis-core, oasis-llm, oasis-telegram, oasis-integrations
 oasis-telegram → oasis-core
 oasis-llm → oasis-core
+oasis-integrations → oasis-core
 ```
 
-### Crate Responsibilities (4 crates)
+### Brain Three-Layer Structure
 
-- **oasis-core** — Shared types (`Document`, `Chunk`, `Task`, `Message`, `ChatRequest`/`ChatResponse`), `Config` loading, `OasisError` enum, and utility functions (`new_id`, `now_unix`).
-- **oasis-llm** — `LlmProvider` and `EmbeddingProvider` traits with implementations for Anthropic, OpenAI, Gemini, and Ollama. All providers use raw HTTP (reqwest) with no SDK dependencies. Gemini supports streaming via SSE.
-- **oasis-telegram** — `TelegramBot` client using long polling. Hand-rolled, no bot framework. Handles message splitting for Telegram's 4096-char limit.
-- **oasis-brain** — The orchestration layer (`Brain` struct) plus all business logic modules:
-  - `brain.rs` — Message routing, intent dispatch, LLM/embedding dispatch, streaming chat
-  - `store.rs` — `VectorStore` wrapping libSQL with DiskANN vector indexes (documents, chunks, conversations, messages, config)
-  - `tasks.rs` — `TaskManager` for CRUD on projects and tasks
-  - `memory.rs` — `MemoryStore` for user fact extraction and memory
-  - `search.rs` — `WebSearch` with headless Chromium for web search and browsing
-  - `tools.rs` — Tool definitions for LLM function calling
-  - `scheduler.rs` — `Scheduler` for proactive task reminders
-  - `ingest/` — `IngestPipeline` for text extraction (plain text, Markdown, HTML) and recursive chunking with overlap
+```
+brain/     (L1: Orchestration)  — routing, chat streaming, action dispatch, scheduling
+tool/      (L2: Extension point) — Tool trait + ToolRegistry + implementations
+service/   (L3: Infrastructure)  — store, memory, LLM dispatch, search, ingest
+```
 
-### Key Design Patterns
+Dependency flows downward only. L3 never calls upward.
 
-- **No async trait objects** — LLM/embedding providers are created on-the-fly in dispatch methods (`chat_llm_inner`, `embed_text_inner`) via match on provider name, avoiding `dyn` trait complexity.
-- **Custom error type without anyhow/thiserror** — `OasisError` enum with manual `Display` impl. All crates use `oasis_core::error::Result<T>`.
-- **ULID-like IDs** — `new_id()` generates time-sortable IDs using timestamp + random bytes from `/dev/urandom`, no external crate.
-- **Background message storage** — `spawn_store()` fires a tokio task to embed and persist message pairs after responding, so the user doesn't wait for embedding.
-- **LLM-based intent routing** — `Brain::handle_message` classifies user messages via a lightweight intent LLM (Gemini Flash-Lite) into Chat vs Action intents, then dispatches accordingly.
+### Key Design Decisions
+
+- **No async trait objects for LLM** — match-based dispatch, RPITIT on `LlmProvider`
+- **`#[async_trait]` for Tool** — must be object-safe (`Box<dyn Tool>` in `ToolRegistry`)
+- **No anyhow/thiserror** — custom `OasisError` enum
+- **No bot framework** — hand-rolled Telegram client
+- **No LLM SDKs** — all providers use raw HTTP (reqwest)
+- **No chrono/time** — hand-rolled date math
+- **Telegram HTML, not Markdown** — `pulldown-cmark` converts MD→HTML
+
+## Conventions (quick reference)
+
+See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for full details, code examples, and the "Things to Never Do" list.
 
 ### Database
 
-Uses libSQL (SQLite-compatible) with vector extensions. Tables: `documents`, `chunks` (with `F32_BLOB(1536)` embedding column), `projects`, `tasks`, `conversations`, `messages` (with embedding), `config` (key-value store for runtime state like `telegram_offset` and `owner_user_id`).
+Uses libSQL (SQLite-compatible) with DiskANN vector extensions. Fresh connections per call (no caching). Tables: `documents`, `chunks` (with `F32_BLOB(1536)` embedding), `conversations`, `messages` (with embedding), `config`, `scheduled_actions`, `user_facts`, `conversation_topics`.
