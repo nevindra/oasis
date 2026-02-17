@@ -1,118 +1,174 @@
 # Oasis
 
-A personal AI assistant accessed via Telegram, built in Rust. Combines conversational AI with a knowledge base (RAG), task management, scheduled reminders, and long-term memory — all running as a single binary.
+An AI agent framework for Go. Build tool-calling agents, multi-agent networks, and conversational assistants with composable, interface-driven primitives.
+
+```go
+import oasis "github.com/nevindra/oasis"
+```
 
 ## Features
 
-- **Streaming Chat** — Real-time streamed responses with multi-provider LLM support (Gemini, Claude, OpenAI, Ollama)
-- **Knowledge Base (RAG)** — Ingest documents (text, Markdown, HTML), chunk and embed them, then retrieve relevant context via vector search
-- **Task Management** — Create, list, update, and delete tasks and projects through natural conversation
-- **Web Search & Browsing** — Search the web and browse pages using headless Chromium
-- **Long-term Memory** — Automatically extracts and recalls facts about the user across conversations
-- **Scheduled Actions** — Set reminders and recurring tasks with proactive notifications
-- **Service Integrations** — Linear (issue management), Google Calendar (events), Gmail (search, read, send) — all accessible via natural language
-- **Intent Classification** — Routes messages to the right handler (chat vs. tool use) using a lightweight classifier model
+- **Composable agents** -- `LLMAgent` for single-provider tool loops, `Network` for multi-agent coordination. Networks nest recursively.
+- **Processor pipeline** -- `PreProcessor`, `PostProcessor`, `PostToolProcessor` hooks for guardrails, PII redaction, logging, and custom middleware.
+- **Interface-driven** -- every component (LLM, storage, tools, frontends, memory) is a Go interface. Swap implementations without touching the rest of the system.
+- **Streaming** -- channel-based token streaming with built-in edit batching for messaging platforms.
+- **Built-in tools** -- knowledge search (RAG), web search, scheduled actions, shell execution, file I/O, HTTP requests.
+- **Observability** -- OpenTelemetry wrappers for providers, tools, and embeddings with cost tracking.
+- **No LLM SDKs** -- all providers use raw `net/http`. Zero vendor lock-in.
+- **Pure-Go SQLite** -- `modernc.org/sqlite`, no CGO required.
 
-## Architecture
+## Quick Start
 
+```go
+package main
+
+import (
+    oasis "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/provider/gemini"
+    "github.com/nevindra/oasis/tools/knowledge"
+    "github.com/nevindra/oasis/tools/search"
+)
+
+func main() {
+    llm := gemini.New(apiKey, "gemini-2.5-flash")
+    embedding := gemini.NewEmbedding(apiKey, "text-embedding-004", 768)
+
+    // Single agent with tools
+    agent := oasis.NewLLMAgent("assistant", "Helpful research assistant", llm,
+        oasis.WithTools(
+            knowledge.New(store, embedding),
+            search.New(embedding, braveKey),
+        ),
+        oasis.WithPrompt("You are a helpful research assistant."),
+    )
+
+    result, err := agent.Execute(ctx, oasis.AgentTask{Input: "What is quantum computing?"})
+}
 ```
-src/main.rs → oasis-brain
-                ├── oasis-integrations  (Linear, Google Calendar, Gmail clients)
-                ├── oasis-llm           (LLM & embedding providers)
-                ├── oasis-telegram      (Telegram bot client)
-                └── oasis-core          (shared types, config, errors)
+
+## Agents
+
+### LLMAgent
+
+A single LLM with tools. Runs a tool-calling loop until the model produces a final text response.
+
+```go
+researcher := oasis.NewLLMAgent("researcher", "Searches the web", llm,
+    oasis.WithTools(searchTool, knowledgeTool),
+    oasis.WithPrompt("You are a research specialist."),
+    oasis.WithMaxIter(5),
+)
 ```
 
-**oasis-brain** is organized into three layers:
+### Network
 
-| Layer | Directory | Responsibility |
-|-------|-----------|----------------|
-| L1: Orchestration | `brain/` | Message routing, streaming chat, action dispatch, scheduling |
-| L2: Extension | `tool/` | Tool trait, registry, and 8 tool modules (29 tools total) |
-| L3: Infrastructure | `service/` | Storage, task management, memory, LLM dispatch, search, ingestion |
+Coordinates multiple agents and tools via an LLM router. The router sees subagents as callable tools (`agent_<name>`) and decides which to invoke.
 
-The system uses three separate LLM models:
+```go
+researcher := oasis.NewLLMAgent("researcher", "Searches for information", llm,
+    oasis.WithTools(searchTool),
+)
+writer := oasis.NewLLMAgent("writer", "Writes polished content", llm)
 
-| Model | Default | Purpose |
-|-------|---------|---------|
-| Chat | Gemini 2.5 Flash | Streaming conversational responses |
-| Intent | Gemini Flash-Lite | Lightweight intent classification & fact extraction |
-| Action | Gemini 2.5 Flash | Agentic tool-use loop |
+team := oasis.NewNetwork("team", "Research and writing team", router,
+    oasis.WithAgents(researcher, writer),
+    oasis.WithTools(knowledgeTool),
+)
 
-## Getting Started
+// Networks compose recursively
+org := oasis.NewNetwork("org", "Full organization", ceo,
+    oasis.WithAgents(team, opsTeam),
+)
+```
 
-### Prerequisites
+### Processors
 
-- Rust 1.84+
-- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- An API key for at least one LLM provider (Gemini, OpenAI, or Anthropic)
-- Chromium (for web search features; included in Docker image)
+Middleware hooks that run at specific points in the agent execution pipeline.
 
-### Configuration
+```go
+agent := oasis.NewLLMAgent("guarded", "Safe agent", llm,
+    oasis.WithTools(searchTool),
+    oasis.WithProcessors(&guardrail, &piiRedactor, &logger),
+)
+```
 
-Create a `.env` file in the project root:
+| Interface | Hook Point | Use Cases |
+| --------- | ---------- | --------- |
+| `PreProcessor` | Before LLM call | Input validation, context injection, rate limiting |
+| `PostProcessor` | After LLM response | Output filtering, tool call validation |
+| `PostToolProcessor` | After tool execution | Result redaction, audit logging |
+
+Return `ErrHalt` from any processor to short-circuit execution with a canned response.
+
+## Core Interfaces
+
+| Interface | Purpose |
+| --------- | ------- |
+| `Provider` | LLM backend -- `Chat`, `ChatWithTools`, `ChatStream` |
+| `EmbeddingProvider` | Text-to-vector embedding |
+| `Store` | Persistence with vector search |
+| `MemoryStore` | Long-term semantic memory (facts, confidence, decay) |
+| `Tool` | Pluggable capability for LLM function calling |
+| `Frontend` | Messaging platform -- `Poll`, `Send`, `Edit` |
+| `Agent` | Composable work unit -- `LLMAgent`, `Network`, or custom |
+
+## Included Implementations
+
+| Component | Packages |
+| --------- | -------- |
+| **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Anthropic, Ollama) |
+| **Storage** | `store/sqlite` (local), `store/libsql` (Turso/remote) |
+| **Memory** | `memory/sqlite` |
+| **Frontend** | `frontend/telegram` |
+| **Tools** | `tools/knowledge`, `tools/remember`, `tools/search`, `tools/schedule`, `tools/shell`, `tools/file`, `tools/http` |
+| **Observability** | `observer` (OpenTelemetry wrappers with cost tracking) |
+| **Ingestion** | `ingest` (HTML, Markdown, plain text chunking pipeline) |
+
+## Installation
 
 ```bash
-# Required
-OASIS_TELEGRAM_TOKEN=your-telegram-bot-token
-OASIS_LLM_API_KEY=your-llm-api-key
-OASIS_EMBEDDING_API_KEY=your-embedding-api-key
-
-# Optional — remote database (Turso)
-OASIS_TURSO_URL=
-OASIS_TURSO_TOKEN=
-
-# Optional — separate keys for intent/action models
-OASIS_INTENT_API_KEY=your-intent-api-key
-OASIS_ACTION_API_KEY=your-action-api-key
-
-# Optional — service integrations
-OASIS_LINEAR_API_KEY=your-linear-api-key
-OASIS_GOOGLE_CLIENT_ID=your-google-client-id
-OASIS_GOOGLE_CLIENT_SECRET=your-google-client-secret
+go get github.com/nevindra/oasis
 ```
 
-See `.env.development` for a complete template with all available variables.
+Requires Go 1.24+.
 
-Adjust `oasis.toml` for model selection, chunking parameters, and other settings. Config loading order: **defaults → `oasis.toml` → environment variables** (env vars win).
+## Project Structure
 
-### Run Locally
-
-```bash
-source .env && cargo run
+```text
+oasis/
+|-- types.go, provider.go, tool.go     # Core interfaces and domain types
+|-- store.go, frontend.go, memory.go
+|-- agent.go, llmagent.go, network.go   # Agent primitives
+|-- processor.go                        # Processor pipeline
+|
+|-- provider/gemini/                    # Google Gemini provider
+|-- provider/openaicompat/              # OpenAI-compatible provider
+|-- frontend/telegram/                  # Telegram frontend
+|-- store/sqlite/                       # Local SQLite store
+|-- store/libsql/                       # Remote Turso store
+|-- memory/sqlite/                      # SQLite memory store
+|-- observer/                           # OTEL observability wrappers
+|-- ingest/                             # Document chunking pipeline
+|-- tools/                              # Built-in tools
+|
+|-- cmd/bot_example/                    # Reference application
 ```
 
-### Docker
+## Configuration
 
-```bash
-docker build -t oasis .
-docker run --env-file .env oasis
-```
+Config loading order: **defaults -> `oasis.toml` -> environment variables** (env vars win).
 
-The Docker image uses a multi-stage Alpine build and includes Chromium for headless browsing.
+See [docs/framework/configuration.md](docs/framework/configuration.md) for the full reference.
 
-## Development
+## Documentation
 
-```bash
-cargo check --workspace        # Type-check all crates
-cargo build                    # Debug build
-cargo test --workspace         # Run all tests
-cargo test -p oasis-brain      # Test a single crate
-cargo test test_ingest_html    # Run a specific test
-```
-
-### Database
-
-Oasis uses libSQL (SQLite-compatible) with DiskANN vector indexes for embedding search. By default, it creates a local `oasis.db` file. Optionally connect to a remote Turso database via `OASIS_TURSO_URL`.
-
-```bash
-./scripts/reset-db.sh          # Drop all tables (local or remote)
-```
-
-## Deployment
-
-Deployed as a Docker image on [Zeabur](https://zeabur.com). Set the required environment variables in your deployment platform and the container runs as a single process.
+- [Getting Started](docs/framework/getting-started.md) -- installation and first run
+- [Architecture](docs/framework/architecture.md) -- component design and data flow
+- [Configuration](docs/framework/configuration.md) -- all config options and environment variables
+- [Extending Oasis](docs/framework/extending.md) -- adding custom tools, providers, frontends, and stores
+- [API Reference](docs/framework/api-reference.md) -- complete interface definitions and types
+- [Deployment](docs/framework/deployment.md) -- Docker, cloud deployment, database options
 
 ## License
 
-All rights reserved.
+[MPL-2.0](LICENSE)
