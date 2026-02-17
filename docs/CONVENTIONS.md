@@ -2,17 +2,71 @@
 
 Rules and patterns that all contributors (human and LLM) must follow when writing code in this project. Read this before writing any code.
 
-For engineering principles and mindset (performance, DX, dependency philosophy), see [ENGINEERING.md](ENGINEERING.md).
+For engineering principles and mindset (AGI-readiness, forward-compatibility, performance, DX, dependency philosophy), see [ENGINEERING.md](ENGINEERING.md).
 
 ## Philosophy
 
-Oasis is deliberately minimalist in its **application layer** — the project avoids large frameworks, SDK dependencies, and module bloat. When a standard library solution or hand-rolled implementation exists and is simple enough, it is preferred over adding a dependency.
+Oasis is an AI agent framework built to evolve toward AGI. Two layers, two mindsets:
 
-At the **framework layer**, Oasis prioritizes composable, expressive primitives. Core interfaces and protocol types are designed to unlock powerful patterns for users — not just to solve today's use case. An Agent that can compose with other Agents. A Tool that can wrap complex workflows. Output that can be structured or free-form. The framework should make powerful things possible, not just simple things easy.
+**Framework layer** — composable, expressive primitives designed for longevity. Core interfaces and protocol types unlock powerful patterns for users. An Agent that composes with other Agents. A Tool that wraps complex workflows. Output that can be structured or free-form. The framework makes powerful things possible, not just simple things easy. Interfaces grow by addition, never removal.
 
-**Do not add dependencies unless absolutely necessary.** If you think you need a new module, check whether the project already has a hand-rolled solution first.
+**Application layer** — deliberately minimalist. Avoids large frameworks, SDK dependencies, and module bloat. When a standard library solution or hand-rolled implementation exists and is simple enough, prefer it over adding a dependency.
+
+**Do not add dependencies unless absolutely necessary.** Check whether the project already has a hand-rolled solution first.
 
 **Do not simplify framework interfaces at the expense of expressiveness.** If a method or field on a core interface enables meaningful composition patterns, it belongs there even if the simplest use case doesn't need it.
+
+**Do not introduce breaking changes to framework interfaces.** Add new capabilities via new interfaces or optional fields. See [ENGINEERING.md](ENGINEERING.md) §2 for the forward-compatibility principle.
+
+## LLM-Readability
+
+Code is read by both humans and LLMs. These conventions ensure LLMs can understand, extend, and generate correct code.
+
+### Godoc on Every Export
+
+Every exported type, function, method, and constant must have a godoc comment. Not just "returns X" — explain the contract:
+
+```go
+// SearchChunks finds the top-K document chunks most similar to the query embedding.
+// Returns chunks sorted by descending similarity score. Returns an empty slice (not nil)
+// if no chunks match above the similarity threshold.
+// The embedding parameter must have the same dimensionality as stored embeddings.
+func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.Chunk, error)
+```
+
+### Interface Contracts
+
+Document invariants, thread-safety, and nil/zero behavior in interface comments. LLMs use these to generate correct implementations:
+
+```go
+// Tool provides one or more callable functions to an LLM agent.
+// Implementations must be safe for concurrent use.
+// Execute must always return a nil error for business failures —
+// use ToolResult.Error instead. A non-nil Go error signals infrastructure failure.
+type Tool interface {
+    Definitions() []ToolDefinition
+    Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error)
+}
+```
+
+### Consistent Patterns
+
+When every Tool follows the same Execute pattern, every Provider follows the same constructor pattern, and every test uses the same table-driven structure, LLMs generate correct code on the first try. Don't invent novel patterns when a project convention exists.
+
+### Examples in Tests
+
+Use `Example*` functions for key APIs. They serve as both documentation and executable tests:
+
+```go
+func ExampleNewLLMAgent() {
+    agent := oasis.NewLLMAgent("researcher", provider,
+        oasis.WithTools(searchTool),
+        oasis.WithPrompt("You are a research assistant."),
+    )
+    result, _ := agent.Execute(ctx, oasis.AgentTask{Input: "Find recent papers on RAG"})
+    fmt.Println(result.Output)
+}
+```
 
 ## Error Handling
 
@@ -232,6 +286,26 @@ type Deps struct {
 
 func New(cfg *config.Config, deps Deps) *App { ... }
 ```
+
+## Extensibility Conventions
+
+### Adding a New Interface
+
+When adding a new core interface to the framework:
+
+1. Define it in the root `oasis` package with full godoc and contract comments.
+2. Ensure zero-value/nil behavior is documented.
+3. Consider: can this compose with existing interfaces? Can it be extended later without breaking?
+4. Add at least one concrete implementation.
+5. Add compile-time verification in the implementation package.
+
+### Extending an Existing Interface
+
+**Don't modify existing interface signatures.** Instead:
+
+- **New optional capability:** define a separate interface, type-assert at runtime.
+- **New field on a struct:** ensure the zero value preserves existing behavior.
+- **New method needed by all implementations:** consider if a wrapper/middleware approach works first. If a breaking change is truly unavoidable, document the migration path.
 
 ## Tool Conventions
 
@@ -494,7 +568,7 @@ Do **not** write tests that require external services (LLM API, Telegram, databa
 
 ## Things to Never Do
 
-- **Do not add LLM SDK crates.** All providers use raw HTTP.
+- **Do not add LLM SDK dependencies.** All providers use raw HTTP.
 - **Do not add bot frameworks.** The Telegram client is hand-rolled.
 - **Do not add error wrapping libraries.** Use `fmt.Errorf` with `%w`.
 - **Do not add time/date libraries.** Use `time` stdlib + hand-rolled date math where needed.
@@ -504,3 +578,4 @@ Do **not** write tests that require external services (LLM API, Telegram, databa
 - **Do not use global state.** Inject dependencies through constructors.
 - **Do not add structured logging frameworks.** Use the standard `log` package.
 - **Do not add HTTP router libraries.** The Telegram client doesn't need one.
+- **Do not break existing interface signatures.** Add new interfaces or optional fields instead.
