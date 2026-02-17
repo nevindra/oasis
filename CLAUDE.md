@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Oasis is an AI agent framework in Go — built to evolve as AI capabilities grow toward AGI. It provides primitives for building AI systems today (tool-calling agents, multi-agent networks, knowledge stores, long-term memory) that are designed to remain relevant as agents become more autonomous, self-directing, and capable.
 
-The framework is the product. Everything else — the Telegram bot, the reference app — is a demo of what the framework can do.
+The framework is the product. Everything else — the Telegram bot, the reference app — is a demo of what the framework can do. DO NOT USE BOT CODE AS YOUR GUIDELINE.
 
 **When Oasis is mentioned, it means the FRAMEWORK, not any specific application built on it.**
 
@@ -54,6 +54,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 oasis/                              # FRAMEWORK
 |-- types.go, provider.go, tool.go  # Protocol types + core interfaces
 |-- store.go, frontend.go, memory.go
+|-- processor.go                    # Processor interfaces + ProcessorChain
 |-- agent.go, llmagent.go, network.go  # Agent primitives (composable)
 |
 |-- provider/gemini/               # Google Gemini (Provider + EmbeddingProvider)
@@ -82,6 +83,9 @@ oasis/                              # FRAMEWORK
 | `Tool` | `tool.go` | Pluggable tool for LLM function calling |
 | `Frontend` | `frontend.go` | Messaging platform: Poll, Send, Edit |
 | `Agent` | `agent.go` | Composable work unit: LLMAgent, Network, or custom |
+| `PreProcessor` | `processor.go` | Transform/validate messages before LLM call |
+| `PostProcessor` | `processor.go` | Transform/validate LLM responses before tool execution |
+| `PostToolProcessor` | `processor.go` | Transform/validate tool results before appending to history |
 
 ### Agent Primitives
 
@@ -89,13 +93,19 @@ Agents compose recursively — a Network contains Agents, and Network itself imp
 
 ```go
 // Single agent with tools
-researcher := oasis.NewLLMAgent("researcher", provider, oasis.WithTools(searchTool))
+researcher := oasis.NewLLMAgent("researcher", "Searches info", provider, oasis.WithTools(searchTool))
+
+// Agent with processors (guardrails, PII redaction, etc.)
+guarded := oasis.NewLLMAgent("guarded", "Safe agent", provider,
+    oasis.WithTools(searchTool),
+    oasis.WithProcessors(&guardrail, &piiRedactor),
+)
 
 // Multi-agent network (router delegates to subagents)
-team := oasis.NewNetwork("team", router, oasis.WithAgents(researcher, writer))
+team := oasis.NewNetwork("team", "Coordinates", router, oasis.WithAgents(researcher, writer))
 
 // Networks of networks
-org := oasis.NewNetwork("org", ceo, oasis.WithAgents(team, opsTeam))
+org := oasis.NewNetwork("org", "Top-level", ceo, oasis.WithAgents(team, opsTeam))
 ```
 
 ### Key Design Decisions

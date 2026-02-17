@@ -16,6 +16,7 @@ type Network struct {
 	router       Provider
 	agents       map[string]Agent // keyed by name
 	tools        *ToolRegistry
+	processors   *ProcessorChain
 	systemPrompt string
 	maxIter      int
 }
@@ -29,6 +30,7 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 		router:       router,
 		agents:       make(map[string]Agent),
 		tools:        NewToolRegistry(),
+		processors:   NewProcessorChain(),
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
 	}
@@ -40,6 +42,9 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	}
 	for _, a := range cfg.agents {
 		n.agents[a.Name()] = a
+	}
+	for _, p := range cfg.processors {
+		n.processors.Add(p)
 	}
 	return n
 }
@@ -62,12 +67,24 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 	messages = append(messages, UserMessage(task.Input))
 
 	for i := 0; i < n.maxIter; i++ {
-		resp, err := n.router.ChatWithTools(ctx, ChatRequest{Messages: messages}, toolDefs)
+		req := ChatRequest{Messages: messages}
+
+		// PreProcessor hook
+		if err := n.processors.RunPreLLM(ctx, &req); err != nil {
+			return handleProcessorError(err, totalUsage)
+		}
+
+		resp, err := n.router.ChatWithTools(ctx, req, toolDefs)
 		if err != nil {
 			return AgentResult{Usage: totalUsage}, err
 		}
 		totalUsage.InputTokens += resp.Usage.InputTokens
 		totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+		// PostProcessor hook
+		if err := n.processors.RunPostLLM(ctx, &resp); err != nil {
+			return handleProcessorError(err, totalUsage)
+		}
 
 		// No tool calls — final response
 		if len(resp.ToolCalls) == 0 {
@@ -86,7 +103,14 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 			content, agentUsage := n.dispatch(ctx, tc, task)
 			totalUsage.InputTokens += agentUsage.InputTokens
 			totalUsage.OutputTokens += agentUsage.OutputTokens
-			messages = append(messages, ToolResultMessage(tc.ID, content))
+
+			// PostToolProcessor hook
+			result := ToolResult{Content: content}
+			if err := n.processors.RunPostTool(ctx, tc, &result); err != nil {
+				return handleProcessorError(err, totalUsage)
+			}
+
+			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
 		}
 	}
 

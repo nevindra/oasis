@@ -241,6 +241,62 @@ type Agent interface {
 
 ---
 
+### Processors
+
+**File:** `processor.go`
+
+Three separate interfaces for hooking into the agent execution pipeline. A processor implements whichever phases it needs.
+
+```go
+// PreProcessor runs before messages are sent to the LLM.
+type PreProcessor interface {
+    PreLLM(ctx context.Context, req *ChatRequest) error
+}
+
+// PostProcessor runs after the LLM responds, before tool execution.
+type PostProcessor interface {
+    PostLLM(ctx context.Context, resp *ChatResponse) error
+}
+
+// PostToolProcessor runs after each tool execution.
+type PostToolProcessor interface {
+    PostTool(ctx context.Context, call ToolCall, result *ToolResult) error
+}
+```
+
+| Interface | Hook Point | Receives |
+|-----------|------------|----------|
+| `PreProcessor` | Before each LLM call in the tool-calling loop | Mutable `*ChatRequest` (full message history) |
+| `PostProcessor` | After LLM response, before tool dispatch | Mutable `*ChatResponse` (content + tool calls) |
+| `PostToolProcessor` | After each tool call, before result is appended to history | `ToolCall` (read-only) + mutable `*ToolResult` |
+
+**Halt mechanism:** Return `ErrHalt` to short-circuit execution with a canned response. Other errors propagate as infrastructure failures.
+
+```go
+type ErrHalt struct {
+    Response string
+}
+```
+
+**ProcessorChain:**
+
+```go
+chain := oasis.NewProcessorChain()
+chain.Add(processor)                              // Must implement at least one of the 3 interfaces
+err := chain.RunPreLLM(ctx, &req)                 // Run PreProcessor hooks
+err := chain.RunPostLLM(ctx, &resp)               // Run PostProcessor hooks
+err := chain.RunPostTool(ctx, toolCall, &result)   // Run PostToolProcessor hooks
+chain.Len()                                        // Number of registered processors
+```
+
+**Registration via AgentOption:**
+
+```go
+oasis.WithProcessors(processors ...any)  // Add to LLMAgent or Network
+```
+
+---
+
 ## Types
 
 ### Domain Types
@@ -466,10 +522,11 @@ result, err := registry.Execute(ctx, name, argsJSON)   // Dispatch by name
 agent := oasis.NewLLMAgent(name, description string, provider oasis.Provider, opts ...oasis.AgentOption)
 
 // AgentOption functions (shared with Network)
-oasis.WithTools(tools ...oasis.Tool)    // Add tools
-oasis.WithPrompt(s string)             // Set system prompt
-oasis.WithMaxIter(n int)               // Max tool-calling iterations (default 10)
-oasis.WithAgents(agents ...oasis.Agent) // Ignored by LLMAgent
+oasis.WithTools(tools ...oasis.Tool)          // Add tools
+oasis.WithPrompt(s string)                   // Set system prompt
+oasis.WithMaxIter(n int)                     // Max tool-calling iterations (default 10)
+oasis.WithAgents(agents ...oasis.Agent)       // Ignored by LLMAgent
+oasis.WithProcessors(processors ...any)       // Add processors to execution pipeline
 ```
 
 ### Network
@@ -481,10 +538,11 @@ oasis.WithAgents(agents ...oasis.Agent) // Ignored by LLMAgent
 network := oasis.NewNetwork(name, description string, router oasis.Provider, opts ...oasis.AgentOption)
 
 // AgentOption functions (shared with LLMAgent)
-oasis.WithAgents(agents ...oasis.Agent) // Add subagents (exposed as "agent_<name>" tools)
-oasis.WithTools(tools ...oasis.Tool)    // Add direct tools
-oasis.WithPrompt(s string)             // Set router system prompt
-oasis.WithMaxIter(n int)               // Max routing iterations (default 10)
+oasis.WithAgents(agents ...oasis.Agent)       // Add subagents (exposed as "agent_<name>" tools)
+oasis.WithTools(tools ...oasis.Tool)          // Add direct tools
+oasis.WithPrompt(s string)                   // Set router system prompt
+oasis.WithMaxIter(n int)                     // Max routing iterations (default 10)
+oasis.WithProcessors(processors ...any)       // Add processors to execution pipeline
 ```
 
 ### ID and Time

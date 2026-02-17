@@ -409,6 +409,97 @@ The reference application in `internal/bot/` uses a two-stage resolution:
 
 This pattern is application-level -- the framework provides the storage and search primitives, your application decides how to select and apply skills.
 
+## Adding Processors
+
+Processors hook into the agent execution pipeline to transform, validate, or control messages. Implement one or more of the three processor interfaces.
+
+### Example: Guardrail (PreProcessor)
+
+```go
+package guard
+
+import (
+    "context"
+    "strings"
+
+    oasis "github.com/nevindra/oasis"
+)
+
+type Guardrail struct{}
+
+func (g *Guardrail) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
+    last := req.Messages[len(req.Messages)-1]
+    if strings.Contains(strings.ToLower(last.Content), "ignore all previous instructions") {
+        return &oasis.ErrHalt{Response: "I can't process that request."}
+    }
+    return nil
+}
+```
+
+### Example: PII Redactor (all 3 phases)
+
+```go
+type PIIRedactor struct{}
+
+func (r *PIIRedactor) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
+    for i := range req.Messages {
+        req.Messages[i].Content = redactPII(req.Messages[i].Content)
+    }
+    return nil
+}
+
+func (r *PIIRedactor) PostLLM(_ context.Context, resp *oasis.ChatResponse) error {
+    resp.Content = redactPII(resp.Content)
+    return nil
+}
+
+func (r *PIIRedactor) PostTool(_ context.Context, _ oasis.ToolCall, result *oasis.ToolResult) error {
+    result.Content = redactPII(result.Content)
+    return nil
+}
+```
+
+### Example: Tool Filter (PostProcessor)
+
+```go
+type ToolFilter struct {
+    Blocked map[string]bool
+}
+
+func (f *ToolFilter) PostLLM(_ context.Context, resp *oasis.ChatResponse) error {
+    filtered := resp.ToolCalls[:0]
+    for _, tc := range resp.ToolCalls {
+        if !f.Blocked[tc.Name] {
+            filtered = append(filtered, tc)
+        }
+    }
+    resp.ToolCalls = filtered
+    return nil
+}
+```
+
+### Registering Processors
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
+    oasis.WithTools(searchTool, scheduleTool),
+    oasis.WithProcessors(
+        &Guardrail{},
+        &PIIRedactor{},
+        &ToolFilter{Blocked: map[string]bool{"shell_exec": true}},
+    ),
+)
+```
+
+Processors run in registration order at each hook point. If a processor returns `ErrHalt`, execution stops and the halt message becomes the agent's response. Other errors propagate as infrastructure failures.
+
+### Patterns to Follow
+
+- **Implement only the interfaces you need.** A guardrail only needs `PreProcessor`. A redactor may need all three. The chain skips processors that don't implement a given phase.
+- **Return `ErrHalt` for intentional stops.** Regular errors signal infrastructure failure; `ErrHalt` produces a graceful `AgentResult` with the halt message.
+- **Processors must be safe for concurrent use.** Multiple agent executions may share the same processor instance.
+- **Modify in place.** Processors receive pointers (`*ChatRequest`, `*ChatResponse`, `*ToolResult`) and modify them directly.
+
 ## Creating Custom Agents
 
 Agents are composable units of work. The framework ships with two concrete implementations (`LLMAgent` and `Network`), but you can implement the `Agent` interface directly for custom behavior.

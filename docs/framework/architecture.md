@@ -237,6 +237,32 @@ result, err := network.Execute(ctx, oasis.AgentTask{Input: "Research and write a
 | `WithPrompt(s string)` | Set the system prompt |
 | `WithMaxIter(n int)` | Set the maximum tool-calling iterations (default 10) |
 | `WithAgents(agents ...Agent)` | Add subagents to a Network (ignored by LLMAgent) |
+| `WithProcessors(processors ...any)` | Add processors to the execution pipeline (see Processors below) |
+
+### Processors (`processor.go`)
+
+Processors transform, validate, or control messages as they pass through an agent's execution pipeline. Three separate interfaces, one per hook point -- a processor implements whichever phases it needs:
+
+| Interface | Hook Point | Can Modify |
+| -------------------- | ------------------------------------------------ | ------------------------------------------ |
+| `PreProcessor` | Before LLM call | `*ChatRequest` (messages, parameters) |
+| `PostProcessor` | After LLM response, before tool execution | `*ChatResponse` (content, tool calls) |
+| `PostToolProcessor` | After each tool execution | `*ToolResult` (content, error) |
+
+Any processor can return `ErrHalt` to short-circuit execution and return a canned response. This enables guardrails, content moderation, and safety checks.
+
+**ProcessorChain** holds an ordered list of processors and runs them at each hook point. Both `LLMAgent` and `Network` hold a chain, populated via `WithProcessors()`.
+
+```go
+agent := oasis.NewLLMAgent("safe-agent", "Agent with guardrails", provider,
+    oasis.WithTools(searchTool),
+    oasis.WithProcessors(&guardrail, &piiRedactor, &tokenBudget),
+)
+```
+
+Processors run in registration order. An empty chain is a no-op (zero overhead).
+
+**Use cases:** input validation, guardrails, prompt injection detection, content moderation, PII redaction, token budget enforcement, tool call filtering, message transformation.
 
 ## Ingest Pipeline (`ingest/`)
 

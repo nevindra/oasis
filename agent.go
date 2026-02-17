@@ -33,10 +33,11 @@ type AgentResult struct {
 
 // agentConfig holds shared configuration for LLMAgent and Network.
 type agentConfig struct {
-	tools   []Tool
-	agents  []Agent
-	prompt  string
-	maxIter int
+	tools      []Tool
+	agents     []Agent
+	prompt     string
+	maxIter    int
+	processors []any
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -60,6 +61,14 @@ func WithMaxIter(n int) AgentOption {
 // WithAgents adds subagents to a Network. Ignored by LLMAgent.
 func WithAgents(agents ...Agent) AgentOption {
 	return func(c *agentConfig) { c.agents = append(c.agents, agents...) }
+}
+
+// WithProcessors adds processors to the agent's execution pipeline.
+// Each processor must implement at least one of PreProcessor, PostProcessor,
+// or PostToolProcessor. Processors run in registration order at their
+// respective hook points during Execute().
+func WithProcessors(processors ...any) AgentOption {
+	return func(c *agentConfig) { c.processors = append(c.processors, processors...) }
 }
 
 func buildConfig(opts []AgentOption) agentConfig {

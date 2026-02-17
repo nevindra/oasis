@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"errors"
 	"log"
 )
 
@@ -13,6 +14,7 @@ type LLMAgent struct {
 	description  string
 	provider     Provider
 	tools        *ToolRegistry
+	processors   *ProcessorChain
 	systemPrompt string
 	maxIter      int
 }
@@ -25,6 +27,7 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 		description:  description,
 		provider:     provider,
 		tools:        NewToolRegistry(),
+		processors:   NewProcessorChain(),
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
 	}
@@ -33,6 +36,9 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	}
 	for _, t := range cfg.tools {
 		a.tools.Add(t)
+	}
+	for _, p := range cfg.processors {
+		a.processors.Add(p)
 	}
 	return a
 }
@@ -56,6 +62,11 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 	for i := 0; i < a.maxIter; i++ {
 		req := ChatRequest{Messages: messages}
 
+		// PreProcessor hook
+		if err := a.processors.RunPreLLM(ctx, &req); err != nil {
+			return handleProcessorError(err, totalUsage)
+		}
+
 		var resp ChatResponse
 		var err error
 		if len(toolDefs) > 0 {
@@ -68,6 +79,11 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 		}
 		totalUsage.InputTokens += resp.Usage.InputTokens
 		totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+		// PostProcessor hook
+		if err := a.processors.RunPostLLM(ctx, &resp); err != nil {
+			return handleProcessorError(err, totalUsage)
+		}
 
 		// No tool calls — final response
 		if len(resp.ToolCalls) == 0 {
@@ -90,7 +106,14 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 			} else if result.Error != "" {
 				content = "error: " + result.Error
 			}
-			messages = append(messages, ToolResultMessage(tc.ID, content))
+
+			// PostToolProcessor hook
+			result.Content = content
+			if err := a.processors.RunPostTool(ctx, tc, &result); err != nil {
+				return handleProcessorError(err, totalUsage)
+			}
+
+			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
 		}
 	}
 
@@ -106,6 +129,16 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 	totalUsage.OutputTokens += resp.Usage.OutputTokens
 
 	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+}
+
+// handleProcessorError converts a processor error into an AgentResult.
+// ErrHalt produces a graceful result; other errors propagate as failures.
+func handleProcessorError(err error, usage Usage) (AgentResult, error) {
+	var halt *ErrHalt
+	if errors.As(err, &halt) {
+		return AgentResult{Output: halt.Response, Usage: usage}, nil
+	}
+	return AgentResult{Usage: usage}, err
 }
 
 // compile-time check

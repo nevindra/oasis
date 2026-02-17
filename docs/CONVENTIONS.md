@@ -353,6 +353,33 @@ default:
 }
 ```
 
+## Processor Conventions
+
+### Implementing a Processor
+
+1. Implement one or more of `PreProcessor`, `PostProcessor`, `PostToolProcessor`.
+2. Return `nil` to pass through. Return `ErrHalt` to short-circuit with a response. Return other errors for infrastructure failures.
+3. Modify data in place via the pointer arguments (`*ChatRequest`, `*ChatResponse`, `*ToolResult`).
+4. Processors must be safe for concurrent use.
+
+### Halt vs Error
+
+```go
+// Intentional halt — produces AgentResult{Output: "blocked"}
+return &oasis.ErrHalt{Response: "blocked"}
+
+// Infrastructure failure — propagated as Go error
+return fmt.Errorf("rate limiter unavailable: %w", err)
+```
+
+### Registration
+
+Register via `WithProcessors()` in order of priority. Guardrails first, transformers after:
+
+```go
+oasis.WithProcessors(&guardrail, &redactor, &tokenBudget)
+```
+
 ## Database Conventions
 
 ### Fresh Connections
