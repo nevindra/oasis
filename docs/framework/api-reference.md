@@ -238,6 +238,7 @@ type Agent interface {
 |------|------------|-------|
 | `LLMAgent` | `NewLLMAgent(name, desc, provider, ...AgentOption)` | Tool-calling loop with a single Provider |
 | `Network` | `NewNetwork(name, desc, router, ...AgentOption)` | Multi-agent coordinator via LLM router |
+| `Workflow` | `NewWorkflow(name, desc, ...WorkflowOption) (*Workflow, error)` | Deterministic DAG-based step orchestration |
 
 ---
 
@@ -487,6 +488,65 @@ type AgentResult struct {
 type AgentOption func(*agentConfig) // Shared option type for LLMAgent and Network
 ```
 
+### Workflow Types
+
+**File:** `workflow.go`
+
+```go
+// StepFunc is the function signature for custom workflow steps.
+type StepFunc func(ctx context.Context, wCtx *WorkflowContext) error
+
+// StepStatus represents the execution state of a workflow step.
+type StepStatus string
+
+const (
+    StepPending StepStatus = "pending"
+    StepRunning StepStatus = "running"
+    StepSuccess StepStatus = "success"
+    StepSkipped StepStatus = "skipped"
+    StepFailed  StepStatus = "failed"
+)
+
+// StepResult holds the outcome of a single step execution.
+type StepResult struct {
+    Name     string
+    Status   StepStatus
+    Output   string
+    Error    error
+    Duration time.Duration
+}
+
+// WorkflowResult is the aggregate outcome of a full workflow execution.
+type WorkflowResult struct {
+    Status  StepStatus
+    Steps   map[string]StepResult
+    Context *WorkflowContext
+    Usage   Usage
+}
+
+// StepOption configures an individual workflow step.
+type StepOption func(*stepConfig)
+
+// WorkflowOption configures a Workflow. Step definitions and workflow-level
+// settings both implement this type.
+type WorkflowOption func(*workflowConfig)
+```
+
+**WorkflowContext** — shared state map that flows between steps. All methods are safe for concurrent use.
+
+```go
+wCtx.Get(key string) (any, bool)    // Read a named value
+wCtx.Set(key string, value any)     // Write a named value
+wCtx.Input() string                 // Original AgentTask.Input
+```
+
+**ForEach iteration helpers** — retrieve per-iteration data inside a ForEach step function:
+
+```go
+oasis.ForEachItem(ctx context.Context) (any, bool)  // Current element
+oasis.ForEachIndex(ctx context.Context) (int, bool)  // 0-based index
+```
+
 ---
 
 ## Constructors and Helpers
@@ -544,6 +604,51 @@ oasis.WithPrompt(s string)                   // Set router system prompt
 oasis.WithMaxIter(n int)                     // Max routing iterations (default 10)
 oasis.WithProcessors(processors ...any)       // Add processors to execution pipeline
 ```
+
+### Workflow
+
+**File:** `workflow.go`
+
+```go
+// Create a Workflow (deterministic DAG-based step orchestration).
+// Returns an error if the step graph is invalid (duplicate names, unknown deps, cycles).
+wf, err := oasis.NewWorkflow(name, description string, opts ...oasis.WorkflowOption)
+```
+
+**Step definitions** (each returns a `WorkflowOption`):
+
+```go
+oasis.Step(name string, fn StepFunc, opts ...StepOption)                    // Custom function step
+oasis.AgentStep(name string, agent Agent, opts ...StepOption)               // Delegate to an Agent
+oasis.ToolStep(name string, tool Tool, toolName string, opts ...StepOption) // Call a tool function
+oasis.ForEach(name string, fn StepFunc, opts ...StepOption)                 // Iterate over collection
+oasis.DoUntil(name string, fn StepFunc, opts ...StepOption)                 // Loop until condition true
+oasis.DoWhile(name string, fn StepFunc, opts ...StepOption)                 // Loop while condition true
+```
+
+**Step options** (`StepOption`):
+
+| Option | Description |
+|--------|-------------|
+| `After(steps ...string)` | Dependency edges: run after named steps complete |
+| `When(fn func(*WorkflowContext) bool)` | Condition gate: skip if false |
+| `InputFrom(key string)` | AgentStep: context key for input |
+| `ArgsFrom(key string)` | ToolStep: context key for JSON args |
+| `OutputTo(key string)` | Override default output key |
+| `Retry(n int, delay time.Duration)` | Retry up to n times with delay |
+| `IterOver(key string)` | ForEach: context key with `[]any` |
+| `Concurrency(n int)` | ForEach: max parallel iterations (default 1) |
+| `Until(fn func(*WorkflowContext) bool)` | DoUntil: exit when true |
+| `While(fn func(*WorkflowContext) bool)` | DoWhile: continue while true |
+| `MaxIter(n int)` | DoUntil/DoWhile: safety cap (default 10) |
+
+**Workflow options** (`WorkflowOption`):
+
+| Option | Description |
+|--------|-------------|
+| `WithOnFinish(fn func(WorkflowResult))` | Callback after workflow completes |
+| `WithOnError(fn func(string, error))` | Callback when a step fails |
+| `WithDefaultRetry(n int, delay time.Duration)` | Default retry for all steps |
 
 ### ID and Time
 

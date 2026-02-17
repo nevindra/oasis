@@ -56,6 +56,7 @@ oasis/                              # FRAMEWORK
 |-- store.go, frontend.go, memory.go
 |-- processor.go                    # Processor interfaces + ProcessorChain
 |-- agent.go, llmagent.go, network.go  # Agent primitives (composable)
+|-- workflow.go                     # Workflow primitive (DAG-based orchestration)
 |
 |-- provider/gemini/               # Google Gemini (Provider + EmbeddingProvider)
 |-- provider/openaicompat/         # OpenAI-compatible (Provider)
@@ -82,14 +83,14 @@ oasis/                              # FRAMEWORK
 | `MemoryStore` | `memory.go` | Long-term semantic memory |
 | `Tool` | `tool.go` | Pluggable tool for LLM function calling |
 | `Frontend` | `frontend.go` | Messaging platform: Poll, Send, Edit |
-| `Agent` | `agent.go` | Composable work unit: LLMAgent, Network, or custom |
+| `Agent` | `agent.go` | Composable work unit: LLMAgent, Network, Workflow, or custom |
 | `PreProcessor` | `processor.go` | Transform/validate messages before LLM call |
 | `PostProcessor` | `processor.go` | Transform/validate LLM responses before tool execution |
 | `PostToolProcessor` | `processor.go` | Transform/validate tool results before appending to history |
 
 ### Agent Primitives
 
-Agents compose recursively — a Network contains Agents, and Network itself implements Agent:
+Agents compose recursively — Networks contain Agents, Workflows orchestrate Agents, and all three implement Agent:
 
 ```go
 // Single agent with tools
@@ -104,8 +105,15 @@ guarded := oasis.NewLLMAgent("guarded", "Safe agent", provider,
 // Multi-agent network (router delegates to subagents)
 team := oasis.NewNetwork("team", "Coordinates", router, oasis.WithAgents(researcher, writer))
 
-// Networks of networks
-org := oasis.NewNetwork("org", "Top-level", ceo, oasis.WithAgents(team, opsTeam))
+// Deterministic workflow (explicit DAG, no LLM routing)
+pipeline, _ := oasis.NewWorkflow("pipeline", "Research and write",
+    oasis.Step("prepare", prepareFn),
+    oasis.AgentStep("research", researcher, oasis.After("prepare")),
+    oasis.AgentStep("write", writer, oasis.InputFrom("research.output"), oasis.After("research")),
+)
+
+// Networks of networks (or workflows)
+org := oasis.NewNetwork("org", "Top-level", ceo, oasis.WithAgents(team, pipeline))
 ```
 
 ### Key Design Decisions
@@ -116,6 +124,17 @@ org := oasis.NewNetwork("org", "Top-level", ceo, oasis.WithAgents(team, opsTeam)
 - **Forward-compatible** — interfaces grow by addition, never removal
 - **Streaming** — channel-based token streaming with 1s edit batching
 - **Pure-Go SQLite** — `modernc.org/sqlite`, no CGO required
+
+## Releasing
+
+- **Changelog**: update [CHANGELOG.md](CHANGELOG.md) using [Keep a Changelog](https://keepachangelog.com/) format. New changes go under `[Unreleased]`. When tagging, rename `[Unreleased]` to `[x.y.z] - date` and add a fresh `[Unreleased]` section.
+- **Versioning** (semver, currently v0.x.x):
+  - Patch (0.1.**x**): bug fixes, no API change
+  - Minor (0.**x**.0): new features, new API, or breaking changes (breaking in minor is expected while v0)
+  - Major: reserved for v1.0.0+
+- **Tagging**: `git tag vX.Y.Z && git push origin master vX.Y.Z`. Go proxy indexes automatically.
+- **Immutable**: once a tag hits `proxy.golang.org`, it's cached forever. Never re-tag, always bump version.
+- **Minimum Go version**: 1.24 (floor set by `modernc.org/sqlite` and `go.opentelemetry.io/otel`). Run `go mod tidy` after dependency updates to verify.
 
 ## Engineering Principles (quick reference)
 

@@ -33,7 +33,8 @@ For application-level orchestration (routing, intent classification, agent manag
                               +--------+--------+
                               |     Agent       |
                               | (LLMAgent,      |
-                              |  Network)       |
+                              |  Network,       |
+                              |  Workflow)       |
                               +-----------------+
                                        |
                                        v
@@ -192,7 +193,7 @@ result, err := registry.Execute(ctx, "tool_name", argsJSON)
 | `tools/file` | `file_read`, `file_write`, `file_list` | workspace path |
 | `tools/http` | `http_fetch` | (none) |
 
-### Agent + LLMAgent + Network (`agent.go`, `llmagent.go`, `network.go`)
+### Agent + LLMAgent + Network + Workflow (`agent.go`, `llmagent.go`, `network.go`, `workflow.go`)
 
 Composable agent primitives for building single-agent and multi-agent systems.
 
@@ -228,6 +229,19 @@ network := oasis.NewNetwork("coordinator", "Routes tasks to specialists", router
 )
 result, err := network.Execute(ctx, oasis.AgentTask{Input: "Research and write about X"})
 ```
+
+**Workflow** -- a concrete Agent that executes a deterministic DAG of steps. Unlike Network (LLM-routed), Workflow follows explicit dependency edges declared at construction time. Steps can be functions, Agent delegations, or Tool calls. Parallel execution emerges from shared predecessors.
+
+```go
+wf, err := oasis.NewWorkflow("pipeline", "Research and write",
+    oasis.Step("prepare", prepareFn),
+    oasis.AgentStep("research", researcher, oasis.After("prepare")),
+    oasis.AgentStep("write", writer, oasis.InputFrom("research.output"), oasis.After("research")),
+)
+result, err := wf.Execute(ctx, oasis.AgentTask{Input: "Go error handling"})
+```
+
+Since Workflow implements Agent, it composes with Networks and other Workflows. See [Workflows](workflows.md) for the full guide.
 
 **AgentOption** -- unified option type shared by both `NewLLMAgent` and `NewNetwork`:
 
@@ -442,4 +456,4 @@ Raw content (text/HTML/file)
 - **Interface-driven** -- Every major component is a Go interface. Concrete implementations are in separate packages. No global state.
 - **Minimal error types** -- Two custom error types (`ErrLLM`, `ErrHTTP`). Tool errors use `ToolResult.Error` string field, not Go errors.
 - **Observer as middleware** -- The `observer/` package wraps `Provider`, `EmbeddingProvider`, and `Tool` with OTEL instrumentation using the decorator pattern. Zero changes to existing implementations, zero overhead when disabled.
-- **Agent as interface** -- `Agent` is a composable primitive like `Tool` or `Provider`. `LLMAgent` and `Network` are concrete implementations. Networks contain Agents, and since Network itself implements Agent, they compose recursively.
+- **Agent as interface** -- `Agent` is a composable primitive like `Tool` or `Provider`. `LLMAgent`, `Network`, and `Workflow` are concrete implementations. All three implement Agent, so they compose recursively: Networks can contain Workflows, Workflows can contain Agents via AgentStep, and Workflows can nest inside other Workflows.

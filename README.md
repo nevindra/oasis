@@ -8,7 +8,7 @@ import oasis "github.com/nevindra/oasis"
 
 ## Features
 
-- **Composable agents** -- `LLMAgent` for single-provider tool loops, `Network` for multi-agent coordination. Networks nest recursively.
+- **Composable agents** -- `LLMAgent` for single-provider tool loops, `Network` for multi-agent coordination, `Workflow` for deterministic DAG-based orchestration. All three nest recursively.
 - **Processor pipeline** -- `PreProcessor`, `PostProcessor`, `PostToolProcessor` hooks for guardrails, PII redaction, logging, and custom middleware.
 - **Interface-driven** -- every component (LLM, storage, tools, frontends, memory) is a Go interface. Swap implementations without touching the rest of the system.
 - **Streaming** -- channel-based token streaming with built-in edit batching for messaging platforms.
@@ -81,6 +81,26 @@ org := oasis.NewNetwork("org", "Full organization", ceo,
 )
 ```
 
+### Workflow
+
+Deterministic, DAG-based task orchestration. Steps run in dependency order with automatic parallelism. Use it when you know the execution order at build time.
+
+```go
+pipeline, err := oasis.NewWorkflow("research-pipeline", "Research and write",
+    oasis.Step("prepare", func(ctx context.Context, wCtx *oasis.WorkflowContext) error {
+        wCtx.Set("query", "Research: "+wCtx.Input())
+        return nil
+    }),
+    oasis.AgentStep("research", researcher, oasis.InputFrom("query"), oasis.After("prepare")),
+    oasis.AgentStep("write", writer, oasis.InputFrom("research.output"), oasis.After("research")),
+    oasis.WithOnError(func(step string, err error) { log.Printf("%s failed: %v", step, err) }),
+)
+
+result, err := pipeline.Execute(ctx, oasis.AgentTask{Input: "Go error handling"})
+```
+
+Step types: `Step` (function), `AgentStep` (delegate to Agent), `ToolStep` (call a tool), `ForEach` (iterate with concurrency), `DoUntil`/`DoWhile` (loop). See [docs/framework/workflows.md](docs/framework/workflows.md) for the full guide.
+
 ### Processors
 
 Middleware hooks that run at specific points in the agent execution pipeline.
@@ -110,7 +130,7 @@ Return `ErrHalt` from any processor to short-circuit execution with a canned res
 | `MemoryStore` | Long-term semantic memory (facts, confidence, decay) |
 | `Tool` | Pluggable capability for LLM function calling |
 | `Frontend` | Messaging platform -- `Poll`, `Send`, `Edit` |
-| `Agent` | Composable work unit -- `LLMAgent`, `Network`, or custom |
+| `Agent` | Composable work unit -- `LLMAgent`, `Network`, `Workflow`, or custom |
 
 ## Included Implementations
 
@@ -139,6 +159,7 @@ oasis/
 |-- types.go, provider.go, tool.go     # Core interfaces and domain types
 |-- store.go, frontend.go, memory.go
 |-- agent.go, llmagent.go, network.go   # Agent primitives
+|-- workflow.go                        # Workflow primitive (DAG orchestration)
 |-- processor.go                        # Processor pipeline
 |
 |-- provider/gemini/                    # Google Gemini provider
@@ -164,6 +185,7 @@ See [docs/framework/configuration.md](docs/framework/configuration.md) for the f
 
 - [Getting Started](docs/framework/getting-started.md) -- installation and first run
 - [Architecture](docs/framework/architecture.md) -- component design and data flow
+- [Workflows](docs/framework/workflows.md) -- deterministic DAG-based task orchestration
 - [Configuration](docs/framework/configuration.md) -- all config options and environment variables
 - [Extending Oasis](docs/framework/extending.md) -- adding custom tools, providers, frontends, and stores
 - [API Reference](docs/framework/api-reference.md) -- complete interface definitions and types

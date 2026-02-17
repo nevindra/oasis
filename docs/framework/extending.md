@@ -502,7 +502,7 @@ Processors run in registration order at each hook point. If a processor returns 
 
 ## Creating Custom Agents
 
-Agents are composable units of work. The framework ships with two concrete implementations (`LLMAgent` and `Network`), but you can implement the `Agent` interface directly for custom behavior.
+Agents are composable units of work. The framework ships with three concrete implementations (`LLMAgent`, `Network`, and `Workflow`), but you can implement the `Agent` interface directly for custom behavior.
 
 ### Using LLMAgent
 
@@ -596,7 +596,54 @@ func (a *SummaryAgent) Execute(ctx context.Context, task oasis.AgentTask) (oasis
 }
 ```
 
-Custom agents work anywhere an `Agent` is expected -- including as subagents in a Network.
+Custom agents work anywhere an `Agent` is expected -- including as subagents in a Network or as steps in a Workflow.
+
+### Using Workflow
+
+Workflow provides deterministic, DAG-based orchestration -- use it when you know the execution order at build time:
+
+```go
+researcher := oasis.NewLLMAgent("researcher", "Searches for information", geminiProvider,
+    oasis.WithTools(searchTool),
+)
+writer := oasis.NewLLMAgent("writer", "Writes polished content", geminiProvider,
+    oasis.WithPrompt("You are a skilled technical writer."),
+)
+
+pipeline, err := oasis.NewWorkflow("research-pipeline", "Research and write about a topic",
+    // Step 1: Prepare search query
+    oasis.Step("prepare", func(ctx context.Context, wCtx *oasis.WorkflowContext) error {
+        wCtx.Set("query", "Research thoroughly: "+wCtx.Input())
+        return nil
+    }),
+
+    // Step 2: Run researcher agent (reads input from "query" key)
+    oasis.AgentStep("research", researcher,
+        oasis.InputFrom("query"),
+        oasis.After("prepare"),
+    ),
+
+    // Step 3: Run writer agent (reads input from research output)
+    oasis.AgentStep("write", writer,
+        oasis.InputFrom("research.output"),
+        oasis.After("research"),
+    ),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+result, err := pipeline.Execute(ctx, oasis.AgentTask{Input: "Go error handling best practices"})
+```
+
+Key features:
+- **Step types:** `Step` (function), `AgentStep` (delegate to Agent), `ToolStep` (call a tool), `ForEach` (iterate), `DoUntil`/`DoWhile` (loop)
+- **Dependencies:** `After("step_name")` declares execution order; parallel execution emerges from shared predecessors
+- **Conditions:** `When(fn)` gates step execution; skipped steps don't cascade failure
+- **Data flow:** `WorkflowContext` is a shared `map[string]any` that steps read/write
+- **Error handling:** fail-fast with configurable retries, onError/onFinish callbacks
+
+Workflow implements Agent, so it composes with everything: Networks can contain Workflows, and Workflows can contain Agents. See [Workflows](workflows.md) for the full guide.
 
 ## Wiring It All Together
 
