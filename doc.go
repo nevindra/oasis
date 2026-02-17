@@ -25,7 +25,7 @@
 //   - [Provider] — LLM backend (chat, tool calling, streaming)
 //   - [EmbeddingProvider] — text-to-vector embedding
 //   - [Frontend] — messaging platform (Telegram, Discord, CLI, etc.)
-//   - [VectorStore] — persistence with vector search
+//   - [Store] — persistence with vector search
 //   - [MemoryStore] — long-term semantic memory
 //   - [Tool] — pluggable capability for LLM function calling
 //

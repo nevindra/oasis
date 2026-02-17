@@ -1,4 +1,4 @@
 .env
 *.db
 docs/plans
-/oasis
+/bot_example

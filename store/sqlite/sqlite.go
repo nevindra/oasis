@@ -1,4 +1,4 @@
-// Package sqlite implements oasis.VectorStore using pure-Go SQLite
+// Package sqlite implements oasis.Store using pure-Go SQLite
 // with in-process brute-force vector search. Zero CGO required.
 package sqlite
 
@@ -15,14 +15,14 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
 
-// Store implements oasis.VectorStore backed by a local SQLite file.
+// Store implements oasis.Store backed by a local SQLite file.
 // Embeddings are stored as JSON text and vector search is done
 // in-process using brute-force cosine similarity.
 type Store struct {
 	dbPath string
 }
 
-var _ oasis.VectorStore = (*Store)(nil)
+var _ oasis.Store = (*Store)(nil)
 
 // New creates a Store using a local SQLite file at dbPath.
 func New(dbPath string) *Store {

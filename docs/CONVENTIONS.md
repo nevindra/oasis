@@ -81,7 +81,7 @@ oasis/
   provider/gemini/         — Gemini implementation
   provider/openaicompat/   — OpenAI-compatible implementation
 
-  store.go                 — VectorStore interface
+  store.go                 — Store interface
   store/sqlite/            — SQLite implementation
   store/libsql/            — Turso/libSQL implementation
 
@@ -189,7 +189,7 @@ Embedding []float32 `json:"-"`
 Every concrete implementation must include a compile-time interface check:
 
 ```go
-var _ oasis.VectorStore = (*Store)(nil)
+var _ oasis.Store = (*Store)(nil)
 var _ oasis.Frontend = (*Bot)(nil)
 ```
 
@@ -198,7 +198,7 @@ var _ oasis.Frontend = (*Bot)(nil)
 Every package must have a doc comment on its primary file:
 
 ```go
-// Package sqlite implements oasis.VectorStore using pure-Go SQLite
+// Package sqlite implements oasis.Store using pure-Go SQLite
 // with in-process brute-force vector search. Zero CGO required.
 package sqlite
 ```
@@ -210,7 +210,7 @@ package sqlite
 Dependencies are injected through constructors, never globals:
 
 ```go
-func New(store oasis.VectorStore, emb oasis.EmbeddingProvider) *KnowledgeTool {
+func New(store oasis.Store, emb oasis.EmbeddingProvider) *KnowledgeTool {
     return &KnowledgeTool{store: store, embedding: emb, topK: 5}
 }
 ```
@@ -226,7 +226,7 @@ type Deps struct {
     IntentLLM oasis.Provider
     ActionLLM oasis.Provider
     Embedding oasis.EmbeddingProvider
-    Store     oasis.VectorStore
+    Store     oasis.Store
     Memory    oasis.MemoryStore
 }
 
@@ -283,7 +283,7 @@ default:
 
 ### Fresh Connections
 
-Each VectorStore/MemoryStore method opens a fresh database connection via `sql.Open()`. Do not cache or reuse connections — this avoids `STREAM_EXPIRED` errors on Turso.
+Each Store/MemoryStore method opens a fresh database connection via `sql.Open()`. Do not cache or reuse connections — this avoids `STREAM_EXPIRED` errors on Turso.
 
 ```go
 func (s *Store) openDB() (*sql.DB, error) {

@@ -25,7 +25,7 @@ For application-level orchestration (routing, intent classification, agent manag
          |              |              |
          v              v              v
 +-------------+  +-------------+  +-----------+
-| VectorStore |  | MemoryStore |  |   Tool    |
+| Store |  | MemoryStore |  |   Tool    |
 | (sqlite,    |  | (sqlite)    |  | Registry  |
 |  libsql)    |  |             |  |           |
 +-------------+  +-------------+  +-----------+
@@ -85,7 +85,7 @@ Abstracts the messaging platform. Designed around a poll-send-edit cycle.
 
 The `Poll` -> `Send` -> `Edit` pattern enables streaming: send a placeholder message, then progressively edit it as LLM tokens arrive.
 
-### VectorStore (`store.go`)
+### Store (`store.go`)
 
 Persistence layer with vector search capabilities. Handles messages, documents/chunks, threads, config, and scheduled actions.
 
@@ -178,10 +178,10 @@ result, err := registry.Execute(ctx, "tool_name", argsJSON)
 
 | Tool | Functions | Dependencies |
 |------|-----------|-------------|
-| `tools/knowledge` | `knowledge_search` | VectorStore, EmbeddingProvider |
-| `tools/remember` | `remember` | VectorStore, EmbeddingProvider |
+| `tools/knowledge` | `knowledge_search` | Store, EmbeddingProvider |
+| `tools/remember` | `remember` | Store, EmbeddingProvider |
 | `tools/search` | `web_search` | EmbeddingProvider, Brave API key |
-| `tools/schedule` | `schedule_create`, `schedule_list`, `schedule_update`, `schedule_delete` | VectorStore |
+| `tools/schedule` | `schedule_create`, `schedule_list`, `schedule_update`, `schedule_delete` | Store |
 | `tools/shell` | `shell_exec` | workspace path |
 | `tools/file` | `file_read`, `file_write`, `file_list` | workspace path |
 | `tools/http` | `http_fetch` | (none) |
@@ -203,7 +203,7 @@ result := pipeline.IngestHTML(htmlContent, sourceURL)
 result := pipeline.IngestFile(content, filename)
 ```
 
-Returns `IngestResult` containing a `Document` and `[]Chunk`. **Embedding is NOT done by the pipeline** -- the caller must embed the chunks and store them via VectorStore.
+Returns `IngestResult` containing a `Document` and `[]Chunk`. **Embedding is NOT done by the pipeline** -- the caller must embed the chunks and store them via Store.
 
 **Chunking strategy:**
 1. Split on paragraph boundaries (`\n\n`)
@@ -274,7 +274,7 @@ See [Configuration](configuration.md) for the full reference.
 
 ## Database Schema
 
-The VectorStore implementations create these tables:
+The Store implementations create these tables:
 
 ```sql
 -- Knowledge base
@@ -318,7 +318,7 @@ Raw content (text/HTML/file)
          |
    Chunks with embeddings
          |
-   [VectorStore.StoreDocument]
+   [Store.StoreDocument]
          |
          v
    Stored in SQLite
@@ -331,7 +331,7 @@ Raw content (text/HTML/file)
          |
    Query embedding
          |
-   [VectorStore.SearchChunks]
+   [Store.SearchChunks]
          |
    Top-K relevant chunks
 ```

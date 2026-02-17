@@ -11,13 +11,13 @@ import (
 
 // Tool saves information to the knowledge base.
 type Tool struct {
-	store     oasis.VectorStore
+	store     oasis.Store
 	embedding oasis.EmbeddingProvider
 	pipeline  *ingest.Pipeline
 }
 
 // New creates a RememberTool. maxTokens defaults to 500, overlap to 50.
-func New(store oasis.VectorStore, embedding oasis.EmbeddingProvider) *Tool {
+func New(store oasis.Store, embedding oasis.EmbeddingProvider) *Tool {
 	return &Tool{
 		store:     store,
 		embedding: embedding,

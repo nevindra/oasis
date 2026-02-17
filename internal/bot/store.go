@@ -70,6 +70,7 @@ func (a *App) extractAndStoreFacts(ctx context.Context, userText, assistantText 
 			oasis.SystemMessage(memory.ExtractFactsPrompt),
 			oasis.UserMessage(conversationTurn),
 		},
+		ResponseSchema: memory.ExtractFactsSchema,
 	}
 
 	resp, err := a.intentLLM.Chat(ctx, req)

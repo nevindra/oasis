@@ -11,7 +11,7 @@ import (
 // System messages are kept in the messages array as role:"system".
 // Tool definitions are NOT included here — use BuildToolDefs and set them on the request separately,
 // or pass tools to ChatRequest.Tools directly.
-func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model string) ChatRequest {
+func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model string, schema *oasis.ResponseSchema) ChatRequest {
 	var msgs []Message
 
 	for _, m := range messages {
@@ -91,6 +91,18 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 
 	if len(tools) > 0 {
 		req.Tools = BuildToolDefs(tools)
+	}
+
+	// Structured output: enforce JSON response matching the schema.
+	if schema != nil && len(schema.Schema) > 0 {
+		req.ResponseFormat = &ResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &JSONSchema{
+				Name:   schema.Name,
+				Schema: schema.Schema,
+				Strict: true,
+			},
+		}
 	}
 
 	return req

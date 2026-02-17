@@ -14,7 +14,7 @@ func TestBuildBody_SystemMessages(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestBuildBody_AssistantMapsToModel(t *testing.T) {
 		{Role: "user", Content: "How are you?"},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestBuildBody_ToolResults(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestBuildBody_ToolDeclarations(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, tools)
+	body, err := buildBody(messages, tools, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestBuildBody_Images(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestBuildBody_EmptyContentGetsFallbackPart(t *testing.T) {
 		{Role: "user", Content: ""},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestBuildBody_GenerationConfig(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestBuildBody_ThoughtSignaturePreserved(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestBuildBody_NoSystemInstruction(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestBuildBody_NoToolsOmitted(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestBuildBody_MultipleToolCalls(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, nil)
+	body, err := buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestBuildBody_JSONRoundTrip(t *testing.T) {
 		{Name: "search", Description: "Search the web", Parameters: json.RawMessage(`{"type":"object"}`)},
 	}
 
-	body, err := buildBody(messages, tools)
+	body, err := buildBody(messages, tools, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}

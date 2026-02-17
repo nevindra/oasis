@@ -93,12 +93,12 @@ type Frontend interface {
 
 ---
 
-### VectorStore
+### Store
 
 **File:** `store.go`
 
 ```go
-type VectorStore interface {
+type Store interface {
     // Messages
     StoreMessage(ctx context.Context, msg Message) error
     GetMessages(ctx context.Context, threadID string, limit int) ([]Message, error)

@@ -110,7 +110,7 @@ func (t *MyTool) Execute(ctx context.Context, name string, args json.RawMessage)
 **Inject dependencies through the constructor.** Tools that need storage, embedding, or other services receive them via `New()`:
 
 ```go
-func New(store oasis.VectorStore, emb oasis.EmbeddingProvider) *MyTool {
+func New(store oasis.Store, emb oasis.EmbeddingProvider) *MyTool {
     return &MyTool{store: store, embedding: emb}
 }
 ```
@@ -280,9 +280,9 @@ func (b *Bot) DownloadFile(ctx context.Context, fileID string) ([]byte, string, 
 
 ## Adding a Storage Backend
 
-### VectorStore
+### Store
 
-Implement the `VectorStore` interface for a new database:
+Implement the `Store` interface for a new database:
 
 ```go
 package mystore
@@ -300,7 +300,7 @@ func (s *Store) Init(ctx context.Context) error {
     return nil
 }
 
-// Implement all VectorStore methods...
+// Implement all Store methods...
 // See store.go for the full interface
 ```
 
@@ -360,7 +360,7 @@ The pipeline handles extraction and chunking. **You** handle embedding and stora
 
 ## Creating Skills
 
-Skills are stored instruction packages that specialize the action agent's behavior. They live in the database (via `VectorStore`) and can be managed at runtime through tools or direct API calls.
+Skills are stored instruction packages that specialize the action agent's behavior. They live in the database (via `Store`) and can be managed at runtime through tools or direct API calls.
 
 A skill consists of:
 - **Name** and **Description** -- used for display and semantic matching

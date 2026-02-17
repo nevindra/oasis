@@ -1,4 +1,4 @@
-// Package libsql implements oasis.VectorStore using libSQL (SQLite-compatible)
+// Package libsql implements oasis.Store using libSQL (SQLite-compatible)
 // with DiskANN vector extensions for Turso.
 package libsql
 
@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
 
-// Store implements oasis.VectorStore backed by libSQL / Turso.
+// Store implements oasis.Store backed by libSQL / Turso.
 //
 // It uses fresh connections per call to avoid STREAM_EXPIRED errors
 // on remote Turso databases.
@@ -25,7 +25,7 @@ type Store struct {
 }
 
 // compile-time check
-var _ oasis.VectorStore = (*Store)(nil)
+var _ oasis.Store = (*Store)(nil)
 
 // New creates a Store that uses a local SQLite file at dbPath.
 func New(dbPath string) *Store {

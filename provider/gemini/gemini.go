@@ -36,7 +36,7 @@ func (g *Gemini) Name() string { return "gemini" }
 
 // Chat sends a non-streaming chat request and returns the complete response.
 func (g *Gemini) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-	body, err := buildBody(req.Messages, nil)
+	body, err := buildBody(req.Messages, nil, req.ResponseSchema)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -45,7 +45,7 @@ func (g *Gemini) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatRes
 
 // ChatWithTools sends a chat request with tool definitions.
 func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-	body, err := buildBody(req.Messages, tools)
+	body, err := buildBody(req.Messages, tools, req.ResponseSchema)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -57,7 +57,7 @@ func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools
 func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- string) (oasis.ChatResponse, error) {
 	defer close(ch)
 
-	body, err := buildBody(req.Messages, nil)
+	body, err := buildBody(req.Messages, nil, nil)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -327,7 +327,7 @@ func (e *GeminiEmbedding) Embed(ctx context.Context, texts []string) ([][]float3
 // ---- Body builder ----
 
 // buildBody constructs the Gemini API request body from chat messages and optional tool definitions.
-func buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition) (map[string]any, error) {
+func buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schema *oasis.ResponseSchema) (map[string]any, error) {
 	var systemParts []string
 	var contents []map[string]any
 
@@ -460,9 +460,20 @@ func buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition) (map[
 	}
 
 	// Generation config with default temperature.
-	body["generationConfig"] = map[string]any{
+	genConfig := map[string]any{
 		"temperature": 1.0,
 	}
+
+	// Structured output: enforce JSON response matching the schema.
+	if schema != nil && len(schema.Schema) > 0 {
+		genConfig["responseMimeType"] = "application/json"
+		var schemaObj any
+		if err := json.Unmarshal(schema.Schema, &schemaObj); err == nil {
+			genConfig["responseSchema"] = schemaObj
+		}
+	}
+
+	body["generationConfig"] = genConfig
 
 	return body, nil
 }

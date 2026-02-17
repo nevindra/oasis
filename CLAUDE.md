@@ -82,8 +82,8 @@ oasis/
 |-- provider/gemini/               # Google Gemini (Provider + EmbeddingProvider)
 |-- provider/openaicompat/         # OpenAI-compatible (Provider)
 |-- frontend/telegram/             # Telegram bot (Frontend)
-|-- store/sqlite/                  # Local SQLite (VectorStore)
-|-- store/libsql/                  # Remote Turso (VectorStore)
+|-- store/sqlite/                  # Local SQLite (Store)
+|-- store/libsql/                  # Remote Turso (Store)
 |-- memory/sqlite/                 # SQLite MemoryStore
 |-- observer/                      # OTEL observability (wraps Provider/Tool/Embedding)
 |-- ingest/                        # Document chunking pipeline
@@ -97,7 +97,7 @@ oasis/
 | `Provider` | `provider.go` | LLM: Chat, ChatWithTools, ChatStream |
 | `EmbeddingProvider` | `provider.go` | Text-to-vector embedding |
 | `Frontend` | `frontend.go` | Messaging platform: Poll, Send, Edit |
-| `VectorStore` | `store.go` | Persistence + vector search |
+| `Store` | `store.go` | Persistence + vector search |
 | `MemoryStore` | `memory.go` | Long-term semantic memory |
 | `Tool` | `tool.go` | Pluggable tool for LLM function calling |
 

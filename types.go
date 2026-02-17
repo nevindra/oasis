@@ -110,8 +110,17 @@ type ToolCall struct {
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
+// ResponseSchema tells the provider to enforce structured JSON output.
+// When set on a ChatRequest, the provider translates it to its native
+// structured output mechanism (e.g. Gemini responseSchema, OpenAI response_format).
+type ResponseSchema struct {
+	Name   string          `json:"name"`   // schema identifier (required by some providers)
+	Schema json.RawMessage `json:"schema"` // JSON Schema object
+}
+
 type ChatRequest struct {
-	Messages []ChatMessage `json:"messages"`
+	Messages       []ChatMessage   `json:"messages"`
+	ResponseSchema *ResponseSchema `json:"response_schema,omitempty"`
 }
 
 type ChatResponse struct {

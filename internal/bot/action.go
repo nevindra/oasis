@@ -83,6 +83,12 @@ func (a *App) launchAgent(ctx context.Context, chatID, text, threadID, originalM
 	}()
 }
 
+// ackLabelSchema is the JSON Schema for ack + label responses.
+var ackLabelSchema = &oasis.ResponseSchema{
+	Name:   "ack_and_label",
+	Schema: json.RawMessage(`{"type":"object","properties":{"ack":{"type":"string"},"label":{"type":"string"}},"required":["ack","label"]}`),
+}
+
 // generateAckAndLabel creates a brief ack + short label from the user's request.
 func (a *App) generateAckAndLabel(ctx context.Context, userMessage string) (string, string) {
 	system := `You are a casual personal assistant. The user just asked you to do something (search, create a task, etc).
@@ -98,6 +104,7 @@ Respond with ONLY the JSON object, no extra text.`
 			oasis.SystemMessage(system),
 			oasis.UserMessage(userMessage),
 		},
+		ResponseSchema: ackLabelSchema,
 	}
 
 	fallbackLabel := userMessage

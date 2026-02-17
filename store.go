@@ -2,8 +2,8 @@ package oasis
 
 import "context"
 
-// VectorStore abstracts persistence with vector search capabilities.
-type VectorStore interface {
+// Store abstracts persistence with vector search capabilities.
+type Store interface {
 	// --- Threads ---
 	CreateThread(ctx context.Context, thread Thread) error
 	GetThread(ctx context.Context, id string) (Thread, error)

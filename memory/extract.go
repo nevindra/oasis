@@ -5,6 +5,8 @@ package memory
 import (
 	"encoding/json"
 	"strings"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 // ExtractedFact is a parsed fact from LLM extraction.
@@ -12,6 +14,12 @@ type ExtractedFact struct {
 	Fact       string  `json:"fact"`
 	Category   string  `json:"category"`
 	Supersedes *string `json:"supersedes,omitempty"`
+}
+
+// ExtractFactsSchema is the JSON Schema for fact extraction responses.
+var ExtractFactsSchema = &oasis.ResponseSchema{
+	Name:   "extracted_facts",
+	Schema: json.RawMessage(`{"type":"array","items":{"type":"object","properties":{"fact":{"type":"string"},"category":{"type":"string","enum":["personal","preference","work","habit","relationship"]},"supersedes":{"type":"string"}},"required":["fact","category"]}}`),
 }
 
 // ExtractFactsPrompt is the system prompt for fact extraction.

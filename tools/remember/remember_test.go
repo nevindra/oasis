@@ -33,7 +33,7 @@ func (s *mockStore) StoreDocument(_ context.Context, doc oasis.Document, chunks 
 	return nil
 }
 
-// Stubs for VectorStore interface — only StoreDocument is used by remember.
+// Stubs for Store interface — only StoreDocument is used by remember.
 func (s *mockStore) StoreMessage(context.Context, oasis.Message) error   { return nil }
 func (s *mockStore) GetMessages(context.Context, string, int) ([]oasis.Message, error) {
 	return nil, nil

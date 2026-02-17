@@ -11,13 +11,13 @@ import (
 
 // KnowledgeTool searches the knowledge base and past conversations.
 type KnowledgeTool struct {
-	store     oasis.VectorStore
+	store     oasis.Store
 	embedding oasis.EmbeddingProvider
 	topK      int
 }
 
 // New creates a KnowledgeTool with default topK of 5.
-func New(store oasis.VectorStore, emb oasis.EmbeddingProvider) *KnowledgeTool {
+func New(store oasis.Store, emb oasis.EmbeddingProvider) *KnowledgeTool {
 	return &KnowledgeTool{store: store, embedding: emb, topK: 5}
 }
 

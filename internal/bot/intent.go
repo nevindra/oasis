@@ -31,12 +31,19 @@ Return a JSON object with a single "intent" field:
 - The user may write in English or Indonesian.`
 
 // ClassifyIntent uses the intent LLM to classify a message as Chat or Action.
+// intentSchema is the JSON Schema for intent classification responses.
+var intentSchema = &oasis.ResponseSchema{
+	Name:   "intent_classification",
+	Schema: json.RawMessage(`{"type":"object","properties":{"intent":{"type":"string","enum":["chat","action"]}},"required":["intent"]}`),
+}
+
 func ClassifyIntent(ctx context.Context, intentLLM oasis.Provider, message string) oasis.Intent {
 	req := oasis.ChatRequest{
 		Messages: []oasis.ChatMessage{
 			oasis.SystemMessage(IntentSystemPrompt),
 			oasis.UserMessage(message),
 		},
+		ResponseSchema: intentSchema,
 	}
 
 	resp, err := intentLLM.Chat(ctx, req)

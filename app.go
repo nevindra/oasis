@@ -8,32 +8,32 @@ import (
 	"time"
 )
 
-// Agent is the core orchestrator that connects a Frontend, Provider, Store, and Tools.
-type Agent struct {
+// App is the core orchestrator that connects a Frontend, Provider, Store, and Tools.
+type App struct {
 	frontend     Frontend
 	provider     Provider
 	embedding    EmbeddingProvider
-	store        VectorStore
+	store        Store
 	memory       MemoryStore // nil if not configured
 	tools        *ToolRegistry
 	systemPrompt string
 	maxIter      int
 }
 
-// Option configures an Agent.
-type Option func(*Agent)
+// Option configures an App.
+type Option func(*App)
 
-func WithFrontend(f Frontend) Option         { return func(a *Agent) { a.frontend = f } }
-func WithProvider(p Provider) Option         { return func(a *Agent) { a.provider = p } }
-func WithEmbedding(e EmbeddingProvider) Option { return func(a *Agent) { a.embedding = e } }
-func WithStore(s VectorStore) Option         { return func(a *Agent) { a.store = s } }
-func WithMemory(m MemoryStore) Option        { return func(a *Agent) { a.memory = m } }
-func WithSystemPrompt(s string) Option       { return func(a *Agent) { a.systemPrompt = s } }
-func WithMaxToolIterations(n int) Option     { return func(a *Agent) { a.maxIter = n } }
+func WithFrontend(f Frontend) Option         { return func(a *App) { a.frontend = f } }
+func WithProvider(p Provider) Option         { return func(a *App) { a.provider = p } }
+func WithEmbedding(e EmbeddingProvider) Option { return func(a *App) { a.embedding = e } }
+func WithStore(s Store) Option               { return func(a *App) { a.store = s } }
+func WithMemory(m MemoryStore) Option        { return func(a *App) { a.memory = m } }
+func WithSystemPrompt(s string) Option       { return func(a *App) { a.systemPrompt = s } }
+func WithMaxToolIterations(n int) Option     { return func(a *App) { a.maxIter = n } }
 
-// New creates an Agent with the given options.
-func New(opts ...Option) *Agent {
-	a := &Agent{
+// New creates an App with the given options.
+func New(opts ...Option) *App {
+	a := &App{
 		tools:   NewToolRegistry(),
 		maxIter: 10,
 	}
@@ -43,25 +43,25 @@ func New(opts ...Option) *Agent {
 	return a
 }
 
-// AddTool registers a tool with the agent.
-func (a *Agent) AddTool(t Tool) {
+// AddTool registers a tool with the app.
+func (a *App) AddTool(t Tool) {
 	a.tools.Add(t)
 }
 
-// Store returns the agent's VectorStore (for tools that need it).
-func (a *Agent) Store() VectorStore {
+// Store returns the app's Store (for tools that need it).
+func (a *App) Store() Store {
 	return a.store
 }
 
-// Embedding returns the agent's EmbeddingProvider (for tools that need it).
-func (a *Agent) Embedding() EmbeddingProvider {
+// Embedding returns the app's EmbeddingProvider (for tools that need it).
+func (a *App) Embedding() EmbeddingProvider {
 	return a.embedding
 }
 
-// Run starts the agent's main loop: poll frontend, handle messages.
-func (a *Agent) Run(ctx context.Context) error {
+// Run starts the app's main loop: poll frontend, handle messages.
+func (a *App) Run(ctx context.Context) error {
 	if a.frontend == nil || a.provider == nil || a.store == nil {
-		return fmt.Errorf("agent requires Frontend, Provider, and Store")
+		return fmt.Errorf("app requires Frontend, Provider, and Store")
 	}
 
 	if err := a.store.Init(ctx); err != nil {
@@ -78,7 +78,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("frontend poll: %w", err)
 	}
 
-	log.Println("oasis: agent running")
+	log.Println("oasis: app running")
 
 	for {
 		select {
@@ -94,7 +94,7 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 // handleMessage processes a single incoming message.
-func (a *Agent) handleMessage(ctx context.Context, msg IncomingMessage) {
+func (a *App) handleMessage(ctx context.Context, msg IncomingMessage) {
 	if msg.Text == "" && msg.Document == nil && len(msg.Photos) == 0 {
 		return
 	}
@@ -117,7 +117,7 @@ func (a *Agent) handleMessage(ctx context.Context, msg IncomingMessage) {
 }
 
 // getOrCreateThread returns the most recent thread for a chatID, or creates one.
-func (a *Agent) getOrCreateThread(ctx context.Context, chatID string) (Thread, error) {
+func (a *App) getOrCreateThread(ctx context.Context, chatID string) (Thread, error) {
 	threads, err := a.store.ListThreads(ctx, chatID, 1)
 	if err != nil {
 		return Thread{}, err
@@ -137,8 +137,8 @@ func (a *Agent) getOrCreateThread(ctx context.Context, chatID string) (Thread, e
 	return thread, nil
 }
 
-// handleAction runs the tool-calling agent loop.
-func (a *Agent) handleAction(ctx context.Context, msg IncomingMessage, thread Thread, userText string) {
+// handleAction runs the tool-calling loop.
+func (a *App) handleAction(ctx context.Context, msg IncomingMessage, thread Thread, userText string) {
 	// Build messages: system + history + user
 	messages := a.buildMessages(ctx, thread, userText)
 
@@ -151,7 +151,6 @@ func (a *Agent) handleAction(ctx context.Context, msg IncomingMessage, thread Th
 
 	toolDefs := a.tools.AllDefinitions()
 
-	// Agent loop
 	for i := 0; i < a.maxIter; i++ {
 		var resp ChatResponse
 		var callErr error
@@ -199,7 +198,7 @@ func (a *Agent) handleAction(ctx context.Context, msg IncomingMessage, thread Th
 }
 
 // buildMessages constructs the message list: system prompt + memory + history + user message.
-func (a *Agent) buildMessages(ctx context.Context, thread Thread, userText string) []ChatMessage {
+func (a *App) buildMessages(ctx context.Context, thread Thread, userText string) []ChatMessage {
 	var messages []ChatMessage
 
 	// System prompt
@@ -234,7 +233,7 @@ func (a *Agent) buildMessages(ctx context.Context, thread Thread, userText strin
 }
 
 // spawnStore persists messages and extracts facts in the background.
-func (a *Agent) spawnStore(ctx context.Context, thread Thread, userText, assistantText string) {
+func (a *App) spawnStore(ctx context.Context, thread Thread, userText, assistantText string) {
 	go func() {
 		// Store user message
 		userMsg := Message{

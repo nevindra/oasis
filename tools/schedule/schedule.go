@@ -11,12 +11,12 @@ import (
 
 // Tool manages scheduled/recurring actions.
 type Tool struct {
-	store    oasis.VectorStore
+	store    oasis.Store
 	tzOffset int // hours from UTC (e.g. 7 for WIB)
 }
 
 // New creates a ScheduleTool.
-func New(store oasis.VectorStore, tzOffset int) *Tool {
+func New(store oasis.Store, tzOffset int) *Tool {
 	return &Tool{store: store, tzOffset: tzOffset}
 }
 

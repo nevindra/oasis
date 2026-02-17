@@ -19,7 +19,7 @@ type Deps struct {
 	IntentLLM oasis.Provider
 	ActionLLM oasis.Provider
 	Embedding oasis.EmbeddingProvider
-	Store     oasis.VectorStore
+	Store     oasis.Store
 	Memory    oasis.MemoryStore
 }
 
@@ -31,7 +31,7 @@ type App struct {
 	intentLLM oasis.Provider
 	actionLLM oasis.Provider
 	embedding oasis.EmbeddingProvider
-	store     oasis.VectorStore
+	store     oasis.Store
 	memory    oasis.MemoryStore
 	tools     *oasis.ToolRegistry
 	agents    *AgentManager

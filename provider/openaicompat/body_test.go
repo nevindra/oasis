@@ -13,7 +13,7 @@ func TestBuildBody_SystemMessages(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	req := BuildBody(messages, nil, "gpt-4o")
+	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	if req.Model != "gpt-4o" {
 		t.Errorf("expected model 'gpt-4o', got %q", req.Model)
@@ -43,7 +43,7 @@ func TestBuildBody_UserAndAssistant(t *testing.T) {
 		{Role: "user", Content: "How are you?"},
 	}
 
-	req := BuildBody(messages, nil, "gpt-4o")
+	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	if len(req.Messages) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(req.Messages))
@@ -79,7 +79,7 @@ func TestBuildBody_AssistantWithToolCalls(t *testing.T) {
 		},
 	}
 
-	req := BuildBody(messages, nil, "gpt-4o")
+	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	if len(req.Messages) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(req.Messages))
@@ -120,7 +120,7 @@ func TestBuildBody_ToolResult(t *testing.T) {
 		},
 	}
 
-	req := BuildBody(messages, nil, "gpt-4o")
+	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	if len(req.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(req.Messages))
@@ -149,7 +149,7 @@ func TestBuildBody_Images(t *testing.T) {
 		},
 	}
 
-	req := BuildBody(messages, nil, "gpt-4o")
+	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	if len(req.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(req.Messages))
@@ -202,7 +202,7 @@ func TestBuildBody_WithTools(t *testing.T) {
 		},
 	}
 
-	req := BuildBody(messages, tools, "gpt-4o")
+	req := BuildBody(messages, tools, "gpt-4o", nil)
 
 	if len(req.Tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(req.Tools))
@@ -234,7 +234,7 @@ func TestBuildBody_NoTools(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	req := BuildBody(messages, nil, "gpt-4o")
+	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	if len(req.Tools) != 0 {
 		t.Errorf("expected no tools, got %d", len(req.Tools))
@@ -296,7 +296,7 @@ func TestBuildBody_JSONRoundTrip(t *testing.T) {
 		{Name: "search", Description: "Search", Parameters: json.RawMessage(`{"type":"object"}`)},
 	}
 
-	req := BuildBody(messages, tools, "gpt-4o")
+	req := BuildBody(messages, tools, "gpt-4o", nil)
 
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -333,7 +333,7 @@ func TestBuildBody_MultipleToolCalls(t *testing.T) {
 		},
 	}
 
-	req := BuildBody(messages, nil, "gpt-4o")
+	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	if len(req.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(req.Messages))

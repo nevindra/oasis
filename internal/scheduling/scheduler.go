@@ -14,7 +14,7 @@ import (
 
 // Scheduler checks for and executes due scheduled actions.
 type Scheduler struct {
-	store     oasis.VectorStore
+	store     oasis.Store
 	tools     *oasis.ToolRegistry
 	frontend  oasis.Frontend
 	intentLLM oasis.Provider
@@ -22,7 +22,7 @@ type Scheduler struct {
 }
 
 // New creates a Scheduler.
-func New(store oasis.VectorStore, tools *oasis.ToolRegistry, frontend oasis.Frontend, intentLLM oasis.Provider, tzOffset int) *Scheduler {
+func New(store oasis.Store, tools *oasis.ToolRegistry, frontend oasis.Frontend, intentLLM oasis.Provider, tzOffset int) *Scheduler {
 	return &Scheduler{
 		store:     store,
 		tools:     tools,
