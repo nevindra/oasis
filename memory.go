@@ -1,0 +1,14 @@
+package oasis
+
+import "context"
+
+// MemoryStore provides long-term user memory with semantic deduplication.
+// Optional — pass to WithMemory() to enable.
+type MemoryStore interface {
+	UpsertFact(ctx context.Context, fact, category string, embedding []float32) error
+	SearchFacts(ctx context.Context, embedding []float32, topK int) ([]Fact, error)
+	BuildContext(ctx context.Context, queryEmbedding []float32) (string, error)
+	DeleteMatchingFacts(ctx context.Context, pattern string) error
+	DecayOldFacts(ctx context.Context) error
+	Init(ctx context.Context) error
+}

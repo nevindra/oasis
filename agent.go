@@ -1,0 +1,241 @@
+package oasis
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+)
+
+// Agent is the core orchestrator that connects a Frontend, Provider, Store, and Tools.
+type Agent struct {
+	frontend     Frontend
+	provider     Provider
+	embedding    EmbeddingProvider
+	store        VectorStore
+	memory       MemoryStore // nil if not configured
+	tools        *ToolRegistry
+	systemPrompt string
+	maxIter      int
+}
+
+// Option configures an Agent.
+type Option func(*Agent)
+
+func WithFrontend(f Frontend) Option         { return func(a *Agent) { a.frontend = f } }
+func WithProvider(p Provider) Option         { return func(a *Agent) { a.provider = p } }
+func WithEmbedding(e EmbeddingProvider) Option { return func(a *Agent) { a.embedding = e } }
+func WithStore(s VectorStore) Option         { return func(a *Agent) { a.store = s } }
+func WithMemory(m MemoryStore) Option        { return func(a *Agent) { a.memory = m } }
+func WithSystemPrompt(s string) Option       { return func(a *Agent) { a.systemPrompt = s } }
+func WithMaxToolIterations(n int) Option     { return func(a *Agent) { a.maxIter = n } }
+
+// New creates an Agent with the given options.
+func New(opts ...Option) *Agent {
+	a := &Agent{
+		tools:   NewToolRegistry(),
+		maxIter: 10,
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
+
+// AddTool registers a tool with the agent.
+func (a *Agent) AddTool(t Tool) {
+	a.tools.Add(t)
+}
+
+// Store returns the agent's VectorStore (for tools that need it).
+func (a *Agent) Store() VectorStore {
+	return a.store
+}
+
+// Embedding returns the agent's EmbeddingProvider (for tools that need it).
+func (a *Agent) Embedding() EmbeddingProvider {
+	return a.embedding
+}
+
+// Run starts the agent's main loop: poll frontend, handle messages.
+func (a *Agent) Run(ctx context.Context) error {
+	if a.frontend == nil || a.provider == nil || a.store == nil {
+		return fmt.Errorf("agent requires Frontend, Provider, and Store")
+	}
+
+	if err := a.store.Init(ctx); err != nil {
+		return fmt.Errorf("store init: %w", err)
+	}
+	if a.memory != nil {
+		if err := a.memory.Init(ctx); err != nil {
+			return fmt.Errorf("memory init: %w", err)
+		}
+	}
+
+	msgs, err := a.frontend.Poll(ctx)
+	if err != nil {
+		return fmt.Errorf("frontend poll: %w", err)
+	}
+
+	log.Println("oasis: agent running")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case msg, ok := <-msgs:
+			if !ok {
+				return nil
+			}
+			go a.handleMessage(ctx, msg)
+		}
+	}
+}
+
+// handleMessage processes a single incoming message.
+func (a *Agent) handleMessage(ctx context.Context, msg IncomingMessage) {
+	if msg.Text == "" && msg.Document == nil && len(msg.Photos) == 0 {
+		return
+	}
+
+	text := msg.Text
+	if text == "" {
+		text = msg.Caption
+	}
+	if text == "" {
+		return
+	}
+
+	conv, err := a.store.GetOrCreateConversation(ctx, msg.ChatID)
+	if err != nil {
+		log.Printf("oasis: get conversation: %v", err)
+		return
+	}
+
+	a.handleAction(ctx, msg, conv, text)
+}
+
+// handleAction runs the tool-calling agent loop.
+func (a *Agent) handleAction(ctx context.Context, msg IncomingMessage, conv Conversation, userText string) {
+	// Build messages: system + history + user
+	messages := a.buildMessages(ctx, conv, userText)
+
+	// Send placeholder
+	placeholderID, err := a.frontend.Send(ctx, msg.ChatID, "...")
+	if err != nil {
+		log.Printf("oasis: send placeholder: %v", err)
+		return
+	}
+
+	toolDefs := a.tools.AllDefinitions()
+
+	// Agent loop
+	for i := 0; i < a.maxIter; i++ {
+		var resp ChatResponse
+		var callErr error
+
+		if len(toolDefs) > 0 {
+			resp, callErr = a.provider.ChatWithTools(ctx, ChatRequest{Messages: messages}, toolDefs)
+		} else {
+			resp, callErr = a.provider.Chat(ctx, ChatRequest{Messages: messages})
+		}
+		if callErr != nil {
+			log.Printf("oasis: llm call: %v", callErr)
+			_ = a.frontend.Edit(ctx, msg.ChatID, placeholderID, "Error: "+callErr.Error())
+			return
+		}
+
+		// No tool calls — final text response
+		if len(resp.ToolCalls) == 0 {
+			_ = a.frontend.EditFormatted(ctx, msg.ChatID, placeholderID, resp.Content)
+			a.spawnStore(ctx, conv, userText, resp.Content)
+			return
+		}
+
+		// Execute tool calls
+		messages = append(messages, ChatMessage{
+			Role:      "assistant",
+			ToolCalls: resp.ToolCalls,
+			Content:   resp.Content,
+		})
+
+		for _, tc := range resp.ToolCalls {
+			_ = a.frontend.Edit(ctx, msg.ChatID, placeholderID, fmt.Sprintf("Using %s...", tc.Name))
+			result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
+			content := result.Content
+			if execErr != nil {
+				content = "error: " + execErr.Error()
+			} else if result.Error != "" {
+				content = "error: " + result.Error
+			}
+			messages = append(messages, ToolResultMessage(tc.ID, content))
+		}
+	}
+
+	// Max iterations — send what we have
+	_ = a.frontend.Edit(ctx, msg.ChatID, placeholderID, "Reached maximum tool iterations.")
+}
+
+// buildMessages constructs the message list: system prompt + memory + history + user message.
+func (a *Agent) buildMessages(ctx context.Context, conv Conversation, userText string) []ChatMessage {
+	var messages []ChatMessage
+
+	// System prompt
+	var systemParts []string
+	if a.systemPrompt != "" {
+		systemParts = append(systemParts, a.systemPrompt)
+	}
+	systemParts = append(systemParts, fmt.Sprintf("Current time: %s", time.Now().Format(time.RFC3339)))
+
+	// Memory context
+	if a.memory != nil && a.embedding != nil {
+		embs, err := a.embedding.Embed(ctx, []string{userText})
+		if err == nil && len(embs) > 0 {
+			memCtx, err := a.memory.BuildContext(ctx, embs[0])
+			if err == nil && memCtx != "" {
+				systemParts = append(systemParts, memCtx)
+			}
+		}
+	}
+
+	messages = append(messages, SystemMessage(strings.Join(systemParts, "\n\n")))
+
+	// Conversation history
+	history, _ := a.store.GetMessages(ctx, conv.ID, 20)
+	for _, m := range history {
+		messages = append(messages, ChatMessage{Role: m.Role, Content: m.Content})
+	}
+
+	// Current user message
+	messages = append(messages, UserMessage(userText))
+	return messages
+}
+
+// spawnStore persists messages and extracts facts in the background.
+func (a *Agent) spawnStore(ctx context.Context, conv Conversation, userText, assistantText string) {
+	go func() {
+		// Store user message
+		userMsg := Message{
+			ID: NewID(), ConversationID: conv.ID,
+			Role: "user", Content: userText, CreatedAt: NowUnix(),
+		}
+		_ = a.store.StoreMessage(ctx, userMsg)
+
+		// Embed user message
+		if a.embedding != nil {
+			embs, err := a.embedding.Embed(ctx, []string{userText})
+			if err == nil && len(embs) > 0 {
+				userMsg.Embedding = embs[0]
+				_ = a.store.StoreMessage(ctx, userMsg)
+			}
+		}
+
+		// Store assistant message
+		asstMsg := Message{
+			ID: NewID(), ConversationID: conv.ID,
+			Role: "assistant", Content: assistantText, CreatedAt: NowUnix(),
+		}
+		_ = a.store.StoreMessage(ctx, asstMsg)
+	}()
+}
