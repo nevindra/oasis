@@ -12,6 +12,11 @@ For application-level orchestration (routing, intent classification, agent manag
 | (Telegram, etc.)  |      | (Gemini, OpenAI)   |
 +-------------------+      +--------------------+
          |                          |
+         |                  +-------+-------+
+         |                  |  Observer     |  (optional OTEL wrapper)
+         |                  | traces/metrics|
+         |                  +-------+-------+
+         |                          |
          v                          v
 +--------------------------------------------------+
 |              Your Application                     |
@@ -356,3 +361,4 @@ Raw content (text/HTML/file)
 - **Fresh DB connections** -- Each operation opens a fresh connection. Avoids connection pooling complexity and Turso STREAM_EXPIRED errors.
 - **Interface-driven** -- Every major component is a Go interface. Concrete implementations are in separate packages. No global state.
 - **Minimal error types** -- Two custom error types (`ErrLLM`, `ErrHTTP`). Tool errors use `ToolResult.Error` string field, not Go errors.
+- **Observer as middleware** -- The `observer/` package wraps `Provider`, `EmbeddingProvider`, and `Tool` with OTEL instrumentation using the decorator pattern. Zero changes to existing implementations, zero overhead when disabled.

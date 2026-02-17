@@ -16,6 +16,7 @@ type Config struct {
 	Intent    IntentConfig    `toml:"intent"`
 	Action    ActionConfig    `toml:"action"`
 	Search    SearchConfig    `toml:"search"`
+	Observer  ObserverConfig  `toml:"observer"`
 }
 
 type TelegramConfig struct {
@@ -63,6 +64,16 @@ type ActionConfig struct {
 
 type SearchConfig struct {
 	BraveAPIKey string `toml:"brave_api_key"`
+}
+
+type ObserverConfig struct {
+	Enabled bool                       `toml:"enabled"`
+	Pricing map[string]ObserverPricing `toml:"pricing"`
+}
+
+type ObserverPricing struct {
+	Input  float64 `toml:"input"`
+	Output float64 `toml:"output"`
 }
 
 // Default returns a Config with all defaults applied.
@@ -116,6 +127,9 @@ func Load(path string) Config {
 	}
 	if v := os.Getenv("OASIS_BRAVE_API_KEY"); v != "" {
 		cfg.Search.BraveAPIKey = v
+	}
+	if os.Getenv("OASIS_OBSERVER_ENABLED") == "true" || os.Getenv("OASIS_OBSERVER_ENABLED") == "1" {
+		cfg.Observer.Enabled = true
 	}
 
 	// Fallbacks

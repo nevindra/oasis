@@ -34,6 +34,7 @@ toml.Unmarshal(data, &cfg)    // 2. TOML overlay
 | `OASIS_TURSO_URL` | Remote libSQL (Turso) database URL | Uses local SQLite file |
 | `OASIS_TURSO_TOKEN` | Authentication token for Turso | - |
 | `OASIS_BRAVE_API_KEY` | Brave Search API key (enables `web_search` tool) | Tool not registered |
+| `OASIS_OBSERVER_ENABLED` | Enable OTEL observability (`true` or `1`) | Disabled |
 | `OASIS_CONFIG` | Path to config file | `oasis.toml` |
 
 ## TOML Configuration Sections
@@ -123,6 +124,39 @@ Controls the document ingestion chunking strategy.
 |-------|------|---------|-------------|
 | `max_tokens` | int | `512` | Maximum tokens per chunk (~4 chars per token) |
 | `overlap_tokens` | int | `50` | Token overlap between consecutive chunks |
+
+### `[observer]`
+
+OTEL-based observability for LLM calls, tool executions, and embeddings. When enabled, wraps Provider, EmbeddingProvider, and Tool with instrumented versions that emit traces, metrics, and logs via OpenTelemetry.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Master switch. Also settable via `OASIS_OBSERVER_ENABLED=true` env var. |
+
+#### `[observer.pricing]`
+
+Override or extend the built-in per-model token pricing table. Prices are per million tokens.
+
+```toml
+[observer.pricing."gpt-4o"]
+input = 2.50
+output = 10.00
+
+[observer.pricing."my-custom-model"]
+input = 1.00
+output = 3.00
+```
+
+Built-in defaults include pricing for common Gemini, OpenAI, and Anthropic models. Unknown models report cost as `0.0`.
+
+**OTEL configuration** uses standard environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint (e.g. `http://localhost:4318`) |
+| `OTEL_SERVICE_NAME` | Service name (defaults to `"oasis"`) |
+| `OTEL_TRACES_SAMPLER` | Trace sampling strategy |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` or `http/protobuf` |
 
 ### `[ollama]`
 
@@ -236,9 +270,10 @@ base_url = "http://localhost:11434"
 
 Some features are only enabled when their credentials are configured:
 
-| Feature | Required Config | Tools Registered |
-|---------|----------------|-----------------|
-| Web search | `OASIS_BRAVE_API_KEY` | `web_search` |
+| Feature | Required Config | Effect |
+|---------|----------------|--------|
+| Web search | `OASIS_BRAVE_API_KEY` | `web_search` tool registered |
 | Long-term memory | MemoryStore passed to App | Fact extraction + memory injection |
+| Observability | `OASIS_OBSERVER_ENABLED=true` | OTEL traces, metrics, and logs for LLM/tool/embedding calls |
 
 If a required credential is missing, the feature is silently disabled and its tools are not registered in the ToolRegistry.

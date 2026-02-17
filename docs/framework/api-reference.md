@@ -507,10 +507,73 @@ type Config struct {
     Intent    IntentConfig     // provider, model, api_key
     Action    ActionConfig     // provider, model, api_key
     Search    SearchConfig     // brave_api_key
+    Observer  ObserverConfig   // enabled, pricing
 }
 ```
 
 See [Configuration](configuration.md) for all fields, defaults, and environment variable mappings.
+
+---
+
+## Observer
+
+**Package:** `github.com/nevindra/oasis/observer`
+
+OTEL-based observability middleware. Wraps `Provider`, `EmbeddingProvider`, and `Tool` with instrumented versions that emit traces, metrics, and structured logs via OpenTelemetry.
+
+### Setup
+
+```go
+inst, shutdown, err := observer.Init(ctx, pricingOverrides)
+defer shutdown(ctx)
+```
+
+### Wrappers
+
+```go
+// Wrap a Provider (emits llm.chat, llm.chat_with_tools, llm.chat_stream spans)
+observed := observer.WrapProvider(provider, modelName, inst)
+
+// Wrap an EmbeddingProvider (emits llm.embed spans)
+observed := observer.WrapEmbedding(embedding, modelName, inst)
+
+// Wrap a Tool (emits tool.execute spans)
+observed := observer.WrapTool(tool, inst)
+```
+
+All wrappers implement their respective interfaces (`oasis.Provider`, `oasis.EmbeddingProvider`, `oasis.Tool`), so they plug into existing code with no changes.
+
+### Traces
+
+| Span Name | Attributes |
+|-----------|-----------|
+| `llm.chat` | model, provider, input_tokens, output_tokens, cost_usd |
+| `llm.chat_with_tools` | model, provider, input_tokens, output_tokens, cost_usd, tool_count, tool_names |
+| `llm.chat_stream` | model, provider, input_tokens, output_tokens, cost_usd, stream_chunks |
+| `llm.embed` | model, provider, text_count, dimensions |
+| `tool.execute` | tool_name, status, result_length |
+
+### Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `llm.token.usage` | Counter | Tokens consumed (by model, provider, direction) |
+| `llm.cost.total` | Counter | Cumulative cost in USD |
+| `llm.requests` | Counter | Request count (by model, method, status) |
+| `llm.duration` | Histogram | Call latency in ms |
+| `tool.executions` | Counter | Tool call count (by name, status) |
+| `tool.duration` | Histogram | Tool latency in ms |
+| `embedding.requests` | Counter | Embedding call count |
+| `embedding.duration` | Histogram | Embedding latency in ms |
+
+### Cost Calculation
+
+```go
+calc := observer.NewCostCalculator(overrides) // merges with built-in defaults
+cost := calc.Calculate("gemini-2.5-flash", inputTokens, outputTokens)
+```
+
+Built-in pricing for common Gemini, OpenAI, and Anthropic models. Unknown models return `0.0`.
 
 ---
 
