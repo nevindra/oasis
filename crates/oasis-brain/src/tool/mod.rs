@@ -6,6 +6,10 @@ pub mod memory_tool;
 pub mod linear;
 pub mod calendar;
 pub mod gmail;
+pub mod skill;
+pub mod shell;
+pub mod file;
+pub mod http;
 
 use std::sync::Arc;
 

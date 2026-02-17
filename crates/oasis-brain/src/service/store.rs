@@ -222,6 +222,30 @@ impl VectorStore {
         .await
         .map_err(map_err)?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS skills (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                description_embedding F32_BLOB(1536),
+                instructions TEXT NOT NULL,
+                tools TEXT,
+                model TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            (),
+        )
+        .await
+        .map_err(map_err)?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS skills_vector_idx ON skills(libsql_vector_idx(description_embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=64'))",
+            (),
+        )
+        .await
+        .map_err(map_err)?;
+
         Ok(())
     }
 
@@ -650,5 +674,174 @@ impl VectorStore {
             .await
             .map_err(map_err)?;
         Ok(count)
+    }
+
+    // --- Skills ---
+
+    pub async fn insert_skill(&self, skill: &Skill, embedding: &[f32]) -> Result<()> {
+        let embedding_json = embedding_to_json(embedding);
+        with_retry(|| async {
+            self.conn()?
+                .execute(
+                    "INSERT INTO skills (id, name, description, description_embedding, instructions, tools, model, created_at, updated_at) VALUES (?, ?, ?, vector(?), ?, ?, ?, ?, ?)",
+                    libsql::params![
+                        skill.id.clone(),
+                        skill.name.clone(),
+                        skill.description.clone(),
+                        embedding_json.clone(),
+                        skill.instructions.clone(),
+                        skill.tools.clone(),
+                        skill.model.clone(),
+                        skill.created_at,
+                        skill.updated_at,
+                    ],
+                )
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn list_skills(&self) -> Result<Vec<Skill>> {
+        let mut rows = self
+            .conn()?
+            .query(
+                "SELECT id, name, description, instructions, tools, model, created_at, updated_at FROM skills ORDER BY created_at DESC",
+                (),
+            )
+            .await
+            .map_err(map_err)?;
+
+        let mut skills = Vec::new();
+        while let Some(row) = rows.next().await.map_err(map_err)? {
+            skills.push(Skill {
+                id: row.get::<String>(0).map_err(map_err)?,
+                name: row.get::<String>(1).map_err(map_err)?,
+                description: row.get::<String>(2).map_err(map_err)?,
+                instructions: row.get::<String>(3).map_err(map_err)?,
+                tools: row.get::<Option<String>>(4).map_err(map_err)?,
+                model: row.get::<Option<String>>(5).map_err(map_err)?,
+                created_at: row.get::<i64>(6).map_err(map_err)?,
+                updated_at: row.get::<i64>(7).map_err(map_err)?,
+            });
+        }
+        Ok(skills)
+    }
+
+    pub async fn get_skill(&self, id: &str) -> Result<Option<Skill>> {
+        let mut rows = self
+            .conn()?
+            .query(
+                "SELECT id, name, description, instructions, tools, model, created_at, updated_at FROM skills WHERE id = ?",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .map_err(map_err)?;
+
+        if let Some(row) = rows.next().await.map_err(map_err)? {
+            Ok(Some(Skill {
+                id: row.get::<String>(0).map_err(map_err)?,
+                name: row.get::<String>(1).map_err(map_err)?,
+                description: row.get::<String>(2).map_err(map_err)?,
+                instructions: row.get::<String>(3).map_err(map_err)?,
+                tools: row.get::<Option<String>>(4).map_err(map_err)?,
+                model: row.get::<Option<String>>(5).map_err(map_err)?,
+                created_at: row.get::<i64>(6).map_err(map_err)?,
+                updated_at: row.get::<i64>(7).map_err(map_err)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn update_skill(&self, skill: &Skill, embedding: &[f32]) -> Result<()> {
+        let embedding_json = embedding_to_json(embedding);
+        with_retry(|| async {
+            self.conn()?
+                .execute(
+                    "UPDATE skills SET name = ?, description = ?, description_embedding = vector(?), instructions = ?, tools = ?, model = ?, updated_at = ? WHERE id = ?",
+                    libsql::params![
+                        skill.name.clone(),
+                        skill.description.clone(),
+                        embedding_json.clone(),
+                        skill.instructions.clone(),
+                        skill.tools.clone(),
+                        skill.model.clone(),
+                        skill.updated_at,
+                        skill.id.clone(),
+                    ],
+                )
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn delete_skill(&self, id: &str) -> Result<()> {
+        self.conn()?
+            .execute(
+                "DELETE FROM skills WHERE id = ?",
+                libsql::params![id.to_string()],
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    pub async fn find_skill_by_name(&self, query: &str) -> Result<Vec<Skill>> {
+        let like_query = format!("%{query}%");
+        let mut rows = self
+            .conn()?
+            .query(
+                "SELECT id, name, description, instructions, tools, model, created_at, updated_at FROM skills WHERE LOWER(name) LIKE LOWER(?)",
+                libsql::params![like_query],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let mut skills = Vec::new();
+        while let Some(row) = rows.next().await.map_err(map_err)? {
+            skills.push(Skill {
+                id: row.get::<String>(0).map_err(map_err)?,
+                name: row.get::<String>(1).map_err(map_err)?,
+                description: row.get::<String>(2).map_err(map_err)?,
+                instructions: row.get::<String>(3).map_err(map_err)?,
+                tools: row.get::<Option<String>>(4).map_err(map_err)?,
+                model: row.get::<Option<String>>(5).map_err(map_err)?,
+                created_at: row.get::<i64>(6).map_err(map_err)?,
+                updated_at: row.get::<i64>(7).map_err(map_err)?,
+            });
+        }
+        Ok(skills)
+    }
+
+    /// Semantic search over skill descriptions. Returns top_k skills ordered by similarity.
+    pub async fn vector_search_skills(&self, embedding: &[f32], top_k: usize) -> Result<Vec<Skill>> {
+        let embedding_json = embedding_to_json(embedding);
+        let mut rows = self
+            .conn()?
+            .query(
+                "SELECT s.id, s.name, s.description, s.instructions, s.tools, s.model, s.created_at, s.updated_at FROM skills s WHERE rowid IN vector_top_k('skills_vector_idx', vector(?), ?)",
+                libsql::params![embedding_json, top_k as i32],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let mut skills = Vec::new();
+        while let Some(row) = rows.next().await.map_err(map_err)? {
+            skills.push(Skill {
+                id: row.get::<String>(0).map_err(map_err)?,
+                name: row.get::<String>(1).map_err(map_err)?,
+                description: row.get::<String>(2).map_err(map_err)?,
+                instructions: row.get::<String>(3).map_err(map_err)?,
+                tools: row.get::<Option<String>>(4).map_err(map_err)?,
+                model: row.get::<Option<String>>(5).map_err(map_err)?,
+                created_at: row.get::<i64>(6).map_err(map_err)?,
+                updated_at: row.get::<i64>(7).map_err(map_err)?,
+            });
+        }
+        Ok(skills)
     }
 }

@@ -220,3 +220,17 @@ pub struct ScheduledToolCall {
     pub tool: String,
     pub params: serde_json::Value,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Skill {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub instructions: String,
+    /// JSON array of allowed tool names. None = all tools.
+    pub tools: Option<String>,
+    /// Preferred LLM model. None = default action model.
+    pub model: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}

@@ -34,7 +34,29 @@ impl Brain {
         original_message_id: i64,
         input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
     ) -> Result<String> {
-        let mut tools = self.tools.definitions();
+        // Resolve skill for this request
+        let resolved = match self.skill_manager.resolve_skill(text).await {
+            Ok(r) => r,
+            Err(e) => {
+                log!(" [agent:{agent_id}] skill resolution failed: {e}");
+                None
+            }
+        };
+
+        let mut tools = if let Some(ref resolved) = resolved {
+            if let Some(ref allowed) = resolved.allowed_tools {
+                // Filter to only the skill's allowed tools
+                self.tools
+                    .definitions()
+                    .into_iter()
+                    .filter(|d| allowed.contains(&d.name))
+                    .collect()
+            } else {
+                self.tools.definitions()
+            }
+        } else {
+            self.tools.definitions()
+        };
         tools.push(ask_user_definition());
 
         let task_summary = self
@@ -74,6 +96,17 @@ impl Brain {
                  - **ask_user**: Use when you need clarification from the user before proceeding. \
                  The user will be notified and can reply. Only use when truly needed.\n",
             );
+        }
+
+        // Inject skill instructions into system prompt if a skill was resolved
+        if let Some(ref resolved) = resolved {
+            if let Some(ChatMessage { content, .. }) = messages.first_mut() {
+                content.push_str(&format!(
+                    "\n## Active Skill: {}\n{}\n",
+                    resolved.skill.name, resolved.skill.instructions
+                ));
+            }
+            log!(" [agent:{agent_id}] skill injected: {}", resolved.skill.name);
         }
 
         messages.push(ChatMessage::text("user", text));
@@ -201,6 +234,10 @@ impl Brain {
                         | "schedule_list"
                         | "schedule_update"
                         | "schedule_delete"
+                        | "skill_create"
+                        | "skill_list"
+                        | "skill_update"
+                        | "skill_delete"
                 );
                 if is_simple {
                     log!(" [agent:{agent_id}] short-circuit: simple tool, skipping LLM synthesis");

@@ -185,6 +185,13 @@ pub struct BrainConfig {
     /// UTC offset in hours (e.g., 7 for WIB/UTC+7, -5 for EST/UTC-5).
     #[serde(default = "default_timezone_offset")]
     pub timezone_offset: i32,
+    #[serde(default = "default_workspace_path")]
+    pub workspace_path: String,
+}
+
+fn default_workspace_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    format!("{home}/oasis-workspace")
 }
 
 fn default_context_window() -> usize {
@@ -205,6 +212,7 @@ impl Default for BrainConfig {
             context_window: default_context_window(),
             vector_top_k: default_top_k(),
             timezone_offset: default_timezone_offset(),
+            workspace_path: default_workspace_path(),
         }
     }
 }

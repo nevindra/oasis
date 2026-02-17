@@ -5,6 +5,7 @@ use crate::service::ingest::pipeline::IngestPipeline;
 use crate::service::llm::{Embedder, LlmDispatch};
 use crate::service::memory::MemoryStore;
 use crate::service::search::WebSearch;
+use crate::service::skills::SkillManager;
 use crate::service::store::VectorStore;
 use crate::service::tasks::TaskManager;
 use crate::tool::knowledge::KnowledgeTool;
@@ -39,6 +40,7 @@ pub struct Brain {
     pub(crate) search_tool: Arc<SearchTool>,
     pub(crate) memory_tool: Arc<MemoryTool>,
     pub(crate) agent_manager: Arc<AgentManager>,
+    pub(crate) skill_manager: SkillManager,
 }
 
 /// Implement TokenStore for VectorStore so integrations can store OAuth tokens.
@@ -124,12 +126,29 @@ impl Brain {
             Arc::clone(&embedder),
         ));
 
+        // Skill management tool
+        let skill_tool = crate::tool::skill::SkillTool::new(Arc::clone(&store), Arc::clone(&embedder));
+
+        // Shell tool (sandboxed to workspace)
+        let workspace = config.brain.workspace_path.clone();
+        let shell_tool = crate::tool::shell::ShellTool::new(workspace.clone(), 60);
+
+        // File tool (sandboxed to workspace)
+        let file_tool = crate::tool::file::FileTool::new(workspace);
+
+        // HTTP tool
+        let http_tool = crate::tool::http::HttpTool::new();
+
         let mut tool_list: Vec<Box<dyn crate::tool::Tool>> = vec![
             Box::new(task_tool),
             Box::new(Arc::clone(&search_tool)),
             Box::new(knowledge_tool),
             Box::new(schedule_tool),
             Box::new(Arc::clone(&memory_tool)),
+            Box::new(skill_tool),
+            Box::new(shell_tool),
+            Box::new(file_tool),
+            Box::new(http_tool),
         ];
 
         // --- Conditional integration tools ---
@@ -181,6 +200,8 @@ impl Brain {
 
         let tools = ToolRegistry::new(tool_list);
 
+        let skill_manager = SkillManager::new(Arc::clone(&store), Arc::clone(&embedder), llm.clone());
+
         let agent_manager = Arc::new(AgentManager::new(3));
 
         Ok(Self {
@@ -195,6 +216,7 @@ impl Brain {
             search_tool,
             memory_tool,
             agent_manager,
+            skill_manager,
         })
     }
 }
