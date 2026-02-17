@@ -39,10 +39,10 @@ type ActionAgent struct {
 
 // QueuedAction represents an action waiting for a slot.
 type QueuedAction struct {
-	ChatID         string
-	Text           string
-	ConversationID string
-	OriginalMsgID  string
+	ChatID        string
+	Text          string
+	ThreadID      string
+	OriginalMsgID string
 }
 
 // AgentManager manages concurrent action agents with reply routing and overflow queue.

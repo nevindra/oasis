@@ -371,7 +371,7 @@ Heavy work that's not on the critical path runs in background goroutines:
 
 ```go
 go func() {
-    a.storeMessagePair(ctx, conv.ID, userText, assistantText)
+    a.storeMessagePair(ctx, thread.ID, userText, assistantText)
     a.extractAndStoreFacts(ctx, userText, assistantText)
 }()
 ```

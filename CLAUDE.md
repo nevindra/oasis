@@ -153,7 +153,7 @@ func (t *MyTool) Execute(ctx context.Context, name string, args json.RawMessage)
 
 ### Database
 
-Uses pure-Go SQLite with brute-force vector search. Fresh connections per call (no pooling). Tables: `documents`, `chunks`, `conversations`, `messages`, `config`, `scheduled_actions`, `skills`, `user_facts`.
+Uses pure-Go SQLite with brute-force vector search. Fresh connections per call (no pooling). Tables: `documents`, `chunks`, `threads`, `messages`, `config`, `scheduled_actions`, `skills`, `user_facts`.
 
 ## Engineering Principles (quick reference)
 

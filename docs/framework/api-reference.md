@@ -101,15 +101,19 @@ type Frontend interface {
 type VectorStore interface {
     // Messages
     StoreMessage(ctx context.Context, msg Message) error
-    GetMessages(ctx context.Context, conversationID string, limit int) ([]Message, error)
+    GetMessages(ctx context.Context, threadID string, limit int) ([]Message, error)
     SearchMessages(ctx context.Context, embedding []float32, topK int) ([]Message, error)
 
     // Documents + Chunks
     StoreDocument(ctx context.Context, doc Document, chunks []Chunk) error
     SearchChunks(ctx context.Context, embedding []float32, topK int) ([]Chunk, error)
 
-    // Conversations
-    GetOrCreateConversation(ctx context.Context, chatID string) (Conversation, error)
+    // Threads
+    CreateThread(ctx context.Context, thread Thread) error
+    GetThread(ctx context.Context, id string) (Thread, error)
+    ListThreads(ctx context.Context, chatID string, limit int) ([]Thread, error)
+    UpdateThread(ctx context.Context, thread Thread) error
+    DeleteThread(ctx context.Context, id string) error
 
     // Key-value config
     GetConfig(ctx context.Context, key string) (string, error)
@@ -233,19 +237,22 @@ type Chunk struct {
     Embedding  []float32 `json:"-"`
 }
 
-type Conversation struct {
-    ID        string `json:"id"`
-    ChatID    string `json:"chat_id"`
-    CreatedAt int64  `json:"created_at"`
+type Thread struct {
+    ID        string            `json:"id"`
+    ChatID    string            `json:"chat_id"`
+    Title     string            `json:"title,omitempty"`
+    Metadata  map[string]string `json:"metadata,omitempty"`
+    CreatedAt int64             `json:"created_at"`
+    UpdatedAt int64             `json:"updated_at"`
 }
 
 type Message struct {
-    ID             string    `json:"id"`
-    ConversationID string    `json:"conversation_id"`
-    Role           string    `json:"role"`     // "user" or "assistant"
-    Content        string    `json:"content"`
-    Embedding      []float32 `json:"-"`
-    CreatedAt      int64     `json:"created_at"`
+    ID        string    `json:"id"`
+    ThreadID  string    `json:"thread_id"`
+    Role      string    `json:"role"`     // "user" or "assistant"
+    Content   string    `json:"content"`
+    Embedding []float32 `json:"-"`
+    CreatedAt int64     `json:"created_at"`
 }
 
 type Fact struct {

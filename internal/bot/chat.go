@@ -13,12 +13,12 @@ import (
 const maxStreamRetries = 3
 
 // handleChatStream handles a chat intent with streaming response.
-func (a *App) handleChatStream(ctx context.Context, chatID, message string, conv oasis.Conversation) string {
-	return a.handleChatStreamWithContext(ctx, chatID, message, conv, "")
+func (a *App) handleChatStream(ctx context.Context, chatID, message string, thread oasis.Thread) string {
+	return a.handleChatStreamWithContext(ctx, chatID, message, thread, "")
 }
 
 // handleChatStreamWithContext handles chat with optional extra context (e.g. file content).
-func (a *App) handleChatStreamWithContext(ctx context.Context, chatID, message string, conv oasis.Conversation, extraContext string) string {
+func (a *App) handleChatStreamWithContext(ctx context.Context, chatID, message string, thread oasis.Thread, extraContext string) string {
 	// Build memory context
 	memoryContext := ""
 	if a.memory != nil && a.embedding != nil {
@@ -42,7 +42,7 @@ func (a *App) handleChatStreamWithContext(ctx context.Context, chatID, message s
 	}
 
 	// Build messages
-	messages := a.buildSystemPrompt(ctx, fullContext, conv)
+	messages := a.buildSystemPrompt(ctx, fullContext, thread)
 	messages = append(messages, oasis.UserMessage(message))
 
 	req := oasis.ChatRequest{Messages: messages}
@@ -130,7 +130,7 @@ func (a *App) handleChatStreamWithContext(ctx context.Context, chatID, message s
 }
 
 // buildSystemPrompt constructs the system message with context and history.
-func (a *App) buildSystemPrompt(ctx context.Context, memContext string, conv oasis.Conversation) []oasis.ChatMessage {
+func (a *App) buildSystemPrompt(ctx context.Context, memContext string, thread oasis.Thread) []oasis.ChatMessage {
 	tz := a.config.Brain.TimezoneOffset
 	now := time.Now().UTC().Add(time.Duration(tz) * time.Hour)
 	timeStr := now.Format("2006-01-02 15:04")
@@ -143,7 +143,7 @@ func (a *App) buildSystemPrompt(ctx context.Context, memContext string, conv oas
 	}
 
 	// Add conversation history
-	history, err := a.store.GetMessages(ctx, conv.ID, a.config.Brain.ContextWindow)
+	history, err := a.store.GetMessages(ctx, thread.ID, a.config.Brain.ContextWindow)
 	if err == nil && len(history) > 0 {
 		system += "\n## Recent conversation (for context only — respond to the user's NEW message, not these)\n"
 		for _, msg := range history {

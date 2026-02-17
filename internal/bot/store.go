@@ -9,24 +9,24 @@ import (
 )
 
 // spawnStore persists messages and extracts facts in a background goroutine.
-func (a *App) spawnStore(ctx context.Context, conv oasis.Conversation, userText, assistantText string) {
+func (a *App) spawnStore(ctx context.Context, thread oasis.Thread, userText, assistantText string) {
 	go func() {
-		a.storeMessagePair(ctx, conv.ID, userText, assistantText)
+		a.storeMessagePair(ctx, thread.ID, userText, assistantText)
 		a.extractAndStoreFacts(ctx, userText, assistantText)
 	}()
 }
 
 // storeMessagePair persists user + assistant messages with embedding.
-func (a *App) storeMessagePair(ctx context.Context, conversationID, userText, assistantText string) {
+func (a *App) storeMessagePair(ctx context.Context, threadID, userText, assistantText string) {
 	now := oasis.NowUnix()
 
 	// User message with embedding
 	userMsg := oasis.Message{
-		ID:             oasis.NewID(),
-		ConversationID: conversationID,
-		Role:           "user",
-		Content:        userText,
-		CreatedAt:      now,
+		ID:        oasis.NewID(),
+		ThreadID:  threadID,
+		Role:      "user",
+		Content:   userText,
+		CreatedAt: now,
 	}
 
 	if a.embedding != nil {
@@ -42,11 +42,11 @@ func (a *App) storeMessagePair(ctx context.Context, conversationID, userText, as
 
 	// Assistant message (no embedding)
 	assistantMsg := oasis.Message{
-		ID:             oasis.NewID(),
-		ConversationID: conversationID,
-		Role:           "assistant",
-		Content:        assistantText,
-		CreatedAt:      now,
+		ID:        oasis.NewID(),
+		ThreadID:  threadID,
+		Role:      "assistant",
+		Content:   assistantText,
+		CreatedAt: now,
 	}
 	if err := a.store.StoreMessage(ctx, assistantMsg); err != nil {
 		log.Printf(" [store] assistant message error: %v", err)

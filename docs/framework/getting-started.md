@@ -103,7 +103,7 @@ After running Oasis, you'll see:
 
 | File/Directory | Purpose |
 |----------------|---------|
-| `oasis.db` | SQLite database (conversations, messages, documents, chunks, memory) |
+| `oasis.db` | SQLite database (threads, messages, documents, chunks, memory) |
 | `~/oasis-workspace/` | Sandboxed directory for shell and file tools |
 
 ## Next Steps

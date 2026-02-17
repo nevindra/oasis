@@ -60,14 +60,17 @@ func (s *Store) Init(ctx context.Context) error {
 			chunk_index INTEGER NOT NULL,
 			embedding TEXT
 		)`,
-		`CREATE TABLE IF NOT EXISTS conversations (
+		`CREATE TABLE IF NOT EXISTS threads (
 			id TEXT PRIMARY KEY,
-			chat_id TEXT UNIQUE NOT NULL,
-			created_at INTEGER NOT NULL
+			chat_id TEXT NOT NULL,
+			title TEXT,
+			metadata TEXT,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS messages (
 			id TEXT PRIMARY KEY,
-			conversation_id TEXT NOT NULL,
+			thread_id TEXT NOT NULL,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
 			embedding TEXT,
@@ -117,8 +120,16 @@ func (s *Store) Init(ctx context.Context) error {
 		return fmt.Errorf("create table: %w", err)
 	}
 
-	// Migrations (best-effort, silent fail if column already exists)
+	// Migrations (best-effort, silent fail if already applied)
 	_, _ = db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
+
+	// Migrate conversations → threads
+	_, _ = db.ExecContext(ctx, "ALTER TABLE conversations RENAME TO threads")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN title TEXT")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN metadata TEXT")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN updated_at INTEGER")
+	_, _ = db.ExecContext(ctx, "UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE messages RENAME COLUMN conversation_id TO thread_id")
 
 	return nil
 }
@@ -138,9 +149,9 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 	}
 
 	_, err = db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO messages (id, conversation_id, role, content, embedding, created_at)
+		`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		msg.ID, msg.ConversationID, msg.Role, msg.Content, embJSON, msg.CreatedAt,
+		msg.ID, msg.ThreadID, msg.Role, msg.Content, embJSON, msg.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("store message: %w", err)
@@ -148,9 +159,9 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 	return nil
 }
 
-// GetMessages returns the most recent messages for a conversation,
+// GetMessages returns the most recent messages for a thread,
 // ordered chronologically (oldest first).
-func (s *Store) GetMessages(ctx context.Context, conversationID string, limit int) ([]oasis.Message, error) {
+func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]oasis.Message, error) {
 	db, err := s.openDB()
 	if err != nil {
 		return nil, err
@@ -158,12 +169,12 @@ func (s *Store) GetMessages(ctx context.Context, conversationID string, limit in
 	defer db.Close()
 
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, conversation_id, role, content, created_at
+		`SELECT id, thread_id, role, content, created_at
 		 FROM messages
-		 WHERE conversation_id = ?
+		 WHERE thread_id = ?
 		 ORDER BY created_at DESC
 		 LIMIT ?`,
-		conversationID, limit,
+		threadID, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get messages: %w", err)
@@ -173,7 +184,7 @@ func (s *Store) GetMessages(ctx context.Context, conversationID string, limit in
 	var messages []oasis.Message
 	for rows.Next() {
 		var m oasis.Message
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 		messages = append(messages, m)
@@ -199,7 +210,7 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 	defer db.Close()
 
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, conversation_id, role, content, embedding, created_at
+		`SELECT id, thread_id, role, content, embedding, created_at
 		 FROM messages WHERE embedding IS NOT NULL`,
 	)
 	if err != nil {
@@ -216,7 +227,7 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 	for rows.Next() {
 		var m oasis.Message
 		var embJSON string
-		if err := rows.Scan(&m.ID, &m.ConversationID, &m.Role, &m.Content, &embJSON, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &embJSON, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 		stored, err := deserializeEmbedding(embJSON)
@@ -345,41 +356,146 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 	return chunks, nil
 }
 
-// GetOrCreateConversation returns an existing conversation for the given
-// chatID, or creates and returns a new one if none exists.
-func (s *Store) GetOrCreateConversation(ctx context.Context, chatID string) (oasis.Conversation, error) {
+// CreateThread inserts a new thread.
+func (s *Store) CreateThread(ctx context.Context, thread oasis.Thread) error {
 	db, err := s.openDB()
 	if err != nil {
-		return oasis.Conversation{}, err
+		return err
 	}
 	defer db.Close()
 
-	var conv oasis.Conversation
-	err = db.QueryRowContext(ctx,
-		`SELECT id, chat_id, created_at FROM conversations WHERE chat_id = ?`,
-		chatID,
-	).Scan(&conv.ID, &conv.ChatID, &conv.CreatedAt)
-
-	if err == nil {
-		return conv, nil
-	}
-	if err != sql.ErrNoRows {
-		return oasis.Conversation{}, fmt.Errorf("get conversation: %w", err)
+	var metaJSON *string
+	if len(thread.Metadata) > 0 {
+		data, _ := json.Marshal(thread.Metadata)
+		v := string(data)
+		metaJSON = &v
 	}
 
-	conv = oasis.Conversation{
-		ID:        oasis.NewID(),
-		ChatID:    chatID,
-		CreatedAt: oasis.NowUnix(),
-	}
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO conversations (id, chat_id, created_at) VALUES (?, ?, ?)`,
-		conv.ID, conv.ChatID, conv.CreatedAt,
+		`INSERT INTO threads (id, chat_id, title, metadata, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		thread.ID, thread.ChatID, thread.Title, metaJSON, thread.CreatedAt, thread.UpdatedAt,
 	)
 	if err != nil {
-		return oasis.Conversation{}, fmt.Errorf("insert conversation: %w", err)
+		return fmt.Errorf("create thread: %w", err)
 	}
-	return conv, nil
+	return nil
+}
+
+// GetThread returns a thread by ID.
+func (s *Store) GetThread(ctx context.Context, id string) (oasis.Thread, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return oasis.Thread{}, err
+	}
+	defer db.Close()
+
+	var t oasis.Thread
+	var title sql.NullString
+	var metaJSON sql.NullString
+	err = db.QueryRowContext(ctx,
+		`SELECT id, chat_id, title, metadata, created_at, updated_at FROM threads WHERE id = ?`,
+		id,
+	).Scan(&t.ID, &t.ChatID, &title, &metaJSON, &t.CreatedAt, &t.UpdatedAt)
+	if err != nil {
+		return oasis.Thread{}, fmt.Errorf("get thread: %w", err)
+	}
+	if title.Valid {
+		t.Title = title.String
+	}
+	if metaJSON.Valid {
+		_ = json.Unmarshal([]byte(metaJSON.String), &t.Metadata)
+	}
+	return t, nil
+}
+
+// ListThreads returns threads for a chatID, ordered by most recently updated first.
+func (s *Store) ListThreads(ctx context.Context, chatID string, limit int) ([]oasis.Thread, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, chat_id, title, metadata, created_at, updated_at
+		 FROM threads WHERE chat_id = ?
+		 ORDER BY updated_at DESC
+		 LIMIT ?`,
+		chatID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list threads: %w", err)
+	}
+	defer rows.Close()
+
+	var threads []oasis.Thread
+	for rows.Next() {
+		var t oasis.Thread
+		var title sql.NullString
+		var metaJSON sql.NullString
+		if err := rows.Scan(&t.ID, &t.ChatID, &title, &metaJSON, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan thread: %w", err)
+		}
+		if title.Valid {
+			t.Title = title.String
+		}
+		if metaJSON.Valid {
+			_ = json.Unmarshal([]byte(metaJSON.String), &t.Metadata)
+		}
+		threads = append(threads, t)
+	}
+	return threads, rows.Err()
+}
+
+// UpdateThread updates a thread's title, metadata, and updated_at.
+func (s *Store) UpdateThread(ctx context.Context, thread oasis.Thread) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	var metaJSON *string
+	if len(thread.Metadata) > 0 {
+		data, _ := json.Marshal(thread.Metadata)
+		v := string(data)
+		metaJSON = &v
+	}
+
+	_, err = db.ExecContext(ctx,
+		`UPDATE threads SET title=?, metadata=?, updated_at=? WHERE id=?`,
+		thread.Title, metaJSON, thread.UpdatedAt, thread.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update thread: %w", err)
+	}
+	return nil
+}
+
+// DeleteThread removes a thread and its messages.
+func (s *Store) DeleteThread(ctx context.Context, id string) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE thread_id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete thread messages: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM threads WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete thread: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetConfig(ctx context.Context, key string) (string, error) {

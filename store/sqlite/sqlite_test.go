@@ -33,12 +33,14 @@ func TestStoreAndGetMessages(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	conv, _ := s.GetOrCreateConversation(ctx, "chat-1")
+	now := oasis.NowUnix()
+	thread := oasis.Thread{ID: oasis.NewID(), ChatID: "chat-1", CreatedAt: now, UpdatedAt: now}
+	s.CreateThread(ctx, thread)
 
 	msgs := []oasis.Message{
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "user", Content: "Hello", CreatedAt: 1000},
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "assistant", Content: "Hi!", CreatedAt: 1001},
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "user", Content: "Bye", CreatedAt: 1002},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "user", Content: "Hello", CreatedAt: 1000},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "assistant", Content: "Hi!", CreatedAt: 1001},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "user", Content: "Bye", CreatedAt: 1002},
 	}
 	for _, m := range msgs {
 		if err := s.StoreMessage(ctx, m); err != nil {
@@ -46,7 +48,7 @@ func TestStoreAndGetMessages(t *testing.T) {
 		}
 	}
 
-	got, err := s.GetMessages(ctx, conv.ID, 10)
+	got, err := s.GetMessages(ctx, thread.ID, 10)
 	if err != nil {
 		t.Fatalf("GetMessages: %v", err)
 	}
@@ -58,20 +60,58 @@ func TestStoreAndGetMessages(t *testing.T) {
 	}
 
 	// Test limit returns most recent
-	got2, _ := s.GetMessages(ctx, conv.ID, 2)
+	got2, _ := s.GetMessages(ctx, thread.ID, 2)
 	if len(got2) != 2 || got2[0].Content != "Hi!" {
 		t.Errorf("limit 2: expected [Hi!, Bye], got %v", got2)
 	}
 }
 
-func TestGetOrCreateConversationIdempotent(t *testing.T) {
+func TestThreadCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	c1, _ := s.GetOrCreateConversation(ctx, "chat-abc")
-	c2, _ := s.GetOrCreateConversation(ctx, "chat-abc")
-	if c1.ID != c2.ID {
-		t.Errorf("not idempotent: %q vs %q", c1.ID, c2.ID)
+	now := oasis.NowUnix()
+	thread := oasis.Thread{ID: oasis.NewID(), ChatID: "chat-abc", Title: "Test Thread", CreatedAt: now, UpdatedAt: now}
+	if err := s.CreateThread(ctx, thread); err != nil {
+		t.Fatalf("CreateThread: %v", err)
+	}
+
+	// Get
+	got, err := s.GetThread(ctx, thread.ID)
+	if err != nil {
+		t.Fatalf("GetThread: %v", err)
+	}
+	if got.ChatID != "chat-abc" || got.Title != "Test Thread" {
+		t.Errorf("unexpected thread: %+v", got)
+	}
+
+	// List
+	threads, err := s.ListThreads(ctx, "chat-abc", 10)
+	if err != nil {
+		t.Fatalf("ListThreads: %v", err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("expected 1 thread, got %d", len(threads))
+	}
+
+	// Update
+	thread.Title = "Updated"
+	thread.UpdatedAt = oasis.NowUnix()
+	if err := s.UpdateThread(ctx, thread); err != nil {
+		t.Fatalf("UpdateThread: %v", err)
+	}
+	got, _ = s.GetThread(ctx, thread.ID)
+	if got.Title != "Updated" {
+		t.Errorf("expected title 'Updated', got %q", got.Title)
+	}
+
+	// Delete
+	if err := s.DeleteThread(ctx, thread.ID); err != nil {
+		t.Fatalf("DeleteThread: %v", err)
+	}
+	threads, _ = s.ListThreads(ctx, "chat-abc", 10)
+	if len(threads) != 0 {
+		t.Fatalf("expected 0 threads after delete, got %d", len(threads))
 	}
 }
 
@@ -127,13 +167,16 @@ func TestStoreDocument(t *testing.T) {
 func TestSearchMessages(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	conv, _ := s.GetOrCreateConversation(ctx, "chat-vec")
+
+	now := oasis.NowUnix()
+	thread := oasis.Thread{ID: oasis.NewID(), ChatID: "chat-vec", CreatedAt: now, UpdatedAt: now}
+	s.CreateThread(ctx, thread)
 
 	// Store messages with embeddings
 	msgs := []oasis.Message{
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "user", Content: "about cats", Embedding: []float32{1, 0, 0}, CreatedAt: 1},
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "user", Content: "about dogs", Embedding: []float32{0, 1, 0}, CreatedAt: 2},
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "user", Content: "about birds", Embedding: []float32{0, 0, 1}, CreatedAt: 3},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "user", Content: "about cats", Embedding: []float32{1, 0, 0}, CreatedAt: 1},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "user", Content: "about dogs", Embedding: []float32{0, 1, 0}, CreatedAt: 2},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "user", Content: "about birds", Embedding: []float32{0, 0, 1}, CreatedAt: 3},
 	}
 	for _, m := range msgs {
 		s.StoreMessage(ctx, m)

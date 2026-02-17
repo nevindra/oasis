@@ -46,17 +46,17 @@ func TestStoreMessageAndGetMessages(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	// Create a conversation first.
-	conv, err := s.GetOrCreateConversation(ctx, "chat-123")
-	if err != nil {
-		t.Fatalf("GetOrCreateConversation: %v", err)
+	now := oasis.NowUnix()
+	thread := oasis.Thread{ID: oasis.NewID(), ChatID: "chat-123", CreatedAt: now, UpdatedAt: now}
+	if err := s.CreateThread(ctx, thread); err != nil {
+		t.Fatalf("CreateThread: %v", err)
 	}
 
 	// Store messages.
 	msgs := []oasis.Message{
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "user", Content: "Hello", CreatedAt: 1000},
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "assistant", Content: "Hi there!", CreatedAt: 1001},
-		{ID: oasis.NewID(), ConversationID: conv.ID, Role: "user", Content: "How are you?", CreatedAt: 1002},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "user", Content: "Hello", CreatedAt: 1000},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "assistant", Content: "Hi there!", CreatedAt: 1001},
+		{ID: oasis.NewID(), ThreadID: thread.ID, Role: "user", Content: "How are you?", CreatedAt: 1002},
 	}
 
 	for _, m := range msgs {
@@ -66,7 +66,7 @@ func TestStoreMessageAndGetMessages(t *testing.T) {
 	}
 
 	// Retrieve messages.
-	got, err := s.GetMessages(ctx, conv.ID, 10)
+	got, err := s.GetMessages(ctx, thread.ID, 10)
 	if err != nil {
 		t.Fatalf("GetMessages: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestStoreMessageAndGetMessages(t *testing.T) {
 	}
 
 	// Test limit.
-	got2, err := s.GetMessages(ctx, conv.ID, 2)
+	got2, err := s.GetMessages(ctx, thread.ID, 2)
 	if err != nil {
 		t.Fatalf("GetMessages with limit: %v", err)
 	}
@@ -100,31 +100,52 @@ func TestStoreMessageAndGetMessages(t *testing.T) {
 	}
 }
 
-func TestGetOrCreateConversationIdempotent(t *testing.T) {
+func TestThreadCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 
-	conv1, err := s.GetOrCreateConversation(ctx, "chat-abc")
-	if err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-	if conv1.ID == "" {
-		t.Fatal("conversation ID is empty")
-	}
-	if conv1.ChatID != "chat-abc" {
-		t.Errorf("ChatID = %q, want %q", conv1.ChatID, "chat-abc")
+	now := oasis.NowUnix()
+	thread := oasis.Thread{ID: oasis.NewID(), ChatID: "chat-abc", Title: "Test Thread", CreatedAt: now, UpdatedAt: now}
+	if err := s.CreateThread(ctx, thread); err != nil {
+		t.Fatalf("CreateThread: %v", err)
 	}
 
-	conv2, err := s.GetOrCreateConversation(ctx, "chat-abc")
+	// Get
+	got, err := s.GetThread(ctx, thread.ID)
 	if err != nil {
-		t.Fatalf("second call: %v", err)
+		t.Fatalf("GetThread: %v", err)
+	}
+	if got.ChatID != "chat-abc" || got.Title != "Test Thread" {
+		t.Errorf("unexpected thread: %+v", got)
 	}
 
-	if conv1.ID != conv2.ID {
-		t.Errorf("IDs differ: %q vs %q -- not idempotent", conv1.ID, conv2.ID)
+	// List
+	threads, err := s.ListThreads(ctx, "chat-abc", 10)
+	if err != nil {
+		t.Fatalf("ListThreads: %v", err)
 	}
-	if conv1.CreatedAt != conv2.CreatedAt {
-		t.Errorf("CreatedAt differ: %d vs %d", conv1.CreatedAt, conv2.CreatedAt)
+	if len(threads) != 1 {
+		t.Fatalf("expected 1 thread, got %d", len(threads))
+	}
+
+	// Update
+	thread.Title = "Updated"
+	thread.UpdatedAt = oasis.NowUnix()
+	if err := s.UpdateThread(ctx, thread); err != nil {
+		t.Fatalf("UpdateThread: %v", err)
+	}
+	got, _ = s.GetThread(ctx, thread.ID)
+	if got.Title != "Updated" {
+		t.Errorf("expected title 'Updated', got %q", got.Title)
+	}
+
+	// Delete
+	if err := s.DeleteThread(ctx, thread.ID); err != nil {
+		t.Fatalf("DeleteThread: %v", err)
+	}
+	threads, _ = s.ListThreads(ctx, "chat-abc", 10)
+	if len(threads) != 0 {
+		t.Fatalf("expected 0 threads after delete, got %d", len(threads))
 	}
 }
 

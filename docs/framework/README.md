@@ -19,7 +19,7 @@ Every major component is a Go interface. Swap LLM providers, storage backends, m
 
 - **Provider** -- LLM abstraction supporting chat, streaming, and function calling. Ships with Gemini and OpenAI-compatible implementations.
 - **EmbeddingProvider** -- Text embedding abstraction for vector search. Ships with Gemini embeddings.
-- **VectorStore** -- Persistence layer with vector search over messages, document chunks, conversations, and scheduled actions. Ships with SQLite and libSQL (Turso) implementations.
+- **VectorStore** -- Persistence layer with vector search over messages, document chunks, threads, and scheduled actions. Ships with SQLite and libSQL (Turso) implementations.
 - **MemoryStore** -- Long-term semantic memory with fact storage, confidence scoring, deduplication, and decay. Ships with SQLite implementation.
 - **Tool + ToolRegistry** -- Pluggable tool system for LLM function calling. Ships with knowledge search, web search, scheduling, shell, file I/O, and HTTP tools.
 - **Frontend** -- Messaging platform abstraction (poll for messages, send/edit responses, download files). Ships with Telegram implementation.

@@ -19,24 +19,24 @@ var askUserDefinition = oasis.ToolDefinition{
 }
 
 // spawnActionAgent creates and launches an action agent, or enqueues if slots are full.
-func (a *App) spawnActionAgent(ctx context.Context, chatID, text, conversationID, originalMsgID string) {
+func (a *App) spawnActionAgent(ctx context.Context, chatID, text, threadID, originalMsgID string) {
 	if !a.agents.SlotsAvailable() {
 		log.Println(" [agent] slots full, enqueuing")
 		a.agents.Enqueue(QueuedAction{
-			ChatID:         chatID,
-			Text:           text,
-			ConversationID: conversationID,
-			OriginalMsgID:  originalMsgID,
+			ChatID:        chatID,
+			Text:          text,
+			ThreadID:      threadID,
+			OriginalMsgID: originalMsgID,
 		})
 		_, _ = a.frontend.Send(ctx, chatID, "Queued — will run when a slot opens.")
 		return
 	}
 
-	a.launchAgent(ctx, chatID, text, conversationID, originalMsgID)
+	a.launchAgent(ctx, chatID, text, threadID, originalMsgID)
 }
 
 // launchAgent generates ack + launches the agent goroutine.
-func (a *App) launchAgent(ctx context.Context, chatID, text, conversationID, originalMsgID string) {
+func (a *App) launchAgent(ctx context.Context, chatID, text, threadID, originalMsgID string) {
 	// Generate ack and label via intent LLM
 	ackText, description := a.generateAckAndLabel(ctx, text)
 
@@ -62,14 +62,14 @@ func (a *App) launchAgent(ctx context.Context, chatID, text, conversationID, ori
 	go func() {
 		log.Printf(" [agent:%s] started", agentID)
 
-		response, err := a.runActionLoop(ctx, chatID, text, conversationID, agentID, ackMsgID, originalMsgID, agent.InputCh)
+		response, err := a.runActionLoop(ctx, chatID, text, threadID, agentID, ackMsgID, originalMsgID, agent.InputCh)
 
 		if err != nil {
 			log.Printf(" [agent:%s] error: %v", agentID, err)
 			_, _ = a.frontend.Send(ctx, chatID, "Sorry, something went wrong.")
 		} else {
-			conv, _ := a.store.GetOrCreateConversation(ctx, chatID)
-			a.spawnStore(ctx, conv, text, response)
+			thread, _ := a.getOrCreateThread(ctx, chatID)
+			a.spawnStore(ctx, thread, text, response)
 		}
 
 		a.agents.Remove(agentID)
@@ -78,7 +78,7 @@ func (a *App) launchAgent(ctx context.Context, chatID, text, conversationID, ori
 		// Try to dequeue next action
 		if queued, ok := a.agents.TryDequeue(); ok {
 			log.Println(" [agent] dequeuing action from queue")
-			a.launchAgent(ctx, queued.ChatID, queued.Text, queued.ConversationID, queued.OriginalMsgID)
+			a.launchAgent(ctx, queued.ChatID, queued.Text, queued.ThreadID, queued.OriginalMsgID)
 		}
 	}()
 }
@@ -133,7 +133,7 @@ Respond with ONLY the JSON object, no extra text.`
 // runActionLoop runs the tool-calling loop for an action agent.
 func (a *App) runActionLoop(
 	ctx context.Context,
-	chatID, text, conversationID, agentID, ackMsgID, originalMsgID string,
+	chatID, text, threadID, agentID, ackMsgID, originalMsgID string,
 	inputCh <-chan string,
 ) (string, error) {
 	// Build memory context
@@ -146,8 +146,8 @@ func (a *App) runActionLoop(
 		}
 	}
 
-	conv, _ := a.store.GetOrCreateConversation(ctx, chatID)
-	messages := a.buildSystemPrompt(ctx, memoryContext, conv)
+	thread, _ := a.getOrCreateThread(ctx, chatID)
+	messages := a.buildSystemPrompt(ctx, memoryContext, thread)
 
 	// Add tool usage guidelines
 	if len(messages) > 0 {

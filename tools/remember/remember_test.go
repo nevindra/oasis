@@ -44,9 +44,13 @@ func (s *mockStore) SearchMessages(context.Context, []float32, int) ([]oasis.Mes
 func (s *mockStore) SearchChunks(context.Context, []float32, int) ([]oasis.Chunk, error) {
 	return nil, nil
 }
-func (s *mockStore) GetOrCreateConversation(context.Context, string) (oasis.Conversation, error) {
-	return oasis.Conversation{}, nil
+func (s *mockStore) CreateThread(context.Context, oasis.Thread) error          { return nil }
+func (s *mockStore) GetThread(context.Context, string) (oasis.Thread, error)   { return oasis.Thread{}, nil }
+func (s *mockStore) ListThreads(context.Context, string, int) ([]oasis.Thread, error) {
+	return nil, nil
 }
+func (s *mockStore) UpdateThread(context.Context, oasis.Thread) error { return nil }
+func (s *mockStore) DeleteThread(context.Context, string) error       { return nil }
 func (s *mockStore) GetConfig(context.Context, string) (string, error) { return "", nil }
 func (s *mockStore) SetConfig(context.Context, string, string) error   { return nil }
 func (s *mockStore) Init(context.Context) error                        { return nil }

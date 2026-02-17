@@ -107,19 +107,40 @@ func (a *Agent) handleMessage(ctx context.Context, msg IncomingMessage) {
 		return
 	}
 
-	conv, err := a.store.GetOrCreateConversation(ctx, msg.ChatID)
+	thread, err := a.getOrCreateThread(ctx, msg.ChatID)
 	if err != nil {
-		log.Printf("oasis: get conversation: %v", err)
+		log.Printf("oasis: get thread: %v", err)
 		return
 	}
 
-	a.handleAction(ctx, msg, conv, text)
+	a.handleAction(ctx, msg, thread, text)
+}
+
+// getOrCreateThread returns the most recent thread for a chatID, or creates one.
+func (a *Agent) getOrCreateThread(ctx context.Context, chatID string) (Thread, error) {
+	threads, err := a.store.ListThreads(ctx, chatID, 1)
+	if err != nil {
+		return Thread{}, err
+	}
+	if len(threads) > 0 {
+		return threads[0], nil
+	}
+	thread := Thread{
+		ID:        NewID(),
+		ChatID:    chatID,
+		CreatedAt: NowUnix(),
+		UpdatedAt: NowUnix(),
+	}
+	if err := a.store.CreateThread(ctx, thread); err != nil {
+		return Thread{}, err
+	}
+	return thread, nil
 }
 
 // handleAction runs the tool-calling agent loop.
-func (a *Agent) handleAction(ctx context.Context, msg IncomingMessage, conv Conversation, userText string) {
+func (a *Agent) handleAction(ctx context.Context, msg IncomingMessage, thread Thread, userText string) {
 	// Build messages: system + history + user
-	messages := a.buildMessages(ctx, conv, userText)
+	messages := a.buildMessages(ctx, thread, userText)
 
 	// Send placeholder
 	placeholderID, err := a.frontend.Send(ctx, msg.ChatID, "...")
@@ -149,7 +170,7 @@ func (a *Agent) handleAction(ctx context.Context, msg IncomingMessage, conv Conv
 		// No tool calls — final text response
 		if len(resp.ToolCalls) == 0 {
 			_ = a.frontend.EditFormatted(ctx, msg.ChatID, placeholderID, resp.Content)
-			a.spawnStore(ctx, conv, userText, resp.Content)
+			a.spawnStore(ctx, thread, userText, resp.Content)
 			return
 		}
 
@@ -178,7 +199,7 @@ func (a *Agent) handleAction(ctx context.Context, msg IncomingMessage, conv Conv
 }
 
 // buildMessages constructs the message list: system prompt + memory + history + user message.
-func (a *Agent) buildMessages(ctx context.Context, conv Conversation, userText string) []ChatMessage {
+func (a *Agent) buildMessages(ctx context.Context, thread Thread, userText string) []ChatMessage {
 	var messages []ChatMessage
 
 	// System prompt
@@ -201,8 +222,8 @@ func (a *Agent) buildMessages(ctx context.Context, conv Conversation, userText s
 
 	messages = append(messages, SystemMessage(strings.Join(systemParts, "\n\n")))
 
-	// Conversation history
-	history, _ := a.store.GetMessages(ctx, conv.ID, 20)
+	// Thread history
+	history, _ := a.store.GetMessages(ctx, thread.ID, 20)
 	for _, m := range history {
 		messages = append(messages, ChatMessage{Role: m.Role, Content: m.Content})
 	}
@@ -213,11 +234,11 @@ func (a *Agent) buildMessages(ctx context.Context, conv Conversation, userText s
 }
 
 // spawnStore persists messages and extracts facts in the background.
-func (a *Agent) spawnStore(ctx context.Context, conv Conversation, userText, assistantText string) {
+func (a *Agent) spawnStore(ctx context.Context, thread Thread, userText, assistantText string) {
 	go func() {
 		// Store user message
 		userMsg := Message{
-			ID: NewID(), ConversationID: conv.ID,
+			ID: NewID(), ThreadID: thread.ID,
 			Role: "user", Content: userText, CreatedAt: NowUnix(),
 		}
 		_ = a.store.StoreMessage(ctx, userMsg)
@@ -233,7 +254,7 @@ func (a *Agent) spawnStore(ctx context.Context, conv Conversation, userText, ass
 
 		// Store assistant message
 		asstMsg := Message{
-			ID: NewID(), ConversationID: conv.ID,
+			ID: NewID(), ThreadID: thread.ID,
 			Role: "assistant", Content: assistantText, CreatedAt: NowUnix(),
 		}
 		_ = a.store.StoreMessage(ctx, asstMsg)

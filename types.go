@@ -20,19 +20,22 @@ type Chunk struct {
 	Embedding  []float32 `json:"-"`
 }
 
-type Conversation struct {
-	ID        string `json:"id"`
-	ChatID    string `json:"chat_id"`
-	CreatedAt int64  `json:"created_at"`
+type Thread struct {
+	ID        string            `json:"id"`
+	ChatID    string            `json:"chat_id"`
+	Title     string            `json:"title,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	CreatedAt int64             `json:"created_at"`
+	UpdatedAt int64             `json:"updated_at"`
 }
 
 type Message struct {
-	ID             string    `json:"id"`
-	ConversationID string    `json:"conversation_id"`
-	Role           string    `json:"role"` // "user" or "assistant"
-	Content        string    `json:"content"`
-	Embedding      []float32 `json:"-"`
-	CreatedAt      int64     `json:"created_at"`
+	ID        string    `json:"id"`
+	ThreadID  string    `json:"thread_id"`
+	Role      string    `json:"role"` // "user" or "assistant"
+	Content   string    `json:"content"`
+	Embedding []float32 `json:"-"`
+	CreatedAt int64     `json:"created_at"`
 }
 
 type Fact struct {
@@ -62,12 +65,26 @@ type ScheduledAction struct {
 	SynthesisPrompt string `json:"synthesis_prompt"`
 	NextRun         int64  `json:"next_run"`
 	Enabled         bool   `json:"enabled"`
+	SkillID         string `json:"skill_id,omitempty"`
 	CreatedAt       int64  `json:"created_at"`
 }
 
 type ScheduledToolCall struct {
 	Tool   string          `json:"tool"`
 	Params json.RawMessage `json:"params"`
+}
+
+// Skill is a stored instruction package for specializing the action agent.
+type Skill struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Description  string    `json:"description"`
+	Instructions string    `json:"instructions"`
+	Tools        []string  `json:"tools,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Embedding    []float32 `json:"-"`
+	CreatedAt    int64     `json:"created_at"`
+	UpdatedAt    int64     `json:"updated_at"`
 }
 
 // --- LLM protocol types ---

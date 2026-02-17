@@ -31,9 +31,9 @@ func (a *App) route(ctx context.Context, msg oasis.IncomingMessage) {
 
 	_ = a.frontend.SendTyping(ctx, chatID)
 
-	conv, err := a.store.GetOrCreateConversation(ctx, chatID)
+	thread, err := a.getOrCreateThread(ctx, chatID)
 	if err != nil {
-		log.Printf(" [conv] error: %v", err)
+		log.Printf(" [thread] error: %v", err)
 		return
 	}
 
@@ -41,13 +41,13 @@ func (a *App) route(ctx context.Context, msg oasis.IncomingMessage) {
 
 	// Document upload
 	if msg.Document != nil {
-		a.handleDocument(ctx, msg, conv)
+		a.handleDocument(ctx, msg, thread)
 		return
 	}
 
 	// Photo upload
 	if len(msg.Photos) > 0 {
-		a.handlePhoto(ctx, msg, conv)
+		a.handlePhoto(ctx, msg, thread)
 		return
 	}
 
@@ -59,9 +59,13 @@ func (a *App) route(ctx context.Context, msg oasis.IncomingMessage) {
 		return
 	}
 
-	// /new command
+	// /new command — create a fresh thread
 	if strings.TrimSpace(text) == "/new" {
-		_, _ = a.store.GetOrCreateConversation(ctx, chatID)
+		now := oasis.NowUnix()
+		_ = a.store.CreateThread(ctx, oasis.Thread{
+			ID: oasis.NewID(), ChatID: chatID,
+			CreatedAt: now, UpdatedAt: now,
+		})
 		log.Println(" [cmd] /new")
 		return
 	}
@@ -76,7 +80,7 @@ func (a *App) route(ctx context.Context, msg oasis.IncomingMessage) {
 
 	// URL messages (structural)
 	if strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://") {
-		a.handleURL(ctx, msg, conv, text)
+		a.handleURL(ctx, msg, thread, text)
 		return
 	}
 
@@ -87,12 +91,12 @@ func (a *App) route(ctx context.Context, msg oasis.IncomingMessage) {
 	switch intent {
 	case oasis.IntentChat:
 		log.Println(" [route] chat")
-		response := a.handleChatStream(ctx, chatID, text, conv)
-		a.spawnStore(ctx, conv, text, response)
+		response := a.handleChatStream(ctx, chatID, text, thread)
+		a.spawnStore(ctx, thread, text, response)
 
 	case oasis.IntentAction:
 		log.Println(" [route] action (sub-agent)")
-		a.spawnActionAgent(ctx, chatID, text, conv.ID, msg.ID)
+		a.spawnActionAgent(ctx, chatID, text, thread.ID, msg.ID)
 	}
 }
 
@@ -114,8 +118,30 @@ func (a *App) isOwner(ctx context.Context, userID string) bool {
 	return true
 }
 
+// getOrCreateThread returns the most recent thread for a chatID, or creates one.
+func (a *App) getOrCreateThread(ctx context.Context, chatID string) (oasis.Thread, error) {
+	threads, err := a.store.ListThreads(ctx, chatID, 1)
+	if err != nil {
+		return oasis.Thread{}, err
+	}
+	if len(threads) > 0 {
+		return threads[0], nil
+	}
+	now := oasis.NowUnix()
+	thread := oasis.Thread{
+		ID:        oasis.NewID(),
+		ChatID:    chatID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := a.store.CreateThread(ctx, thread); err != nil {
+		return oasis.Thread{}, err
+	}
+	return thread, nil
+}
+
 // handleDocument handles file uploads — ingest + optionally chat with context.
-func (a *App) handleDocument(ctx context.Context, msg oasis.IncomingMessage, conv oasis.Conversation) {
+func (a *App) handleDocument(ctx context.Context, msg oasis.IncomingMessage, thread oasis.Thread) {
 	if a.ingestFile == nil || msg.Document == nil {
 		return
 	}
@@ -144,26 +170,26 @@ func (a *App) handleDocument(ctx context.Context, msg oasis.IncomingMessage, con
 			fileContext = fileContext[:maxContext]
 		}
 		contextStr := fmt.Sprintf("## File: %s\n\n%s", filename, fileContext)
-		response := a.handleChatStreamWithContext(ctx, msg.ChatID, caption, conv, contextStr)
-		a.spawnStore(ctx, conv, caption, response)
+		response := a.handleChatStreamWithContext(ctx, msg.ChatID, caption, thread, contextStr)
+		a.spawnStore(ctx, thread, caption, response)
 	} else {
 		_, _ = a.frontend.Send(ctx, msg.ChatID, result)
-		a.spawnStore(ctx, conv, "[file upload]", result)
+		a.spawnStore(ctx, thread, "[file upload]", result)
 	}
 }
 
 // handlePhoto handles photo uploads — pass to chat LLM as images.
-func (a *App) handlePhoto(ctx context.Context, msg oasis.IncomingMessage, conv oasis.Conversation) {
+func (a *App) handlePhoto(ctx context.Context, msg oasis.IncomingMessage, thread oasis.Thread) {
 	text := msg.Caption
 	if text == "" {
 		text = "[photo]"
 	}
-	response := a.handleChatStream(ctx, msg.ChatID, text, conv)
-	a.spawnStore(ctx, conv, text, response)
+	response := a.handleChatStream(ctx, msg.ChatID, text, thread)
+	a.spawnStore(ctx, thread, text, response)
 }
 
 // handleURL ingests a URL into the knowledge base.
-func (a *App) handleURL(ctx context.Context, msg oasis.IncomingMessage, conv oasis.Conversation, url string) {
+func (a *App) handleURL(ctx context.Context, msg oasis.IncomingMessage, thread oasis.Thread, url string) {
 	// Route URL ingestion through the action agent for full tool access
-	a.spawnActionAgent(ctx, msg.ChatID, "Save this URL to the knowledge base: "+url, conv.ID, msg.ID)
+	a.spawnActionAgent(ctx, msg.ChatID, "Save this URL to the knowledge base: "+url, thread.ID, msg.ID)
 }

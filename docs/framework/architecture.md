@@ -82,19 +82,23 @@ The `Poll` -> `Send` -> `Edit` pattern enables streaming: send a placeholder mes
 
 ### VectorStore (`store.go`)
 
-Persistence layer with vector search capabilities. Handles messages, documents/chunks, conversations, config, and scheduled actions.
+Persistence layer with vector search capabilities. Handles messages, documents/chunks, threads, config, and scheduled actions.
 
 **Message operations:**
 - `StoreMessage(ctx, msg)` -- persist a message (with optional embedding)
-- `GetMessages(ctx, conversationID, limit)` -- recent messages for context window
+- `GetMessages(ctx, threadID, limit)` -- recent messages for context window
 - `SearchMessages(ctx, embedding, topK)` -- vector search over all messages
 
 **Document/chunk operations:**
 - `StoreDocument(ctx, doc, chunks)` -- persist a document and its chunks (with embeddings)
 - `SearchChunks(ctx, embedding, topK)` -- vector search over document chunks
 
-**Conversation management:**
-- `GetOrCreateConversation(ctx, chatID)` -- find or create a conversation by chat ID
+**Thread management (full CRUD):**
+- `CreateThread(ctx, thread)` -- create a new conversation thread
+- `GetThread(ctx, id)` -- get a thread by ID
+- `ListThreads(ctx, chatID, limit)` -- list threads for a chat, ordered by most recent
+- `UpdateThread(ctx, thread)` -- update title/metadata
+- `DeleteThread(ctx, id)` -- delete a thread and its messages
 
 **Key-value config:**
 - `GetConfig(ctx, key) -> string`
@@ -215,8 +219,8 @@ All framework types live in the root `oasis` package:
 |------|---------|-----------|
 | `Document` | Ingested content | ID, Title, Source, Content, CreatedAt |
 | `Chunk` | Document fragment with embedding | ID, DocumentID, Content, ChunkIndex, Embedding |
-| `Conversation` | Chat session | ID, ChatID, CreatedAt |
-| `Message` | Chat message | ID, ConversationID, Role, Content, Embedding, CreatedAt |
+| `Thread` | Conversation thread | ID, ChatID, Title, Metadata, CreatedAt, UpdatedAt |
+| `Message` | Chat message | ID, ThreadID, Role, Content, Embedding, CreatedAt |
 | `Fact` | Memory fact | ID, Fact, Category, Confidence, Embedding, CreatedAt, UpdatedAt |
 | `ScheduledAction` | Recurring automation | ID, Description, Schedule, ToolCalls (JSON), NextRun, Enabled, SkillID |
 | `Skill` | Stored instruction package for specializing agents | ID, Name, Description, Instructions, Tools, Model, Embedding, CreatedAt, UpdatedAt |
@@ -272,9 +276,9 @@ The VectorStore implementations create these tables:
 documents (id, title, source, content, created_at)
 chunks    (id, document_id, content, chunk_index, embedding)
 
--- Conversations
-conversations (id, chat_id UNIQUE, created_at)
-messages      (id, conversation_id, role, content, embedding, created_at)
+-- Threads
+threads  (id, chat_id, title, metadata, created_at, updated_at)
+messages (id, thread_id, role, content, embedding, created_at)
 
 -- Config
 config (key PRIMARY KEY, value)
