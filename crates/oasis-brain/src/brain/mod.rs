@@ -18,6 +18,8 @@ use oasis_telegram::bot::TelegramBot;
 
 mod action;
 mod chat;
+mod ingest;
+mod lifecycle;
 mod router;
 mod scheduling;
 mod storage;

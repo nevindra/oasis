@@ -137,7 +137,7 @@ impl Brain {
         description: &str,
     ) -> String {
         let tz_offset = self.config.brain.timezone_offset;
-        let (now_str, tz_str) = crate::brain::chat::format_now_with_tz(tz_offset);
+        let (now_str, tz_str) = crate::util::format_now_with_tz(tz_offset);
 
         let system = format!(
             "You are Oasis, a personal AI assistant. Current time: {now_str} (UTC{tz_str}).\n\n\

@@ -187,7 +187,7 @@ impl Brain {
     ) -> Vec<ChatMessage> {
         let today = {
             let tz_offset = self.config.brain.timezone_offset;
-            let (now_str, tz_str) = format_now_with_tz(tz_offset);
+            let (now_str, tz_str) = crate::util::format_now_with_tz(tz_offset);
             format!("{now_str} (UTC{tz_str})")
         };
 
@@ -216,25 +216,4 @@ impl Brain {
 
         vec![ChatMessage::text("system", system)]
     }
-}
-
-
-/// Format the current date+time in the user's timezone.
-pub(crate) fn format_now_with_tz(tz_offset: i32) -> (String, String) {
-    let utc_secs = now_unix();
-    let local_secs = utc_secs + (tz_offset as i64) * 3600;
-    let days = local_secs / 86400;
-    let remainder = local_secs % 86400;
-    let (y, m, d) = crate::util::unix_days_to_date(days);
-    let h = remainder / 3600;
-    let min = (remainder % 3600) / 60;
-
-    let datetime = format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}");
-    let tz_label = if tz_offset >= 0 {
-        format!("+{:02}:00", tz_offset)
-    } else {
-        format!("-{:02}:00", tz_offset.unsigned_abs())
-    };
-
-    (datetime, tz_label)
 }

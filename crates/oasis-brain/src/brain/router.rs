@@ -4,7 +4,6 @@ use oasis_core::error::Result;
 use oasis_core::types::*;
 
 use super::Brain;
-use crate::agent::{AgentHandle, AgentStatus, QueuedAction};
 use crate::service::intent::{parse_intent, Intent};
 
 /// Intent classification prompt sent to the intent LLM.
@@ -270,146 +269,6 @@ impl Brain {
         Ok(())
     }
 
-    /// Spawn an action as a background sub-agent, or enqueue if slots are full.
-    async fn spawn_action_agent(
-        self: &Arc<Self>,
-        chat_id: i64,
-        text: &str,
-        conversation_id: &str,
-        original_message_id: i64,
-    ) -> Result<()> {
-        if !self.agent_manager.slots_available() {
-            log!(" [agent] slots full, enqueuing");
-            self.agent_manager.enqueue(QueuedAction {
-                chat_id,
-                text: text.to_string(),
-                conversation_id: conversation_id.to_string(),
-                original_message_id,
-            });
-            let _ = self
-                .bot
-                .send_reply_with_id(chat_id, "Queued — will run when a slot opens.", original_message_id)
-                .await;
-            return Ok(());
-        }
-
-        self.launch_agent(chat_id, text.to_string(), conversation_id.to_string(), original_message_id)
-            .await
-    }
-
-    /// Generate a brief ack message and a short task label from the user's request.
-    /// Returns (ack_text, label). Uses the intent LLM (fast) in a single call.
-    async fn generate_ack_and_label(&self, user_message: &str) -> (String, String) {
-        let system = r#"You are a casual personal assistant. The user just asked you to do something (search, create a task, etc).
-
-Return a JSON object with two fields:
-- "ack": A brief, casual acknowledgment (1 sentence, max 20 words) in the SAME language as the user. Do NOT do the task — just acknowledge you'll work on it. No emojis.
-- "label": A short task label (3-6 words, in English) summarizing what the agent will do. Examples: "Search CS:GO tournaments", "Create grocery task", "Find flight prices".
-
-Respond with ONLY the JSON object, no extra text."#;
-
-        let request = ChatRequest {
-            messages: vec![
-                ChatMessage::text("system", system),
-                ChatMessage::text("user", user_message),
-            ],
-            max_tokens: Some(150),
-            temperature: Some(0.7),
-        };
-
-        let fallback_label = user_message[..user_message.len().min(40)].to_string();
-
-        match self.llm.chat_intent(request).await {
-            Ok(r) => {
-                // Try to parse JSON
-                let content = r.content.trim().trim_start_matches("```json").trim_end_matches("```").trim();
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(content) {
-                    let ack = v["ack"].as_str().unwrap_or("On it...").to_string();
-                    let label = v["label"].as_str().unwrap_or(&fallback_label).to_string();
-                    (ack, label)
-                } else {
-                    // If not valid JSON, use the whole response as ack
-                    (r.content, fallback_label)
-                }
-            }
-            _ => ("On it...".to_string(), fallback_label),
-        }
-    }
-
-    /// Launch a sub-agent task for an action.
-    async fn launch_agent(
-        self: &Arc<Self>,
-        chat_id: i64,
-        text: String,
-        conversation_id: String,
-        original_message_id: i64,
-    ) -> Result<()> {
-        let (ack_text, description) = self.generate_ack_and_label(&text).await;
-        let ack_message_id = self
-            .bot
-            .send_reply_with_id(chat_id, &ack_text, original_message_id)
-            .await?;
-
-        let agent_id = new_id();
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-        let handle = AgentHandle {
-            id: agent_id.clone(),
-            chat_id,
-            status: std::sync::Mutex::new(AgentStatus::Running),
-            description,
-            input_tx,
-            ack_message_id,
-            original_message_id,
-            created_at: now_unix() as u64,
-        };
-        self.agent_manager.register(handle);
-
-        let brain = Arc::clone(self);
-        let text = text.to_string();
-        let conversation_id = conversation_id.to_string();
-        let agent_id_clone = agent_id.clone();
-
-        tokio::spawn(async move {
-            log!(" [agent:{agent_id_clone}] started");
-
-            let result = brain
-                .handle_action(
-                    chat_id,
-                    &text,
-                    &conversation_id,
-                    &agent_id_clone,
-                    ack_message_id,
-                    original_message_id,
-                    &mut input_rx,
-                )
-                .await;
-
-            match result {
-                Ok(response) => {
-                    brain.spawn_store(conversation_id, text, response);
-                }
-                Err(e) => {
-                    log!(" [agent:{agent_id_clone}] error: {e}");
-                    let _ = brain
-                        .bot
-                        .send_reply_with_id(
-                            chat_id,
-                            "Sorry, something went wrong.",
-                            original_message_id,
-                        )
-                        .await;
-                }
-            }
-
-            // Cleanup
-            brain.agent_manager.remove(&agent_id_clone);
-            log!(" [agent:{agent_id_clone}] done, removed");
-        });
-
-        Ok(())
-    }
-
     /// Handle `/status` command — show active agents.
     async fn handle_status_command(&self, chat_id: i64) -> Result<()> {
         let active = self.agent_manager.list_active();
@@ -451,7 +310,7 @@ Respond with ONLY the JSON object, no extra text."#;
     /// Classify a user message into a structured Intent.
     async fn classify_intent(&self, message: &str) -> Result<Intent> {
         let tz_offset = self.config.brain.timezone_offset;
-        let (now_str, tz_str) = crate::brain::chat::format_now_with_tz(tz_offset);
+        let (now_str, tz_str) = crate::util::format_now_with_tz(tz_offset);
 
         let system = INTENT_SYSTEM_PROMPT
             .replace("{now}", &now_str)
@@ -469,98 +328,5 @@ Respond with ONLY the JSON object, no extra text."#;
         let response = self.llm.chat_intent(request).await?;
         let intent = parse_intent(&response.content);
         Ok(intent)
-    }
-
-    /// Handle a file upload from Telegram.
-    /// Returns (ingest_response, extracted_text).
-    async fn handle_file(
-        &self,
-        doc: &oasis_telegram::types::TelegramDocument,
-    ) -> Result<(String, String)> {
-        let file_info = self.bot.get_file(&doc.file_id).await?;
-        let file_path = file_info.file_path.ok_or_else(|| {
-            oasis_core::error::OasisError::Telegram(
-                "file_path not returned by Telegram API".to_string(),
-            )
-        })?;
-        let file_bytes = self.bot.download_file(&file_path).await?;
-        let filename = doc.file_name.as_deref().unwrap_or("unknown_file");
-
-        let extension = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-        let is_pdf =
-            extension == "pdf" || doc.mime_type.as_deref() == Some("application/pdf");
-
-        let content = if is_pdf {
-            pdf_extract::extract_text_from_mem(&file_bytes).map_err(|e| {
-                oasis_core::error::OasisError::Ingest(format!(
-                    "failed to extract text from PDF: {e}"
-                ))
-            })?
-        } else {
-            String::from_utf8(file_bytes).map_err(|e| {
-                oasis_core::error::OasisError::Ingest(format!(
-                    "file is not valid UTF-8 text: {e}"
-                ))
-            })?
-        };
-
-        let response = self.memory_tool.ingest_file(&content, filename).await?;
-        Ok((response, content))
-    }
-
-    /// Handle a photo upload: download, base64-encode, send to vision LLM.
-    async fn handle_photo(
-        self: &Arc<Self>,
-        chat_id: i64,
-        photos: &[oasis_telegram::types::PhotoSize],
-        caption: Option<&str>,
-        conversation_id: &str,
-    ) -> Result<String> {
-        use base64::Engine;
-
-        // Pick the largest photo (last in array — Telegram sorts ascending by size)
-        let photo = photos.last().unwrap();
-        log!(
-            " [photo] using {}x{} (file_id={})",
-            photo.width,
-            photo.height,
-            photo.file_id
-        );
-
-        let file_info = self.bot.get_file(&photo.file_id).await?;
-        let file_path = file_info.file_path.ok_or_else(|| {
-            oasis_core::error::OasisError::Telegram(
-                "file_path not returned for photo".to_string(),
-            )
-        })?;
-        let photo_bytes = self.bot.download_file(&file_path).await?;
-
-        let mime_type = if file_path.ends_with(".png") {
-            "image/png"
-        } else {
-            "image/jpeg"
-        };
-
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&photo_bytes);
-        let image_data = oasis_core::types::ImageData {
-            mime_type: mime_type.to_string(),
-            base64: b64,
-        };
-
-        let text = caption.unwrap_or("What's in this image?");
-
-        let recent_messages = self
-            .store
-            .get_recent_messages(conversation_id, self.config.brain.context_window)
-            .await?;
-
-        self.handle_chat_stream(chat_id, text, &recent_messages, "", vec![image_data])
-            .await
-    }
-
-    /// Handle a URL message.
-    async fn handle_url(&self, url: &str, _conversation_id: &str) -> Result<String> {
-        let html = crate::service::ingest::pipeline::IngestPipeline::fetch_url(url).await?;
-        self.memory_tool.ingest_url(&html, url).await
     }
 }

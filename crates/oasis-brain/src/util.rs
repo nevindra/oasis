@@ -24,6 +24,26 @@ pub fn date_to_unix_days(year: i64, month: i64, day: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
+/// Format the current date+time in the user's timezone.
+pub fn format_now_with_tz(tz_offset: i32) -> (String, String) {
+    let utc_secs = oasis_core::types::now_unix();
+    let local_secs = utc_secs + (tz_offset as i64) * 3600;
+    let days = local_secs / 86400;
+    let remainder = local_secs % 86400;
+    let (y, m, d) = unix_days_to_date(days);
+    let h = remainder / 3600;
+    let min = (remainder % 3600) / 60;
+
+    let datetime = format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}");
+    let tz_label = if tz_offset >= 0 {
+        format!("+{:02}:00", tz_offset)
+    } else {
+        format!("-{:02}:00", tz_offset.unsigned_abs())
+    };
+
+    (datetime, tz_label)
+}
+
 /// Format a unix timestamp as a human-readable date(time) string in the given timezone.
 pub fn format_due(ts: i64, tz_offset: i32) -> String {
     let local_ts = ts + (tz_offset as i64) * 3600;
