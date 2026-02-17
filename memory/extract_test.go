@@ -43,22 +43,6 @@ func TestParseFactsEmpty(t *testing.T) {
 	}
 }
 
-func TestParseFactsCodeFence(t *testing.T) {
-	r := "```json\n[{\"fact\":\"Prefers Rust\",\"category\":\"preference\"}]\n```"
-	facts := ParseExtractedFacts(r)
-	if len(facts) != 1 || facts[0].Fact != "Prefers Rust" {
-		t.Error("wrong")
-	}
-}
-
-func TestParseFactsSurroundingText(t *testing.T) {
-	r := "Here are the facts:\n[{\"fact\":\"Lives in Jakarta\",\"category\":\"personal\"}]\nDone."
-	facts := ParseExtractedFacts(r)
-	if len(facts) != 1 {
-		t.Error("expected 1")
-	}
-}
-
 func TestParseFactsInvalidJSON(t *testing.T) {
 	facts := ParseExtractedFacts("This is not JSON")
 	if facts != nil {

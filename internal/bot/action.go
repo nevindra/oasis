@@ -117,12 +117,11 @@ Respond with ONLY the JSON object, no extra text.`
 		return "On it...", fallbackLabel
 	}
 
-	content := extractJSON(resp.Content)
 	var parsed struct {
 		Ack   string `json:"ack"`
 		Label string `json:"label"`
 	}
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(resp.Content), &parsed); err != nil {
 		return resp.Content, fallbackLabel
 	}
 

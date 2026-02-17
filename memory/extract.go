@@ -74,27 +74,8 @@ func ShouldExtract(text string) bool {
 
 // ParseExtractedFacts parses the LLM's fact extraction response.
 func ParseExtractedFacts(response string) []ExtractedFact {
-	trimmed := strings.TrimSpace(response)
-
-	// Strip markdown code fences
-	if strings.HasPrefix(trimmed, "```") {
-		trimmed = strings.TrimPrefix(trimmed, "```json")
-		trimmed = strings.TrimPrefix(trimmed, "```")
-		trimmed = strings.TrimSuffix(trimmed, "```")
-		trimmed = strings.TrimSpace(trimmed)
-	}
-
-	start := strings.Index(trimmed, "[")
-	if start == -1 {
-		return nil
-	}
-	end := strings.LastIndex(trimmed, "]")
-	if end == -1 || end < start {
-		return nil
-	}
-
 	var facts []ExtractedFact
-	if err := json.Unmarshal([]byte(trimmed[start:end+1]), &facts); err != nil {
+	if err := json.Unmarshal([]byte(response), &facts); err != nil {
 		return nil
 	}
 	return facts

@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	oasis "github.com/nevindra/oasis"
 )
@@ -57,12 +56,10 @@ func ClassifyIntent(ctx context.Context, intentLLM oasis.Provider, message strin
 
 // ParseIntent parses an LLM response into an Intent. Defaults to Action on failure.
 func ParseIntent(response string) oasis.Intent {
-	jsonStr := extractJSON(response)
-
 	var parsed struct {
 		Intent string `json:"intent"`
 	}
-	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(response), &parsed); err != nil {
 		return oasis.IntentAction
 	}
 
@@ -70,28 +67,4 @@ func ParseIntent(response string) oasis.Intent {
 		return oasis.IntentChat
 	}
 	return oasis.IntentAction
-}
-
-// extractJSON finds the first JSON object in a string (handles code fences).
-func extractJSON(input string) string {
-	trimmed := strings.TrimSpace(input)
-
-	// Strip markdown code fences
-	if strings.HasPrefix(trimmed, "```json") {
-		trimmed = strings.TrimPrefix(trimmed, "```json")
-		trimmed = strings.TrimSuffix(trimmed, "```")
-		trimmed = strings.TrimSpace(trimmed)
-	} else if strings.HasPrefix(trimmed, "```") {
-		trimmed = strings.TrimPrefix(trimmed, "```")
-		trimmed = strings.TrimSuffix(trimmed, "```")
-		trimmed = strings.TrimSpace(trimmed)
-	}
-
-	start := strings.Index(trimmed, "{")
-	end := strings.LastIndex(trimmed, "}")
-	if start >= 0 && end > start {
-		return trimmed[start : end+1]
-	}
-
-	return trimmed
 }
