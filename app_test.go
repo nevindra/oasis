@@ -2,7 +2,7 @@ package oasis
 
 import "testing"
 
-func TestNewAgent(t *testing.T) {
+func TestNewApp(t *testing.T) {
 	a := New(
 		WithSystemPrompt("You are a test bot."),
 		WithMaxToolIterations(5),
@@ -18,7 +18,7 @@ func TestNewAgent(t *testing.T) {
 	}
 }
 
-func TestAgentRunRequiresComponents(t *testing.T) {
+func TestAppRunRequiresComponents(t *testing.T) {
 	a := New()
 	err := a.Run(t.Context())
 	if err == nil {
