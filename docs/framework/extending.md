@@ -62,7 +62,7 @@ func (t *WeatherTool) Execute(ctx context.Context, name string, args json.RawMes
 
 ### Step 2: Register the Tool
 
-In your application bootstrap (e.g. `cmd/oasis/main.go`):
+In your application bootstrap (e.g. `cmd/bot_example/main.go`):
 
 ```go
 app.AddTool(mytool.New("weather-api-key"))

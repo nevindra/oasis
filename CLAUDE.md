@@ -23,13 +23,13 @@ Oasis is a personal AI assistant framework built in Go. It combines conversation
 
 ```bash
 # Build
-go build ./cmd/oasis/
+go build ./cmd/bot_example/
 
 # Build with CGO (better SQLite performance)
-CGO_ENABLED=1 go build -o oasis ./cmd/oasis/
+CGO_ENABLED=1 go build -o oasis ./cmd/bot_example/
 
 # Run (requires .env or env vars set)
-source .env && go run ./cmd/oasis/
+source .env && go run ./cmd/bot_example/
 
 # Run tests
 go test ./...
@@ -58,6 +58,7 @@ Secrets are set via environment variables:
 - `OASIS_ACTION_API_KEY` — action LLM (falls back to `OASIS_LLM_API_KEY`)
 - `OASIS_TURSO_URL` / `OASIS_TURSO_TOKEN` — optional remote libSQL database
 - `OASIS_BRAVE_API_KEY` — Brave Search API (enables `web_search` tool)
+- `OASIS_OBSERVER_ENABLED` — enable OTEL observability (`true` or `1`)
 - `OASIS_CONFIG` — path to config file (defaults to `oasis.toml`)
 
 Full config reference: [docs/framework/configuration.md](docs/framework/configuration.md)
@@ -73,7 +74,7 @@ oasis/
 |-- types.go, provider.go, tool.go, store.go, frontend.go, memory.go
 |   (root package: domain types + interfaces)
 |
-|-- cmd/oasis/main.go              # Entry point
+|-- cmd/bot_example/main.go         # Reference application entry point
 |-- internal/config/               # Config loading
 |-- internal/bot/                  # Application orchestration (routing, chat, agents)
 |-- internal/scheduling/           # Background scheduler
@@ -84,6 +85,7 @@ oasis/
 |-- store/sqlite/                  # Local SQLite (VectorStore)
 |-- store/libsql/                  # Remote Turso (VectorStore)
 |-- memory/sqlite/                 # SQLite MemoryStore
+|-- observer/                      # OTEL observability (wraps Provider/Tool/Embedding)
 |-- ingest/                        # Document chunking pipeline
 |-- tools/{knowledge,remember,search,schedule,shell,file,http}/
 ```
@@ -159,13 +161,15 @@ Uses pure-Go SQLite with brute-force vector search. Fresh connections per call (
 
 See [docs/ENGINEERING.md](docs/ENGINEERING.md) for the full mental model.
 
-1. **Earn every abstraction** — concrete first, extract only when pattern repeats 3x
+**Key distinction:** Framework primitives (core interfaces, agent model, protocol types) are designed for **composability and expressiveness** — invest in getting the design right. Application code (tool impls, provider adapters) is designed for **simplicity and pragmatism** — concrete first, refactor later.
+
+1. **Earn every abstraction** — concrete first, extract only when pattern repeats 3x. *Exception: framework primitives are the abstraction — design for composability from the start.*
 2. **Optimize for the reader** — names explain intent, comments explain why, top-to-bottom flow
 3. **Make it fast where it matters** — user-perceived latency and API call count, not micro-optimizations
 4. **Fail gracefully** — degrade don't die, distinguish transient vs permanent, never crash on recoverable errors
 5. **Own your dependencies** — hand-roll < 200 lines, no SDKs for external APIs, raw HTTP
-6. **Design for replaceability** — interfaces at natural boundaries, depend on behavior not implementation
+6. **Design for composability** — interfaces at natural boundaries, primitives that snap together, expressiveness over simplicity at the framework layer
 7. **Explicit over magic** — constructor injection, no hidden side effects, predictable config cascade
-8. **Ship incrementally** — one PR one concern, working > perfect, no speculative refactors
+8. **Ship incrementally** — working > perfect for app code. *Right > fast for framework primitives — breaking changes cascade.*
 9. **Test what matters** — behavior not implementation, pure functions first, edge cases > happy path
 10. **Respect the user's time** — actionable errors, sensible defaults, living documentation

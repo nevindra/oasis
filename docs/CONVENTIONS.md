@@ -6,9 +6,13 @@ For engineering principles and mindset (performance, DX, dependency philosophy),
 
 ## Philosophy
 
-Oasis is deliberately minimalist. The project avoids large frameworks, SDK dependencies, and module bloat. When a standard library solution or hand-rolled implementation exists and is simple enough, it is preferred over adding a dependency.
+Oasis is deliberately minimalist in its **application layer** — the project avoids large frameworks, SDK dependencies, and module bloat. When a standard library solution or hand-rolled implementation exists and is simple enough, it is preferred over adding a dependency.
+
+At the **framework layer**, Oasis prioritizes composable, expressive primitives. Core interfaces and protocol types are designed to unlock powerful patterns for users — not just to solve today's use case. An Agent that can compose with other Agents. A Tool that can wrap complex workflows. Output that can be structured or free-form. The framework should make powerful things possible, not just simple things easy.
 
 **Do not add dependencies unless absolutely necessary.** If you think you need a new module, check whether the project already has a hand-rolled solution first.
+
+**Do not simplify framework interfaces at the expense of expressiveness.** If a method or field on a core interface enables meaningful composition patterns, it belongs there even if the simplest use case doesn't need it.
 
 ## Error Handling
 
@@ -236,7 +240,7 @@ func New(cfg *config.Config, deps Deps) *App { ... }
 1. Create a package in `tools/` (e.g., `tools/mytool/`).
 2. Define a struct with dependencies.
 3. Implement the `oasis.Tool` interface.
-4. Register it in `cmd/oasis/main.go`.
+4. Register it in your application's `main.go` (see `cmd/bot_example/main.go`).
 
 ### Tool Definition Rules
 

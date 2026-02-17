@@ -65,7 +65,7 @@ oasis/
 |   |-- file/                      # file_read/write/list -- sandboxed file I/O
 |   |-- http/                      # http_request -- outbound HTTP calls
 |
-|-- cmd/oasis/main.go              # Reference application entry point
+|-- cmd/bot_example/main.go         # Reference application entry point
 |-- internal/bot/                  # Reference application (orchestration, routing, agents)
 |-- internal/scheduling/           # Reference application (background scheduler)
 |

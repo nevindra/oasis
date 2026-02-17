@@ -19,7 +19,7 @@ Optional:
 ```bash
 git clone https://github.com/nevindra/oasis.git
 cd oasis
-go build ./cmd/oasis/
+go build ./cmd/bot_example/
 ```
 
 This produces an `oasis` binary in the current directory.
@@ -79,7 +79,7 @@ source .env && ./oasis
 Or if you prefer running directly from source:
 
 ```bash
-source .env && go run ./cmd/oasis/
+source .env && go run ./cmd/bot_example/
 ```
 
 ## 5. Talk to Your Bot

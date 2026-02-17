@@ -2,6 +2,15 @@
 
 Prinsip-prinsip ini membentuk cara berpikir saat menulis kode di Oasis -- baik di level framework maupun application. Ini bukan checklist pattern atau style guide (itu ada di [CONVENTIONS.md](CONVENTIONS.md)). Ini tentang **mental model** yang mendasari setiap keputusan engineering.
 
+**Framework Primitives vs Application Code**
+
+Oasis punya dua "mode" engineering yang berbeda:
+
+- **Framework primitives** (core interfaces, agent model, tool protocol) — ini didesain untuk **composability dan expressiveness**. Primitives yang benar unlock banyak patterns. Primitives yang salah jadi breaking change yang mahal. Invest waktu di desain yang tepat.
+- **Application code** (tool implementations, provider adapters, frontends) — ini didesain untuk **simplicity dan pragmatism**. Concrete first, refactor later. Working > perfect.
+
+Kalau kamu sedang mendesain interface atau primitive baru, tanya: "apa patterns yang ini unlock untuk user?" bukan "apa cara paling simpel untuk implement ini?". Kalau kamu sedang implement feature di atas primitives yang sudah ada, tanya: "apa cara paling simpel yang benar?"
+
 ## 1. Earn Every Abstraction
 
 Abstraksi itu hutang. Setiap layer, interface, wrapper, atau helper function yang ditambahkan harus **membuktikan nilainya** -- bukan ditambahkan karena "mungkin berguna nanti".
@@ -11,7 +20,9 @@ Abstraksi itu hutang. Setiap layer, interface, wrapper, atau helper function yan
 - Interface baru harus punya minimal 2 implementasi yang sudah ada atau yang sangat jelas akan ada. Kalau cuma satu implementasi, gunakan concrete type.
 - Jangan bikin `utils`, `helpers`, atau `common` package. Kalau sebuah function tidak punya tempat yang jelas, itu tandanya abstraksinya salah.
 
-**Test-nya simpel**: kalau kamu hapus abstraksi itu dan inline kodenya, apakah kode jadi lebih susah dibaca? Kalau tidak, abstraksi itu tidak dibutuhkan.
+**Pengecualian: framework primitives.** Core interfaces (`Provider`, `Tool`, `Agent`) dan protocol types (`ChatRequest`, `ToolResult`) *adalah* abstraksinya. Mereka tidak perlu menunggu 3x repetition — mereka didesain untuk **composability dan expressiveness** dari awal, karena salah desain di sini = breaking change yang mahal. Tanya: "apa patterns yang primitive ini unlock?" bukan "apa cara paling simpel untuk solve use case hari ini?"
+
+**Test-nya simpel**: untuk application code, kalau kamu hapus abstraksi itu dan inline kodenya, apakah kode jadi lebih susah dibaca? Kalau tidak, tidak dibutuhkan. Untuk framework primitives: apakah primitive ini bisa di-compose untuk solve use cases yang belum terpikirkan?
 
 ## 2. Optimize for the Reader
 
@@ -63,13 +74,15 @@ Kalau jawaban 1 atau 2 = ya, jangan tambahkan dependency. Kode sendiri yang 50 b
 
 **Khusus untuk external APIs: jangan pakai SDK.** SDK menambahkan coupling yang besar terhadap versi tertentu, sering bloated, dan menyembunyikan apa yang sebenarnya terjadi di wire level. Raw HTTP + JSON memberikan full control dan full visibility. Kalau API berubah, kamu cukup ubah satu file, bukan upgrade major version SDK.
 
-## 6. Design for Replaceability
+## 6. Design for Composability
 
-Setiap komponen harus bisa diganti tanpa merombak sistem. Ini bukan tentang over-engineering -- ini tentang **menaruh seam di tempat yang tepat**.
+Setiap komponen harus bisa **diganti** tanpa merombak sistem, dan bisa **di-compose** untuk membentuk behavior yang lebih kompleks. Ini bukan tentang over-engineering -- ini tentang **menaruh seam di tempat yang tepat** dan **mendesain primitives yang saling snap together**.
 
 - **Interface di boundary yang natural.** Tempat yang tepat untuk interface: antara sistem kamu dan external service (LLM, database, messaging platform). Tempat yang salah: antara dua function internal yang selalu berubah bersamaan.
 - **Depend on behavior, not implementation.** Consumer seharusnya tidak peduli apakah storage-nya SQLite atau Postgres -- mereka peduli bahwa `SearchChunks` mengembalikan top-K hasil.
 - **Configurations, not conditionals.** Kalau sebuah behavior perlu bisa diubah, buat configurable. Jangan hardcode lalu `if/else` nanti.
+- **Primitives yang composable.** Framework primitives harus bisa dikombinasikan dengan cara yang tidak kita antisipasi. Agent yang bisa punya sub-agents. Tool yang bisa wrap agent. Output yang bisa structured atau free-form. Desain untuk **composability**, bukan untuk satu use case spesifik.
+- **Expressiveness over simplicity di framework layer.** Kalau menambahkan satu field atau method ke interface membuka 5 use cases baru tanpa menambah complexity signifikan, itu worth it. Simplicity yang mengorbankan expressiveness di level framework = technical debt yang tersembunyi.
 
 ## 7. Explicit Over Magic
 
@@ -87,7 +100,8 @@ Lebih baik ship 3 perubahan kecil yang masing-masing benar, daripada 1 perubahan
 - **Satu PR, satu concern.** Jangan campur refactor dengan feature baru. Jangan campur bug fix dengan "improvement" di area lain.
 - **Buat setiap commit bisa di-revert.** Kalau commit kamu di-revert, sistem harus tetap berfungsi.
 - **Jangan refactor spekulatif.** "Sekalian aja gue rapiin ini" saat mengerjakan fitur lain = risk tanpa value. Refactor itu task terpisah.
-- **Working > perfect.** Ship solusi 80% yang benar hari ini, improve besok. Jangan block feature karena arsitektur belum "ideal".
+- **Working > perfect — untuk application code.** Ship solusi 80% yang benar hari ini, improve besok. Jangan block feature karena arsitektur belum "ideal".
+- **Right > fast — untuk framework primitives.** Core interfaces dan protocol types harus didesain dengan benar dari awal. Mengubah `Provider` interface setelah ada 5 implementasi itu mahal. Invest waktu ekstra untuk desain yang composable dan expressive. Ini bukan perfectionism — ini menghindari breaking changes yang cascade ke seluruh codebase.
 
 ## 9. Test What Matters
 

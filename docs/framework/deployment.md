@@ -5,7 +5,7 @@ This guide covers building, containerizing, and deploying Oasis to production.
 ## Local Build
 
 ```bash
-go build ./cmd/oasis/
+go build ./cmd/bot_example/
 ```
 
 Produces a single `oasis` binary. CGO is not required for the basic build (uses `modernc.org/sqlite` which is pure Go), but CGO_ENABLED=1 gives better SQLite performance.
@@ -13,7 +13,7 @@ Produces a single `oasis` binary. CGO is not required for the basic build (uses 
 ### With CGO (recommended for production)
 
 ```bash
-CGO_ENABLED=1 go build -o oasis ./cmd/oasis/
+CGO_ENABLED=1 go build -o oasis ./cmd/bot_example/
 ```
 
 Requires a C compiler (`gcc` or `musl-dev` on Alpine).
@@ -29,7 +29,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=1 go build -o oasis ./cmd/oasis/
+RUN CGO_ENABLED=1 go build -o oasis ./cmd/bot_example/
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
