@@ -172,6 +172,60 @@ func TestSearchChunks(t *testing.T) {
 	}
 }
 
+func TestScheduledActions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	action := oasis.ScheduledAction{
+		ID: oasis.NewID(), Description: "daily briefing",
+		Schedule: "08:00 daily", ToolCalls: `[{"tool":"web_search","params":{"query":"news"}}]`,
+		NextRun: oasis.NowUnix() + 3600, Enabled: true, CreatedAt: oasis.NowUnix(),
+	}
+	if err := s.CreateScheduledAction(ctx, action); err != nil {
+		t.Fatal(err)
+	}
+
+	// List
+	actions, _ := s.ListScheduledActions(ctx)
+	if len(actions) != 1 || actions[0].Description != "daily briefing" {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+
+	// Find by description
+	found, _ := s.FindScheduledActionsByDescription(ctx, "briefing")
+	if len(found) != 1 {
+		t.Fatal("expected 1 match")
+	}
+
+	// Get due (none should be due yet if next_run is in the future)
+	due, _ := s.GetDueScheduledActions(ctx, oasis.NowUnix())
+	if len(due) != 0 {
+		t.Fatal("expected 0 due")
+	}
+
+	// Get due (with past next_run)
+	action.NextRun = oasis.NowUnix() - 60
+	s.UpdateScheduledAction(ctx, action)
+	due, _ = s.GetDueScheduledActions(ctx, oasis.NowUnix())
+	if len(due) != 1 {
+		t.Fatal("expected 1 due")
+	}
+
+	// Disable
+	s.UpdateScheduledActionEnabled(ctx, action.ID, false)
+	due, _ = s.GetDueScheduledActions(ctx, oasis.NowUnix()+99999)
+	if len(due) != 0 {
+		t.Fatal("disabled action should not be due")
+	}
+
+	// Delete
+	s.DeleteScheduledAction(ctx, action.ID)
+	actions, _ = s.ListScheduledActions(ctx)
+	if len(actions) != 0 {
+		t.Fatal("expected 0 after delete")
+	}
+}
+
 func TestCosineSimilarity(t *testing.T) {
 	// Identical vectors = 1.0
 	s := cosineSimilarity([]float32{1, 2, 3}, []float32{1, 2, 3})

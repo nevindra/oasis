@@ -45,6 +45,31 @@ type Fact struct {
 	UpdatedAt  int64     `json:"updated_at"`
 }
 
+// Intent for classification
+type Intent int
+
+const (
+	IntentChat   Intent = iota
+	IntentAction
+)
+
+// Scheduled action (DB record)
+type ScheduledAction struct {
+	ID              string `json:"id"`
+	Description     string `json:"description"`
+	Schedule        string `json:"schedule"`
+	ToolCalls       string `json:"tool_calls"`
+	SynthesisPrompt string `json:"synthesis_prompt"`
+	NextRun         int64  `json:"next_run"`
+	Enabled         bool   `json:"enabled"`
+	CreatedAt       int64  `json:"created_at"`
+}
+
+type ScheduledToolCall struct {
+	Tool   string          `json:"tool"`
+	Params json.RawMessage `json:"params"`
+}
+
 // --- LLM protocol types ---
 
 type ChatMessage struct {

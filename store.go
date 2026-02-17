@@ -20,6 +20,16 @@ type VectorStore interface {
 	GetConfig(ctx context.Context, key string) (string, error)
 	SetConfig(ctx context.Context, key, value string) error
 
+	// --- Scheduled Actions ---
+	CreateScheduledAction(ctx context.Context, action ScheduledAction) error
+	ListScheduledActions(ctx context.Context) ([]ScheduledAction, error)
+	GetDueScheduledActions(ctx context.Context, now int64) ([]ScheduledAction, error)
+	UpdateScheduledAction(ctx context.Context, action ScheduledAction) error
+	UpdateScheduledActionEnabled(ctx context.Context, id string, enabled bool) error
+	DeleteScheduledAction(ctx context.Context, id string) error
+	DeleteAllScheduledActions(ctx context.Context) (int, error)
+	FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
+
 	// --- Lifecycle ---
 	Init(ctx context.Context) error
 	Close() error

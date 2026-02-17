@@ -4,43 +4,77 @@ import (
 	"context"
 	"log"
 	"os"
-	"os/signal"
 
-	"github.com/nevindra/oasis"
 	"github.com/nevindra/oasis/frontend/telegram"
+	"github.com/nevindra/oasis/internal/app"
+	"github.com/nevindra/oasis/internal/config"
+	"github.com/nevindra/oasis/internal/scheduling"
+	memsqlite "github.com/nevindra/oasis/memory/sqlite"
 	"github.com/nevindra/oasis/provider/gemini"
 	"github.com/nevindra/oasis/store/sqlite"
+	"github.com/nevindra/oasis/tools/file"
+	httptool "github.com/nevindra/oasis/tools/http"
 	"github.com/nevindra/oasis/tools/knowledge"
+	"github.com/nevindra/oasis/tools/remember"
+	"github.com/nevindra/oasis/tools/schedule"
+	"github.com/nevindra/oasis/tools/search"
+	"github.com/nevindra/oasis/tools/shell"
 )
 
 func main() {
-	apiKey := os.Getenv("OASIS_LLM_API_KEY")
-	tgToken := os.Getenv("OASIS_TELEGRAM_TOKEN")
-	dbPath := os.Getenv("OASIS_DB_PATH")
-	if dbPath == "" {
-		dbPath = "oasis.db"
+	// 1. Load config
+	cfg := config.Load(os.Getenv("OASIS_CONFIG"))
+
+	// 2. Create providers
+	chatLLM := gemini.New(cfg.LLM.APIKey, cfg.LLM.Model)
+	intentLLM := gemini.New(cfg.Intent.APIKey, cfg.Intent.Model)
+	actionLLM := gemini.New(cfg.Action.APIKey, cfg.Action.Model)
+	embedding := gemini.NewEmbedding(cfg.Embedding.APIKey, cfg.Embedding.Model, cfg.Embedding.Dimensions)
+
+	// 3. Create store + memory
+	store := sqlite.New(cfg.Database.Path)
+	memStore := memsqlite.New(cfg.Database.Path)
+
+	// 4. Create app
+	oasisApp := app.New(&cfg, app.Deps{
+		Frontend:  telegram.New(cfg.Telegram.Token),
+		ChatLLM:   chatLLM,
+		IntentLLM: intentLLM,
+		ActionLLM: actionLLM,
+		Embedding: embedding,
+		Store:     store,
+		Memory:    memStore,
+	})
+
+	// 5. Register tools
+	knowledgeTool := knowledge.New(store, embedding)
+	oasisApp.AddTool(knowledgeTool)
+
+	scheduleTool := schedule.New(store, cfg.Brain.TimezoneOffset)
+	oasisApp.AddTool(scheduleTool)
+
+	rememberTool := remember.New(store, embedding)
+	oasisApp.AddTool(rememberTool)
+	oasisApp.SetIngestFile(rememberTool.IngestFile)
+
+	shellTool := shell.New(cfg.Brain.WorkspacePath, 30)
+	oasisApp.AddTool(shellTool)
+
+	fileTool := file.New(cfg.Brain.WorkspacePath)
+	oasisApp.AddTool(fileTool)
+
+	httpTool := httptool.New()
+	oasisApp.AddTool(httpTool)
+
+	if cfg.Search.BraveAPIKey != "" {
+		searchTool := search.New(embedding, cfg.Search.BraveAPIKey)
+		oasisApp.AddTool(searchTool)
 	}
 
-	if apiKey == "" || tgToken == "" {
-		log.Fatal("OASIS_LLM_API_KEY and OASIS_TELEGRAM_TOKEN are required")
-	}
+	// 6. Start scheduler in background
+	sched := scheduling.New(store, oasisApp.Tools(), oasisApp.Frontend(), intentLLM, cfg.Brain.TimezoneOffset)
+	go sched.Run(context.Background())
 
-	emb := gemini.NewEmbedding(apiKey, "gemini-embedding-001", 1536)
-
-	agent := oasis.New(
-		oasis.WithProvider(gemini.New(apiKey, "gemini-2.5-flash-preview-05-20")),
-		oasis.WithEmbedding(emb),
-		oasis.WithFrontend(telegram.New(tgToken)),
-		oasis.WithStore(sqlite.New(dbPath)),
-		oasis.WithSystemPrompt("You are Oasis, a helpful personal AI assistant. Respond concisely."),
-	)
-
-	agent.AddTool(knowledge.New(agent.Store(), emb))
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	if err := agent.Run(ctx); err != nil {
-		log.Fatal(err)
-	}
+	// 7. Run
+	log.Fatal(oasisApp.RunWithSignal())
 }

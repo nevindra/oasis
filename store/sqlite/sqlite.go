@@ -85,6 +85,21 @@ func (s *Store) Init(ctx context.Context) error {
 		}
 	}
 
+	// Scheduled actions
+	_, err = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS scheduled_actions (
+		id TEXT PRIMARY KEY,
+		description TEXT,
+		schedule TEXT,
+		tool_calls TEXT,
+		synthesis_prompt TEXT,
+		next_run INTEGER,
+		enabled INTEGER DEFAULT 1,
+		created_at INTEGER
+	)`)
+	if err != nil {
+		return fmt.Errorf("create table: %w", err)
+	}
+
 	return nil
 }
 
@@ -382,9 +397,134 @@ func (s *Store) SetConfig(ctx context.Context, key, value string) error {
 	return nil
 }
 
+// --- Scheduled Actions ---
+
+func (s *Store) CreateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		action.ID, action.Description, action.Schedule, action.ToolCalls,
+		action.SynthesisPrompt, action.NextRun, boolToInt(action.Enabled), action.CreatedAt)
+	return err
+}
+
+func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledAction, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions ORDER BY next_run`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduledActions(rows)
+}
+
+func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.ScheduledAction, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions WHERE enabled = 1 AND next_run <= ?`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduledActions(rows)
+}
+
+func (s *Store) UpdateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx,
+		`UPDATE scheduled_actions SET description=?, schedule=?, tool_calls=?, synthesis_prompt=?, next_run=?, enabled=? WHERE id=?`,
+		action.Description, action.Schedule, action.ToolCalls, action.SynthesisPrompt, action.NextRun, boolToInt(action.Enabled), action.ID)
+	return err
+}
+
+func (s *Store) UpdateScheduledActionEnabled(ctx context.Context, id string, enabled bool) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `UPDATE scheduled_actions SET enabled=? WHERE id=?`, boolToInt(enabled), id)
+	return err
+}
+
+func (s *Store) DeleteScheduledAction(ctx context.Context, id string) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `DELETE FROM scheduled_actions WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	res, err := db.ExecContext(ctx, `DELETE FROM scheduled_actions`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions WHERE description LIKE ?`, "%"+pattern+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanScheduledActions(rows)
+}
+
 // Close is a no-op since we use fresh connections per call.
 func (s *Store) Close() error {
 	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func scanScheduledActions(rows *sql.Rows) ([]oasis.ScheduledAction, error) {
+	var actions []oasis.ScheduledAction
+	for rows.Next() {
+		var a oasis.ScheduledAction
+		var enabled int
+		if err := rows.Scan(&a.ID, &a.Description, &a.Schedule, &a.ToolCalls, &a.SynthesisPrompt, &a.NextRun, &enabled, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		a.Enabled = enabled != 0
+		actions = append(actions, a)
+	}
+	return actions, rows.Err()
 }
 
 // --- Vector math ---
