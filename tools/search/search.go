@@ -15,7 +15,7 @@ import (
 	"time"
 
 	oasis "github.com/nevindra/oasis"
-	"github.com/nevindra/oasis/internal/ingest"
+	"github.com/nevindra/oasis/ingest"
 )
 
 // Tool performs web searches via Brave API with semantic re-ranking.

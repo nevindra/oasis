@@ -13,7 +13,7 @@ import (
 	"github.com/go-shiori/go-readability"
 
 	oasis "github.com/nevindra/oasis"
-	"github.com/nevindra/oasis/internal/ingest"
+	"github.com/nevindra/oasis/ingest"
 )
 
 // Tool fetches URLs and extracts readable content.
