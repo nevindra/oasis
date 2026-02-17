@@ -8,5 +8,5 @@ Detailed documentation for the Oasis AI agent framework. For an overview and qui
 | [Configuration](configuration.md) | All configuration options, environment variables, defaults, and fallback logic |
 | [Architecture](architecture.md) | Framework component design, interfaces, data flow, and how pieces connect |
 | [Extending Oasis](extending.md) | How to add custom tools, LLM providers, frontends, and storage backends |
-| [Deployment](deployment.md) | Docker builds, cloud deployment, production setup, and database options |
+| [Deployment](../../cmd/bot_example/DEPLOYMENT.md) | Docker builds, cloud deployment for the reference bot |
 | [API Reference](api-reference.md) | Complete interface definitions, domain types, and constructor patterns |

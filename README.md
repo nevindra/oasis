@@ -167,7 +167,7 @@ See [docs/framework/configuration.md](docs/framework/configuration.md) for the f
 - [Configuration](docs/framework/configuration.md) -- all config options and environment variables
 - [Extending Oasis](docs/framework/extending.md) -- adding custom tools, providers, frontends, and stores
 - [API Reference](docs/framework/api-reference.md) -- complete interface definitions and types
-- [Deployment](docs/framework/deployment.md) -- Docker, cloud deployment, database options
+- [Deployment](cmd/bot_example/DEPLOYMENT.md) -- Docker, cloud deployment for the reference bot
 
 ## License
 

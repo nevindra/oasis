@@ -20,28 +20,10 @@ Requires a C compiler (`gcc` or `musl-dev` on Alpine).
 
 ## Docker
 
-The included `Dockerfile` produces a minimal Alpine-based image:
-
-```dockerfile
-FROM golang:1.24-alpine AS builder
-RUN apk add --no-cache gcc musl-dev
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=1 go build -o oasis ./cmd/bot_example/
-
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
-COPY --from=builder /app/oasis /usr/local/bin/oasis
-COPY oasis.toml /etc/oasis/oasis.toml
-ENTRYPOINT ["oasis"]
-```
-
-### Build and Run
+Build from the repository root using the Dockerfile in this directory:
 
 ```bash
-docker build -t oasis .
+docker build -f cmd/bot_example/Dockerfile -t oasis .
 docker run --env-file .env oasis
 ```
 

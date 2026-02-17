@@ -111,4 +111,4 @@ After running Oasis, you'll see:
 - [Configuration](configuration.md) -- customize LLM models, providers, and all settings
 - [Architecture](architecture.md) -- understand the framework's component design
 - [Extending Oasis](extending.md) -- add your own tools, providers, or frontends
-- [Deployment](deployment.md) -- deploy to production with Docker
+- [Deployment](../../cmd/bot_example/DEPLOYMENT.md) -- deploy the reference bot to production

@@ -39,7 +39,7 @@ See [docs/ENGINEERING.md](docs/ENGINEERING.md) for the full mental model.
 go build ./cmd/bot_example/              # build reference app
 go test ./...                            # all tests
 go test ./tools/schedule/ -run TestName  # single test
-docker build -t oasis .                  # docker
+docker build -f cmd/bot_example/Dockerfile -t oasis .  # docker
 ```
 
 Config: defaults -> `oasis.toml` -> env vars (env wins). See [docs/framework/configuration.md](docs/framework/configuration.md).
