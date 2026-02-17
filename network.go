@@ -1,0 +1,200 @@
+package oasis
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+)
+
+// Network is an Agent that coordinates subagents and tools via an LLM router.
+// The router sees subagents as callable tools ("agent_<name>") and decides
+// which primitives to invoke, in what order, and with what data.
+type Network struct {
+	name         string
+	description  string
+	router       Provider
+	agents       map[string]Agent // keyed by name
+	tools        *ToolRegistry
+	processors   *ProcessorChain
+	systemPrompt string
+	maxIter      int
+}
+
+// NewNetwork creates a Network with the given router provider and options.
+func NewNetwork(name, description string, router Provider, opts ...AgentOption) *Network {
+	cfg := buildConfig(opts)
+	n := &Network{
+		name:         name,
+		description:  description,
+		router:       router,
+		agents:       make(map[string]Agent),
+		tools:        NewToolRegistry(),
+		processors:   NewProcessorChain(),
+		systemPrompt: cfg.prompt,
+		maxIter:      defaultMaxIter,
+	}
+	if cfg.maxIter > 0 {
+		n.maxIter = cfg.maxIter
+	}
+	for _, t := range cfg.tools {
+		n.tools.Add(t)
+	}
+	for _, a := range cfg.agents {
+		n.agents[a.Name()] = a
+	}
+	for _, p := range cfg.processors {
+		n.processors.Add(p)
+	}
+	return n
+}
+
+func (n *Network) Name() string        { return n.name }
+func (n *Network) Description() string { return n.description }
+
+// Execute runs the network's routing loop.
+func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+	var totalUsage Usage
+
+	// Build tool definitions: agent tools + direct tools
+	toolDefs := n.buildToolDefs()
+
+	// Build initial messages
+	var messages []ChatMessage
+	if n.systemPrompt != "" {
+		messages = append(messages, SystemMessage(n.systemPrompt))
+	}
+	messages = append(messages, UserMessage(task.Input))
+
+	for i := 0; i < n.maxIter; i++ {
+		req := ChatRequest{Messages: messages}
+
+		// PreProcessor hook
+		if err := n.processors.RunPreLLM(ctx, &req); err != nil {
+			return handleProcessorError(err, totalUsage)
+		}
+
+		resp, err := n.router.ChatWithTools(ctx, req, toolDefs)
+		if err != nil {
+			return AgentResult{Usage: totalUsage}, err
+		}
+		totalUsage.InputTokens += resp.Usage.InputTokens
+		totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+		// PostProcessor hook
+		if err := n.processors.RunPostLLM(ctx, &resp); err != nil {
+			return handleProcessorError(err, totalUsage)
+		}
+
+		// No tool calls — final response
+		if len(resp.ToolCalls) == 0 {
+			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+		}
+
+		// Append assistant message
+		messages = append(messages, ChatMessage{
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		})
+
+		// Execute each tool call
+		for _, tc := range resp.ToolCalls {
+			content, agentUsage := n.dispatch(ctx, tc, task)
+			totalUsage.InputTokens += agentUsage.InputTokens
+			totalUsage.OutputTokens += agentUsage.OutputTokens
+
+			// PostToolProcessor hook
+			result := ToolResult{Content: content}
+			if err := n.processors.RunPostTool(ctx, tc, &result); err != nil {
+				return handleProcessorError(err, totalUsage)
+			}
+
+			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
+		}
+	}
+
+	// Max iterations — force synthesis
+	log.Printf("[network:%s] max iterations reached, forcing synthesis", n.name)
+	messages = append(messages, UserMessage(
+		"You have used all available calls. Summarize what you have and respond to the user."))
+	resp, err := n.router.Chat(ctx, ChatRequest{Messages: messages})
+	if err != nil {
+		return AgentResult{Usage: totalUsage}, err
+	}
+	totalUsage.InputTokens += resp.Usage.InputTokens
+	totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+}
+
+// dispatch routes a tool call to either a subagent or a direct tool.
+func (n *Network) dispatch(ctx context.Context, tc ToolCall, parentTask AgentTask) (string, Usage) {
+	// Check if it's an agent call (prefixed with "agent_")
+	if len(tc.Name) > 6 && tc.Name[:6] == "agent_" {
+		agentName := tc.Name[6:]
+		agent, ok := n.agents[agentName]
+		if !ok {
+			return fmt.Sprintf("error: unknown agent %q", agentName), Usage{}
+		}
+
+		var params struct {
+			Task string `json:"task"`
+		}
+		if err := json.Unmarshal(tc.Args, &params); err != nil {
+			return "error: invalid agent call args: " + err.Error(), Usage{}
+		}
+
+		log.Printf("[network:%s] -> agent_%s: %s", n.name, agentName, truncateStr(params.Task, 80))
+
+		result, err := agent.Execute(ctx, AgentTask{
+			Input:   params.Task,
+			Context: parentTask.Context,
+		})
+		if err != nil {
+			return "error: " + err.Error(), Usage{}
+		}
+		return result.Output, result.Usage
+	}
+
+	// Regular tool call
+	result, err := n.tools.Execute(ctx, tc.Name, tc.Args)
+	if err != nil {
+		return "error: " + err.Error(), Usage{}
+	}
+	if result.Error != "" {
+		return "error: " + result.Error, Usage{}
+	}
+	return result.Content, Usage{}
+}
+
+// buildToolDefs builds tool definitions from subagents and direct tools.
+func (n *Network) buildToolDefs() []ToolDefinition {
+	var defs []ToolDefinition
+
+	// Agent tool definitions
+	for name, agent := range n.agents {
+		defs = append(defs, ToolDefinition{
+			Name:        "agent_" + name,
+			Description: agent.Description(),
+			Parameters: json.RawMessage(
+				`{"type":"object","properties":{"task":{"type":"string","description":"Natural language description of the task to delegate to this agent"}},"required":["task"]}`,
+			),
+		})
+	}
+
+	// Direct tool definitions
+	defs = append(defs, n.tools.AllDefinitions()...)
+	return defs
+}
+
+// truncateStr truncates a string to n characters.
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// compile-time check
+var _ Agent = (*Network)(nil)

@@ -1,594 +1,608 @@
 # Oasis Coding Conventions
 
-Rules and patterns that all contributors (human and LLM) must follow. Read this before writing any code in this project.
+Rules and patterns that all contributors (human and LLM) must follow when writing code in this project. Read this before writing any code.
+
+For engineering principles and mindset (AGI-readiness, forward-compatibility, performance, DX, dependency philosophy), see [ENGINEERING.md](ENGINEERING.md).
 
 ## Philosophy
 
-Oasis is deliberately minimalist. The project avoids large frameworks, SDK dependencies, and crate bloat. When a standard library solution or hand-rolled implementation exists and is simple enough, it is preferred over adding a dependency.
+Oasis is an AI agent framework built to evolve toward AGI. Two layers, two mindsets:
 
-**Do not add dependencies unless absolutely necessary.** If you think you need a new crate, check whether the project already has a hand-rolled solution first.
+**Framework layer** — composable, expressive primitives designed for longevity. Core interfaces and protocol types unlock powerful patterns for users. An Agent that composes with other Agents. A Tool that wraps complex workflows. Output that can be structured or free-form. The framework makes powerful things possible, not just simple things easy. Interfaces grow by addition, never removal.
+
+**Application layer** — deliberately minimalist. Avoids large frameworks, SDK dependencies, and module bloat. When a standard library solution or hand-rolled implementation exists and is simple enough, prefer it over adding a dependency.
+
+**Do not add dependencies unless absolutely necessary.** Check whether the project already has a hand-rolled solution first.
+
+**Do not simplify framework interfaces at the expense of expressiveness.** If a method or field on a core interface enables meaningful composition patterns, it belongs there even if the simplest use case doesn't need it.
+
+**Do not introduce breaking changes to framework interfaces.** Add new capabilities via new interfaces or optional fields. See [ENGINEERING.md](ENGINEERING.md) §2 for the forward-compatibility principle.
+
+## LLM-Readability
+
+Code is read by both humans and LLMs. These conventions ensure LLMs can understand, extend, and generate correct code.
+
+### Godoc on Every Export
+
+Every exported type, function, method, and constant must have a godoc comment. Not just "returns X" — explain the contract:
+
+```go
+// SearchChunks finds the top-K document chunks most similar to the query embedding.
+// Returns chunks sorted by descending similarity score. Returns an empty slice (not nil)
+// if no chunks match above the similarity threshold.
+// The embedding parameter must have the same dimensionality as stored embeddings.
+func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.Chunk, error)
+```
+
+### Interface Contracts
+
+Document invariants, thread-safety, and nil/zero behavior in interface comments. LLMs use these to generate correct implementations:
+
+```go
+// Tool provides one or more callable functions to an LLM agent.
+// Implementations must be safe for concurrent use.
+// Execute must always return a nil error for business failures —
+// use ToolResult.Error instead. A non-nil Go error signals infrastructure failure.
+type Tool interface {
+    Definitions() []ToolDefinition
+    Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error)
+}
+```
+
+### Consistent Patterns
+
+When every Tool follows the same Execute pattern, every Provider follows the same constructor pattern, and every test uses the same table-driven structure, LLMs generate correct code on the first try. Don't invent novel patterns when a project convention exists.
+
+### Examples in Tests
+
+Use `Example*` functions for key APIs. They serve as both documentation and executable tests:
+
+```go
+func ExampleNewLLMAgent() {
+    agent := oasis.NewLLMAgent("researcher", provider,
+        oasis.WithTools(searchTool),
+        oasis.WithPrompt("You are a research assistant."),
+    )
+    result, _ := agent.Execute(ctx, oasis.AgentTask{Input: "Find recent papers on RAG"})
+    fmt.Println(result.Output)
+}
+```
 
 ## Error Handling
 
-### OasisError Enum
+### Custom Error Types
 
-All errors use a custom `OasisError` enum defined in `oasis-core/src/error.rs`. No `anyhow`, no `thiserror`.
+Two error types are defined in `errors.go`:
 
-```rust
-// All crates use this Result alias
-use oasis_core::error::{OasisError, Result};
+```go
+type ErrLLM struct {
+    Provider string
+    Message  string
+}
 
-fn do_something() -> Result<String> {
-    // ...
+type ErrHTTP struct {
+    Status int
+    Body   string
 }
 ```
+
+No `pkg/errors`, no error wrapping frameworks. Use `fmt.Errorf("context: %w", err)` for wrapping when needed.
 
 ### Rules
 
-- **No `From` impls.** External errors are converted via module-level helper functions or inline `.map_err()` closures.
-- **Error messages are lowercase, no trailing period:** `"telegram error: {msg}"`, not `"Telegram error: {msg}."`.
-- **Error variants use `String` messages.** External errors are converted via `.to_string()`.
-- **The `Llm` variant is the only named-field variant** (`{ provider, message }`). All others are single-field tuple variants wrapping `String`.
+- **Error messages are lowercase, no trailing period:** `"invalid schedule format: %s"`, not `"Invalid schedule format: %s."`.
+- **Wrap with context:** `fmt.Errorf("store init: %w", err)`, not bare `return err`.
+- **Provider-specific errors** use `ErrLLM`:
+  ```go
+  func (g *Gemini) wrapErr(msg string) error {
+      return &oasis.ErrLLM{Provider: "gemini", Message: msg}
+  }
+  ```
 
-```rust
-// Module-level helper (preferred for repeated use within a file)
-fn map_err(e: libsql::Error) -> OasisError {
-    OasisError::Database(e.to_string())
-}
+### ToolResult is Not an Error
 
-// Inline closure (for one-off conversions)
-.map_err(|e| OasisError::Llm {
-    provider: "anthropic".to_string(),
-    message: format!("request failed: {e}"),
-})?;
-```
+`ToolResult` is a plain struct. Tool execution always "succeeds" at the Go level — business errors are encoded in `ToolResult.Error`. This is by design: tool errors are communicated back to the LLM, not propagated as Go errors.
 
-### ToolResult is Not a Result
-
-`ToolResult` is a plain struct, not a `Result` type. Tool execution always "succeeds" at the Rust level — errors are encoded as `ToolResult::err(...)` with an `"Error: "` prefix in the output string. This is by design: tool errors should be communicated back to the LLM, not propagated up as Rust errors.
-
-```rust
+```go
 // Correct
-ToolResult::ok("Task created: buy groceries")
-ToolResult::err("No tasks found matching 'xyz'")
+return oasis.ToolResult{Content: "Task created: buy groceries"}, nil
+return oasis.ToolResult{Error: "no tasks found matching 'xyz'"}, nil
 
-// Wrong — don't return Result from Tool::execute
+// Wrong — don't return Go error for business failures
+return oasis.ToolResult{}, fmt.Errorf("no tasks found")
 ```
 
-## Module Structure
+### Silent Error Handling
 
-### Three-Layer Architecture
+Non-critical operations discard errors with `_ =`:
 
-oasis-brain follows strict layering: `brain/` → `tool/` → `service/`. Dependency flows downward only. Never import from an upper layer.
-
-```
-brain/   (L1) can call → tool/ (L2) and service/ (L3)
-tool/    (L2) can call → service/ (L3)
-service/ (L3) never calls upward
+```go
+// Telegram edit during streaming — may fail if content hasn't changed
+_ = a.frontend.Edit(ctx, chatID, msgID, accumulated.String())
 ```
 
-### Brain Decomposition Pattern
+Only use this pattern when failure is expected and non-critical.
 
-The `Brain` struct is defined in `brain/mod.rs`. Behavior is split across **separate files, each containing an `impl Brain` block**. Do not create separate types for Brain subsystems — use method grouping by file.
+## Project Layout
 
-```rust
-// brain/chat.rs
-use super::Brain;
+### Interface in Root, Implementation in Subdirectory
 
-impl Brain {
-    pub(crate) async fn handle_chat_stream(&self, ...) -> Result<String> {
-        // ...
-    }
-}
+Core interfaces live in the root `oasis` package. Implementations live in dedicated packages:
+
+```
+oasis/
+  provider.go              — Provider, EmbeddingProvider interfaces
+  provider/gemini/         — Gemini implementation
+  provider/openaicompat/   — OpenAI-compatible implementation
+
+  store.go                 — Store interface
+  store/sqlite/            — SQLite implementation
+  store/libsql/            — Turso/libSQL implementation
+
+  frontend.go              — Frontend interface
+  frontend/telegram/       — Telegram implementation
 ```
 
-### mod.rs Pattern
+### File = Concern
 
-Directory modules use `mod.rs`. Service `mod.rs` files are just lists of `pub mod`:
+One file, one concern. Don't mix routing with storage in the same file:
 
-```rust
-// service/mod.rs
-pub mod ingest;
-pub mod intent;
-pub mod llm;
-pub mod memory;
-pub mod search;
-pub mod store;
+```
+internal/bot/
+  app.go      — struct, constructor, Run(), RunWithSignal()
+  router.go   — message routing dispatch
+  chat.go     — chat streaming handler
+  action.go   — action agent loop
+  intent.go   — intent classification
+  store.go    — background persistence (embed + store + facts)
+  agents.go   — agent lifecycle management
 ```
 
-## Visibility
+### Package Naming
 
-Use `pub(crate)` for methods and fields shared across brain submodules but not part of the public crate API:
+Package names are short, lowercase, single words:
 
-```rust
-pub struct Brain {
-    pub(crate) store: Arc<VectorStore>,
-    pub(crate) bot: TelegramBot,
-    pub(crate) config: Config,
-    // ...
-}
-
-impl Brain {
-    // Called from other brain/ submodules
-    pub(crate) async fn handle_chat_stream(&self, ...) -> Result<String> { ... }
-
-    // Only used within this file
-    async fn build_system_prompt(&self, ...) -> String { ... }
-}
+```go
+package gemini       // not oasis_gemini
+package sqlite       // not sqliteStore
+package schedule     // not scheduleTool
 ```
 
 ## Import Ordering
 
 Imports follow a 3-group pattern separated by blank lines:
 
-1. **Standard library** (`std::`)
-2. **External crates** and **sibling workspace crates** (`oasis_core::`, `reqwest`, `serde_json`, etc.)
-3. **Crate-internal** (`crate::`, `super::`)
+1. **Standard library** (`context`, `fmt`, `net/http`, etc.)
+2. **External modules + project root** (`github.com/nevindra/oasis`, `github.com/rs/xid`, etc.)
+3. **Internal packages** (`github.com/nevindra/oasis/internal/...`)
 
-```rust
-use std::sync::Arc;
+```go
+import (
+    "context"
+    "encoding/json"
+    "fmt"
 
-use oasis_core::error::{OasisError, Result};
-use oasis_core::types::*;
-use oasis_telegram::bot::TelegramBot;
-use serde_json::json;
+    oasis "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/ingest"
 
-use super::Brain;
-use crate::service::store::VectorStore;
+    "github.com/nevindra/oasis/internal/config"
+)
 ```
 
-### Glob Import for Core Types
+### Root Package Import Alias
 
-`oasis_core::types::*` is used throughout brain and service modules since those types (`ChatMessage`, `ChatRequest`, `Message`, `new_id`, `now_unix`, etc.) are used pervasively.
+When importing the root `oasis` package from subpackages, use the alias `oasis`:
 
-### Braces for Multi-Item Imports
-
-```rust
-use oasis_core::error::{OasisError, Result};
+```go
+import oasis "github.com/nevindra/oasis"
 ```
 
-## Trait Patterns
+## Naming Conventions
 
-### LlmProvider — RPITIT (not object-safe)
+### Functions and Methods
 
-`LlmProvider` uses return-position impl trait in trait (RPITIT). It is intentionally **not** object-safe. Providers are dispatched via match, never stored as `dyn LlmProvider`.
+- Exported: `PascalCase` — `func New(...)`, `func (t *Tool) Execute(...)`
+- Unexported: `camelCase` — `func buildBody(...)`, `func (g *Gemini) wrapErr(...)`
+- Constructors: always `New(...)` or `NewXxx(...)`
 
-```rust
-pub trait LlmProvider: Send + Sync {
-    fn chat(&self, request: ChatRequest)
-        -> impl std::future::Future<Output = Result<ChatResponse>> + Send;
-    fn name(&self) -> &str;
+### Constants
+
+Top of file, after imports. Use `camelCase` for unexported, `PascalCase` for exported:
+
+```go
+const (
+    maxStreamRetries = 3
+    maxMessageLength = 4096
+    baseURL          = "https://generativelanguage.googleapis.com/v1beta"
+)
+```
+
+Use `_` separators for large numbers: `1 << 20` or `1_000_000`.
+
+### Struct Tags
+
+JSON tags use `snake_case`, match the Go field names where possible:
+
+```go
+type Document struct {
+    ID        string `json:"id"`
+    CreatedAt int64  `json:"created_at"`
 }
 ```
 
-**Do not add `#[async_trait]` to LlmProvider.** Do not try to store providers as trait objects.
+Omit from JSON with `json:"-"` for internal-only fields:
 
-### Tool — `#[async_trait]` (object-safe)
+```go
+Embedding []float32 `json:"-"`
+```
 
-`Tool` uses `#[async_trait]` because it must be object-safe — tools are stored as `Box<dyn Tool>` in `ToolRegistry`.
+## Interface Implementation
 
-```rust
-#[async_trait]
-pub trait Tool: Send + Sync {
-    fn definitions(&self) -> Vec<ToolDefinition>;
-    async fn execute(&self, name: &str, args: &serde_json::Value) -> ToolResult;
+### Compile-Time Verification
+
+Every concrete implementation must include a compile-time interface check:
+
+```go
+var _ oasis.Store = (*Store)(nil)
+var _ oasis.Frontend = (*Bot)(nil)
+```
+
+### Package Doc Comments
+
+Every package must have a doc comment on its primary file:
+
+```go
+// Package sqlite implements oasis.Store using pure-Go SQLite
+// with in-process brute-force vector search. Zero CGO required.
+package sqlite
+```
+
+## Constructor Patterns
+
+### Dependency Injection
+
+Dependencies are injected through constructors, never globals:
+
+```go
+func New(store oasis.Store, emb oasis.EmbeddingProvider) *KnowledgeTool {
+    return &KnowledgeTool{store: store, embedding: emb, topK: 5}
 }
 ```
 
-The blanket `impl<T: Tool> Tool for Arc<T>` allows the same tool instance to be shared between Brain fields and the ToolRegistry.
+### Deps Struct for Many Parameters
 
-### When to Use Which
+When constructors need 4+ parameters, group them in a `Deps` struct:
 
-| Scenario | Pattern |
-|----------|---------|
-| Trait object needed (`Box<dyn T>`, `Vec<Box<dyn T>>`) | `#[async_trait]` |
-| Static dispatch only (match-based) | RPITIT |
-
-## Adding a New Tool
-
-1. Create a file in `tool/` (e.g., `tool/my_tool.rs`).
-2. Define a struct that holds its dependencies (Arc references to services).
-3. Implement the `Tool` trait with `definitions()` and `execute()`.
-4. Register it in `brain/mod.rs` inside `Brain::new()` by adding it to the `ToolRegistry`.
-
-```rust
-// tool/my_tool.rs
-use async_trait::async_trait;
-use oasis_core::types::ToolDefinition;
-use serde_json::json;
-
-use crate::tool::{Tool, ToolResult};
-
-pub struct MyTool {
-    // dependencies
+```go
+type Deps struct {
+    Frontend  oasis.Frontend
+    ChatLLM   oasis.Provider
+    IntentLLM oasis.Provider
+    ActionLLM oasis.Provider
+    Embedding oasis.EmbeddingProvider
+    Store     oasis.Store
+    Memory    oasis.MemoryStore
 }
 
-#[async_trait]
-impl Tool for MyTool {
-    fn definitions(&self) -> Vec<ToolDefinition> {
-        vec![ToolDefinition {
-            name: "my_tool_action".to_string(),
-            description: "Does something useful".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "input": { "type": "string", "description": "The input" }
-                },
-                "required": ["input"]
-            }),
-        }]
-    }
-
-    async fn execute(&self, name: &str, args: &serde_json::Value) -> ToolResult {
-        match name {
-            "my_tool_action" => {
-                let input = args["input"].as_str().unwrap_or("");
-                // ... do work ...
-                ToolResult::ok("Done")
-            }
-            _ => ToolResult::err(format!("Unknown tool: {name}")),
-        }
-    }
-}
+func New(cfg *config.Config, deps Deps) *App { ... }
 ```
+
+## Extensibility Conventions
+
+### Adding a New Interface
+
+When adding a new core interface to the framework:
+
+1. Define it in the root `oasis` package with full godoc and contract comments.
+2. Ensure zero-value/nil behavior is documented.
+3. Consider: can this compose with existing interfaces? Can it be extended later without breaking?
+4. Add at least one concrete implementation.
+5. Add compile-time verification in the implementation package.
+
+### Extending an Existing Interface
+
+**Don't modify existing interface signatures.** Instead:
+
+- **New optional capability:** define a separate interface, type-assert at runtime.
+- **New field on a struct:** ensure the zero value preserves existing behavior.
+- **New method needed by all implementations:** consider if a wrapper/middleware approach works first. If a breaking change is truly unavoidable, document the migration path.
+
+## Tool Conventions
+
+### Adding a New Tool
+
+1. Create a package in `tools/` (e.g., `tools/mytool/`).
+2. Define a struct with dependencies.
+3. Implement the `oasis.Tool` interface.
+4. Register it in your application's `main.go` (see `cmd/bot_example/main.go`).
 
 ### Tool Definition Rules
 
-- Parameters use `serde_json::json!` macro for JSON Schema.
-- Tool names use `snake_case`.
-- Description should be clear enough for an LLM to decide when to call it.
-- A single `Tool` struct can provide **multiple** tool definitions (e.g., `SearchTool` provides `web_search`, `browse_url`, `page_click`, etc.).
+- Tool names use `snake_case`: `knowledge_search`, `schedule_create`
+- Description must be clear enough for an LLM to decide when to call it
+- Parameters use JSON Schema via `json.RawMessage`
+- A single Tool struct can provide multiple tool definitions
 
 ### Tool Execute Pattern
 
-If a tool has multiple sub-tools, use `match name` in `execute()`:
+Parse args into an anonymous struct, early-return on errors:
 
-```rust
-async fn execute(&self, name: &str, args: &serde_json::Value) -> ToolResult {
-    match name {
-        "tool_a" => { /* ... */ }
-        "tool_b" => { /* ... */ }
-        _ => ToolResult::err(format!("Unknown tool: {name}")),
+```go
+func (t *MyTool) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
+    var params struct {
+        Query string `json:"query"`
     }
-}
-```
-
-Argument extraction uses `args["field"].as_str().unwrap_or("")` — no custom deserialization structs.
-
-## Async Patterns
-
-### Arc<Self> for Background Tasks
-
-`Brain` is wrapped in `Arc<Self>`. Methods that spawn background tasks take `self: &Arc<Self>`:
-
-```rust
-impl Brain {
-    pub(crate) fn spawn_store(self: &Arc<Self>, conv_id: String, ...) {
-        let brain = Arc::clone(self);
-        tokio::spawn(async move {
-            if let Err(e) = brain.store_message_pair(&conv_id, ...).await {
-                log!(" [store] background failed: {e}");
-            }
-        });
+    if err := json.Unmarshal(args, &params); err != nil {
+        return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
     }
+    // ... business logic ...
+    return oasis.ToolResult{Content: result}, nil
 }
 ```
 
-### Message Processing Concurrency
+For multi-function tools, dispatch on `name`:
 
-Each incoming Telegram message is spawned as its own tokio task:
-
-```rust
-for update in &updates {
-    let brain = Arc::clone(self);
-    tokio::spawn(async move {
-        if let Err(e) = brain.handle_message(&msg).await {
-            log!(" error handling message: {e}");
-        }
-    });
+```go
+switch name {
+case "schedule_create":
+    return t.handleCreate(ctx, args)
+case "schedule_list":
+    return t.handleList(ctx)
+default:
+    return oasis.ToolResult{Error: "unknown tool: " + name}, nil
 }
 ```
 
-### Retry with Exponential Backoff
+## Processor Conventions
 
-Transient errors (429, 500-504, connection errors, `STREAM_EXPIRED`) are retried with exponential backoff:
+### Implementing a Processor
 
-```rust
-const MAX_RETRIES: u32 = 3;
+1. Implement one or more of `PreProcessor`, `PostProcessor`, `PostToolProcessor`.
+2. Return `nil` to pass through. Return `ErrHalt` to short-circuit with a response. Return other errors for infrastructure failures.
+3. Modify data in place via the pointer arguments (`*ChatRequest`, `*ChatResponse`, `*ToolResult`).
+4. Processors must be safe for concurrent use.
 
-for attempt in 0..=MAX_RETRIES {
-    if attempt > 0 {
-        let delay = std::time::Duration::from_secs(1 << (attempt - 1));
-        tokio::time::sleep(delay).await;
-    }
-    match f().await {
-        Ok(val) => return Ok(val),
-        Err(e) if is_transient(&e) && attempt < MAX_RETRIES => { /* retry */ }
-        Err(e) => return Err(e),
-    }
-}
+### Halt vs Error
+
+```go
+// Intentional halt — produces AgentResult{Output: "blocked"}
+return &oasis.ErrHalt{Response: "blocked"}
+
+// Infrastructure failure — propagated as Go error
+return fmt.Errorf("rate limiter unavailable: %w", err)
 ```
 
-This pattern is used for both DB operations (VectorStore) and LLM calls (intent LLM).
+### Registration
 
-### Silent Error Handling
+Register via `WithProcessors()` in order of priority. Guardrails first, transformers after:
 
-Non-critical operations silently discard errors with `let _ =`:
-
-```rust
-// Telegram edit during streaming — may fail if content hasn't changed
-let _ = self.bot.edit_message(chat_id, msg_id, &text).await;
-
-// Bot command registration — nice-to-have, not critical
-let _ = self.bot.set_my_commands(&[...]).await;
+```go
+oasis.WithProcessors(&guardrail, &redactor, &tokenBudget)
 ```
-
-Only use `let _ =` when failure is expected and non-critical. Always log errors that indicate real problems.
-
-## Logging
-
-### Custom log! Macro
-
-The project uses a custom `log!` macro defined in `oasis-brain/src/lib.rs`. No `log` crate, no `tracing`.
-
-```rust
-log!(" [tag] message with {variable}");
-```
-
-Output format: `HH:MM:SS oasis:  [tag] message`
-
-### Log Tag Convention
-
-Messages start with a **space, then a bracketed tag**:
-
-```rust
-log!(" [recv] from={username} (id={user_id}) chat={}", msg.chat.id);
-log!(" [embed] calling {provider}/{model} for {} text(s)", texts.len());
-log!(" [tool] {}({})", tool_call.name, tool_call.arguments);
-log!(" [store] saving message pair to conversation {conversation_id}");
-log!(" [db] retry {attempt}/{MAX_DB_RETRIES} in {}s", delay.as_secs());
-```
-
-Common tags: `[recv]`, `[auth]`, `[conv]`, `[text]`, `[route]`, `[intent]`, `[cmd]`, `[embed]`, `[chat-llm]`, `[intent-llm]`, `[tool]`, `[agent]`, `[store]`, `[memory]`, `[db]`, `[search]`, `[send]`, `[integrations]`.
-
-### Outside oasis-brain
-
-In `src/main.rs` (outside the macro's scope), use raw `eprintln!`:
-
-```rust
-eprintln!("oasis: starting...");
-eprintln!("fatal: failed to load config: {e}");
-```
-
-## String Conventions
-
-### Inline Format Variables
-
-Use Rust 2021 capture syntax for format strings:
-
-```rust
-// Correct
-format!("unknown provider: '{other}'")
-log!(" [embed] calling {provider}/{model} for {} text(s)", texts.len());
-
-// Avoid positional arguments when captures are available
-```
-
-### String Building
-
-Use `String::new()` + `push_str()` with `&format!()` for building long strings:
-
-```rust
-let mut system = format!("Current date: {today}\n");
-if !context.is_empty() {
-    system.push_str(&format!("\n{context}\n"));
-}
-```
-
-### Constructors
-
-Use `impl Into<String>` for constructor parameters that take strings:
-
-```rust
-pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
-    Self {
-        role: role.into(),
-        content: content.into(),
-    }
-}
-```
-
-### String Conversion
-
-Use `.to_string()` for `&str` → `String`. Not `.to_owned()`, not `String::from()`.
-
-## Type Conventions
-
-### Shared Types
-
-All shared types live in `oasis-core/src/types.rs`. Derive order is always:
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-```
-
-### Field Rules
-
-- All fields are `pub`.
-- IDs are `String` (ULID-like from `new_id()`).
-- Timestamps are `i64` (unix seconds from `now_unix()`).
-- Nullable fields use `Option<String>`.
-- Schemaless JSON uses `serde_json::Value`.
-- No `#[serde(rename_all)]` — field names match JSON keys exactly.
-
-### ID Generation
-
-Use `new_id()` from `oasis_core::types` for all entity IDs. Do not use UUID crates or other ID schemes.
-
-### Date/Time
-
-Use `now_unix()` from `oasis_core::types` for timestamps. Date math uses hand-rolled functions in `oasis-brain/src/util.rs`. Do not add `chrono` or `time` crates.
-
-## Config Conventions
-
-### Adding a New Config Field
-
-1. Add the field to the appropriate sub-config struct in `oasis-core/src/config.rs`.
-2. Add a `#[serde(default = "fn_name")]` attribute.
-3. Create a module-level default function (not a method).
-4. Update the `Default` impl to call the same default function.
-5. If it should be overridable via env var, add the override in `Config::load()`.
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MyConfig {
-    #[serde(default = "default_my_value")]
-    pub my_value: String,
-}
-
-fn default_my_value() -> String {
-    "default".to_string()
-}
-
-impl Default for MyConfig {
-    fn default() -> Self {
-        Self {
-            my_value: default_my_value(),
-        }
-    }
-}
-```
-
-### Env Var Naming
-
-All env vars use the `OASIS_` prefix, uppercase, underscore-separated: `OASIS_TELEGRAM_TOKEN`, `OASIS_LLM_API_KEY`.
 
 ## Database Conventions
 
 ### Fresh Connections
 
-Each VectorStore method creates a fresh connection via `self.db.connect()`. Do not cache or reuse connections — this avoids `STREAM_EXPIRED` errors on Turso.
+Each Store/MemoryStore method opens a fresh database connection via `sql.Open()`. Do not cache or reuse connections — this avoids `STREAM_EXPIRED` errors on Turso.
 
-### Module-Level Error Mapper
-
-Each service file that talks to libSQL defines its own error mapper:
-
-```rust
-fn map_err(e: libsql::Error) -> OasisError {
-    OasisError::Database(e.to_string())
-}
-```
-
-### DB Retry
-
-Wrap database operations in the `with_retry` pattern for transient errors. Check `is_transient_db_error()` before retrying.
-
-## Testing
-
-### Test Structure
-
-Tests go at the bottom of the source file in a `#[cfg(test)] mod tests` block:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_descriptive_name() {
-        // ...
+```go
+func (s *Store) openDB() (*sql.DB, error) {
+    db, err := sql.Open("sqlite", s.dbPath)
+    if err != nil {
+        return nil, fmt.Errorf("open database: %w", err)
     }
+    return db, nil
 }
 ```
 
-### Rules
+### Table Creation
 
-- All tests are **synchronous** `#[test]`. No `#[tokio::test]` — tests focus on pure functions and validation logic.
-- Test naming: `test_<descriptive_snake_case_name>`.
-- Helper setup functions are plain functions in the test module, not fixtures or macros.
-- Assertions: `assert!`, `assert_eq!`, `assert!(matches!(...))`. No custom assertion macros.
-- Test both valid and invalid inputs (e.g., `test_blocked_commands` + `test_allowed_commands`).
+All `CREATE TABLE` statements use `IF NOT EXISTS`. Table creation happens in `Init()`.
+
+### Embedding Storage
+
+Embeddings are serialized as JSON text (`[]float32` -> `string`). Vector search loads all embeddings and computes cosine similarity in-process.
 
 ## LLM Provider Conventions
 
 ### Adding a New Provider
 
-1. Create a file in `oasis-llm/src/` (e.g., `my_provider.rs`).
-2. Implement `LlmProvider` and/or `EmbeddingProvider` using RPITIT (not `#[async_trait]`).
-3. Use raw HTTP via `reqwest`. No SDK dependencies.
-4. Add the match arm in `oasis-brain/src/service/llm.rs` dispatch methods.
-5. Add the provider name to the error message listing supported providers.
-
-```rust
-// oasis-llm/src/my_provider.rs
-pub struct MyProviderLlm {
-    client: Client,
-    api_key: String,
-    model: String,
-}
-
-impl LlmProvider for MyProviderLlm {
-    fn chat(&self, request: ChatRequest)
-        -> impl std::future::Future<Output = Result<ChatResponse>> + Send {
-        async move {
-            // raw HTTP call
-        }
-    }
-    fn name(&self) -> &str { "my_provider" }
-}
-```
+1. Create a package in `provider/` (e.g., `provider/anthropic/`).
+2. Implement `oasis.Provider` and/or `oasis.EmbeddingProvider`.
+3. Use raw HTTP via `net/http`. No SDK dependencies.
+4. Add a `wrapErr()` helper for consistent error wrapping.
 
 ### Streaming
 
 All streaming implementations use SSE (Server-Sent Events):
 
-1. Send request with `stream: true` parameter.
-2. Read response as streaming bytes.
-3. Parse SSE `data:` lines.
-4. Send text deltas via `tx.send(chunk)`.
-5. Return final `ChatResponse` with usage stats.
+1. POST with streaming enabled
+2. Read response as buffered reader
+3. Parse `data:` lines
+4. Send text deltas via `ch <- chunk`
+5. Close the channel when done
+6. Return final `ChatResponse` with usage stats
+
+```go
+func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- string) (oasis.ChatResponse, error) {
+    defer close(ch)
+    // ... SSE parsing, send chunks to ch ...
+    return oasis.ChatResponse{Content: full, Usage: usage}, nil
+}
+```
 
 ## Telegram Conventions
 
 ### HTML, Not Markdown
 
-Always use `parse_mode: "HTML"` for formatted output. Convert markdown to HTML via `pulldown-cmark`. Telegram's legacy "Markdown" parse_mode does not support `**bold**`, `###` headers, or other standard markdown.
+Always use `parse_mode: "HTML"` for formatted output. Convert markdown to HTML via goldmark.
 
 ### Streaming Edits
 
-- **Intermediate edits**: plain text (markdown may be incomplete mid-stream).
-- **Final edit**: HTML via `edit_message_formatted()`.
-- **Edit errors**: silently ignored with `let _ =`.
-- **Edit rate**: max once per second to avoid Telegram rate limits.
+- **Intermediate edits**: plain text via `Edit()` (markdown may be incomplete mid-stream)
+- **Final edit**: HTML via `EditFormatted()`
+- **Edit errors**: silently ignored with `_ =`
+- **Edit rate**: max once per second to avoid Telegram rate limits
 
 ### Message Length
 
-Telegram has a 4096-character limit. `split_message()` handles splitting at newline boundaries.
+Telegram has a 4096-character limit. Handle splitting for long messages.
 
-## Constants
+## Configuration Conventions
 
-Place constants at the top of the file, after imports:
+### Adding a New Config Field
 
-```rust
-const MAX_ITERATIONS: usize = 10;
-const PAGE_FETCH_TIMEOUT: u64 = 10;
-const MAX_PAGE_CHARS: usize = 12_000;
+1. Add the field to the appropriate sub-config struct in `internal/config/config.go`
+2. Add a default value in `Default()`
+3. If it should be overridable via env var, add the override in `Load()`
+4. Update `oasis.toml` with the new field
+
+### Env Var Naming
+
+All env vars use the `OASIS_` prefix, uppercase, underscore-separated:
+
+```
+OASIS_TELEGRAM_TOKEN
+OASIS_LLM_API_KEY
+OASIS_BRAVE_API_KEY
 ```
 
-Use `_` separators for large numbers: `5_242_880` not `5242880`.
+## Concurrency Patterns
+
+### Background Goroutines
+
+Heavy work that's not on the critical path runs in background goroutines:
+
+```go
+go func() {
+    a.storeMessagePair(ctx, thread.ID, userText, assistantText)
+    a.extractAndStoreFacts(ctx, userText, assistantText)
+}()
+```
+
+### Channel-Based Streaming
+
+LLM streaming uses buffered channels:
+
+```go
+ch := make(chan string, 100)
+go func() {
+    resp, err := provider.ChatStream(ctx, req, ch)
+    resultCh <- streamResult{resp, err}
+}()
+for chunk := range ch {
+    accumulated.WriteString(chunk)
+    // edit message periodically
+}
+```
+
+### Retry with Exponential Backoff
+
+Transient errors (429, 5xx) are retried. Non-transient errors are not.
+
+```go
+for attempt := 0; attempt <= maxRetries; attempt++ {
+    if attempt > 0 {
+        delay := time.Duration(1<<(attempt-1)) * time.Second
+        time.Sleep(delay)
+    }
+    // ... attempt operation ...
+}
+```
+
+## Logging
+
+### Standard log Package
+
+Use Go's standard `log` package. No structured logging frameworks.
+
+```go
+log.Printf(" [recv] from=%s chat=%s", msg.UserID, msg.ChatID)
+log.Printf(" [chat] retry %d/%d in %s", attempt, maxRetries, delay)
+log.Printf(" [memory] extracted %d fact(s)", len(facts))
+```
+
+### Log Tag Convention
+
+Messages start with a **space, then a bracketed tag**:
+
+```
+ [recv]    — incoming message
+ [auth]    — authentication
+ [route]   — message routing
+ [chat]    — chat streaming
+ [send]    — outgoing message
+ [tool]    — tool execution
+ [agent]   — action agent lifecycle
+ [store]   — persistence
+ [memory]  — fact extraction/storage
+ [ingest]  — document ingestion
+```
+
+## Testing
+
+### Test Files
+
+Tests go in `*_test.go` files alongside the source:
+
+```
+ingest/chunker.go
+ingest/chunker_test.go
+tools/schedule/schedule.go
+tools/schedule/schedule_test.go
+```
+
+### Test Naming
+
+```go
+func TestChunkText(t *testing.T) { ... }
+func TestComputeNextRun(t *testing.T) { ... }
+func TestStripHTML(t *testing.T) { ... }
+```
+
+### Table-Driven Tests
+
+Preferred for functions with multiple input/output cases:
+
+```go
+cases := []struct {
+    input string
+    want  int
+}{
+    {"monday", 0},
+    {"senin", 0},
+    {"invalid", -1},
+}
+for _, tc := range cases {
+    got := myFunc(tc.input)
+    if got != tc.want {
+        t.Errorf("myFunc(%q) = %d, want %d", tc.input, got, tc.want)
+    }
+}
+```
+
+### What to Test
+
+Focus on pure functions and business logic:
+- Chunking algorithms
+- Schedule parsing and next-run computation
+- HTML/Markdown text extraction
+- Day name parsing
+- Config loading
+
+Do **not** write tests that require external services (LLM API, Telegram, databases with real data).
 
 ## Things to Never Do
 
-- **Do not add `anyhow` or `thiserror`.** Use `OasisError` with `map_err`.
-- **Do not add `chrono` or `time`.** Use `now_unix()` and `util.rs` date math.
-- **Do not add UUID crates.** Use `new_id()`.
+- **Do not add LLM SDK dependencies.** All providers use raw HTTP.
 - **Do not add bot frameworks.** The Telegram client is hand-rolled.
-- **Do not add LLM SDK crates.** All providers use raw HTTP.
-- **Do not use `dyn LlmProvider`.** Use match-based dispatch.
-- **Do not add `#[async_trait]` to `LlmProvider`.** It uses RPITIT intentionally.
-- **Do not use `log` or `tracing` crates.** Use the custom `log!` macro.
-- **Do not cache database connections.** Create fresh connections per call.
-- **Do not return `Result` from `Tool::execute`.** Return `ToolResult::ok()` or `ToolResult::err()`.
+- **Do not add error wrapping libraries.** Use `fmt.Errorf` with `%w`.
+- **Do not add time/date libraries.** Use `time` stdlib + hand-rolled date math where needed.
+- **Do not cache database connections.** Fresh connection per operation.
+- **Do not return Go `error` from `Tool.Execute` for business failures.** Use `ToolResult.Error`.
 - **Do not use Telegram's `parse_mode: "Markdown"`.** Always use HTML.
-- **Do not add `[workspace.dependencies]`.** Each crate declares its own versions.
-- **Do not use `reqwest` with default features.** Always use `default-features = false, features = ["rustls-tls", ...]`.
+- **Do not use global state.** Inject dependencies through constructors.
+- **Do not add structured logging frameworks.** Use the standard `log` package.
+- **Do not add HTTP router libraries.** The Telegram client doesn't need one.
+- **Do not break existing interface signatures.** Add new interfaces or optional fields instead.
