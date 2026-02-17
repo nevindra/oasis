@@ -44,7 +44,7 @@ For application-level orchestration (routing, intent classification, agent manag
                                   +-----------+
 ```
 
-Every box above is a Go interface (except Ingest Pipeline which is a concrete struct). You can swap any implementation without affecting the others.
+Every box above is a Go interface (except Ingest which is a concrete struct). You can swap any implementation without affecting the others.
 
 ## Core Interfaces
 
@@ -280,33 +280,46 @@ Processors run in registration order. An empty chain is a no-op (zero overhead).
 
 ## Ingest Pipeline (`ingest/`)
 
-Converts raw content into documents and chunks ready for embedding and storage. This is a concrete struct, not an interface.
+End-to-end ingestion: extract → chunk → embed → store. Built around two core interfaces (`Extractor`, `Chunker`) and one high-level API (`Ingestor`).
 
 ```go
-pipeline := ingest.NewPipeline(512, 50) // maxTokens, overlapTokens
-
-// From plain text
-result := pipeline.IngestText(content, source, title)
-
-// From HTML
-result := pipeline.IngestHTML(htmlContent, sourceURL)
-
-// From file (detects type by extension)
-result := pipeline.IngestFile(content, filename)
+// Ingestor handles the full pipeline
+ingestor := ingest.NewIngestor(store, embedding)
+result, err := ingestor.IngestText(ctx, content, source, title)
+result, err := ingestor.IngestFile(ctx, fileBytes, filename)
+result, err := ingestor.IngestReader(ctx, reader, filename)
 ```
 
-Returns `IngestResult` containing a `Document` and `[]Chunk`. **Embedding is NOT done by the pipeline** -- the caller must embed the chunks and store them via Store.
+**Interfaces:**
 
-**Chunking strategy:**
-1. Split on paragraph boundaries (`\n\n`)
-2. If too large, split on sentence boundaries (`. ` followed by uppercase)
-3. If still too large, split on word boundaries
-4. Target: ~512 tokens per chunk (~2048 chars), ~50 token overlap
+- `Extractor` — converts raw `[]byte` to plain text (pluggable: PDF, DOCX, etc.)
+- `Chunker` — splits text into `[]string` chunks (pluggable strategies)
 
-**Text extraction:**
-- HTML: strips tags, scripts, styles; decodes entities
-- Markdown: strips formatting markers, links, code fences
-- Plain text: pass through
+**Built-in chunkers:**
+
+- `RecursiveChunker` — paragraphs → sentences → words (default). Improved sentence boundaries: abbreviation-aware (Mr., Dr.), decimal-safe (3.14), CJK punctuation (。！？).
+- `MarkdownChunker` — splits at heading boundaries, preserves headings in chunks for LLM context, falls back to RecursiveChunker for oversized sections.
+
+**Chunking strategies:**
+
+- `StrategyFlat` (default) — single-level chunking
+- `StrategyParentChild` — two-level hierarchical. Child chunks (small, ~256 tokens) are embedded for matching; parent chunks (large, ~1024 tokens) provide context. On retrieval: match children → resolve `ParentID` → return parent content.
+
+**Batched embedding:** Large documents are embedded in configurable batches (default 64 chunks per `Embed()` call) to respect provider limits.
+
+**Package layout:**
+
+```text
+ingest/
+├── extractor.go          # Extractor interface + PlainText/HTML/Markdown extractors
+├── chunker.go            # Chunker interface + RecursiveChunker
+├── chunker_markdown.go   # MarkdownChunker
+├── ingestor.go           # Ingestor (extract → chunk → embed → store)
+├── strategy.go           # ChunkStrategy + parent-child logic
+├── option.go             # Option types
+└── pdf/
+    └── extractor.go      # PDFExtractor (separate dependency)
+```
 
 ## Domain Types (`types.go`)
 
@@ -315,7 +328,7 @@ All framework types live in the root `oasis` package:
 | Type | Purpose | Key Fields |
 |------|---------|-----------|
 | `Document` | Ingested content | ID, Title, Source, Content, CreatedAt |
-| `Chunk` | Document fragment with embedding | ID, DocumentID, Content, ChunkIndex, Embedding |
+| `Chunk` | Document fragment with embedding | ID, DocumentID, ParentID, Content, ChunkIndex, Embedding |
 | `Thread` | Conversation thread | ID, ChatID, Title, Metadata, CreatedAt, UpdatedAt |
 | `Message` | Chat message | ID, ThreadID, Role, Content, Embedding, CreatedAt |
 | `Fact` | Memory fact | ID, Fact, Category, Confidence, Embedding, CreatedAt, UpdatedAt |
@@ -373,7 +386,7 @@ The Store implementations create these tables:
 ```sql
 -- Knowledge base
 documents (id, title, source, content, created_at)
-chunks    (id, document_id, content, chunk_index, embedding)
+chunks    (id, document_id, parent_id, content, chunk_index, embedding)
 
 -- Threads
 threads  (id, chat_id, title, metadata, created_at, updated_at)
@@ -401,21 +414,13 @@ Embeddings are stored as JSON text. Vector search is brute-force cosine similari
 
 ## Data Flow: Ingest -> Search
 
-```
-Raw content (text/HTML/file)
+```text
+Raw content (text/HTML/file/PDF)
          |
-   [Ingest Pipeline]
-         |
-   Document + Chunks (no embeddings yet)
-         |
-   [EmbeddingProvider.Embed]
-         |
-   Chunks with embeddings
-         |
-   [Store.StoreDocument]
+   [Ingestor]  (extract → chunk → batch embed → store)
          |
          v
-   Stored in SQLite
+   Stored in SQLite (Document + Chunks with embeddings)
 
 --- later ---
 
@@ -428,6 +433,8 @@ Raw content (text/HTML/file)
    [Store.SearchChunks]
          |
    Top-K relevant chunks
+         |
+   (if parent-child: resolve ParentID via Store.GetChunksByIDs)
 ```
 
 ## Data Flow: Tool Execution

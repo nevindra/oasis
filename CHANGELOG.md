@@ -8,20 +8,34 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
-- Comprehensive test suite: ~110 new test cases across agent, tool registry, app, scheduler, schedule, memory/sqlite, observer, errors, types, and tools (shell, file, schedule)
-- Workflow primitive: deterministic DAG-based task orchestration (`workflow.go`)
-  - Step types: `Step` (function), `AgentStep` (Agent delegation), `ToolStep` (tool call), `ForEach` (collection iteration), `DoUntil`/`DoWhile` (loops)
-  - Step options: `After` (dependencies), `When` (conditions), `InputFrom`/`ArgsFrom`/`OutputTo` (data routing), `Retry`, `IterOver`, `Concurrency`, `Until`, `While`, `MaxIter`
-  - Workflow options: `WithOnFinish`, `WithOnError`, `WithDefaultRetry`
+- `Workflow` agent primitive — deterministic DAG-based task orchestration
+  - Step types: `Step`, `AgentStep`, `ToolStep`, `ForEach`, `DoUntil`/`DoWhile`
+  - DAG validation at construction (duplicate, unknown dep, cycle detection)
   - Shared `WorkflowContext` with concurrent-safe `Get`/`Set`
-  - `ForEachItem`/`ForEachIndex` helpers for per-goroutine iteration data
-  - DAG validation at construction: duplicate detection, unknown dependency check, cycle detection (Kahn's algorithm)
-  - Fail-fast error handling with configurable retries and failure cascade tracking
-  - Implements `Agent` interface for recursive composition with Network and other Workflows
+  - Implements `Agent` interface for recursive composition
+- `Ingestor` — end-to-end extract → chunk → embed → store API with batched embedding
+- `Extractor` interface with built-in `PlainTextExtractor`, `HTMLExtractor`, `MarkdownExtractor`
+- `Chunker` interface with `RecursiveChunker` (improved sentence boundaries) and `MarkdownChunker` (heading-aware)
+- `StrategyParentChild` — two-level hierarchical chunking with `Chunk.ParentID` linking
+- `Store.GetChunksByIDs` for batch chunk retrieval (parent-child resolution)
+- PDF extractor stub subpackage (`ingest/pdf/`)
+- ~110 new test cases across framework packages
+
+### Changed
+
+- `ContentType` is now `string` (MIME type) instead of `int` enum
+- Remember tool uses `Ingestor` instead of manual embed+store boilerplate
+- Search tool uses `Chunker` interface instead of `ChunkerConfig`
+
+### Removed
+
+- `Pipeline`, `PipelineResult`, `NewPipeline` — use `Ingestor`
+- `ChunkerConfig`, `DefaultChunkerConfig()`, `ChunkText()` — use `NewRecursiveChunker()`
+- `ExtractText()` — use `Extractor` implementations
 
 ### Fixed
 
-- `parseScheduledToolCalls` partial unmarshal contamination causing legacy format to return duplicates
+- `parseScheduledToolCalls` partial unmarshal contamination causing duplicates
 
 ## [0.1.2] - 2026-02-18
 

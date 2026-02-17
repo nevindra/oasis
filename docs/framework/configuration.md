@@ -118,7 +118,7 @@ When `turso_url` is set, Oasis connects to the remote Turso database instead of 
 
 ### `[chunking]`
 
-Controls the document ingestion chunking strategy.
+Controls the document ingestion chunking strategy. These settings configure the default `RecursiveChunker` used by the reference app. When using the `Ingestor` API directly, configure chunking via `WithMaxTokens()`, `WithOverlapTokens()`, and other `ChunkerOption`s.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

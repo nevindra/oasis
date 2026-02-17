@@ -316,6 +316,7 @@ type Document struct {
 type Chunk struct {
     ID         string    `json:"id"`
     DocumentID string    `json:"document_id"`
+    ParentID   string    `json:"parent_id,omitempty"`
     Content    string    `json:"content"`
     ChunkIndex int       `json:"chunk_index"`
     Embedding  []float32 `json:"-"`
@@ -683,43 +684,117 @@ Both implement the `error` interface.
 
 **Package:** `github.com/nevindra/oasis/ingest`
 
-### Pipeline
+### Ingestor (primary API)
+
+End-to-end ingestion: extract → chunk → embed → store.
 
 ```go
-pipeline := ingest.NewPipeline(maxTokens, overlapTokens int) *Pipeline
+// Simple — flat recursive, just works
+ingestor := ingest.NewIngestor(store, embedding)
+result, err := ingestor.IngestText(ctx, content, "message", "")
 
-result := pipeline.IngestText(content, source, title string) IngestResult
-result := pipeline.IngestHTML(html, sourceURL string) IngestResult
-result := pipeline.IngestFile(content, filename string) IngestResult
+// Large docs — parent-child strategy
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithStrategy(ingest.StrategyParentChild),
+)
+
+// Full control
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithStrategy(ingest.StrategyParentChild),
+    ingest.WithParentChunker(ingest.NewMarkdownChunker(ingest.WithMaxTokens(1024))),
+    ingest.WithChildChunker(ingest.NewRecursiveChunker(ingest.WithMaxTokens(256))),
+    ingest.WithBatchSize(32),
+)
+
+// Entry points
+result, err := ingestor.IngestText(ctx, text, source, title)
+result, err := ingestor.IngestFile(ctx, content []byte, filename)
+result, err := ingestor.IngestReader(ctx, r io.Reader, filename)
 ```
 
 ### IngestResult
 
 ```go
 type IngestResult struct {
-    Document oasis.Document
-    Chunks   []oasis.Chunk  // Embedding field is empty -- caller must embed
+    DocumentID string
+    Document   oasis.Document
+    ChunkCount int
 }
 ```
 
-### Text Extraction
+### Ingestor Options
 
 ```go
-ingest.StripHTML(content string) string
-ingest.ExtractText(content string, ct ContentType) string
+ingest.WithChunker(c Chunker)               // custom chunker for flat strategy
+ingest.WithParentChunker(c Chunker)          // parent-level chunker
+ingest.WithChildChunker(c Chunker)           // child-level chunker
+ingest.WithStrategy(s ChunkStrategy)         // StrategyFlat (default) or StrategyParentChild
+ingest.WithParentTokens(n int)               // default 1024
+ingest.WithChildTokens(n int)                // default 256
+ingest.WithBatchSize(n int)                  // chunks per Embed() call, default 64
+ingest.WithExtractor(ct ContentType, e Extractor)  // register custom extractor
+```
+
+### Interfaces
+
+```go
+// Extractor converts raw content to plain text.
+type Extractor interface {
+    Extract(content []byte) (string, error)
+}
+
+// Chunker splits text into chunks suitable for embedding.
+type Chunker interface {
+    Chunk(text string) []string
+}
+```
+
+Built-in extractors: `PlainTextExtractor`, `HTMLExtractor`, `MarkdownExtractor`.
+
+### Chunkers
+
+```go
+// RecursiveChunker — paragraphs → sentences → words (default)
+ingest.NewRecursiveChunker(opts ...ChunkerOption) *RecursiveChunker
+
+// MarkdownChunker — heading-aware, preserves headings in chunks
+ingest.NewMarkdownChunker(opts ...ChunkerOption) *MarkdownChunker
+
+// ChunkerOptions
+ingest.WithMaxTokens(n int)      // default 512
+ingest.WithOverlapTokens(n int)  // default 50
+```
+
+### Content Types
+
+```go
+type ContentType string
+
+const (
+    TypePlainText ContentType = "text/plain"
+    TypeHTML      ContentType = "text/html"
+    TypeMarkdown  ContentType = "text/markdown"
+)
+
 ingest.ContentTypeFromExtension(ext string) ContentType
 ```
 
-### Chunking
+### Chunking Strategies
 
 ```go
-ingest.ChunkText(text string, cfg ChunkerConfig) []string
-ingest.DefaultChunkerConfig() ChunkerConfig
+type ChunkStrategy int
 
-type ChunkerConfig struct {
-    MaxChars     int  // Default 2048 (~512 tokens)
-    OverlapChars int  // Default 200 (~50 tokens)
-}
+const (
+    StrategyFlat        ChunkStrategy = iota  // single-level (default)
+    StrategyParentChild                        // two-level hierarchical
+)
+```
+
+### Utility Functions
+
+```go
+ingest.StripHTML(content string) string                      // Strip HTML tags, scripts, styles
+ingest.ContentTypeFromExtension(ext string) ContentType      // Map file extension to ContentType
 ```
 
 ---

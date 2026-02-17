@@ -5,37 +5,53 @@ import (
 	"unicode"
 )
 
-// ContentType determines how to extract plain text.
-type ContentType int
+// Extractor converts raw content to plain text.
+type Extractor interface {
+	Extract(content []byte) (string, error)
+}
+
+// ContentType identifies the MIME type of content for extraction.
+type ContentType string
 
 const (
-	PlainText ContentType = iota
-	Markdown
-	HTML
+	TypePlainText ContentType = "text/plain"
+	TypeHTML      ContentType = "text/html"
+	TypeMarkdown  ContentType = "text/markdown"
 )
 
 // ContentTypeFromExtension maps file extensions to content types.
 func ContentTypeFromExtension(ext string) ContentType {
 	switch strings.ToLower(ext) {
 	case "md", "markdown":
-		return Markdown
+		return TypeMarkdown
 	case "html", "htm":
-		return HTML
+		return TypeHTML
 	default:
-		return PlainText
+		return TypePlainText
 	}
 }
 
-// ExtractText converts content to plain text based on its type.
-func ExtractText(content string, ct ContentType) string {
-	switch ct {
-	case Markdown:
-		return stripMarkdown(content)
-	case HTML:
-		return StripHTML(content)
-	default:
-		return content
-	}
+// --- Built-in extractors ---
+
+// PlainTextExtractor returns content as-is.
+type PlainTextExtractor struct{}
+
+func (PlainTextExtractor) Extract(content []byte) (string, error) {
+	return string(content), nil
+}
+
+// HTMLExtractor strips HTML tags, scripts, styles, and decodes entities.
+type HTMLExtractor struct{}
+
+func (HTMLExtractor) Extract(content []byte) (string, error) {
+	return StripHTML(string(content)), nil
+}
+
+// MarkdownExtractor strips markdown formatting to produce plain text.
+type MarkdownExtractor struct{}
+
+func (MarkdownExtractor) Extract(content []byte) (string, error) {
+	return stripMarkdown(string(content)), nil
 }
 
 // StripHTML removes HTML tags, scripts, styles, and decodes entities.

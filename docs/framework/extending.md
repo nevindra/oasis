@@ -327,36 +327,90 @@ The key behavior to preserve:
 - **Confidence scoring**: New facts start at 1.0, reinforced facts get +0.1
 - **Decay**: Old unreinforced facts lose confidence over time
 
-## Using the Ingest Pipeline
+## Using the Ingestor
 
-The ingest pipeline is not an interface -- it's a utility you use directly:
+The `Ingestor` handles the full pipeline: extract → chunk → embed → store.
 
 ```go
 import "github.com/nevindra/oasis/ingest"
 
-// Create pipeline with chunking config
-pipeline := ingest.NewPipeline(512, 50) // maxTokens, overlapTokens
+// Simple — one call does everything
+ingestor := ingest.NewIngestor(store, embeddingProvider)
+result, err := ingestor.IngestText(ctx, content, "source-url", "Document Title")
+// result.DocumentID  -- the stored document ID
+// result.ChunkCount  -- number of chunks created and embedded
 
-// Ingest content
-result := pipeline.IngestText(content, "source-url", "Document Title")
-// result.Document -- the Document record
-// result.Chunks   -- []Chunk (no embeddings yet)
+// From files (auto-detects content type by extension)
+result, err := ingestor.IngestFile(ctx, fileBytes, "report.md")
 
-// Embed chunks
-texts := make([]string, len(result.Chunks))
-for i, c := range result.Chunks {
-    texts[i] = c.Content
-}
-vectors, _ := embeddingProvider.Embed(ctx, texts)
-for i := range result.Chunks {
-    result.Chunks[i].Embedding = vectors[i]
-}
-
-// Store
-store.StoreDocument(ctx, result.Document, result.Chunks)
+// From io.Reader
+result, err := ingestor.IngestReader(ctx, resp.Body, "page.html")
 ```
 
-The pipeline handles extraction and chunking. **You** handle embedding and storage. This separation keeps the pipeline dependency-free and testable.
+The Ingestor handles extraction, chunking, batched embedding, and storage in one call.
+
+### Custom Chunkers and Extractors
+
+```go
+// Use MarkdownChunker for heading-aware splitting
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithChunker(ingest.NewMarkdownChunker(ingest.WithMaxTokens(1024))),
+)
+
+// Parent-child strategy for large documents
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithStrategy(ingest.StrategyParentChild),
+)
+
+// Register a custom extractor (e.g., PDF)
+import "github.com/nevindra/oasis/ingest/pdf"
+
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithExtractor(pdf.TypePDF, pdf.NewExtractor()),
+)
+```
+
+### Implementing Custom Extractors
+
+```go
+type Extractor interface {
+    Extract(content []byte) (string, error)
+}
+
+// Example: CSV extractor
+type CSVExtractor struct{}
+
+func (CSVExtractor) Extract(content []byte) (string, error) {
+    // Convert CSV rows to readable text
+    return convertCSVToText(content)
+}
+
+// Register it
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithExtractor("text/csv", CSVExtractor{}),
+)
+```
+
+### Implementing Custom Chunkers
+
+```go
+type Chunker interface {
+    Chunk(text string) []string
+}
+
+// Example: fixed-size chunker
+type FixedChunker struct{ Size int }
+
+func (fc FixedChunker) Chunk(text string) []string {
+    var chunks []string
+    for i := 0; i < len(text); i += fc.Size {
+        end := i + fc.Size
+        if end > len(text) { end = len(text) }
+        chunks = append(chunks, text[i:end])
+    }
+    return chunks
+}
+```
 
 ## Creating Skills
 

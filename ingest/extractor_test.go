@@ -5,8 +5,12 @@ import (
 	"testing"
 )
 
-func TestExtractTextPlain(t *testing.T) {
-	out := ExtractText("hello world", PlainText)
+func TestPlainTextExtractorIdentity(t *testing.T) {
+	e := PlainTextExtractor{}
+	out, err := e.Extract([]byte("hello world"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if out != "hello world" {
 		t.Errorf("expected hello world, got %q", out)
 	}
@@ -39,8 +43,12 @@ func TestStripHTMLScript(t *testing.T) {
 	}
 }
 
-func TestStripMarkdownHeadings(t *testing.T) {
-	out := ExtractText("# Title\n## Subtitle", Markdown)
+func TestMarkdownExtractorHeadings(t *testing.T) {
+	e := MarkdownExtractor{}
+	out, err := e.Extract([]byte("# Title\n## Subtitle"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(out, "Title") || !strings.Contains(out, "Subtitle") {
 		t.Errorf("headings not extracted: %q", out)
 	}
@@ -49,8 +57,12 @@ func TestStripMarkdownHeadings(t *testing.T) {
 	}
 }
 
-func TestStripMarkdownLinks(t *testing.T) {
-	out := ExtractText("Click [here](https://example.com) for more", Markdown)
+func TestMarkdownExtractorLinks(t *testing.T) {
+	e := MarkdownExtractor{}
+	out, err := e.Extract([]byte("Click [here](https://example.com) for more"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(out, "here") {
 		t.Error("link text lost")
 	}
@@ -59,8 +71,12 @@ func TestStripMarkdownLinks(t *testing.T) {
 	}
 }
 
-func TestStripMarkdownEmphasis(t *testing.T) {
-	out := ExtractText("This is **bold** and *italic*", Markdown)
+func TestMarkdownExtractorEmphasis(t *testing.T) {
+	e := MarkdownExtractor{}
+	out, err := e.Extract([]byte("This is **bold** and *italic*"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(out, "bold") || !strings.Contains(out, "italic") {
 		t.Errorf("emphasis text lost: %q", out)
 	}
@@ -70,13 +86,38 @@ func TestStripMarkdownEmphasis(t *testing.T) {
 }
 
 func TestContentTypeFromExtension(t *testing.T) {
-	if ContentTypeFromExtension("md") != Markdown {
-		t.Error("expected Markdown")
+	if ContentTypeFromExtension("md") != TypeMarkdown {
+		t.Error("expected TypeMarkdown")
 	}
-	if ContentTypeFromExtension("html") != HTML {
-		t.Error("expected HTML")
+	if ContentTypeFromExtension("html") != TypeHTML {
+		t.Error("expected TypeHTML")
 	}
-	if ContentTypeFromExtension("txt") != PlainText {
-		t.Error("expected PlainText")
+	if ContentTypeFromExtension("txt") != TypePlainText {
+		t.Error("expected TypePlainText")
+	}
+}
+
+func TestHTMLExtractor(t *testing.T) {
+	e := HTMLExtractor{}
+	out, err := e.Extract([]byte("<p>Hello <b>world</b></p>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Hello") || !strings.Contains(out, "world") {
+		t.Errorf("missing content: %q", out)
+	}
+}
+
+func TestMarkdownExtractor(t *testing.T) {
+	e := MarkdownExtractor{}
+	out, err := e.Extract([]byte("# Title\n\nSome **bold** text"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Title") || !strings.Contains(out, "bold") {
+		t.Errorf("content not extracted: %q", out)
+	}
+	if strings.Contains(out, "#") || strings.Contains(out, "**") {
+		t.Error("formatting not stripped")
 	}
 }

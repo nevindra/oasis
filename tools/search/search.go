@@ -23,7 +23,7 @@ type Tool struct {
 	embedding   oasis.EmbeddingProvider
 	braveAPIKey string
 	httpClient  *http.Client
-	chunkerCfg  ingest.ChunkerConfig
+	chunker     ingest.Chunker
 }
 
 // New creates a SearchTool. Requires an embedding provider and Brave API key.
@@ -32,7 +32,7 @@ func New(embedding oasis.EmbeddingProvider, braveAPIKey string) *Tool {
 		embedding:   embedding,
 		braveAPIKey: braveAPIKey,
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
-		chunkerCfg:  ingest.ChunkerConfig{MaxChars: 500, OverlapChars: 0},
+		chunker:     ingest.NewRecursiveChunker(ingest.WithMaxTokens(125), ingest.WithOverlapTokens(0)),
 	}
 }
 
@@ -221,7 +221,7 @@ func (t *Tool) rankResults(ctx context.Context, query string, results []resultWi
 			})
 		}
 		if r.Content != "" {
-			chunks := ingest.ChunkText(r.Content, t.chunkerCfg)
+			chunks := t.chunker.Chunk(r.Content)
 			for _, c := range chunks {
 				if len(c) < 50 {
 					continue
