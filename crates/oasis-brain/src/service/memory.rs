@@ -7,6 +7,17 @@ fn db_err(e: libsql::Error) -> OasisError {
     OasisError::Database(e.to_string())
 }
 
+fn embedding_to_json(embedding: &[f32]) -> String {
+    format!(
+        "[{}]",
+        embedding
+            .iter()
+            .map(|f| f.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
 /// The prompt sent to the LLM to extract facts from a conversation turn.
 pub const EXTRACT_FACTS_PROMPT: &str = r#"You are a memory extraction system. Given a conversation between a user and an assistant, extract factual information ABOUT THE USER.
 
@@ -21,11 +32,15 @@ Rules:
 - Only extract facts clearly stated or strongly implied by the USER (not the assistant)
 - Each fact should be a single, concise statement
 - Categorize each fact as: personal, preference, work, habit, or relationship
+- If a new fact CONTRADICTS or UPDATES a previously known fact, include a "supersedes" field with the old fact text
 - If no new user facts are present, return an empty array
 - Do NOT extract facts about the assistant or general knowledge
 
 Return a JSON array:
-[{"fact": "User's name is Nev", "category": "personal"}, {"fact": "Prefers concise answers", "category": "preference"}]
+[{"fact": "User moved to Bali", "category": "personal", "supersedes": "Lives in Jakarta"}]
+
+If the fact does not supersede anything, omit the "supersedes" field:
+[{"fact": "User's name is Nev", "category": "personal"}]
 
 Return ONLY the JSON array, no extra text. Return [] if no facts found."#;
 
@@ -46,6 +61,28 @@ pub struct UserFact {
 pub struct ExtractedFact {
     pub fact: String,
     pub category: String,
+    #[serde(default)]
+    pub supersedes: Option<String>,
+}
+
+/// Check whether a user message is worth running fact extraction on.
+/// Skips very short messages and common filler replies.
+pub fn should_extract_facts(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.len() < 10 {
+        return false;
+    }
+    let lower = trimmed.to_lowercase();
+    let skip = [
+        "ok", "oke", "okay", "okey",
+        "thanks", "thank you", "makasih", "thx", "ty",
+        "yes", "no", "ya", "ga", "gak", "nggak", "engga",
+        "nice", "sip", "siap", "oke sip",
+        "lol", "haha", "wkwk", "wkwkwk",
+        "hmm", "hm", "oh", "ah",
+        "good", "great", "cool", "yep", "nope",
+    ];
+    !skip.iter().any(|s| lower == *s)
 }
 
 /// Memory store for user facts and conversation topics.
@@ -80,6 +117,7 @@ impl MemoryStore {
                 fact TEXT NOT NULL,
                 category TEXT NOT NULL,
                 confidence REAL DEFAULT 1.0,
+                embedding F32_BLOB(1536),
                 source_message_id TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
@@ -90,12 +128,7 @@ impl MemoryStore {
         .map_err(db_err)?;
 
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS conversation_topics (
-                id TEXT PRIMARY KEY,
-                topic TEXT NOT NULL,
-                mention_count INTEGER DEFAULT 1,
-                last_mentioned INTEGER NOT NULL
-            )",
+            "CREATE INDEX IF NOT EXISTS user_facts_vector_idx ON user_facts(libsql_vector_idx(embedding, 'metric=cosine', 'compress_neighbors=float8', 'max_neighbors=64'))",
             (),
         )
         .await
@@ -140,35 +173,61 @@ impl MemoryStore {
         serde_json::from_str(array_str).unwrap_or_default()
     }
 
-    /// Insert a new fact or update confidence of an existing similar fact.
+    /// Insert a new fact or merge with an existing semantically similar fact.
+    ///
+    /// If a fact with cosine similarity > 0.85 exists, replace it (merge & replace).
+    /// Otherwise insert as new.
     pub async fn upsert_fact(
         &self,
         fact: &str,
         category: &str,
+        embedding: &[f32],
         source_message_id: Option<&str>,
     ) -> Result<()> {
         let now = now_unix();
+        let embedding_json = embedding_to_json(embedding);
 
-        // Check for existing similar fact (exact match for now)
+        // Search for semantically similar existing facts
         let conn = self.conn()?;
         let mut rows = conn
             .query(
-                "SELECT id, confidence FROM user_facts WHERE fact = ?1",
-                libsql::params![fact.to_string()],
+                "SELECT uf.id, uf.confidence, vector_distance_cos(uf.embedding, vector(?1)) as distance \
+                 FROM user_facts uf \
+                 WHERE uf.rowid IN vector_top_k('user_facts_vector_idx', vector(?1), 3)",
+                libsql::params![embedding_json.clone()],
             )
             .await
             .map_err(db_err)?;
 
-        if let Some(row) = rows.next().await.map_err(db_err)? {
-            // Existing fact — bump confidence and timestamp
+        // Find the closest fact within threshold
+        let mut best_match: Option<(String, f64)> = None;
+        while let Some(row) = rows.next().await.map_err(db_err)? {
             let id: String = row.get(0).map_err(db_err)?;
             let confidence: f64 = row.get(1).map_err(db_err)?;
-            let new_confidence = (confidence + 0.1).min(1.0);
+            let distance: f64 = row.get(2).map_err(db_err)?;
 
+            // cosine distance < 0.15 means similarity > 0.85
+            if distance < 0.15 {
+                best_match = Some((id, confidence));
+                break;
+            }
+        }
+
+        if let Some((id, confidence)) = best_match {
+            // Similar fact exists — replace text, update embedding, bump confidence
+            let new_confidence = (confidence + 0.1).min(1.0);
             self.conn()?
                 .execute(
-                    "UPDATE user_facts SET confidence = ?1, updated_at = ?2 WHERE id = ?3",
-                    libsql::params![new_confidence, now, id],
+                    "UPDATE user_facts SET fact = ?1, category = ?2, embedding = vector(?3), \
+                     confidence = ?4, updated_at = ?5 WHERE id = ?6",
+                    libsql::params![
+                        fact.to_string(),
+                        category.to_string(),
+                        embedding_json,
+                        new_confidence,
+                        now,
+                        id
+                    ],
                 )
                 .await
                 .map_err(db_err)?;
@@ -177,11 +236,14 @@ impl MemoryStore {
             let id = new_id();
             self.conn()?
                 .execute(
-                    "INSERT INTO user_facts (id, fact, category, confidence, source_message_id, created_at, updated_at) VALUES (?1, ?2, ?3, 1.0, ?4, ?5, ?6)",
+                    "INSERT INTO user_facts (id, fact, category, confidence, embedding, \
+                     source_message_id, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, 1.0, vector(?4), ?5, ?6, ?7)",
                     libsql::params![
                         id,
                         fact.to_string(),
                         category.to_string(),
+                        embedding_json,
                         source_message_id.map(|s| s.to_string()),
                         now,
                         now
@@ -235,9 +297,65 @@ impl MemoryStore {
         Ok(facts)
     }
 
+    /// Get facts most relevant to a query, using vector similarity.
+    pub async fn get_relevant_facts(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> Result<Vec<UserFact>> {
+        let embedding_json = embedding_to_json(query_embedding);
+        let conn = self.conn()?;
+
+        let mut rows = conn
+            .query(
+                "SELECT uf.id, uf.fact, uf.category, uf.confidence, uf.source_message_id, \
+                 uf.created_at, uf.updated_at \
+                 FROM user_facts uf \
+                 WHERE uf.confidence >= 0.3 \
+                 AND uf.rowid IN vector_top_k('user_facts_vector_idx', vector(?1), ?2)",
+                libsql::params![embedding_json, limit as i64],
+            )
+            .await
+            .map_err(db_err)?;
+
+        let mut facts = Vec::new();
+        while let Some(row) = rows.next().await.map_err(db_err)? {
+            let source_msg_id = {
+                let val = row.get::<libsql::Value>(4).map_err(db_err)?;
+                match val {
+                    libsql::Value::Null => None,
+                    libsql::Value::Text(s) => Some(s),
+                    _ => None,
+                }
+            };
+
+            facts.push(UserFact {
+                id: row.get(0).map_err(db_err)?,
+                fact: row.get(1).map_err(db_err)?,
+                category: row.get(2).map_err(db_err)?,
+                confidence: row.get(3).map_err(db_err)?,
+                source_message_id: source_msg_id,
+                created_at: row.get(5).map_err(db_err)?,
+                updated_at: row.get(6).map_err(db_err)?,
+            });
+        }
+
+        Ok(facts)
+    }
+
     /// Build a memory context block for injection into the system prompt.
-    pub async fn build_memory_context(&self) -> Result<String> {
-        let facts = self.get_top_facts(15).await?;
+    ///
+    /// When a query embedding is provided, retrieves facts by relevance.
+    /// Otherwise falls back to top facts by confidence/recency.
+    pub async fn build_memory_context(
+        &self,
+        query_embedding: Option<&[f32]>,
+    ) -> Result<String> {
+        let facts = if let Some(emb) = query_embedding {
+            self.get_relevant_facts(emb, 10).await?
+        } else {
+            self.get_top_facts(15).await?
+        };
 
         if facts.is_empty() {
             return Ok(String::new());
@@ -338,5 +456,41 @@ mod tests {
         let response = "This is not JSON at all";
         let facts = MemoryStore::parse_extracted_facts(response);
         assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn test_should_extract_trivial() {
+        assert!(!should_extract_facts("ok"));
+        assert!(!should_extract_facts("Oke"));
+        assert!(!should_extract_facts("thanks"));
+        assert!(!should_extract_facts("sip"));
+        assert!(!should_extract_facts("lol"));
+        assert!(!should_extract_facts("wkwk"));
+        assert!(!should_extract_facts("ya"));
+        assert!(!should_extract_facts("short")); // < 10 chars
+    }
+
+    #[test]
+    fn test_should_extract_real_messages() {
+        assert!(should_extract_facts("Gue tinggal di Jakarta sekarang"));
+        assert!(should_extract_facts("I work as a software engineer"));
+        assert!(should_extract_facts("My name is Nev and I like Rust"));
+    }
+
+    #[test]
+    fn test_parse_facts_with_supersedes() {
+        let response = r#"[{"fact":"User moved to Bali","category":"personal","supersedes":"Lives in Jakarta"}]"#;
+        let facts = MemoryStore::parse_extracted_facts(response);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].fact, "User moved to Bali");
+        assert_eq!(facts[0].supersedes, Some("Lives in Jakarta".to_string()));
+    }
+
+    #[test]
+    fn test_parse_facts_without_supersedes() {
+        let response = r#"[{"fact":"User's name is Nev","category":"personal"}]"#;
+        let facts = MemoryStore::parse_extracted_facts(response);
+        assert_eq!(facts.len(), 1);
+        assert!(facts[0].supersedes.is_none());
     }
 }

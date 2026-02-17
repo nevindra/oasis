@@ -59,7 +59,18 @@ impl Brain {
         };
         tools.push(ask_user_definition());
 
-        let memory_context = match self.memory.build_memory_context().await {
+        let user_embedding = match self.embedder.embed(&[text]).await {
+            Ok(mut e) => e.pop(),
+            Err(e) => {
+                log!(" [memory] embed for context failed: {e}");
+                None
+            }
+        };
+        let memory_context = match self
+            .memory
+            .build_memory_context(user_embedding.as_deref())
+            .await
+        {
             Ok(mc) => mc,
             Err(e) => {
                 log!(" [memory] failed to load: {e}");

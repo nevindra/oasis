@@ -31,6 +31,11 @@ impl Brain {
 
     /// Extract user facts from a conversation turn and store them.
     async fn extract_and_store_facts(&self, user_text: &str, assistant_text: &str) {
+        // Skip trivial messages
+        if !crate::service::memory::should_extract_facts(user_text) {
+            return;
+        }
+
         let existing = match self.memory.get_top_facts(30).await {
             Ok(facts) => facts,
             Err(_) => Vec::new(),
@@ -65,14 +70,32 @@ impl Brain {
         };
 
         let facts = MemoryStore::parse_extracted_facts(&response.content);
-        if !facts.is_empty() {
-            log!(" [memory] extracted {} fact(s)", facts.len());
+        if facts.is_empty() {
+            return;
         }
+        log!(" [memory] extracted {} fact(s)", facts.len());
 
-        for fact in &facts {
+        // Embed all fact texts in one batch
+        let fact_texts: Vec<&str> = facts.iter().map(|f| f.fact.as_str()).collect();
+        let embeddings = match self.embedder.embed(&fact_texts).await {
+            Ok(e) => e,
+            Err(e) => {
+                log!(" [memory] fact embedding failed: {e}");
+                return;
+            }
+        };
+
+        for (fact, embedding) in facts.iter().zip(embeddings.iter()) {
+            // Handle contradiction: delete superseded fact first
+            if let Some(ref old_fact) = fact.supersedes {
+                if let Err(e) = self.memory.delete_matching_facts(old_fact).await {
+                    log!(" [memory] failed to delete superseded fact: {e}");
+                }
+            }
+
             if let Err(e) = self
                 .memory
-                .upsert_fact(&fact.fact, &fact.category, None)
+                .upsert_fact(&fact.fact, &fact.category, embedding, None)
                 .await
             {
                 log!(" [memory] failed to upsert fact: {e}");
