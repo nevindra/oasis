@@ -158,13 +158,15 @@ Uses pure-Go SQLite with brute-force vector search. Fresh connections per call (
 
 ## Engineering Principles (quick reference)
 
-See [docs/ENGINEERING.md](docs/ENGINEERING.md) for full details.
+See [docs/ENGINEERING.md](docs/ENGINEERING.md) for the full mental model.
 
-- **Batch operations** — batch embed calls, batch DB writes
-- **Background heavy work** — `go func()` for embed + store after response
-- **Stream don't buffer** — progressive message editing via channels
-- **Limit resources** — LimitReader, max iterations, truncation caps
-- **Minimal dependencies** — hand-roll if < 200 lines, raw HTTP, no SDKs
-- **Early return** — fail fast, flat code, no deep nesting
-- **Interface-driven** — testable, swappable, clear contracts
-- **Constructor injection** — explicit deps, no global state
+1. **Earn every abstraction** — concrete first, extract only when pattern repeats 3x
+2. **Optimize for the reader** — names explain intent, comments explain why, top-to-bottom flow
+3. **Make it fast where it matters** — user-perceived latency and API call count, not micro-optimizations
+4. **Fail gracefully** — degrade don't die, distinguish transient vs permanent, never crash on recoverable errors
+5. **Own your dependencies** — hand-roll < 200 lines, no SDKs for external APIs, raw HTTP
+6. **Design for replaceability** — interfaces at natural boundaries, depend on behavior not implementation
+7. **Explicit over magic** — constructor injection, no hidden side effects, predictable config cascade
+8. **Ship incrementally** — one PR one concern, working > perfect, no speculative refactors
+9. **Test what matters** — behavior not implementation, pure functions first, edge cases > happy path
+10. **Respect the user's time** — actionable errors, sensible defaults, living documentation
