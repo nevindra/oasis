@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/nevindra/oasis/frontend/telegram"
-	"github.com/nevindra/oasis/internal/app"
+	"github.com/nevindra/oasis/internal/bot"
 	"github.com/nevindra/oasis/internal/config"
 	"github.com/nevindra/oasis/internal/scheduling"
 	memsqlite "github.com/nevindra/oasis/memory/sqlite"
@@ -36,7 +36,7 @@ func main() {
 	memStore := memsqlite.New(cfg.Database.Path)
 
 	// 4. Create app
-	oasisApp := app.New(&cfg, app.Deps{
+	oasisApp := bot.New(&cfg, bot.Deps{
 		Frontend:  telegram.New(cfg.Telegram.Token),
 		ChatLLM:   chatLLM,
 		IntentLLM: intentLLM,

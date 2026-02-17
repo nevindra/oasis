@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	oasis "github.com/nevindra/oasis"
-	"github.com/nevindra/oasis/internal/ingest"
+	"github.com/nevindra/oasis/ingest"
 )
 
 // Tool saves information to the knowledge base.
