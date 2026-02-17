@@ -171,4 +171,4 @@ See [docs/framework/configuration.md](docs/framework/configuration.md) for the f
 
 ## License
 
-[MPL-2.0](LICENSE)
+[Apache-2.0](LICENSE)
