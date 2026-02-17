@@ -18,11 +18,6 @@ impl Brain {
         context: &str,
         images: Vec<oasis_core::types::ImageData>,
     ) -> Result<String> {
-        let task_summary = self
-            .tasks
-            .get_active_task_summary(self.config.brain.timezone_offset)
-            .await?;
-
         let memory_context = match self.memory.build_memory_context().await {
             Ok(mc) => mc,
             Err(e) => {
@@ -38,7 +33,7 @@ impl Brain {
             format!("{memory_context}\n{context}")
         };
 
-        let messages = self.build_system_prompt(&task_summary, &full_context, recent_messages);
+        let messages = self.build_system_prompt(&full_context, recent_messages);
 
         let mut all_messages = messages;
         if images.is_empty() {
@@ -183,11 +178,10 @@ impl Brain {
         }))
     }
 
-    /// Build the dynamic system prompt with task summary, knowledge context,
+    /// Build the dynamic system prompt with knowledge context
     /// and recent conversation history.
     pub(crate) fn build_system_prompt(
         &self,
-        task_summary: &str,
         context: &str,
         recent: &[Message],
     ) -> Vec<ChatMessage> {
@@ -199,9 +193,7 @@ impl Brain {
 
         let mut system = format!(
             "You are Oasis, a personal AI assistant. You are helpful, concise, and friendly.\n\
-             Current date and time: {today}\n\n\
-             ## Active tasks\n\
-             {task_summary}\n"
+             Current date and time: {today}\n"
         );
 
         if !context.is_empty() {
@@ -233,7 +225,7 @@ pub(crate) fn format_now_with_tz(tz_offset: i32) -> (String, String) {
     let local_secs = utc_secs + (tz_offset as i64) * 3600;
     let days = local_secs / 86400;
     let remainder = local_secs % 86400;
-    let (y, m, d) = crate::tool::task::unix_days_to_date(days);
+    let (y, m, d) = crate::util::unix_days_to_date(days);
     let h = remainder / 3600;
     let min = (remainder % 3600) / 60;
 

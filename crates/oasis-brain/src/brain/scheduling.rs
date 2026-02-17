@@ -5,7 +5,7 @@ use oasis_core::types::*;
 
 use super::Brain;
 use crate::tool::schedule::compute_next_run;
-use crate::tool::task::format_due;
+use crate::util::format_due;
 
 impl Brain {
     /// Background loop: check for and execute due scheduled actions every 60s.

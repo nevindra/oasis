@@ -7,12 +7,10 @@ use crate::service::memory::MemoryStore;
 use crate::service::search::WebSearch;
 use crate::service::skills::SkillManager;
 use crate::service::store::VectorStore;
-use crate::service::tasks::TaskManager;
 use crate::tool::knowledge::KnowledgeTool;
 use crate::tool::memory_tool::MemoryTool;
 use crate::tool::schedule::ScheduleTool;
 use crate::tool::search::SearchTool;
-use crate::tool::task::TaskTool;
 use crate::tool::ToolRegistry;
 use oasis_core::config::Config;
 use oasis_core::error::{OasisError, Result};
@@ -30,7 +28,6 @@ mod storage;
 /// tool execution to the ToolRegistry. Domain logic lives in tool implementations.
 pub struct Brain {
     pub(crate) store: Arc<VectorStore>,
-    pub(crate) tasks: Arc<TaskManager>,
     pub(crate) memory: MemoryStore,
     pub(crate) bot: TelegramBot,
     pub(crate) config: Config,
@@ -66,23 +63,6 @@ impl Brain {
         };
         let store = Arc::new(store);
 
-        // TaskManager (separate DB connection)
-        let task_db = if !config.database.turso_url.is_empty() {
-            libsql::Builder::new_remote(
-                config.database.turso_url.clone(),
-                config.database.turso_token.clone(),
-            )
-            .build()
-            .await
-            .map_err(|e| OasisError::Database(e.to_string()))?
-        } else {
-            libsql::Builder::new_local(&config.database.path)
-                .build()
-                .await
-                .map_err(|e| OasisError::Database(e.to_string()))?
-        };
-        let tasks = Arc::new(TaskManager::new(task_db));
-
         // MemoryStore (separate DB connection)
         let memory_db = if !config.database.turso_url.is_empty() {
             libsql::Builder::new_remote(
@@ -115,7 +95,6 @@ impl Brain {
 
         // Tool implementations
         let tz = config.brain.timezone_offset;
-        let task_tool = TaskTool::new(Arc::clone(&tasks), tz);
         let search_tool = Arc::new(SearchTool::new(Arc::clone(&search), Arc::clone(&embedder)));
         let knowledge_tool =
             KnowledgeTool::new(Arc::clone(&store), Arc::clone(&embedder), config.brain.vector_top_k);
@@ -140,7 +119,6 @@ impl Brain {
         let http_tool = crate::tool::http::HttpTool::new();
 
         let mut tool_list: Vec<Box<dyn crate::tool::Tool>> = vec![
-            Box::new(task_tool),
             Box::new(Arc::clone(&search_tool)),
             Box::new(knowledge_tool),
             Box::new(schedule_tool),
@@ -206,7 +184,6 @@ impl Brain {
 
         Ok(Self {
             store,
-            tasks,
             memory,
             bot,
             config,

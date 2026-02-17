@@ -59,11 +59,6 @@ impl Brain {
         };
         tools.push(ask_user_definition());
 
-        let task_summary = self
-            .tasks
-            .get_active_task_summary(self.config.brain.timezone_offset)
-            .await?;
-
         let memory_context = match self.memory.build_memory_context().await {
             Ok(mc) => mc,
             Err(e) => {
@@ -77,7 +72,7 @@ impl Brain {
             .get_recent_messages(conversation_id, self.config.brain.context_window)
             .await?;
 
-        let mut messages = self.build_system_prompt(&task_summary, &memory_context, &recent);
+        let mut messages = self.build_system_prompt(&memory_context, &recent);
 
         // Add tool usage guidelines to the system prompt for the action path
         if let Some(ChatMessage { content, .. }) = messages.first_mut() {
@@ -225,11 +220,7 @@ impl Brain {
             {
                 let is_simple = matches!(
                     response.tool_calls[0].name.as_str(),
-                    "task_create"
-                        | "task_list"
-                        | "task_update"
-                        | "task_delete"
-                        | "remember"
+                    "remember"
                         | "schedule_create"
                         | "schedule_list"
                         | "schedule_update"

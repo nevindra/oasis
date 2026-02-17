@@ -56,30 +56,6 @@ pub struct Chunk {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Project {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub status: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Task {
-    pub id: String,
-    pub project_id: Option<String>,
-    pub parent_task_id: Option<String>,
-    pub title: String,
-    pub description: Option<String>,
-    pub status: String,
-    pub priority: i32,
-    pub due_at: Option<i64>,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
     pub telegram_chat_id: i64,

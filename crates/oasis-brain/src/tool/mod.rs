@@ -1,4 +1,3 @@
-pub mod task;
 pub mod search;
 pub mod knowledge;
 pub mod schedule;
@@ -34,7 +33,7 @@ impl ToolResult {
 /// A tool that the LLM can call during the action loop.
 ///
 /// Each tool struct owns its dependencies and can provide multiple
-/// tool definitions (e.g. TaskTool provides task_create, task_list, etc.).
+/// tool definitions (e.g. ScheduleTool provides schedule_create, schedule_list, etc.).
 #[async_trait]
 pub trait Tool: Send + Sync {
     /// Tool definitions this struct provides.

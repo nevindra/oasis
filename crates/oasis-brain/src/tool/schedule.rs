@@ -6,7 +6,7 @@ use oasis_core::types::*;
 use serde_json::json;
 
 use crate::service::store::VectorStore;
-use crate::tool::task::{date_to_unix_days, format_due, unix_days_to_date};
+use crate::util::{date_to_unix_days, format_due, unix_days_to_date};
 use crate::tool::{Tool, ToolResult};
 
 pub struct ScheduleTool {

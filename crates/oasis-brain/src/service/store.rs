@@ -132,38 +132,6 @@ impl VectorStore {
         .map_err(map_err)?;
 
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS projects (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                status TEXT NOT NULL DEFAULT 'active',
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            )",
-            (),
-        )
-        .await
-        .map_err(map_err)?;
-
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY,
-                project_id TEXT REFERENCES projects(id),
-                parent_task_id TEXT REFERENCES tasks(id),
-                title TEXT NOT NULL,
-                description TEXT,
-                status TEXT NOT NULL DEFAULT 'todo',
-                priority INTEGER DEFAULT 0,
-                due_at INTEGER,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            )",
-            (),
-        )
-        .await
-        .map_err(map_err)?;
-
-        conn.execute(
             "CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 telegram_chat_id INTEGER NOT NULL,
