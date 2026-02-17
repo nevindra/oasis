@@ -9,7 +9,6 @@ import (
 	"github.com/nevindra/oasis/frontend/telegram"
 	"github.com/nevindra/oasis/internal/bot"
 	"github.com/nevindra/oasis/internal/config"
-	"github.com/nevindra/oasis/internal/scheduling"
 	memsqlite "github.com/nevindra/oasis/memory/sqlite"
 	"github.com/nevindra/oasis/observer"
 	"github.com/nevindra/oasis/provider/gemini"
@@ -97,11 +96,7 @@ func main() {
 		oasisApp.AddTool(wrapTool(searchTool, inst))
 	}
 
-	// 7. Start scheduler in background
-	sched := scheduling.New(store, oasisApp.Tools(), oasisApp.Frontend(), intentLLM, cfg.Brain.TimezoneOffset)
-	go sched.Run(context.Background())
-
-	// 8. Run
+	// 7. Run
 	log.Fatal(oasisApp.RunWithSignal())
 }
 

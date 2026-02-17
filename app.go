@@ -18,6 +18,11 @@ type App struct {
 	tools        *ToolRegistry
 	systemPrompt string
 	maxIter      int
+
+	// Scheduler fields — set via WithScheduler / WithSchedulerProvider.
+	schedEnabled  bool
+	schedTZOffset int
+	schedProvider Provider // nil = use main provider
 }
 
 // Option configures an App.
@@ -71,6 +76,22 @@ func (a *App) Run(ctx context.Context) error {
 		if err := a.memory.Init(ctx); err != nil {
 			return fmt.Errorf("memory init: %w", err)
 		}
+	}
+
+	// Start background scheduler if configured.
+	if a.schedEnabled {
+		provider := a.schedProvider
+		if provider == nil {
+			provider = a.provider
+		}
+		s := &scheduler{
+			store:    a.store,
+			tools:    a.tools,
+			frontend: a.frontend,
+			provider: provider,
+			tzOffset: a.schedTZOffset,
+		}
+		go s.run(ctx)
 	}
 
 	msgs, err := a.frontend.Poll(ctx)

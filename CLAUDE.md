@@ -78,7 +78,6 @@ oasis/
 |-- cmd/bot_example/main.go         # Reference application entry point
 |-- internal/config/               # Config loading
 |-- internal/bot/                  # Application orchestration (routing, chat, agents)
-|-- internal/scheduling/           # Background scheduler
 |
 |-- provider/gemini/               # Google Gemini (Provider + EmbeddingProvider)
 |-- provider/openaicompat/         # OpenAI-compatible (Provider)

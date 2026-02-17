@@ -71,7 +71,6 @@ oasis/
 |
 |-- cmd/bot_example/main.go         # Reference application entry point
 |-- internal/bot/                  # Reference application (orchestration, routing, agents)
-|-- internal/scheduling/           # Reference application (background scheduler)
 |
 |-- docs/
     |-- framework/                 # This documentation
