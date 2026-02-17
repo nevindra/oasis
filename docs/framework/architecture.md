@@ -25,10 +25,16 @@ For application-level orchestration (routing, intent classification, agent manag
          |              |              |
          v              v              v
 +-------------+  +-------------+  +-----------+
-| Store |  | MemoryStore |  |   Tool    |
+|    Store    |  | MemoryStore |  |   Tool    |
 | (sqlite,    |  | (sqlite)    |  | Registry  |
 |  libsql)    |  |             |  |           |
 +-------------+  +-------------+  +-----------+
+                                       |
+                              +--------+--------+
+                              |     Agent       |
+                              | (LLMAgent,      |
+                              |  Network)       |
+                              +-----------------+
                                        |
                                        v
                                   +-----------+
@@ -186,6 +192,52 @@ result, err := registry.Execute(ctx, "tool_name", argsJSON)
 | `tools/file` | `file_read`, `file_write`, `file_list` | workspace path |
 | `tools/http` | `http_fetch` | (none) |
 
+### Agent + LLMAgent + Network (`agent.go`, `llmagent.go`, `network.go`)
+
+Composable agent primitives for building single-agent and multi-agent systems.
+
+**Agent interface:**
+
+```go
+type Agent interface {
+    Name() string
+    Description() string
+    Execute(ctx context.Context, task AgentTask) (AgentResult, error)
+}
+```
+
+Any struct implementing `Agent` can be used standalone or composed into a Network.
+
+**LLMAgent** -- a concrete Agent that runs a `ChatWithTools` loop with a single Provider. It iterates: call LLM -> execute tool calls -> feed results back -> repeat until the LLM produces a final text response.
+
+```go
+agent := oasis.NewLLMAgent("researcher", "Searches for information", provider,
+    oasis.WithTools(searchTool, knowledgeTool),
+    oasis.WithPrompt("You are a research assistant."),
+    oasis.WithMaxIter(5),
+)
+result, err := agent.Execute(ctx, oasis.AgentTask{Input: "Find info about Go interfaces"})
+```
+
+**Network** -- a concrete Agent that coordinates subagents and tools via an LLM router. The router sees subagents as callable tools (`agent_<name>`) and decides which to invoke. Networks can contain other Networks (recursive composition).
+
+```go
+network := oasis.NewNetwork("coordinator", "Routes tasks to specialists", routerProvider,
+    oasis.WithAgents(researcher, writer),
+    oasis.WithTools(knowledgeTool),
+)
+result, err := network.Execute(ctx, oasis.AgentTask{Input: "Research and write about X"})
+```
+
+**AgentOption** -- unified option type shared by both `NewLLMAgent` and `NewNetwork`:
+
+| Option | Description |
+|--------|-------------|
+| `WithTools(tools ...Tool)` | Add tools to the agent or network |
+| `WithPrompt(s string)` | Set the system prompt |
+| `WithMaxIter(n int)` | Set the maximum tool-calling iterations (default 10) |
+| `WithAgents(agents ...Agent)` | Add subagents to a Network (ignored by LLMAgent) |
+
 ## Ingest Pipeline (`ingest/`)
 
 Converts raw content into documents and chunks ready for embedding and storage. This is a concrete struct, not an interface.
@@ -236,6 +288,8 @@ All framework types live in the root `oasis` package:
 | `ToolCall` | LLM tool invocation | ID, Name, Args |
 | `ToolResult` | Tool execution result | Content, Error |
 | `IncomingMessage` | Frontend message | ID, ChatID, UserID, Text, Document, Photos |
+| `AgentTask` | Input to an Agent | Input, Context (metadata map) |
+| `AgentResult` | Output of an Agent | Output, Usage (aggregate tokens) |
 
 **Convenience constructors:**
 ```go
@@ -362,3 +416,4 @@ Raw content (text/HTML/file)
 - **Interface-driven** -- Every major component is a Go interface. Concrete implementations are in separate packages. No global state.
 - **Minimal error types** -- Two custom error types (`ErrLLM`, `ErrHTTP`). Tool errors use `ToolResult.Error` string field, not Go errors.
 - **Observer as middleware** -- The `observer/` package wraps `Provider`, `EmbeddingProvider`, and `Tool` with OTEL instrumentation using the decorator pattern. Zero changes to existing implementations, zero overhead when disabled.
+- **Agent as interface** -- `Agent` is a composable primitive like `Tool` or `Provider`. `LLMAgent` and `Network` are concrete implementations. Networks contain Agents, and since Network itself implements Agent, they compose recursively.

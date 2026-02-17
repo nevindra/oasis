@@ -72,7 +72,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 ```
 oasis/
 |-- types.go, provider.go, tool.go, store.go, frontend.go, memory.go
-|   (root package: domain types + interfaces)
+|-- agent.go, llmagent.go, network.go
+|   (root package: domain types + interfaces + agent primitives)
 |
 |-- cmd/bot_example/main.go         # Reference application entry point
 |-- internal/config/               # Config loading
@@ -100,6 +101,7 @@ oasis/
 | `Store` | `store.go` | Persistence + vector search |
 | `MemoryStore` | `memory.go` | Long-term semantic memory |
 | `Tool` | `tool.go` | Pluggable tool for LLM function calling |
+| `Agent` | `agent.go` | Composable agent: LLMAgent (tool-calling) or Network (multi-agent) |
 
 ### Key Design Decisions
 

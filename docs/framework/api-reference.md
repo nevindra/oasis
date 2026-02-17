@@ -214,6 +214,33 @@ type Tool interface {
 
 ---
 
+### Agent
+
+**File:** `agent.go`
+
+```go
+type Agent interface {
+    Name() string
+    Description() string
+    Execute(ctx context.Context, task AgentTask) (AgentResult, error)
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `Name` | Agent identifier string (e.g. `"researcher"`) |
+| `Description` | Human-readable description. Used by Network to generate tool definitions for the routing LLM. |
+| `Execute` | Run the agent on a task and return a result. |
+
+**Implementations:**
+
+| Type | Constructor | Notes |
+|------|------------|-------|
+| `LLMAgent` | `NewLLMAgent(name, desc, provider, ...AgentOption)` | Tool-calling loop with a single Provider |
+| `Network` | `NewNetwork(name, desc, router, ...AgentOption)` | Multi-agent coordinator via LLM router |
+
+---
+
 ## Types
 
 ### Domain Types
@@ -386,6 +413,24 @@ type FileInfo struct {
 }
 ```
 
+### Agent Types
+
+**File:** `agent.go`
+
+```go
+type AgentTask struct {
+    Input   string            // Natural language task description
+    Context map[string]string // Optional metadata (thread ID, user ID, etc.)
+}
+
+type AgentResult struct {
+    Output string // Agent's final response text
+    Usage  Usage  // Aggregate token usage across all LLM calls
+}
+
+type AgentOption func(*agentConfig) // Shared option type for LLMAgent and Network
+```
+
 ---
 
 ## Constructors and Helpers
@@ -410,6 +455,36 @@ registry := oasis.NewToolRegistry()
 registry.Add(tool)                                     // Register a tool
 defs := registry.AllDefinitions()                      // Get all tool schemas
 result, err := registry.Execute(ctx, name, argsJSON)   // Dispatch by name
+```
+
+### LLMAgent
+
+**File:** `llmagent.go`
+
+```go
+// Create an LLMAgent (tool-calling loop with a single Provider)
+agent := oasis.NewLLMAgent(name, description string, provider oasis.Provider, opts ...oasis.AgentOption)
+
+// AgentOption functions (shared with Network)
+oasis.WithTools(tools ...oasis.Tool)    // Add tools
+oasis.WithPrompt(s string)             // Set system prompt
+oasis.WithMaxIter(n int)               // Max tool-calling iterations (default 10)
+oasis.WithAgents(agents ...oasis.Agent) // Ignored by LLMAgent
+```
+
+### Network
+
+**File:** `network.go`
+
+```go
+// Create a Network (multi-agent coordinator via LLM router)
+network := oasis.NewNetwork(name, description string, router oasis.Provider, opts ...oasis.AgentOption)
+
+// AgentOption functions (shared with LLMAgent)
+oasis.WithAgents(agents ...oasis.Agent) // Add subagents (exposed as "agent_<name>" tools)
+oasis.WithTools(tools ...oasis.Tool)    // Add direct tools
+oasis.WithPrompt(s string)             // Set router system prompt
+oasis.WithMaxIter(n int)               // Max routing iterations (default 10)
 ```
 
 ### ID and Time

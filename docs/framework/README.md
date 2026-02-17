@@ -22,6 +22,7 @@ Every major component is a Go interface. Swap LLM providers, storage backends, m
 - **Store** -- Persistence layer with vector search over messages, document chunks, threads, and scheduled actions. Ships with SQLite and libSQL (Turso) implementations.
 - **MemoryStore** -- Long-term semantic memory with fact storage, confidence scoring, deduplication, and decay. Ships with SQLite implementation.
 - **Tool + ToolRegistry** -- Pluggable tool system for LLM function calling. Ships with knowledge search, web search, scheduling, shell, file I/O, and HTTP tools.
+- **Agent** -- Composable agent interface. `LLMAgent` runs a tool-calling loop with a single Provider. `Network` coordinates multiple subagents and tools via an LLM router. Networks can contain other Networks (recursive composition).
 - **Frontend** -- Messaging platform abstraction (poll for messages, send/edit responses, download files). Ships with Telegram implementation.
 - **Ingest Pipeline** -- Document chunking pipeline: extract text from HTML/Markdown/plain text, split into overlapping chunks ready for embedding.
 - **Configuration** -- Layered config system: defaults -> TOML file -> environment variables.
@@ -36,6 +37,9 @@ oasis/
 |-- store.go                       # Store interface
 |-- frontend.go                    # Frontend interface
 |-- memory.go                      # MemoryStore interface
+|-- agent.go                       # Agent interface + AgentTask/AgentResult + AgentOption
+|-- llmagent.go                    # LLMAgent (tool-calling agent)
+|-- network.go                     # Network (multi-agent coordinator)
 |-- errors.go                      # Custom error types
 |-- id.go                          # ID generation (xid) + timestamps
 |-- oasis.toml                     # Default configuration

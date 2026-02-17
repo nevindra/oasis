@@ -409,6 +409,104 @@ The reference application in `internal/bot/` uses a two-stage resolution:
 
 This pattern is application-level -- the framework provides the storage and search primitives, your application decides how to select and apply skills.
 
+## Creating Custom Agents
+
+Agents are composable units of work. The framework ships with two concrete implementations (`LLMAgent` and `Network`), but you can implement the `Agent` interface directly for custom behavior.
+
+### Using LLMAgent
+
+The simplest way to create an agent -- give it a Provider, tools, and a prompt:
+
+```go
+researcher := oasis.NewLLMAgent("researcher", "Searches for information", geminiProvider,
+    oasis.WithTools(knowledge.New(store, emb), search.New(emb, braveKey)),
+    oasis.WithPrompt("You are a research assistant. Search thoroughly before answering."),
+    oasis.WithMaxIter(5),
+)
+
+result, err := researcher.Execute(ctx, oasis.AgentTask{
+    Input:   "What are the best practices for Go error handling?",
+    Context: map[string]string{"user_id": "123"},
+})
+fmt.Println(result.Output)
+```
+
+LLMAgent runs a loop: call `ChatWithTools` -> execute tool calls -> feed results back -> repeat until the LLM returns a text response (no more tool calls). If `maxIter` is reached, it forces synthesis by asking the LLM to summarize.
+
+### Using Network
+
+Network coordinates multiple agents and tools via an LLM router:
+
+```go
+researcher := oasis.NewLLMAgent("researcher", "Searches for information", geminiProvider,
+    oasis.WithTools(searchTool),
+)
+writer := oasis.NewLLMAgent("writer", "Writes polished content", geminiProvider,
+    oasis.WithPrompt("You are a skilled writer."),
+)
+
+coordinator := oasis.NewNetwork("coordinator", "Routes research and writing tasks", geminiProvider,
+    oasis.WithAgents(researcher, writer),
+    oasis.WithTools(knowledgeTool), // Direct tools also available to the router
+)
+
+result, err := coordinator.Execute(ctx, oasis.AgentTask{Input: "Research Go generics and write a summary"})
+```
+
+The router LLM sees subagents as tools named `agent_<name>` (e.g. `agent_researcher`, `agent_writer`). It decides which to call, with what task description, and synthesizes the final response.
+
+**Networks compose recursively** -- a Network is an Agent, so it can be a subagent of another Network:
+
+```go
+researchTeam := oasis.NewNetwork("research_team", "Coordinates research", routerProvider,
+    oasis.WithAgents(webSearcher, docSearcher),
+)
+
+mainNetwork := oasis.NewNetwork("main", "Top-level coordinator", routerProvider,
+    oasis.WithAgents(researchTeam, writer),
+)
+```
+
+### Implementing the Agent Interface
+
+For behavior that doesn't fit LLMAgent or Network, implement `Agent` directly:
+
+```go
+package myagent
+
+import (
+    "context"
+
+    oasis "github.com/nevindra/oasis"
+)
+
+type SummaryAgent struct {
+    provider oasis.Provider
+}
+
+func New(provider oasis.Provider) *SummaryAgent {
+    return &SummaryAgent{provider: provider}
+}
+
+func (a *SummaryAgent) Name() string        { return "summarizer" }
+func (a *SummaryAgent) Description() string { return "Summarizes long text into bullet points" }
+
+func (a *SummaryAgent) Execute(ctx context.Context, task oasis.AgentTask) (oasis.AgentResult, error) {
+    resp, err := a.provider.Chat(ctx, oasis.ChatRequest{
+        Messages: []oasis.ChatMessage{
+            oasis.SystemMessage("Summarize the following into 3-5 bullet points."),
+            oasis.UserMessage(task.Input),
+        },
+    })
+    if err != nil {
+        return oasis.AgentResult{}, err
+    }
+    return oasis.AgentResult{Output: resp.Content, Usage: resp.Usage}, nil
+}
+```
+
+Custom agents work anywhere an `Agent` is expected -- including as subagents in a Network.
+
 ## Wiring It All Together
 
 Here's a minimal example of assembling components:
