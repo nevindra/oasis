@@ -1,6 +1,6 @@
 # Extending Oasis
 
-This guide shows how to add custom tools, LLM providers, frontends, and storage backends to Oasis.
+This guide shows how to add custom tools, LLM providers, frontends, storage backends, and skills to Oasis.
 
 ## Adding a Custom Tool
 
@@ -357,6 +357,57 @@ store.StoreDocument(ctx, result.Document, result.Chunks)
 ```
 
 The pipeline handles extraction and chunking. **You** handle embedding and storage. This separation keeps the pipeline dependency-free and testable.
+
+## Creating Skills
+
+Skills are stored instruction packages that specialize the action agent's behavior. They live in the database (via `VectorStore`) and can be managed at runtime through tools or direct API calls.
+
+A skill consists of:
+- **Name** and **Description** -- used for display and semantic matching
+- **Instructions** -- injected into the agent's system prompt when the skill is active
+- **Tools** (optional) -- restricts which tools the agent can use. Empty means all tools are available.
+- **Model** (optional) -- overrides the default LLM model for this skill
+- **Embedding** -- vector representation of the description, used for semantic search
+
+### Creating a Skill Programmatically
+
+```go
+skill := oasis.Skill{
+    ID:           oasis.NewID(),
+    Name:         "code-reviewer",
+    Description:  "Review code changes and suggest improvements",
+    Instructions: "You are a code reviewer. Analyze the code provided and give constructive feedback on style, correctness, and performance.",
+    Tools:        []string{"shell_exec", "file_read"}, // Only these tools available
+    CreatedAt:    oasis.NowUnix(),
+    UpdatedAt:    oasis.NowUnix(),
+}
+
+// Embed the description for semantic search
+vectors, _ := embeddingProvider.Embed(ctx, []string{skill.Description})
+skill.Embedding = vectors[0]
+
+// Store
+store.CreateSkill(ctx, skill)
+```
+
+### Searching Skills by Semantic Similarity
+
+```go
+// Embed the user's message
+queryVec, _ := embeddingProvider.Embed(ctx, []string{"review my pull request"})
+
+// Find top 3 matching skills
+matches, _ := store.SearchSkills(ctx, queryVec[0], 3)
+// matches[0].Name == "code-reviewer" (highest similarity)
+```
+
+### Skill Resolution Pattern
+
+The reference application in `internal/bot/` uses a two-stage resolution:
+1. Embed the user message and `SearchSkills` for top candidates
+2. Ask an intent LLM to pick the best match (or "none")
+
+This pattern is application-level -- the framework provides the storage and search primitives, your application decides how to select and apply skills.
 
 ## Wiring It All Together
 

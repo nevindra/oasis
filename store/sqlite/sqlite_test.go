@@ -226,6 +226,149 @@ func TestScheduledActions(t *testing.T) {
 	}
 }
 
+func TestSkillCRUD(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	skill := oasis.Skill{
+		ID:           oasis.NewID(),
+		Name:         "web-research",
+		Description:  "Research topics on the web",
+		Instructions: "Use web_search to find information, then summarize.",
+		Tools:        []string{"web_search", "browse"},
+		Model:        "gpt-4o",
+		CreatedAt:    oasis.NowUnix(),
+		UpdatedAt:    oasis.NowUnix(),
+	}
+
+	// Create
+	if err := s.CreateSkill(ctx, skill); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	// Get
+	got, err := s.GetSkill(ctx, skill.ID)
+	if err != nil {
+		t.Fatalf("GetSkill: %v", err)
+	}
+	if got.Name != "web-research" {
+		t.Errorf("expected name 'web-research', got %q", got.Name)
+	}
+	if got.Description != "Research topics on the web" {
+		t.Errorf("expected description mismatch, got %q", got.Description)
+	}
+	if len(got.Tools) != 2 || got.Tools[0] != "web_search" {
+		t.Errorf("expected tools [web_search, browse], got %v", got.Tools)
+	}
+	if got.Model != "gpt-4o" {
+		t.Errorf("expected model 'gpt-4o', got %q", got.Model)
+	}
+
+	// List
+	skills, err := s.ListSkills(ctx)
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(skills))
+	}
+
+	// Update
+	skill.Name = "deep-research"
+	skill.Instructions = "Updated instructions"
+	skill.UpdatedAt = oasis.NowUnix()
+	if err := s.UpdateSkill(ctx, skill); err != nil {
+		t.Fatalf("UpdateSkill: %v", err)
+	}
+	got, _ = s.GetSkill(ctx, skill.ID)
+	if got.Name != "deep-research" {
+		t.Errorf("after update: expected name 'deep-research', got %q", got.Name)
+	}
+	if got.Instructions != "Updated instructions" {
+		t.Errorf("after update: expected updated instructions, got %q", got.Instructions)
+	}
+
+	// Create a second skill, then delete the first
+	skill2 := oasis.Skill{
+		ID:           oasis.NewID(),
+		Name:         "task-manager",
+		Description:  "Manage tasks",
+		Instructions: "Create and manage tasks.",
+		CreatedAt:    oasis.NowUnix(),
+		UpdatedAt:    oasis.NowUnix(),
+	}
+	s.CreateSkill(ctx, skill2)
+
+	skills, _ = s.ListSkills(ctx)
+	if len(skills) != 2 {
+		t.Fatalf("expected 2 skills, got %d", len(skills))
+	}
+
+	// Delete
+	if err := s.DeleteSkill(ctx, skill.ID); err != nil {
+		t.Fatalf("DeleteSkill: %v", err)
+	}
+	skills, _ = s.ListSkills(ctx)
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 skill after delete, got %d", len(skills))
+	}
+	if skills[0].Name != "task-manager" {
+		t.Errorf("remaining skill should be 'task-manager', got %q", skills[0].Name)
+	}
+}
+
+func TestSearchSkills(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	skills := []oasis.Skill{
+		{
+			ID: oasis.NewID(), Name: "coding", Description: "Write code",
+			Instructions: "Write clean code.", Embedding: []float32{1, 0, 0},
+			CreatedAt: oasis.NowUnix(), UpdatedAt: oasis.NowUnix(),
+		},
+		{
+			ID: oasis.NewID(), Name: "research", Description: "Research topics",
+			Instructions: "Search the web.", Embedding: []float32{0, 1, 0},
+			CreatedAt: oasis.NowUnix(), UpdatedAt: oasis.NowUnix(),
+		},
+		{
+			ID: oasis.NewID(), Name: "writing", Description: "Write content",
+			Instructions: "Write articles.", Embedding: []float32{0, 0, 1},
+			CreatedAt: oasis.NowUnix(), UpdatedAt: oasis.NowUnix(),
+		},
+	}
+	for _, sk := range skills {
+		if err := s.CreateSkill(ctx, sk); err != nil {
+			t.Fatalf("CreateSkill: %v", err)
+		}
+	}
+
+	// Search for coding-like vector
+	results, err := s.SearchSkills(ctx, []float32{0.9, 0.1, 0}, 2)
+	if err != nil {
+		t.Fatalf("SearchSkills: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Name != "coding" {
+		t.Errorf("top result should be 'coding', got %q", results[0].Name)
+	}
+	if results[1].Name != "research" {
+		t.Errorf("second result should be 'research', got %q", results[1].Name)
+	}
+
+	// Search for writing-like vector
+	results, err = s.SearchSkills(ctx, []float32{0, 0.1, 0.9}, 1)
+	if err != nil {
+		t.Fatalf("SearchSkills: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "writing" {
+		t.Errorf("expected top result 'writing', got %v", results)
+	}
+}
+
 func TestCosineSimilarity(t *testing.T) {
 	// Identical vectors = 1.0
 	s := cosineSimilarity([]float32{1, 2, 3}, []float32{1, 2, 3})

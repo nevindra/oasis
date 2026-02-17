@@ -94,11 +94,31 @@ func (s *Store) Init(ctx context.Context) error {
 		synthesis_prompt TEXT,
 		next_run INTEGER,
 		enabled INTEGER DEFAULT 1,
+		skill_id TEXT,
 		created_at INTEGER
 	)`)
 	if err != nil {
 		return fmt.Errorf("create table: %w", err)
 	}
+
+	// Skills
+	_, err = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS skills (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL,
+		instructions TEXT NOT NULL,
+		tools TEXT,
+		model TEXT,
+		embedding TEXT,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`)
+	if err != nil {
+		return fmt.Errorf("create table: %w", err)
+	}
+
+	// Migrations (best-effort, silent fail if column already exists)
+	_, _ = db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
 
 	return nil
 }
@@ -499,6 +519,191 @@ func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern s
 	}
 	defer rows.Close()
 	return scanScheduledActions(rows)
+}
+
+// --- Skills ---
+
+func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	var toolsJSON *string
+	if len(skill.Tools) > 0 {
+		data, _ := json.Marshal(skill.Tools)
+		v := string(data)
+		toolsJSON = &v
+	}
+	var embJSON *string
+	if len(skill.Embedding) > 0 {
+		v := serializeEmbedding(skill.Embedding)
+		embJSON = &v
+	}
+
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO skills (id, name, description, instructions, tools, model, embedding, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		skill.ID, skill.Name, skill.Description, skill.Instructions,
+		toolsJSON, skill.Model, embJSON, skill.CreatedAt, skill.UpdatedAt)
+	return err
+}
+
+func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return oasis.Skill{}, err
+	}
+	defer db.Close()
+
+	var sk oasis.Skill
+	var tools sql.NullString
+	var model sql.NullString
+	err = db.QueryRowContext(ctx,
+		`SELECT id, name, description, instructions, tools, model, created_at, updated_at
+		 FROM skills WHERE id = ?`, id,
+	).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt)
+	if err != nil {
+		return oasis.Skill{}, fmt.Errorf("get skill: %w", err)
+	}
+	if tools.Valid {
+		_ = json.Unmarshal([]byte(tools.String), &sk.Tools)
+	}
+	if model.Valid {
+		sk.Model = model.String
+	}
+	return sk, nil
+}
+
+func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, name, description, instructions, tools, model, created_at, updated_at
+		 FROM skills ORDER BY created_at`)
+	if err != nil {
+		return nil, fmt.Errorf("list skills: %w", err)
+	}
+	defer rows.Close()
+
+	var skills []oasis.Skill
+	for rows.Next() {
+		var sk oasis.Skill
+		var tools sql.NullString
+		var model sql.NullString
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan skill: %w", err)
+		}
+		if tools.Valid {
+			_ = json.Unmarshal([]byte(tools.String), &sk.Tools)
+		}
+		if model.Valid {
+			sk.Model = model.String
+		}
+		skills = append(skills, sk)
+	}
+	return skills, rows.Err()
+}
+
+func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	var toolsJSON *string
+	if len(skill.Tools) > 0 {
+		data, _ := json.Marshal(skill.Tools)
+		v := string(data)
+		toolsJSON = &v
+	}
+	var embJSON *string
+	if len(skill.Embedding) > 0 {
+		v := serializeEmbedding(skill.Embedding)
+		embJSON = &v
+	}
+
+	_, err = db.ExecContext(ctx,
+		`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, embedding=?, updated_at=? WHERE id=?`,
+		skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, embJSON, skill.UpdatedAt, skill.ID)
+	return err
+}
+
+func (s *Store) DeleteSkill(ctx context.Context, id string) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `DELETE FROM skills WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.Skill, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, name, description, instructions, tools, model, embedding, created_at, updated_at
+		 FROM skills WHERE embedding IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("search skills: %w", err)
+	}
+	defer rows.Close()
+
+	type scored struct {
+		skill oasis.Skill
+		score float32
+	}
+	var results []scored
+
+	for rows.Next() {
+		var sk oasis.Skill
+		var tools sql.NullString
+		var model sql.NullString
+		var embJSON string
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &embJSON, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan skill: %w", err)
+		}
+		if tools.Valid {
+			_ = json.Unmarshal([]byte(tools.String), &sk.Tools)
+		}
+		if model.Valid {
+			sk.Model = model.String
+		}
+		stored, err := deserializeEmbedding(embJSON)
+		if err != nil {
+			continue
+		}
+		score := cosineSimilarity(embedding, stored)
+		results = append(results, scored{skill: sk, score: score})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate skills: %w", err)
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].score > results[j].score
+	})
+
+	if len(results) > topK {
+		results = results[:topK]
+	}
+
+	skills := make([]oasis.Skill, len(results))
+	for i, r := range results {
+		skills[i] = r.skill
+	}
+	return skills, nil
 }
 
 // Close is a no-op since we use fresh connections per call.

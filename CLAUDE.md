@@ -8,7 +8,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **[docs/ENGINEERING.md](docs/ENGINEERING.md)** — Engineering principles and mindset: performance patterns, developer experience, dependency philosophy, error handling philosophy, testing approach, and code organization rules.
 - **[docs/CONVENTIONS.md](docs/CONVENTIONS.md)** — Coding conventions: error handling, import ordering, naming, config patterns, database patterns, logging, testing rules, and things to never do.
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Internal system architecture: component graph, message processing flows, LLM dispatch, subsystems (memory, ingestion, search, scheduling), database schema, and design decisions.
 
 **Framework documentation (for users/extenders):**
 
@@ -18,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Oasis
 
-Oasis is a personal AI assistant framework built in Go, accessed via Telegram. It combines conversational AI (streaming), a knowledge base (RAG with vector search), long-term semantic memory, a pluggable tool execution system, scheduled automations, and web browsing. Built as a single binary with interface-driven modules, deployed as a Docker image.
+Oasis is a personal AI assistant framework built in Go. It combines conversational AI (streaming), a knowledge base (RAG with vector search), long-term semantic memory, a pluggable tool execution system, scheduled automations, and web browsing. When Oasis is mentioned it means the FRAMEWORK not the TELEGRAM BOT.
 
 ## Build & Run Commands
 
@@ -154,7 +153,7 @@ func (t *MyTool) Execute(ctx context.Context, name string, args json.RawMessage)
 
 ### Database
 
-Uses pure-Go SQLite with brute-force vector search. Fresh connections per call (no pooling). Tables: `documents`, `chunks`, `conversations`, `messages`, `config`, `scheduled_actions`, `user_facts`.
+Uses pure-Go SQLite with brute-force vector search. Fresh connections per call (no pooling). Tables: `documents`, `chunks`, `conversations`, `messages`, `config`, `scheduled_actions`, `skills`, `user_facts`.
 
 ## Engineering Principles (quick reference)
 

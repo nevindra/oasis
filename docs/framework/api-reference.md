@@ -125,6 +125,14 @@ type VectorStore interface {
     DeleteAllScheduledActions(ctx context.Context) (int, error)
     FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
 
+    // Skills
+    CreateSkill(ctx context.Context, skill Skill) error
+    GetSkill(ctx context.Context, id string) (Skill, error)
+    ListSkills(ctx context.Context) ([]Skill, error)
+    UpdateSkill(ctx context.Context, skill Skill) error
+    DeleteSkill(ctx context.Context, id string) error
+    SearchSkills(ctx context.Context, embedding []float32, topK int) ([]Skill, error)
+
     // Lifecycle
     Init(ctx context.Context) error
     Close() error
@@ -258,7 +266,21 @@ type ScheduledAction struct {
     SynthesisPrompt string `json:"synthesis_prompt"`
     NextRun         int64  `json:"next_run"`
     Enabled         bool   `json:"enabled"`
+    SkillID         string `json:"skill_id,omitempty"` // Optional: run under this skill's context
     CreatedAt       int64  `json:"created_at"`
+}
+
+// Skill is a stored instruction package for specializing the action agent.
+type Skill struct {
+    ID           string    `json:"id"`
+    Name         string    `json:"name"`
+    Description  string    `json:"description"`
+    Instructions string    `json:"instructions"`
+    Tools        []string  `json:"tools,omitempty"`  // Restrict available tools (empty = all)
+    Model        string    `json:"model,omitempty"`  // Override default model (empty = default)
+    Embedding    []float32 `json:"-"`                // For semantic search
+    CreatedAt    int64     `json:"created_at"`
+    UpdatedAt    int64     `json:"updated_at"`
 }
 
 type ScheduledToolCall struct {

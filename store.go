@@ -30,6 +30,14 @@ type VectorStore interface {
 	DeleteAllScheduledActions(ctx context.Context) (int, error)
 	FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
 
+	// --- Skills ---
+	CreateSkill(ctx context.Context, skill Skill) error
+	GetSkill(ctx context.Context, id string) (Skill, error)
+	ListSkills(ctx context.Context) ([]Skill, error)
+	UpdateSkill(ctx context.Context, skill Skill) error
+	DeleteSkill(ctx context.Context, id string) error
+	SearchSkills(ctx context.Context, embedding []float32, topK int) ([]Skill, error)
+
 	// --- Lifecycle ---
 	Init(ctx context.Context) error
 	Close() error

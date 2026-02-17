@@ -106,6 +106,10 @@ Persistence layer with vector search capabilities. Handles messages, documents/c
 - `DeleteScheduledAction`, `DeleteAllScheduledActions`
 - `FindScheduledActionsByDescription`
 
+**Skills (full CRUD + vector search):**
+- `CreateSkill`, `GetSkill`, `ListSkills`, `UpdateSkill`, `DeleteSkill`
+- `SearchSkills(ctx, embedding, topK)` -- vector search over skill embeddings
+
 **Lifecycle:**
 - `Init(ctx)` -- create tables/indexes
 - `Close()` -- clean up connections
@@ -214,7 +218,8 @@ All framework types live in the root `oasis` package:
 | `Conversation` | Chat session | ID, ChatID, CreatedAt |
 | `Message` | Chat message | ID, ConversationID, Role, Content, Embedding, CreatedAt |
 | `Fact` | Memory fact | ID, Fact, Category, Confidence, Embedding, CreatedAt, UpdatedAt |
-| `ScheduledAction` | Recurring automation | ID, Description, Schedule, ToolCalls (JSON), NextRun, Enabled |
+| `ScheduledAction` | Recurring automation | ID, Description, Schedule, ToolCalls (JSON), NextRun, Enabled, SkillID |
+| `Skill` | Stored instruction package for specializing agents | ID, Name, Description, Instructions, Tools, Model, Embedding, CreatedAt, UpdatedAt |
 | `ChatMessage` | LLM protocol message | Role, Content, Images, ToolCalls, ToolCallID |
 | `ChatRequest` | LLM request | Messages |
 | `ChatResponse` | LLM response | Content, ToolCalls, Usage |
@@ -276,7 +281,11 @@ config (key PRIMARY KEY, value)
 
 -- Scheduling
 scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt,
-                   next_run, enabled, created_at)
+                   next_run, enabled, skill_id, created_at)
+
+-- Skills
+skills (id, name, description, instructions, tools, model, embedding,
+        created_at, updated_at)
 ```
 
 The MemoryStore creates:
