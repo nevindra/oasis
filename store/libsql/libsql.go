@@ -143,6 +143,7 @@ func (s *Store) Init(ctx context.Context) error {
 
 	// Migrations (best-effort, silent fail if already applied)
 	_, _ = db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE conversations RENAME TO threads")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN title TEXT")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN metadata TEXT")
@@ -292,18 +293,22 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 	}
 
 	for _, chunk := range chunks {
+		var parentID *string
+		if chunk.ParentID != "" {
+			parentID = &chunk.ParentID
+		}
 		if len(chunk.Embedding) > 0 {
 			embJSON := serializeEmbedding(chunk.Embedding)
 			_, err = tx.ExecContext(ctx,
-				`INSERT OR REPLACE INTO chunks (id, document_id, content, chunk_index, embedding)
-				 VALUES (?, ?, ?, ?, vector(?))`,
-				chunk.ID, chunk.DocumentID, chunk.Content, chunk.ChunkIndex, embJSON,
+				`INSERT OR REPLACE INTO chunks (id, document_id, parent_id, content, chunk_index, embedding)
+				 VALUES (?, ?, ?, ?, ?, vector(?))`,
+				chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, embJSON,
 			)
 		} else {
 			_, err = tx.ExecContext(ctx,
-				`INSERT OR REPLACE INTO chunks (id, document_id, content, chunk_index, embedding)
-				 VALUES (?, ?, ?, ?, NULL)`,
-				chunk.ID, chunk.DocumentID, chunk.Content, chunk.ChunkIndex,
+				`INSERT OR REPLACE INTO chunks (id, document_id, parent_id, content, chunk_index, embedding)
+				 VALUES (?, ?, ?, ?, ?, NULL)`,
+				chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex,
 			)
 		}
 		if err != nil {
@@ -328,7 +333,7 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
-		`SELECT c.id, c.document_id, c.content, c.chunk_index
+		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index
 		 FROM vector_top_k('chunks_vector_idx', vector(?), ?) AS v
 		 JOIN chunks AS c ON c.rowid = v.id`,
 		embJSON, topK,
@@ -341,8 +346,53 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 	var chunks []oasis.Chunk
 	for rows.Next() {
 		var c oasis.Chunk
-		if err := rows.Scan(&c.ID, &c.DocumentID, &c.Content, &c.ChunkIndex); err != nil {
+		var parentID sql.NullString
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex); err != nil {
 			return nil, fmt.Errorf("scan chunk: %w", err)
+		}
+		if parentID.Valid {
+			c.ParentID = parentID.String
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
+// GetChunksByIDs returns chunks matching the given IDs.
+func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`SELECT id, document_id, parent_id, content, chunk_index FROM chunks WHERE id IN (%s)`,
+		strings.Join(placeholders, ","))
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get chunks by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var chunks []oasis.Chunk
+	for rows.Next() {
+		var c oasis.Chunk
+		var parentID sql.NullString
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex); err != nil {
+			return nil, fmt.Errorf("scan chunk: %w", err)
+		}
+		if parentID.Valid {
+			c.ParentID = parentID.String
 		}
 		chunks = append(chunks, c)
 	}

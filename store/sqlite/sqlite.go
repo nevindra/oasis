@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/nevindra/oasis"
 
@@ -122,6 +123,7 @@ func (s *Store) Init(ctx context.Context) error {
 
 	// Migrations (best-effort, silent fail if already applied)
 	_, _ = db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")
 
 	// Migrate conversations → threads
 	_, _ = db.ExecContext(ctx, "ALTER TABLE conversations RENAME TO threads")
@@ -285,10 +287,14 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 			v := serializeEmbedding(chunk.Embedding)
 			embJSON = &v
 		}
+		var parentID *string
+		if chunk.ParentID != "" {
+			parentID = &chunk.ParentID
+		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO chunks (id, document_id, content, chunk_index, embedding)
-			 VALUES (?, ?, ?, ?, ?)`,
-			chunk.ID, chunk.DocumentID, chunk.Content, chunk.ChunkIndex, embJSON,
+			`INSERT OR REPLACE INTO chunks (id, document_id, parent_id, content, chunk_index, embedding)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, embJSON,
 		)
 		if err != nil {
 			return fmt.Errorf("insert chunk: %w", err)
@@ -310,7 +316,7 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 	defer db.Close()
 
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, document_id, content, chunk_index, embedding
+		`SELECT id, document_id, parent_id, content, chunk_index, embedding
 		 FROM chunks WHERE embedding IS NOT NULL`,
 	)
 	if err != nil {
@@ -326,9 +332,13 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 
 	for rows.Next() {
 		var c oasis.Chunk
+		var parentID sql.NullString
 		var embJSON string
-		if err := rows.Scan(&c.ID, &c.DocumentID, &c.Content, &c.ChunkIndex, &embJSON); err != nil {
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &embJSON); err != nil {
 			return nil, fmt.Errorf("scan chunk: %w", err)
+		}
+		if parentID.Valid {
+			c.ParentID = parentID.String
 		}
 		stored, err := deserializeEmbedding(embJSON)
 		if err != nil {
@@ -354,6 +364,47 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 		chunks[i] = r.chunk
 	}
 	return chunks, nil
+}
+
+// GetChunksByIDs returns chunks matching the given IDs.
+func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`SELECT id, document_id, parent_id, content, chunk_index FROM chunks WHERE id IN (%s)`,
+		strings.Join(placeholders, ","))
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get chunks by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var chunks []oasis.Chunk
+	for rows.Next() {
+		var c oasis.Chunk
+		var parentID sql.NullString
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex); err != nil {
+			return nil, fmt.Errorf("scan chunk: %w", err)
+		}
+		if parentID.Valid {
+			c.ParentID = parentID.String
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
 }
 
 // CreateThread inserts a new thread.

@@ -15,6 +15,7 @@ type Document struct {
 type Chunk struct {
 	ID         string    `json:"id"`
 	DocumentID string    `json:"document_id"`
+	ParentID   string    `json:"parent_id,omitempty"`
 	Content    string    `json:"content"`
 	ChunkIndex int       `json:"chunk_index"`
 	Embedding  []float32 `json:"-"`

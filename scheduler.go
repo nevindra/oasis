@@ -153,6 +153,7 @@ func parseScheduledToolCalls(raw string) ([]ScheduledToolCall, bool) {
 	if err := json.Unmarshal([]byte(raw), &calls); err == nil && len(calls) > 0 {
 		return calls, true
 	}
+	calls = nil // reset — json.Unmarshal may partially populate on error
 
 	// Legacy fallback: array of JSON-encoded strings.
 	var strs []string

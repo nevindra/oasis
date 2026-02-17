@@ -19,6 +19,7 @@ type Store interface {
 	// --- Documents + Chunks ---
 	StoreDocument(ctx context.Context, doc Document, chunks []Chunk) error
 	SearchChunks(ctx context.Context, embedding []float32, topK int) ([]Chunk, error)
+	GetChunksByIDs(ctx context.Context, ids []string) ([]Chunk, error)
 
 	// --- Key-value config ---
 	GetConfig(ctx context.Context, key string) (string, error)

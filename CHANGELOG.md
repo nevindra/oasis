@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- Comprehensive test suite: ~110 new test cases across agent, tool registry, app, scheduler, schedule, memory/sqlite, observer, errors, types, and tools (shell, file, schedule)
 - Workflow primitive: deterministic DAG-based task orchestration (`workflow.go`)
   - Step types: `Step` (function), `AgentStep` (Agent delegation), `ToolStep` (tool call), `ForEach` (collection iteration), `DoUntil`/`DoWhile` (loops)
   - Step options: `After` (dependencies), `When` (conditions), `InputFrom`/`ArgsFrom`/`OutputTo` (data routing), `Retry`, `IterOver`, `Concurrency`, `Until`, `While`, `MaxIter`
@@ -17,6 +18,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   - DAG validation at construction: duplicate detection, unknown dependency check, cycle detection (Kahn's algorithm)
   - Fail-fast error handling with configurable retries and failure cascade tracking
   - Implements `Agent` interface for recursive composition with Network and other Workflows
+
+### Fixed
+
+- `parseScheduledToolCalls` partial unmarshal contamination causing legacy format to return duplicates
 
 ## [0.1.2] - 2026-02-18
 
