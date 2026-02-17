@@ -312,39 +312,84 @@ When the Action LLM runs, it has access to tools from the `ToolRegistry`:
 
 **Conditional registration**: Integration tools are only loaded into the ToolRegistry when their API credentials are configured. No API key = no tools registered.
 
-## Memory System
+## Memory System (v2)
 
-Automatic user fact extraction and long-term memory.
+Automatic user fact extraction and long-term memory with semantic deduplication, contradiction handling, and relevance-filtered context injection.
 
 ```mermaid
 flowchart TD
-    Conv[Conversation Turn] --> Extract[LLM Fact Extraction]
+    Conv[Conversation Turn] --> Trivial{Trivial message?}
+    Trivial -->|Yes, skip| Done[No extraction]
+    Trivial -->|No| Extract[LLM Fact Extraction]
     Extract --> Parse[Parse JSON Response]
-    Parse --> Upsert[Upsert Facts to DB]
+    Parse --> Supersedes{Has supersedes?}
+    Supersedes -->|Yes| Delete[Delete old contradicted fact]
+    Supersedes -->|No| Dedup
+    Delete --> Dedup[Semantic Dedup]
+    Dedup --> Similar{Similar fact exists?\ncosine > 0.85}
+    Similar -->|Yes| Merge[Replace text + bump confidence]
+    Similar -->|No| Insert[Insert as new fact]
 
-    Prompt[System Prompt] --> Build[build_memory_context]
-    Build --> Query[Get Top 15 Facts]
-    Query --> Inject[Inject into System Prompt]
+    Query[User Message] --> Embed[Embed query]
+    Embed --> VectorSearch[vector_top_k on user_facts]
+    VectorSearch --> Inject[Inject top 10 relevant facts into system prompt]
 ```
+
+### Trivial Message Filter
+
+Before calling the LLM for extraction, `should_extract_facts()` skips:
+- Messages shorter than 10 characters
+- Common filler replies: "ok", "oke", "thanks", "makasih", "sip", "ya", "lol", "wkwk", etc.
+
+This saves an LLM call on every trivial message.
 
 ### Extraction (after every message)
 
 1. `spawn_store()` calls `extract_and_store_facts()` in a background task
-2. Fetches existing facts (top 30) to avoid re-extracting known information
-3. Sends the conversation turn + extraction prompt to the **intent LLM**
-4. Parses the response as JSON array of `{fact, category}` objects
-5. Upserts each fact into the `user_facts` table
+2. Checks `should_extract_facts()` — skips trivial messages
+3. Fetches existing facts (top 30) to avoid re-extracting known information
+4. Sends the conversation turn + extraction prompt to the **intent LLM**
+5. Parses the response as JSON array of `{fact, category, supersedes?}` objects
+6. For facts with `supersedes` — deletes the contradicted fact via `delete_matching_facts()`
+7. Upserts each fact with semantic dedup (see below)
 
-### Injection (before every response)
+### Semantic Deduplication (Merge & Replace)
 
-`build_memory_context()` fetches top 15 facts sorted by confidence and recency, formatted as a markdown section injected into the system prompt.
+The `user_facts` table has an `embedding F32_BLOB(1536)` column with a DiskANN vector index. On upsert:
+
+1. Embed the new fact via `Embedder`
+2. `vector_top_k('user_facts_vector_idx', vector(?), 3)` — find 3 most similar existing facts
+3. Compute cosine distance. If distance < 0.15 (similarity > 0.85) → **replace** the old fact text, update embedding, bump confidence, update timestamp
+4. If no similar fact → insert as new
+
+This prevents near-duplicate facts from accumulating over time.
+
+### Contradiction Detection
+
+The extraction prompt supports an optional `supersedes` field:
+
+```json
+[{"fact": "User moved to Bali", "category": "personal", "supersedes": "Lives in Jakarta"}]
+```
+
+When a fact has `supersedes`, the old contradicted fact is deleted via `delete_matching_facts()` before the new fact is upserted. This works alongside semantic dedup as a belt-and-suspenders approach.
+
+### Relevance-Filtered Context Injection
+
+`build_memory_context()` accepts an optional query embedding:
+
+- **With embedding** (normal flow): uses `vector_top_k` on `user_facts` to retrieve the top 10 facts most relevant to the current user message
+- **Without embedding** (fallback): returns top 15 facts sorted by confidence + recency
+
+Callers (`chat.rs`, `action.rs`) embed the user message and pass the embedding in, so injected facts are contextually relevant rather than just the highest-confidence ones.
 
 ### Confidence System
 
 - New facts start at confidence `1.0`
-- Re-extracted facts get `+0.1` (capped at 1.0)
+- Re-extracted (semantically similar) facts get `+0.1` (capped at 1.0)
 - Facts not reinforced in 7+ days decay by `*0.95`
 - Facts below `0.3` confidence AND older than 30 days are pruned
+- Only facts with confidence >= 0.3 are included in context
 
 ## Ingestion Pipeline
 
