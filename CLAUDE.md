@@ -6,39 +6,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Always read and follow these docs before making changes:**
 
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Full system architecture: crate graph, brain 3-layer structure, message processing flows, LLM dispatch, subsystems (memory, ingestion, search, scheduling), database schema, configuration, and design decisions.
-- **[docs/CONVENTIONS.md](docs/CONVENTIONS.md)** — Coding best practices: error handling, module structure, import ordering, trait patterns, how to add tools/providers, async patterns, logging, string/type/config conventions, testing rules, and things to never do.
+- **[docs/ENGINEERING.md](docs/ENGINEERING.md)** — Engineering principles and mindset: performance patterns, developer experience, dependency philosophy, error handling philosophy, testing approach, and code organization rules.
+- **[docs/CONVENTIONS.md](docs/CONVENTIONS.md)** — Coding conventions: error handling, import ordering, naming, config patterns, database patterns, logging, testing rules, and things to never do.
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Internal system architecture: component graph, message processing flows, LLM dispatch, subsystems (memory, ingestion, search, scheduling), database schema, and design decisions.
+
+**Framework documentation (for users/extenders):**
+
+- **[docs/framework/](docs/framework/README.md)** — Complete framework docs: getting started, configuration reference, architecture overview, extending guide (tools/providers/frontends/stores), deployment guide, and full API reference.
 
 **When you make architectural or convention changes, update the corresponding doc file to keep them in sync.**
 
 ## What is Oasis
 
-Oasis is a personal AI assistant accessed via Telegram. It combines conversational AI, a knowledge base (RAG), task management, scheduled automations, web browsing, and conversational memory. Built in Rust as a single binary with modular library crates, deployed as a Docker image on Zeabur.
+Oasis is a personal AI assistant framework built in Go, accessed via Telegram. It combines conversational AI (streaming), a knowledge base (RAG with vector search), long-term semantic memory, a pluggable tool execution system, scheduled automations, and web browsing. Built as a single binary with interface-driven modules, deployed as a Docker image.
 
 ## Build & Run Commands
 
 ```bash
 # Build
-cargo build
-cargo build --release
+go build ./cmd/oasis/
+
+# Build with CGO (better SQLite performance)
+CGO_ENABLED=1 go build -o oasis ./cmd/oasis/
 
 # Run (requires .env or env vars set)
-source .env && cargo run
+source .env && go run ./cmd/oasis/
 
-# Run tests (all crates)
-cargo test --workspace
+# Run tests
+go test ./...
 
-# Run tests for a single crate
-cargo test -p oasis-brain
+# Run tests for a specific package
+go test ./ingest/
+go test ./store/sqlite/
+go test ./tools/schedule/
 
 # Run a single test by name
-cargo test -p oasis-brain test_ingest_html
-
-# Check without building
-cargo check --workspace
-
-# Reset database (drops all tables)
-./scripts/reset-db.sh
+go test ./ingest/ -run TestChunkText
 
 # Docker build
 docker build -t oasis .
@@ -48,51 +51,120 @@ docker build -t oasis .
 
 Config loading order: defaults -> `oasis.toml` -> environment variables (env wins).
 
-Secrets are set via environment variables (see `.env`):
-- `OASIS_TELEGRAM_TOKEN` - Telegram bot token
-- `OASIS_LLM_API_KEY` - API key for the configured LLM provider
-- `OASIS_EMBEDDING_API_KEY` - API key for the configured embedding provider
-- `OASIS_TURSO_URL` / `OASIS_TURSO_TOKEN` - optional remote libSQL database
-- `OASIS_CONFIG` - path to config file (defaults to `oasis.toml`)
+Secrets are set via environment variables:
+- `OASIS_TELEGRAM_TOKEN` — Telegram bot token
+- `OASIS_LLM_API_KEY` — API key for the chat LLM provider
+- `OASIS_EMBEDDING_API_KEY` — API key for the embedding provider
+- `OASIS_INTENT_API_KEY` — intent LLM (falls back to `OASIS_LLM_API_KEY`)
+- `OASIS_ACTION_API_KEY` — action LLM (falls back to `OASIS_LLM_API_KEY`)
+- `OASIS_TURSO_URL` / `OASIS_TURSO_TOKEN` — optional remote libSQL database
+- `OASIS_BRAVE_API_KEY` — Brave Search API (enables `web_search` tool)
+- `OASIS_CONFIG` — path to config file (defaults to `oasis.toml`)
+
+Full config reference: [docs/framework/configuration.md](docs/framework/configuration.md)
 
 ## Architecture (quick reference)
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 
-### Crate Dependency Flow (5 crates, no cycles)
+### Project Structure
 
 ```
-src/main.rs → oasis-brain
-oasis-brain → oasis-core, oasis-llm, oasis-telegram, oasis-integrations
-oasis-telegram → oasis-core
-oasis-llm → oasis-core
-oasis-integrations → oasis-core
+oasis/
+|-- types.go, provider.go, tool.go, store.go, frontend.go, memory.go
+|   (root package: domain types + interfaces)
+|
+|-- cmd/oasis/main.go              # Entry point
+|-- internal/config/               # Config loading
+|-- internal/bot/                  # Application orchestration (routing, chat, agents)
+|-- internal/scheduling/           # Background scheduler
+|
+|-- provider/gemini/               # Google Gemini (Provider + EmbeddingProvider)
+|-- provider/openaicompat/         # OpenAI-compatible (Provider)
+|-- frontend/telegram/             # Telegram bot (Frontend)
+|-- store/sqlite/                  # Local SQLite (VectorStore)
+|-- store/libsql/                  # Remote Turso (VectorStore)
+|-- memory/sqlite/                 # SQLite MemoryStore
+|-- ingest/                        # Document chunking pipeline
+|-- tools/{knowledge,remember,search,schedule,shell,file,http}/
 ```
 
-### Brain Three-Layer Structure
+### Core Interfaces (root package)
 
-```
-brain/     (L1: Orchestration)  — routing, chat streaming, action dispatch, scheduling
-tool/      (L2: Extension point) — Tool trait + ToolRegistry + implementations
-service/   (L3: Infrastructure)  — store, memory, LLM dispatch, search, ingest
-```
-
-Dependency flows downward only. L3 never calls upward.
+| Interface | File | Purpose |
+|-----------|------|---------|
+| `Provider` | `provider.go` | LLM: Chat, ChatWithTools, ChatStream |
+| `EmbeddingProvider` | `provider.go` | Text-to-vector embedding |
+| `Frontend` | `frontend.go` | Messaging platform: Poll, Send, Edit |
+| `VectorStore` | `store.go` | Persistence + vector search |
+| `MemoryStore` | `memory.go` | Long-term semantic memory |
+| `Tool` | `tool.go` | Pluggable tool for LLM function calling |
 
 ### Key Design Decisions
 
-- **No async trait objects for LLM** — match-based dispatch, RPITIT on `LlmProvider`
-- **`#[async_trait]` for Tool** — must be object-safe (`Box<dyn Tool>` in `ToolRegistry`)
-- **No anyhow/thiserror** — custom `OasisError` enum
+- **No LLM SDKs** — all providers use raw HTTP (`net/http`)
 - **No bot framework** — hand-rolled Telegram client
-- **No LLM SDKs** — all providers use raw HTTP (reqwest)
-- **No chrono/time** — hand-rolled date math
-- **Telegram HTML, not Markdown** — `pulldown-cmark` converts MD→HTML
+- **No error framework** — 2 custom error types (`ErrLLM`, `ErrHTTP`)
+- **No chrono/time library** — hand-rolled date math
+- **Pure-Go SQLite** — `modernc.org/sqlite`, no CGO required
+- **Embeddings as JSON** — brute-force cosine similarity in-process
+- **Interface-driven** — every major component is a Go interface
+- **Constructor injection** — no global state, dependencies via `Deps` struct
+- **Background storage** — embed + store + fact extraction after response
+- **Streaming** — channel-based token streaming with 1s edit batching
 
 ## Conventions (quick reference)
 
-See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for full details, code examples, and the "Things to Never Do" list.
+See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for full details.
+
+### Import Ordering (3 groups)
+
+```go
+import (
+    "context"           // 1. stdlib
+    "fmt"
+
+    oasis "github.com/nevindra/oasis"  // 2. external + project root
+    "github.com/nevindra/oasis/ingest"
+
+    "github.com/nevindra/oasis/internal/config"  // 3. internal
+)
+```
+
+### Error Handling
+
+- Tool errors go in `ToolResult.Error`, not Go `error`
+- Error messages: lowercase, no trailing period
+- Graceful degradation: log and continue, don't crash
+- Transient errors (429, 5xx): retry with exponential backoff
+- Non-critical ops: `let _ =` pattern (e.g. edit during streaming)
+
+### Tool Pattern
+
+```go
+func (t *MyTool) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
+    var params struct { Query string `json:"query"` }
+    if err := json.Unmarshal(args, &params); err != nil {
+        return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+    }
+    // ... business logic ...
+    return oasis.ToolResult{Content: result}, nil
+}
+```
 
 ### Database
 
-Uses libSQL (SQLite-compatible) with DiskANN vector extensions. Fresh connections per call (no caching). Tables: `documents`, `chunks` (with `F32_BLOB(1536)` embedding), `conversations`, `messages` (with embedding), `config`, `scheduled_actions`, `user_facts`, `conversation_topics`.
+Uses pure-Go SQLite with brute-force vector search. Fresh connections per call (no pooling). Tables: `documents`, `chunks`, `conversations`, `messages`, `config`, `scheduled_actions`, `user_facts`.
+
+## Engineering Principles (quick reference)
+
+See [docs/ENGINEERING.md](docs/ENGINEERING.md) for full details.
+
+- **Batch operations** — batch embed calls, batch DB writes
+- **Background heavy work** — `go func()` for embed + store after response
+- **Stream don't buffer** — progressive message editing via channels
+- **Limit resources** — LimitReader, max iterations, truncation caps
+- **Minimal dependencies** — hand-roll if < 200 lines, raw HTTP, no SDKs
+- **Early return** — fail fast, flat code, no deep nesting
+- **Interface-driven** — testable, swappable, clear contracts
+- **Constructor injection** — explicit deps, no global state
