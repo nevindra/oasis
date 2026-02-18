@@ -7,7 +7,6 @@ import (
 
 	oasis "github.com/nevindra/oasis"
 	"github.com/nevindra/oasis/frontend/telegram"
-	"github.com/nevindra/oasis/internal/bot"
 	"github.com/nevindra/oasis/internal/config"
 	memsqlite "github.com/nevindra/oasis/memory/sqlite"
 	"github.com/nevindra/oasis/observer"
@@ -62,7 +61,7 @@ func main() {
 
 	// 5. Create frontend + input handler
 	frontend := telegram.New(cfg.Telegram.Token)
-	inputHandler := bot.NewTelegramInputHandler(frontend)
+	inputHandler := NewTelegramInputHandler(frontend)
 
 	// 6. Create tools
 	tools := collectTools(cfg, store, embedding, inst)
@@ -93,7 +92,7 @@ func main() {
 	// 8. Run
 	// Note: observer wrapping is on individual providers/tools.
 	// ObservedAgent doesn't support StreamingAgent yet.
-	app := bot.New(&cfg, frontend, network, store, memStore, inputHandler)
+	app := New(&cfg, frontend, network, store, memStore, inputHandler)
 	log.Fatal(app.RunWithSignal())
 }
 
