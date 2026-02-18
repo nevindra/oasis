@@ -144,8 +144,9 @@ Long-term semantic memory. Stores user facts with confidence scoring, semantic d
 | `UpsertFact(ctx, fact, category, embedding)` | Insert or merge a fact (deduplicates by cosine similarity > 0.85) |
 | `SearchFacts(ctx, embedding, topK) -> []ScoredFact` | Semantic search over stored facts, sorted by score descending |
 | `BuildContext(ctx, queryEmbedding) -> string` | Build a formatted memory context string (top 15 facts by confidence + recency) |
+| `DeleteFact(ctx, factID)` | Delete a single fact by ID (used by the supersedes pipeline) |
 | `DeleteMatchingFacts(ctx, pattern)` | Delete facts matching a text pattern |
-| `DecayOldFacts(ctx)` | Reduce confidence of un-reinforced facts (multiply by 0.95 if not updated in 7+ days) |
+| `DecayOldFacts(ctx)` | Reduce confidence of un-reinforced facts (multiply by 0.95 if not updated in 7+ days); called automatically ~5% per turn |
 | `Init(ctx)` | Create tables |
 
 **Shipped implementation**: `memory/sqlite`.
@@ -156,7 +157,13 @@ Long-term semantic memory. Stores user facts with confidence scoring, semantic d
 - Decay: `confidence *= 0.95` for facts not reinforced in 7+ days
 - Pruning: facts with `confidence < 0.3` and `age > 30 days` are removed
 
-**Auto-extraction**: when `WithUserMemory` is set on a `LLMAgent`, the agent automatically extracts user facts from each conversation exchange using its own LLM and persists them via `UpsertFact`. No extra configuration required. This is the write path that populates `user_facts` from real conversations.
+**Auto-extraction**: when `WithUserMemory` is set on a `LLMAgent`, the agent automatically extracts user facts from each conversation exchange using its own LLM and persists them via `UpsertFact`. No extra configuration required. This is the write path that populates `user_facts` from real conversations. The pipeline:
+
+1. **Trivial filter** — short or trivial messages ("ok", "thanks", "wkwk") are skipped to avoid wasted LLM calls
+2. **Extraction** — the LLM extracts facts with category and optional `supersedes` field for contradictions
+3. **Supersedes** — if a fact contradicts an existing one, the old fact is found by semantic search (cosine >= 0.80) and deleted
+4. **Upsert** — new facts are embedded and upserted (deduplication at cosine > 0.85)
+5. **Decay** — `DecayOldFacts` runs probabilistically (~5% per turn) to age out stale facts
 
 ### Tool + ToolRegistry (`tool.go`)
 
@@ -307,7 +314,7 @@ threadID := task.TaskThreadID()  // "thread-123"
 2. Inject user facts from MemoryStore into the system prompt
 3. Search for semantically relevant messages across all threads (when EmbeddingProvider is set), filtered by cosine similarity score
 4. Persist user and assistant messages after producing a final response
-5. Extract durable user facts from the conversation turn and upsert them to MemoryStore (when `WithUserMemory` is set) — runs in the background goroutine using the agent's own LLM
+5. Extract durable user facts from the conversation turn and upsert them to MemoryStore (when `WithUserMemory` is set) — runs in the background goroutine using the agent's own LLM; trivial messages are filtered, contradictions are resolved via semantic supersedes, and `DecayOldFacts` runs probabilistically
 
 All memory features are opt-in. Without these options, agents behave exactly as before.
 

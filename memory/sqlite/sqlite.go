@@ -208,6 +208,16 @@ func (s *Store) getTopFacts(ctx context.Context, limit int) ([]oasis.Fact, error
 	return facts, nil
 }
 
+func (s *Store) DeleteFact(ctx context.Context, factID string) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `DELETE FROM user_facts WHERE id = ?`, factID)
+	return err
+}
+
 func (s *Store) DeleteMatchingFacts(ctx context.Context, pattern string) error {
 	db, err := s.openDB()
 	if err != nil {

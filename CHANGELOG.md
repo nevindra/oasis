@@ -14,6 +14,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `observer`: fixed data race in `ObservedProvider.ChatStream` — the chunk counter goroutine now signals completion via a done channel before the counter is read
 - Semantic recall: cross-thread messages are now filtered by cosine similarity score before injection into LLM context, preventing irrelevant messages from polluting context (previously all top-K results were injected regardless of score)
 - Semantic recall: messages from the current conversation thread are now excluded from cross-thread recall (they are already present in conversation history — previously they were double-injected)
+- Background persist goroutine now uses `context.WithoutCancel` — message persistence and fact extraction complete even when the parent handler context is canceled; context values (trace IDs) are still inherited
+- User messages are now embedded before storing (single write) instead of store-then-embed-then-re-store (double write)
 
 ### Added
 
@@ -26,8 +28,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `ConversationOption` type and `CrossThreadSearch(opts ...SemanticOption) ConversationOption` — opt-in cross-thread semantic recall as a sub-option of `WithConversationMemory`; e.g. `WithConversationMemory(store, CrossThreadSearch(MinScore(0.7)))`
 - `SemanticOption` type and `MinScore(score float32) SemanticOption` — tune cross-thread search threshold (default 0.60); passed to `CrossThreadSearch`
 - `WithEmbedding(e EmbeddingProvider)` — shared embedding provider used by `CrossThreadSearch` and `WithUserMemory`
-- `ExtractedFact` type (`Fact string`, `Category string`) — represents a user fact extracted from a conversation turn
+- `ExtractedFact` type (`Fact string`, `Category string`, `Supersedes *string`) — represents a user fact extracted from a conversation turn; optional `Supersedes` field names the old fact being replaced
+- `MemoryStore.DeleteFact(ctx, factID)` — delete a single fact by ID; used by the supersedes pipeline to remove contradicted facts
 - **Auto fact extraction** — `WithUserMemory` now completes the full read+write cycle: after each conversation turn, the agent uses its own LLM to extract durable user facts from the exchange and persists them to `MemoryStore` via `UpsertFact`; no new option required; extraction runs in the background goroutine alongside message persistence
+- **Trivial message filter** — extraction is skipped for short or trivial messages ("ok", "thanks", "wkwk", etc.) to avoid wasted LLM calls
+- **Semantic supersedes** — when the extraction LLM detects a contradicting fact (e.g. "moved to Bali" superseding "lives in Jakarta"), the pipeline embeds the superseded text, searches for matching facts (cosine >= 0.80), and deletes them before upserting the new fact
+- **Probabilistic fact decay** — `DecayOldFacts` is now called automatically with ~5% probability per conversation turn, so stale facts decay without external scheduling
 
 ### Changed
 

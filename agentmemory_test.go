@@ -95,6 +95,7 @@ type stubMemoryStore struct {
 func (m *stubMemoryStore) Init(_ context.Context) error                                        { return nil }
 func (m *stubMemoryStore) UpsertFact(_ context.Context, _, _ string, _ []float32) error        { return nil }
 func (m *stubMemoryStore) SearchFacts(_ context.Context, _ []float32, _ int) ([]ScoredFact, error) { return nil, nil }
+func (m *stubMemoryStore) DeleteFact(_ context.Context, _ string) error                         { return nil }
 func (m *stubMemoryStore) DeleteMatchingFacts(_ context.Context, _ string) error                { return nil }
 func (m *stubMemoryStore) DecayOldFacts(_ context.Context) error                                { return nil }
 func (m *stubMemoryStore) BuildContext(_ context.Context, _ []float32) (string, error) {
@@ -469,14 +470,218 @@ func TestBuildMessagesImagesFromTask(t *testing.T) {
 	}
 }
 
+// --- Extraction pipeline tests ---
+
+// recordingMemoryStore tracks calls for extraction pipeline verification.
+type recordingMemoryStore struct {
+	stubMemoryStore
+	mu            sync.Mutex
+	upserted      []ExtractedFact
+	deletedIDs    []string
+	decayCalled   bool
+	searchResults []ScoredFact
+}
+
+func (m *recordingMemoryStore) UpsertFact(_ context.Context, fact, category string, _ []float32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.upserted = append(m.upserted, ExtractedFact{Fact: fact, Category: category})
+	return nil
+}
+
+func (m *recordingMemoryStore) DeleteFact(_ context.Context, factID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deletedIDs = append(m.deletedIDs, factID)
+	return nil
+}
+
+func (m *recordingMemoryStore) SearchFacts(_ context.Context, _ []float32, _ int) ([]ScoredFact, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.searchResults, nil
+}
+
+func (m *recordingMemoryStore) DecayOldFacts(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.decayCalled = true
+	return nil
+}
+
+func (m *recordingMemoryStore) getUpserted() []ExtractedFact {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]ExtractedFact, len(m.upserted))
+	copy(cp, m.upserted)
+	return cp
+}
+
+func (m *recordingMemoryStore) getDeletedIDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]string, len(m.deletedIDs))
+	copy(cp, m.deletedIDs)
+	return cp
+}
+
+func TestExtractionSkipsTrivialMessages(t *testing.T) {
+	if shouldExtractFacts("ok") {
+		t.Error("should skip 'ok'")
+	}
+	if shouldExtractFacts("thanks") {
+		t.Error("should skip 'thanks'")
+	}
+	if shouldExtractFacts("wkwk") {
+		t.Error("should skip 'wkwk'")
+	}
+	if shouldExtractFacts("short") {
+		t.Error("should skip messages < 10 chars")
+	}
+	if !shouldExtractFacts("I work as a software engineer") {
+		t.Error("should extract real content")
+	}
+}
+
+func TestExtractionPipelineExtractsFacts(t *testing.T) {
+	mem := &recordingMemoryStore{}
+	store := &recordingStore{}
+	emb := &stubEmbedding{}
+
+	// Provider responds to main call, then returns facts for extraction.
+	extractionResp := `[{"fact":"User is a Go developer","category":"work"}]`
+	provider := &capturingProvider{resp: ChatResponse{Content: "hello"}}
+	provider.extractionResp = &ChatResponse{Content: extractionResp}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+		WithUserMemory(mem),
+		WithEmbedding(emb),
+	)
+
+	task := AgentTask{
+		Input:   "I am a Go developer and love building frameworks",
+		Context: map[string]any{ContextThreadID: "t1"},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for background persist + extraction
+	time.Sleep(200 * time.Millisecond)
+
+	upserted := mem.getUpserted()
+	if len(upserted) != 1 {
+		t.Fatalf("expected 1 upserted fact, got %d", len(upserted))
+	}
+	if upserted[0].Fact != "User is a Go developer" {
+		t.Errorf("fact = %q, want %q", upserted[0].Fact, "User is a Go developer")
+	}
+}
+
+func TestExtractionSkipsTrivialInput(t *testing.T) {
+	mem := &recordingMemoryStore{}
+	store := &recordingStore{}
+	emb := &stubEmbedding{}
+
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+		WithUserMemory(mem),
+		WithEmbedding(emb),
+	)
+
+	task := AgentTask{
+		Input:   "thanks",
+		Context: map[string]any{ContextThreadID: "t1"},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Provider should only be called once (main call), not for extraction.
+	provider.mu.Lock()
+	callCount := len(provider.reqs)
+	provider.mu.Unlock()
+	if callCount != 1 {
+		t.Errorf("expected 1 provider call (main only), got %d", callCount)
+	}
+
+	if len(mem.getUpserted()) != 0 {
+		t.Error("should not extract facts from trivial message")
+	}
+}
+
+func TestExtractionHandlesSupersedes(t *testing.T) {
+	oldFactID := "fact-jakarta"
+	mem := &recordingMemoryStore{
+		searchResults: []ScoredFact{
+			{Fact: Fact{ID: oldFactID, Fact: "Lives in Jakarta"}, Score: 0.85},
+		},
+	}
+	store := &recordingStore{}
+	emb := &stubEmbedding{}
+
+	extractionResp := `[{"fact":"User moved to Bali","category":"personal","supersedes":"Lives in Jakarta"}]`
+	provider := &capturingProvider{resp: ChatResponse{Content: "noted"}}
+	provider.extractionResp = &ChatResponse{Content: extractionResp}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+		WithUserMemory(mem),
+		WithEmbedding(emb),
+	)
+
+	task := AgentTask{
+		Input:   "By the way, I just moved to Bali last month",
+		Context: map[string]any{ContextThreadID: "t1"},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Old fact should be deleted
+	deleted := mem.getDeletedIDs()
+	if len(deleted) != 1 || deleted[0] != oldFactID {
+		t.Errorf("expected deleted fact %q, got %v", oldFactID, deleted)
+	}
+
+	// New fact should be upserted
+	upserted := mem.getUpserted()
+	if len(upserted) != 1 || upserted[0].Fact != "User moved to Bali" {
+		t.Errorf("expected upserted 'User moved to Bali', got %v", upserted)
+	}
+}
+
+func TestParseExtractedFactsMarkdownFence(t *testing.T) {
+	r := "```json\n[{\"fact\":\"User likes Go\",\"category\":\"preference\"}]\n```"
+	facts := parseExtractedFacts(r)
+	if len(facts) != 1 {
+		t.Fatalf("expected 1, got %d", len(facts))
+	}
+	if facts[0].Fact != "User likes Go" {
+		t.Errorf("fact = %q, want %q", facts[0].Fact, "User likes Go")
+	}
+}
+
 // --- Test helpers ---
 
 // capturingProvider records all ChatRequests for inspection.
 // Thread-safe: auto-extraction calls the provider from a background goroutine.
+// If extractionResp is set, the second call returns it instead of resp.
 type capturingProvider struct {
-	resp ChatResponse
-	mu   sync.Mutex
-	reqs []ChatRequest
+	resp           ChatResponse
+	extractionResp *ChatResponse // returned on 2nd+ call if non-nil
+	mu             sync.Mutex
+	reqs           []ChatRequest
 }
 
 func (p *capturingProvider) Name() string { return "capturing" }
@@ -499,6 +704,14 @@ func (p *capturingProvider) firstCall() ChatRequest {
 
 func (p *capturingProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
 	p.record(req)
+	if p.extractionResp != nil {
+		p.mu.Lock()
+		n := len(p.reqs)
+		p.mu.Unlock()
+		if n > 1 {
+			return *p.extractionResp, nil
+		}
+	}
 	return p.resp, nil
 }
 func (p *capturingProvider) ChatWithTools(_ context.Context, req ChatRequest, _ []ToolDefinition) (ChatResponse, error) {

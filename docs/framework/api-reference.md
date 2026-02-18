@@ -167,6 +167,7 @@ type MemoryStore interface {
     UpsertFact(ctx context.Context, fact, category string, embedding []float32) error
     SearchFacts(ctx context.Context, embedding []float32, topK int) ([]ScoredFact, error)
     BuildContext(ctx context.Context, queryEmbedding []float32) (string, error)
+    DeleteFact(ctx context.Context, factID string) error
     DeleteMatchingFacts(ctx context.Context, pattern string) error
     DecayOldFacts(ctx context.Context) error
     Init(ctx context.Context) error
@@ -178,8 +179,9 @@ type MemoryStore interface {
 | `UpsertFact` | Insert a new fact or merge with semantically similar existing fact (cosine > 0.85) |
 | `SearchFacts` | Vector search over stored facts; returns `[]ScoredFact` sorted by score descending |
 | `BuildContext` | Build formatted memory context string from top facts (by confidence + recency) |
+| `DeleteFact` | Delete a single fact by its ID (used by the supersedes pipeline) |
 | `DeleteMatchingFacts` | Delete facts whose text matches a pattern (SQL LIKE) |
-| `DecayOldFacts` | Multiply confidence by 0.95 for facts not updated in 7+ days; prune if < 0.3 and > 30 days old |
+| `DecayOldFacts` | Multiply confidence by 0.95 for facts not updated in 7+ days; prune if < 0.3 and > 30 days old. Called automatically with ~5% probability per conversation turn when `WithUserMemory` is set |
 | `Init` | Create `user_facts` table |
 
 **Implementations:**

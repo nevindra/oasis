@@ -73,10 +73,17 @@ func ShouldExtract(text string) bool {
 }
 
 // ParseExtractedFacts parses the LLM's fact extraction response.
+// Handles both raw JSON arrays and markdown-fenced responses (```json...```).
 func ParseExtractedFacts(response string) []ExtractedFact {
+	response = strings.TrimSpace(response)
 	var facts []ExtractedFact
 	if err := json.Unmarshal([]byte(response), &facts); err != nil {
-		return nil
+		// LLM sometimes wraps JSON in markdown fences — find the array.
+		start := strings.Index(response, "[")
+		end := strings.LastIndex(response, "]")
+		if start >= 0 && end > start {
+			_ = json.Unmarshal([]byte(response[start:end+1]), &facts)
+		}
 	}
 	return facts
 }

@@ -50,6 +50,17 @@ func TestParseFactsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseFactsMarkdownFence(t *testing.T) {
+	r := "```json\n[{\"fact\":\"User likes Go\",\"category\":\"preference\"}]\n```"
+	facts := ParseExtractedFacts(r)
+	if len(facts) != 1 {
+		t.Fatalf("expected 1, got %d", len(facts))
+	}
+	if facts[0].Fact != "User likes Go" {
+		t.Errorf("fact = %q, want %q", facts[0].Fact, "User likes Go")
+	}
+}
+
 func TestParseFactsWithSupersedes(t *testing.T) {
 	r := `[{"fact":"User moved to Bali","category":"personal","supersedes":"Lives in Jakarta"}]`
 	facts := ParseExtractedFacts(r)

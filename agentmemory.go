@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"strings"
 )
 
@@ -115,6 +116,10 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 	}
 
 	go func() {
+		// Detach from parent cancellation so persist + extraction can finish
+		// even after the handler returns. Inherits context values (trace IDs).
+		bgCtx := context.WithoutCancel(ctx)
+
 		userMsg := Message{
 			ID: NewID(), ThreadID: threadID,
 			Role: "user", Content: userText, CreatedAt: NowUnix(),
@@ -122,13 +127,13 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 
 		// Embed before storing so we only write once.
 		if m.embedding != nil {
-			embs, err := m.embedding.Embed(ctx, []string{userText})
+			embs, err := m.embedding.Embed(bgCtx, []string{userText})
 			if err == nil && len(embs) > 0 {
 				userMsg.Embedding = embs[0]
 			}
 		}
 
-		if err := m.store.StoreMessage(ctx, userMsg); err != nil {
+		if err := m.store.StoreMessage(bgCtx, userMsg); err != nil {
 			log.Printf("[agent:%s] persist user msg: %v", agentName, err)
 		}
 
@@ -136,52 +141,141 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 			ID: NewID(), ThreadID: threadID,
 			Role: "assistant", Content: assistantText, CreatedAt: NowUnix(),
 		}
-		if err := m.store.StoreMessage(ctx, asstMsg); err != nil {
+		if err := m.store.StoreMessage(bgCtx, asstMsg); err != nil {
 			log.Printf("[agent:%s] persist assistant msg: %v", agentName, err)
 		}
 
 		// Auto-extract user facts from this conversation turn.
 		if m.memory != nil && m.provider != nil && m.embedding != nil {
-			facts := extractUserFacts(ctx, m.provider, userText, assistantText)
-			for _, f := range facts {
-				embs, err := m.embedding.Embed(ctx, []string{f.Fact})
-				if err == nil && len(embs) > 0 {
-					if err := m.memory.UpsertFact(ctx, f.Fact, f.Category, embs[0]); err != nil {
-						log.Printf("[agent:%s] upsert fact: %v", agentName, err)
-					}
+			m.extractAndPersistFacts(bgCtx, agentName, userText, assistantText)
+
+			// Probabilistic decay: ~5% chance per turn.
+			if rand.IntN(20) == 0 {
+				if err := m.memory.DecayOldFacts(bgCtx); err != nil {
+					log.Printf("[agent:%s] decay facts: %v", agentName, err)
 				}
 			}
 		}
 	}()
 }
 
-// extractUserFacts calls the provider with a lightweight prompt to extract
-// durable user facts from a single conversation exchange.
-// Returns nil if nothing significant was found or the call fails.
-func extractUserFacts(ctx context.Context, p Provider, userMsg, assistantMsg string) []ExtractedFact {
-	const systemPrompt = `Extract concrete, durable facts about the user from this conversation exchange.
-Return a JSON array: [{"fact":"...","category":"..."}]
-Categories: interests, preferences, background, goals, personal, skills
-Rules:
-- Only extract specific facts stated or strongly implied by the user
-- Skip trivial or ephemeral things (greetings, thanks, small talk, one-off actions)
-- Return [] if nothing significant was revealed
-- Return ONLY the JSON array, no other text`
+// extractFactsPrompt is the system prompt for fact extraction with supersedes support.
+const extractFactsPrompt = `You are a memory extraction system. Given a conversation between a user and an assistant, extract factual information ABOUT THE USER.
 
-	resp, err := p.Chat(ctx, ChatRequest{
+Extract facts like:
+- Personal info (name, job, location, timezone)
+- Preferences (communication style, tools, languages)
+- Habits and routines
+- Current projects or goals
+- Relationships and people they mention
+
+Rules:
+- Only extract facts clearly stated or strongly implied by the USER (not the assistant)
+- Each fact should be a single, concise statement
+- Categorize each fact as: personal, preference, work, habit, or relationship
+- If a new fact CONTRADICTS or UPDATES a previously known fact, include a "supersedes" field with the old fact text
+- If no new user facts are present, return an empty array
+- Do NOT extract facts about the assistant or general knowledge
+
+Return a JSON array:
+[{"fact": "User moved to Bali", "category": "personal", "supersedes": "Lives in Jakarta"}]
+
+If the fact does not supersede anything, omit the "supersedes" field:
+[{"fact": "User's name is Nev", "category": "personal"}]
+
+Return ONLY the JSON array, no extra text. Return [] if no facts found.`
+
+// shouldExtractFacts returns true if the user message is worth running
+// fact extraction on. Skips trivial messages to avoid wasted LLM calls.
+func shouldExtractFacts(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if len(trimmed) < 10 {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, s := range trivialMessages {
+		if lower == s {
+			return false
+		}
+	}
+	return true
+}
+
+var trivialMessages = []string{
+	"ok", "oke", "okay", "okey",
+	"thanks", "thank you", "makasih", "thx", "ty",
+	"yes", "no", "ya", "ga", "gak", "nggak", "engga",
+	"nice", "sip", "siap", "oke sip",
+	"lol", "haha", "wkwk", "wkwkwk",
+	"hmm", "hm", "oh", "ah",
+	"good", "great", "cool", "yep", "nope",
+}
+
+// extractAndPersistFacts runs fact extraction on the conversation turn and
+// persists results to MemoryStore, including semantic supersedes handling.
+func (m *agentMemory) extractAndPersistFacts(ctx context.Context, agentName, userText, assistantText string) {
+	if !shouldExtractFacts(userText) {
+		return
+	}
+
+	resp, err := m.provider.Chat(ctx, ChatRequest{
 		Messages: []ChatMessage{
-			SystemMessage(systemPrompt),
-			UserMessage(fmt.Sprintf("User: %s\nAssistant: %s", userMsg, assistantMsg)),
+			SystemMessage(extractFactsPrompt),
+			UserMessage(fmt.Sprintf("User: %s\nAssistant: %s", userText, assistantText)),
 		},
 	})
 	if err != nil {
-		return nil
+		return
 	}
 
-	content := strings.TrimSpace(resp.Content)
+	facts := parseExtractedFacts(resp.Content)
+	for _, f := range facts {
+		// Handle supersedes: semantically find and delete the old fact.
+		if f.Supersedes != nil {
+			m.deleteSupersededFact(ctx, agentName, *f.Supersedes)
+		}
+
+		embs, err := m.embedding.Embed(ctx, []string{f.Fact})
+		if err == nil && len(embs) > 0 {
+			if err := m.memory.UpsertFact(ctx, f.Fact, f.Category, embs[0]); err != nil {
+				log.Printf("[agent:%s] upsert fact: %v", agentName, err)
+			}
+		}
+	}
+}
+
+// supersedesMinScore is the cosine similarity threshold for matching
+// a superseded fact. Lower than the dedup threshold (0.85) because
+// supersedes targets contradictions that are semantically similar but different.
+const supersedesMinScore float32 = 0.80
+
+// deleteSupersededFact embeds the superseded text, searches for semantically
+// similar facts, and deletes matches above the threshold.
+func (m *agentMemory) deleteSupersededFact(ctx context.Context, agentName, supersededText string) {
+	embs, err := m.embedding.Embed(ctx, []string{supersededText})
+	if err != nil || len(embs) == 0 {
+		return
+	}
+	results, err := m.memory.SearchFacts(ctx, embs[0], 5)
+	if err != nil {
+		return
+	}
+	for _, r := range results {
+		if r.Score >= supersedesMinScore {
+			if err := m.memory.DeleteFact(ctx, r.Fact.ID); err != nil {
+				log.Printf("[agent:%s] delete superseded fact %s: %v", agentName, r.Fact.ID, err)
+			}
+		}
+	}
+}
+
+// parseExtractedFacts parses the LLM's fact extraction response.
+// Handles both raw JSON arrays and markdown-fenced responses.
+func parseExtractedFacts(response string) []ExtractedFact {
+	content := strings.TrimSpace(response)
 	var facts []ExtractedFact
 	if err := json.Unmarshal([]byte(content), &facts); err != nil {
-		// LLM sometimes wraps JSON in markdown — try to find the array
+		// LLM sometimes wraps JSON in markdown fences — find the array.
 		start := strings.Index(content, "[")
 		end := strings.LastIndex(content, "]")
 		if start >= 0 && end > start {
