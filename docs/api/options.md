@@ -19,9 +19,10 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 
 Passed to `WithConversationMemory`.
 
-| Option | Description |
-|--------|-------------|
-| `CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption)` | Enable cross-thread semantic recall |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `MaxHistory(n int)` | 10 | Max recent messages loaded into LLM context |
+| `CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption)` | — | Enable cross-thread semantic recall |
 
 ## SemanticOption
 

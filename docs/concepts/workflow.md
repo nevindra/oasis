@@ -207,6 +207,41 @@ oasis.Step("flaky", flakyFn, oasis.Retry(3, 2*time.Second))       // per-step
 oasis.WithDefaultRetry(2, time.Second)                              // workflow-wide
 ```
 
+## Suspend/Resume
+
+Steps can pause execution to await external input (human approval, async data, etc.):
+
+```go
+oasis.Step("gate", func(ctx context.Context, wCtx *oasis.WorkflowContext) error {
+    if data, ok := oasis.ResumeData(wCtx); ok {
+        // Resumed — data contains the human's response.
+        wCtx.Set("gate.approved", true)
+        return nil
+    }
+    return oasis.Suspend(json.RawMessage(`{"needs": "approval"}`))
+}, oasis.After("prepare"))
+```
+
+When a step calls `Suspend`, the workflow:
+1. Returns `*ErrSuspended` from `Execute` (not `WorkflowError` — suspension is not a failure)
+2. Preserves all completed step results and context values
+3. Does **not** call `OnFinish` or `OnError` callbacks
+
+Resume with the human's response:
+
+```go
+result, err := wf.Execute(ctx, task)
+
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    fmt.Println("Waiting for:", string(suspended.Payload))
+    // Later, with human input:
+    result, err = suspended.Resume(ctx, json.RawMessage(`"approved"`))
+}
+```
+
+On resume, completed steps are skipped (not re-executed). The suspended step re-runs with `ResumeData` available. Multiple suspend points work — each `Resume` advances to the next `Suspend` or completion.
+
 ## DAG Validation
 
 `NewWorkflow` validates at construction time:

@@ -52,6 +52,28 @@ type WorkflowError struct {
 
 Implements `Unwrap()` for `errors.Is`/`errors.As` chains.
 
+## ErrSuspended
+
+**File:** `suspend.go`
+
+```go
+// ErrSuspended is returned by Execute() when a workflow step or
+// processor suspends execution to await external input.
+type ErrSuspended struct {
+    Step    string           // step or agent that suspended
+    Payload json.RawMessage  // context for the human
+}
+```
+
+Call `Resume(ctx, data)` to continue execution with the human's response. Resume is single-use.
+
+```go
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    result, err = suspended.Resume(ctx, json.RawMessage(`"approved"`))
+}
+```
+
 ## Error Patterns
 
 ### Tool Errors

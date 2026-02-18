@@ -97,6 +97,42 @@ pipeline, _ := oasis.NewWorkflow("pipeline", "Research with approval",
 )
 ```
 
+## Suspend/Resume (Asynchronous Gate)
+
+For cases where you can't block the thread (webhooks, async UIs), use `Suspend` to pause and `Resume` later:
+
+```go
+pipeline, _ := oasis.NewWorkflow("pipeline", "Research with async approval",
+    oasis.AgentStep("research", researcher),
+    oasis.Step("approve", func(ctx context.Context, wCtx *oasis.WorkflowContext) error {
+        if data, ok := oasis.ResumeData(wCtx); ok {
+            var d struct{ Approved bool `json:"approved"` }
+            json.Unmarshal(data, &d)
+            if !d.Approved {
+                return fmt.Errorf("rejected by human")
+            }
+            return nil
+        }
+        output, _ := wCtx.Get("research.output")
+        return oasis.Suspend(json.RawMessage(fmt.Sprintf(
+            `{"question": "Approve research?", "preview": %q}`, output,
+        )))
+    }, oasis.After("research")),
+    oasis.AgentStep("write", writer, oasis.After("approve")),
+)
+
+// Execute — suspends at "approve".
+_, err := pipeline.Execute(ctx, task)
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    // Store suspended somewhere (e.g. send Payload to a webhook).
+    // Later, when human responds:
+    result, err := suspended.Resume(ctx, json.RawMessage(`{"approved": true}`))
+}
+```
+
+Processors in LLMAgent/Network can also call `Suspend()` — the agent returns `*ErrSuspended` with the same resume pattern.
+
 ## Tips
 
 - No handler = no-op. Processors that call `InputHandlerFromContext` should skip gracefully.

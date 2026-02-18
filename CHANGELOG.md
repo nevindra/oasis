@@ -6,6 +6,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- `MaxHistory(n int) ConversationOption` — control how many recent messages are loaded into LLM context per thread; pass to `WithConversationMemory(store, MaxHistory(30))`
+- **Suspend/Resume** — pause agent or workflow execution to await external input, then continue from where it left off
+  - `Suspend(payload json.RawMessage) error` — call from any step function or processor to signal the engine to pause
+  - `ErrSuspended` — returned by `Execute()` when execution is suspended; inspect `Payload` for context, call `Resume(ctx, data)` to continue
+  - `ResumeData(wCtx *WorkflowContext) (json.RawMessage, bool)` — retrieve resume data inside a workflow step
+  - `StepSuspended` step status — marks the step that triggered the suspension
+  - Works in Workflows (DAG state preserved across suspend/resume cycles), LLMAgent, and Network (conversation history preserved)
+  - Processors (`PreProcessor`, `PostProcessor`, `PostToolProcessor`) can return `Suspend()` to trigger human-in-the-loop gates
+
 ## [0.2.1] - 2026-02-18
 
 ### Changed

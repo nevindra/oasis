@@ -14,6 +14,10 @@ import (
 // Applied when MinScore is not passed to CrossThreadSearch.
 const defaultSemanticRecallMinScore float32 = 0.60
 
+// defaultMaxHistory is the number of recent messages loaded from conversation
+// history when MaxHistory is not passed to WithConversationMemory.
+const defaultMaxHistory = 10
+
 // agentMemory provides shared memory wiring for LLMAgent and Network.
 // All fields are optional — nil means the feature is disabled.
 type agentMemory struct {
@@ -22,6 +26,7 @@ type agentMemory struct {
 	memory            MemoryStore       // user facts
 	crossThreadSearch bool              // enabled by CrossThreadSearch option
 	semanticMinScore  float32           // 0 = use defaultSemanticRecallMinScore
+	maxHistory        int               // 0 = use defaultMaxHistory
 	provider          Provider          // for auto-extraction when memory != nil
 }
 
@@ -38,7 +43,11 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 	// Conversation history
 	threadID := task.TaskThreadID()
 	if m.store != nil && threadID != "" {
-		history, err := m.store.GetMessages(ctx, threadID, 20)
+		limit := m.maxHistory
+		if limit <= 0 {
+			limit = defaultMaxHistory
+		}
+		history, err := m.store.GetMessages(ctx, threadID, limit)
 		if err != nil {
 			log.Printf("[agent:%s] load history: %v", agentName, err)
 		}

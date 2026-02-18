@@ -175,6 +175,51 @@ func TestLLMAgentConversationMemory(t *testing.T) {
 	}
 }
 
+// limitCapturingStore records the limit passed to GetMessages.
+type limitCapturingStore struct {
+	stubStore
+	capturedLimit int
+}
+
+func (s *limitCapturingStore) GetMessages(_ context.Context, _ string, limit int) ([]Message, error) {
+	s.capturedLimit = limit
+	return nil, nil
+}
+
+func TestMaxHistoryOption(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      []ConversationOption
+		wantLimit int
+	}{
+		{"default", nil, defaultMaxHistory},
+		{"custom", []ConversationOption{MaxHistory(50)}, 50},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &limitCapturingStore{}
+			provider := &mockProvider{
+				name:      "test",
+				responses: []ChatResponse{{Content: "ok"}},
+			}
+
+			opts := []AgentOption{WithConversationMemory(store, tt.opts...)}
+			agent := NewLLMAgent("test", "test", provider, opts...)
+
+			_, err := agent.Execute(context.Background(), AgentTask{
+				Input:   "hi",
+				Context: map[string]any{ContextThreadID: "t1"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if store.capturedLimit != tt.wantLimit {
+				t.Errorf("GetMessages limit = %d, want %d", store.capturedLimit, tt.wantLimit)
+			}
+		})
+	}
+}
+
 func TestLLMAgentNoThreadIDSkipsHistory(t *testing.T) {
 	store := &recordingStore{
 		history: []Message{{Role: "user", Content: "should not appear"}},

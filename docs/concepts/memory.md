@@ -28,11 +28,16 @@ graph TB
 
 ### 1. Conversation Memory
 
-Loads recent messages before the LLM call, persists the exchange afterward.
+Loads recent messages before the LLM call, persists the exchange afterward. By default, the last 10 messages are loaded.
 
 ```go
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithConversationMemory(store),
+)
+
+// Custom history limit
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store, oasis.MaxHistory(30)),
 )
 ```
 

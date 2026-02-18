@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"sync"
@@ -99,6 +100,7 @@ type agentConfig struct {
 	memory           MemoryStore
 	crossThreadSearch bool    // enabled by CrossThreadSearch option
 	semanticMinScore  float32 // set by MinScore inside CrossThreadSearch
+	maxHistory        int     // set by MaxHistory inside WithConversationMemory
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -174,6 +176,13 @@ func MinScore(score float32) SemanticOption {
 	return func(c *agentConfig) { c.semanticMinScore = score }
 }
 
+// MaxHistory sets the maximum number of recent messages loaded from conversation
+// history before the LLM call. The zero value (or omitting this option) uses
+// a built-in default of 10.
+func MaxHistory(n int) ConversationOption {
+	return func(c *agentConfig) { c.maxHistory = n }
+}
+
 // WithConversationMemory enables conversation history on the agent.
 // When set and task.Context["thread_id"] is present, the agent loads
 // recent messages before the LLM call and persists the exchange afterward.
@@ -181,6 +190,7 @@ func MinScore(score float32) SemanticOption {
 // Optional ConversationOption values enable additional features:
 //
 //	oasis.WithConversationMemory(store)                                                  // history only
+//	oasis.WithConversationMemory(store, oasis.MaxHistory(30))                            // custom history limit
 //	oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding))              // + cross-thread recall
 //	oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7))) // + custom threshold
 func WithConversationMemory(s Store, opts ...ConversationOption) AgentOption {
@@ -230,15 +240,16 @@ type dispatchFunc func(ctx context.Context, tc ToolCall) (string, Usage)
 
 // loopConfig holds everything the shared runLoop needs to run.
 type loopConfig struct {
-	name         string           // for logging (e.g. "agent:foo", "network:bar")
-	provider     Provider
-	tools        []ToolDefinition // pre-built tool defs (including ask_user if applicable)
-	processors   *ProcessorChain
-	maxIter      int
-	mem          *agentMemory
-	inputHandler InputHandler
-	dispatch     dispatchFunc
-	systemPrompt string
+	name           string           // for logging (e.g. "agent:foo", "network:bar")
+	provider       Provider
+	tools          []ToolDefinition // pre-built tool defs (including ask_user if applicable)
+	processors     *ProcessorChain
+	maxIter        int
+	mem            *agentMemory
+	inputHandler   InputHandler
+	dispatch       dispatchFunc
+	systemPrompt   string
+	resumeMessages []ChatMessage // if set, replaces buildMessages (used by suspend/resume)
 }
 
 // runLoop is the shared tool-calling loop used by both LLMAgent and Network.
@@ -253,7 +264,13 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 	}
 
 	// Build initial messages (system prompt + user memory + history + user input).
-	messages := cfg.mem.buildMessages(ctx, cfg.name, cfg.systemPrompt, task)
+	// If resumeMessages is set (suspend/resume), use those instead.
+	var messages []ChatMessage
+	if len(cfg.resumeMessages) > 0 {
+		messages = cfg.resumeMessages
+	} else {
+		messages = cfg.mem.buildMessages(ctx, cfg.name, cfg.systemPrompt, task)
+	}
 
 	// lastAgentOutput tracks the most recent sub-agent result so we can fall
 	// back to it when the router produces an empty final response (common for
@@ -268,6 +285,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 		if err := cfg.processors.RunPreLLM(ctx, &req); err != nil {
 			if ch != nil {
 				close(ch)
+			}
+			if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
+				return AgentResult{Usage: totalUsage}, s
 			}
 			return handleProcessorError(err, totalUsage)
 		}
@@ -305,6 +325,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 			if ch != nil {
 				close(ch)
 			}
+			if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
+				return AgentResult{Usage: totalUsage}, s
+			}
 			return handleProcessorError(err, totalUsage)
 		}
 
@@ -341,6 +364,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 			if err := cfg.processors.RunPostTool(ctx, tc, &result); err != nil {
 				if ch != nil {
 					close(ch)
+				}
+				if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
+					return AgentResult{Usage: totalUsage}, s
 				}
 				return handleProcessorError(err, totalUsage)
 			}
@@ -383,6 +409,34 @@ func handleProcessorError(err error, usage Usage) (AgentResult, error) {
 		return AgentResult{Output: halt.Response, Usage: usage}, nil
 	}
 	return AgentResult{Usage: usage}, err
+}
+
+// checkSuspendLoop checks if a processor error is a suspend signal.
+// Returns a fully-wired ErrSuspended (with resume closure) if it is, nil otherwise.
+// The resume closure captures the current conversation messages, appends the
+// human's response, and re-enters runLoop.
+func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task AgentTask) *ErrSuspended {
+	var suspend *errSuspend
+	if !errors.As(err, &suspend) {
+		return nil
+	}
+
+	// Snapshot messages for resume closure.
+	snapshot := make([]ChatMessage, len(messages))
+	copy(snapshot, messages)
+
+	return &ErrSuspended{
+		Step:    cfg.name,
+		Payload: suspend.payload,
+		resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
+			resumed := make([]ChatMessage, len(snapshot)+1)
+			copy(resumed, snapshot)
+			resumed[len(snapshot)] = UserMessage("Human input: " + string(data))
+			resumeCfg := cfg
+			resumeCfg.resumeMessages = resumed
+			return runLoop(ctx, resumeCfg, task, nil)
+		},
+	}
 }
 
 // --- parallel tool dispatch ---

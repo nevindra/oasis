@@ -3,6 +3,7 @@ package oasis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -689,6 +690,8 @@ type executionState struct {
 	results        map[string]StepResult
 	failedStep     string          // name of first step that failed, empty if none
 	failureSkipped map[string]bool // steps skipped due to upstream failure (not When() condition)
+	suspendedStep  string          // name of step that suspended
+	suspendPayload json.RawMessage // payload from the suspended step
 	mu             sync.Mutex      // protects results, failedStep, failureSkipped
 	cancel         context.CancelFunc
 }
@@ -724,6 +727,74 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 	// Run the DAG.
 	w.runDAG(ctx, state)
 
+	return w.buildResult(state, task)
+}
+
+// executeResume continues a suspended workflow from the given step.
+func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedResults map[string]StepResult, contextValues map[string]any, _ string, data json.RawMessage) (AgentResult, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Reconstruct workflow context from snapshot.
+	wCtx := newWorkflowContext(task)
+	for k, v := range contextValues {
+		wCtx.Set(k, v)
+	}
+	// Inject resume data for the suspended step.
+	wCtx.Set(resumeDataKey, data)
+
+	state := &executionState{
+		wCtx:           wCtx,
+		results:        make(map[string]StepResult),
+		failureSkipped: make(map[string]bool),
+		cancel:         cancel,
+	}
+
+	// Pre-populate completed steps so they don't re-execute.
+	for k, v := range completedResults {
+		state.results[k] = v
+	}
+
+	// Re-run the DAG — completed steps are skipped, suspended step re-executes.
+	w.runDAG(ctx, state)
+
+	// Clear resume data after execution.
+	wCtx.Set(resumeDataKey, nil)
+
+	return w.buildResult(state, task)
+}
+
+// buildResult converts execution state into an AgentResult after the DAG completes.
+// Handles suspension (returns ErrSuspended), failure (returns WorkflowError),
+// and success. Shared by Execute and executeResume.
+func (w *Workflow) buildResult(state *executionState, task AgentTask) (AgentResult, error) {
+	// Check for suspension.
+	if state.suspendedStep != "" {
+		snapshotResults := make(map[string]StepResult)
+		for k, v := range state.results {
+			if v.Status == StepSuccess || (v.Status == StepSkipped && !state.failureSkipped[k]) {
+				snapshotResults[k] = v
+			}
+		}
+		snapshotValues := make(map[string]any)
+		state.wCtx.mu.RLock()
+		for k, v := range state.wCtx.values {
+			snapshotValues[k] = v
+		}
+		state.wCtx.mu.RUnlock()
+
+		suspendedStep := state.suspendedStep
+		suspendPayload := state.suspendPayload
+
+		return AgentResult{}, &ErrSuspended{
+			Step:    suspendedStep,
+			Payload: suspendPayload,
+			resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
+				return w.executeResume(ctx, task, snapshotResults, snapshotValues, suspendedStep, data)
+			},
+		}
+	}
+
 	// Build WorkflowResult.
 	var totalUsage Usage
 	if u, ok := state.wCtx.Get("_usage"); ok {
@@ -754,7 +825,6 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 		Usage:   totalUsage,
 	}
 
-	// Call onFinish callback.
 	if w.onFinish != nil {
 		w.safeCallback(func() { w.onFinish(wfResult) })
 	}
@@ -848,9 +918,9 @@ func (w *Workflow) runDAG(ctx context.Context, state *executionState) {
 	}
 }
 
-// hasFailedUpstream checks if any upstream dependency of a step has failed or
-// was itself skipped due to an upstream failure. Steps skipped by a When()
-// condition are treated as satisfied and do NOT propagate failure.
+// hasFailedUpstream checks if any upstream dependency of a step has failed,
+// suspended, or was itself skipped due to an upstream failure. Steps skipped
+// by a When() condition are treated as satisfied and do NOT propagate failure.
 func (w *Workflow) hasFailedUpstream(s *stepConfig, state *executionState) bool {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -859,7 +929,7 @@ func (w *Workflow) hasFailedUpstream(s *stepConfig, state *executionState) bool 
 		if !ok {
 			continue
 		}
-		if r.Status == StepFailed {
+		if r.Status == StepFailed || r.Status == StepSuspended {
 			return true
 		}
 		if r.Status == StepSkipped && state.failureSkipped[dep] {
@@ -914,6 +984,24 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 	err := w.executeWithRetry(ctx, s, run)
 
 	duration := time.Since(start)
+
+	// Check for suspend (before error handling — suspend is not a failure).
+	var suspend *errSuspend
+	if errors.As(err, &suspend) {
+		state.mu.Lock()
+		state.results[s.name] = StepResult{
+			Name:     s.name,
+			Status:   StepSuspended,
+			Duration: duration,
+		}
+		if state.suspendedStep == "" {
+			state.suspendedStep = s.name
+			state.suspendPayload = suspend.payload
+		}
+		state.mu.Unlock()
+		log.Printf(" [workflow] step %q suspended", s.name)
+		return
+	}
 
 	if err != nil {
 		state.mu.Lock()
@@ -972,6 +1060,12 @@ func (w *Workflow) executeWithRetry(ctx context.Context, s *stepConfig, run func
 		lastErr = run()
 		if lastErr == nil {
 			return nil
+		}
+
+		// Don't retry on suspend — it's not a failure.
+		var susp *errSuspend
+		if errors.As(lastErr, &susp) {
+			return lastErr
 		}
 
 		// Don't retry on context cancellation.
