@@ -27,8 +27,8 @@ func main() {
 	cfg := config.Load(os.Getenv("OASIS_CONFIG"))
 
 	// 2. Create providers
+	var routerLLM oasis.Provider = gemini.New(cfg.Intent.APIKey, cfg.Intent.Model)
 	var chatLLM oasis.Provider = gemini.New(cfg.LLM.APIKey, cfg.LLM.Model)
-	var intentLLM oasis.Provider = gemini.New(cfg.Intent.APIKey, cfg.Intent.Model)
 	var actionLLM oasis.Provider = gemini.New(cfg.Action.APIKey, cfg.Action.Model)
 	var embedding oasis.EmbeddingProvider = gemini.NewEmbedding(cfg.Embedding.APIKey, cfg.Embedding.Model, cfg.Embedding.Dimensions)
 
@@ -48,8 +48,8 @@ func main() {
 		}
 		defer shutdown(context.Background())
 
+		routerLLM = observer.WrapProvider(routerLLM, cfg.Intent.Model, inst)
 		chatLLM = observer.WrapProvider(chatLLM, cfg.LLM.Model, inst)
-		intentLLM = observer.WrapProvider(intentLLM, cfg.Intent.Model, inst)
 		actionLLM = observer.WrapProvider(actionLLM, cfg.Action.Model, inst)
 		embedding = observer.WrapEmbedding(embedding, cfg.Embedding.Model, inst)
 
@@ -60,44 +60,59 @@ func main() {
 	store := sqlite.New(cfg.Database.Path)
 	memStore := memsqlite.New(cfg.Database.Path)
 
-	// 5. Create app
-	oasisApp := bot.New(&cfg, bot.Deps{
-		Frontend:  telegram.New(cfg.Telegram.Token),
-		ChatLLM:   chatLLM,
-		IntentLLM: intentLLM,
-		ActionLLM: actionLLM,
-		Embedding: embedding,
-		Store:     store,
-		Memory:    memStore,
-	})
+	// 5. Create frontend + input handler
+	frontend := telegram.New(cfg.Telegram.Token)
+	inputHandler := bot.NewTelegramInputHandler(frontend)
 
-	// 6. Register tools
-	knowledgeTool := knowledge.New(store, embedding)
-	oasisApp.AddTool(wrapTool(knowledgeTool, inst))
+	// 6. Create tools
+	tools := collectTools(cfg, store, embedding, inst)
 
-	scheduleTool := schedule.New(store, cfg.Brain.TimezoneOffset)
-	oasisApp.AddTool(wrapTool(scheduleTool, inst))
+	// 7. Build agents
+	chatAgent := oasis.NewLLMAgent("chat", "Handle casual conversation, questions, and general chat", chatLLM,
+		oasis.WithPrompt(chatPrompt(cfg)),
+		oasis.WithConversationMemory(store),
+		oasis.WithUserMemory(memStore),
+		oasis.WithSemanticSearch(embedding),
+	)
 
-	rememberTool := remember.New(store, embedding)
-	oasisApp.AddTool(wrapTool(rememberTool, inst))
-	oasisApp.SetIngestFile(rememberTool.IngestFile)
+	actionAgent := oasis.NewLLMAgent("action", "Execute tasks using tools: search the web, manage schedules, save knowledge, read/write files, run commands", actionLLM,
+		oasis.WithPrompt(actionPrompt()),
+		oasis.WithTools(tools...),
+		oasis.WithConversationMemory(store),
+		oasis.WithUserMemory(memStore),
+		oasis.WithSemanticSearch(embedding),
+	)
 
-	shellTool := shell.New(cfg.Brain.WorkspacePath, 30)
-	oasisApp.AddTool(wrapTool(shellTool, inst))
+	network := oasis.NewNetwork("oasis", "AI personal assistant", routerLLM,
+		oasis.WithAgents(chatAgent, actionAgent),
+		oasis.WithPrompt(routerPrompt()),
+		oasis.WithInputHandler(inputHandler),
+		oasis.WithMaxIter(15),
+	)
 
-	fileTool := file.New(cfg.Brain.WorkspacePath)
-	oasisApp.AddTool(wrapTool(fileTool, inst))
+	// 8. Run
+	// Note: observer wrapping is on individual providers/tools.
+	// ObservedAgent doesn't support StreamingAgent yet.
+	app := bot.New(&cfg, frontend, network, store, memStore, inputHandler)
+	log.Fatal(app.RunWithSignal())
+}
 
-	httpTool := httptool.New()
-	oasisApp.AddTool(wrapTool(httpTool, inst))
+// collectTools creates all tools with optional observer wrapping.
+func collectTools(cfg config.Config, store oasis.Store, embedding oasis.EmbeddingProvider, inst *observer.Instruments) []oasis.Tool {
+	var tools []oasis.Tool
+
+	tools = append(tools, wrapTool(knowledge.New(store, embedding), inst))
+	tools = append(tools, wrapTool(schedule.New(store, cfg.Brain.TimezoneOffset), inst))
+	tools = append(tools, wrapTool(remember.New(store, embedding), inst))
+	tools = append(tools, wrapTool(shell.New(cfg.Brain.WorkspacePath, 30), inst))
+	tools = append(tools, wrapTool(file.New(cfg.Brain.WorkspacePath), inst))
+	tools = append(tools, wrapTool(httptool.New(), inst))
 
 	if cfg.Search.BraveAPIKey != "" {
-		searchTool := search.New(embedding, cfg.Search.BraveAPIKey)
-		oasisApp.AddTool(wrapTool(searchTool, inst))
+		tools = append(tools, wrapTool(search.New(embedding, cfg.Search.BraveAPIKey), inst))
 	}
 
-	// 7. Run
-	log.Fatal(oasisApp.RunWithSignal())
+	return tools
 }
 
 // wrapTool wraps a tool with observer instrumentation if inst is non-nil.
@@ -106,4 +121,41 @@ func wrapTool(t oasis.Tool, inst *observer.Instruments) oasis.Tool {
 		return t
 	}
 	return observer.WrapTool(t, inst)
+}
+
+// --- System Prompts ---
+
+func chatPrompt(cfg config.Config) string {
+	return `You are Oasis, a personal AI assistant. You are helpful, concise, and friendly.
+Respond naturally in the same language the user uses.
+If the user writes in Indonesian, respond in Indonesian. If in English, respond in English.`
+}
+
+func actionPrompt() string {
+	return `You are Oasis, a personal AI assistant with tools. Use your tools to complete the user's request.
+
+## Tool usage guidelines
+- web_search: Use for general information lookup, quick answers, and finding URLs.
+- knowledge_search: Search saved knowledge and past conversations.
+- remember: Save information to the knowledge base for future reference.
+- schedule_create/schedule_list/schedule_update/schedule_delete: Manage scheduled actions.
+- shell_exec: Execute commands in the workspace directory.
+- file_read/file_write: Read/write files in the workspace.
+- http_fetch: Fetch and extract content from URLs.
+
+Be concise in your final response. Respond in the same language as the user.`
+}
+
+func routerPrompt() string {
+	return `You are a router for Oasis, a personal AI assistant. Your job is to decide which agent should handle the user's message.
+
+You have two agents:
+- agent_chat: For casual conversation, questions, opinions, recommendations, explanations, or anything you can answer from knowledge. Use this for: "what is X?", "recommend me Y", greetings, follow-up questions, casual talk.
+- agent_action: For tasks that require using tools: searching the web, managing schedules, saving/searching knowledge, reading/writing files, running commands. Use this when the user wants to CREATE, UPDATE, DELETE, SEARCH, SCHEDULE, or MONITOR something.
+
+Rules:
+- If the user is asking a question or having conversation, route to agent_chat.
+- If the user wants to perform an operation (search, save, schedule, file ops, etc.), route to agent_action.
+- When in doubt, prefer agent_chat.
+- Always delegate to exactly one agent per message. Pass the user's full message as the task.`
 }
