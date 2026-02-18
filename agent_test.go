@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 )
 
 // stubAgent is a minimal Agent for testing.
@@ -714,5 +716,215 @@ func TestTaskAccessorsWrongType(t *testing.T) {
 
 	if got := task.TaskThreadID(); got != "" {
 		t.Errorf("TaskThreadID() = %q, want empty for non-string value", got)
+	}
+}
+
+// --- Parallel tool execution tests ---
+
+// barrierTool is a Tool where each Execute blocks until all concurrent calls
+// have started. If tools run sequentially, this deadlocks (caught by timeout).
+type barrierTool struct {
+	name    string
+	barrier chan struct{}
+	started chan struct{}
+}
+
+func (b *barrierTool) Definitions() []ToolDefinition {
+	return []ToolDefinition{{Name: b.name, Description: "barrier tool"}}
+}
+
+func (b *barrierTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+	b.started <- struct{}{} // signal: I have started
+	<-b.barrier             // wait for release
+	return ToolResult{Content: "done from " + b.name}, nil
+}
+
+func TestLLMAgentParallelToolExecution(t *testing.T) {
+	const numTools = 3
+	barrier := make(chan struct{})
+	started := make(chan struct{}, numTools)
+
+	// Create tools that share a barrier
+	var tools []Tool
+	for i := 0; i < numTools; i++ {
+		tools = append(tools, &barrierTool{
+			name:    fmt.Sprintf("tool_%d", i),
+			barrier: barrier,
+			started: started,
+		})
+	}
+
+	// Provider returns all tool calls at once, then a final response
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{
+				{ID: "1", Name: "tool_0", Args: json.RawMessage(`{}`)},
+				{ID: "2", Name: "tool_1", Args: json.RawMessage(`{}`)},
+				{ID: "3", Name: "tool_2", Args: json.RawMessage(`{}`)},
+			}},
+			{Content: "all tools completed"},
+		},
+	}
+
+	agent := NewLLMAgent("parallel", "Tests parallel", provider, WithTools(tools...))
+
+	done := make(chan struct{})
+	var result AgentResult
+	var execErr error
+	go func() {
+		result, execErr = agent.Execute(context.Background(), AgentTask{Input: "go"})
+		close(done)
+	}()
+
+	// All 3 tools must start before any can finish.
+	// If sequential, tool_1 would block waiting for tool_0 to finish,
+	// but tool_0 is waiting for all 3 to start — deadlock.
+	for i := 0; i < numTools; i++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("tool did not start — tools likely running sequentially")
+		}
+	}
+
+	// Release all tools
+	close(barrier)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent did not finish in time")
+	}
+
+	if execErr != nil {
+		t.Fatal(execErr)
+	}
+	if result.Output != "all tools completed" {
+		t.Errorf("Output = %q, want %q", result.Output, "all tools completed")
+	}
+}
+
+func TestNetworkParallelToolExecution(t *testing.T) {
+	const numTools = 3
+	barrier := make(chan struct{})
+	started := make(chan struct{}, numTools)
+
+	var tools []Tool
+	for i := 0; i < numTools; i++ {
+		tools = append(tools, &barrierTool{
+			name:    fmt.Sprintf("tool_%d", i),
+			barrier: barrier,
+			started: started,
+		})
+	}
+
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{
+				{ID: "1", Name: "tool_0", Args: json.RawMessage(`{}`)},
+				{ID: "2", Name: "tool_1", Args: json.RawMessage(`{}`)},
+				{ID: "3", Name: "tool_2", Args: json.RawMessage(`{}`)},
+			}},
+			{Content: "network parallel done"},
+		},
+	}
+
+	network := NewNetwork("parallel", "Tests parallel", router, WithTools(tools...))
+
+	done := make(chan struct{})
+	var result AgentResult
+	var execErr error
+	go func() {
+		result, execErr = network.Execute(context.Background(), AgentTask{Input: "go"})
+		close(done)
+	}()
+
+	for i := 0; i < numTools; i++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("tool did not start — tools likely running sequentially")
+		}
+	}
+
+	close(barrier)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("network did not finish in time")
+	}
+
+	if execErr != nil {
+		t.Fatal(execErr)
+	}
+	if result.Output != "network parallel done" {
+		t.Errorf("Output = %q, want %q", result.Output, "network parallel done")
+	}
+}
+
+func TestNetworkParallelAgentExecution(t *testing.T) {
+	// Verify subagent dispatches also run in parallel
+	barrier := make(chan struct{})
+	started := make(chan struct{}, 2)
+
+	makeAgent := func(name string) *stubAgent {
+		return &stubAgent{
+			name: name,
+			desc: "Barrier agent",
+			fn: func(task AgentTask) (AgentResult, error) {
+				started <- struct{}{}
+				<-barrier
+				return AgentResult{Output: name + " done"}, nil
+			},
+		}
+	}
+
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{
+				{ID: "1", Name: "agent_alpha", Args: json.RawMessage(`{"task":"work"}`)},
+				{ID: "2", Name: "agent_beta", Args: json.RawMessage(`{"task":"work"}`)},
+			}},
+			{Content: "both agents done"},
+		},
+	}
+
+	network := NewNetwork("parallel", "Tests parallel agents", router,
+		WithAgents(makeAgent("alpha"), makeAgent("beta")),
+	)
+
+	done := make(chan struct{})
+	var result AgentResult
+	var execErr error
+	go func() {
+		result, execErr = network.Execute(context.Background(), AgentTask{Input: "go"})
+		close(done)
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("agent did not start — agents likely running sequentially")
+		}
+	}
+
+	close(barrier)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("network did not finish in time")
+	}
+
+	if execErr != nil {
+		t.Fatal(execErr)
+	}
+	if result.Output != "both agents done" {
+		t.Errorf("Output = %q, want %q", result.Output, "both agents done")
 	}
 }

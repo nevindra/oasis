@@ -118,6 +118,9 @@ func TestLLMAgentAskUserWithOptions(t *testing.T) {
 }
 
 func TestLLMAgentAskUserHandlerError(t *testing.T) {
+	// When ask_user handler fails, the error is converted to a tool result
+	// string (consistent with Network.dispatch behavior). The LLM sees the
+	// error and can respond accordingly.
 	handler := &mockInputHandler{err: errors.New("timeout")}
 	provider := &mockProvider{
 		name: "test",
@@ -127,6 +130,7 @@ func TestLLMAgentAskUserHandlerError(t *testing.T) {
 				Name: "ask_user",
 				Args: json.RawMessage(`{"question":"hello?"}`),
 			}}},
+			{Content: "could not reach user"},
 		},
 	}
 
@@ -134,12 +138,12 @@ func TestLLMAgentAskUserHandlerError(t *testing.T) {
 		WithInputHandler(handler),
 	)
 
-	_, err := agent.Execute(context.Background(), AgentTask{Input: "ask"})
-	if err == nil {
-		t.Fatal("expected error when handler fails")
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "ask"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if err.Error() != "timeout" {
-		t.Errorf("error = %q, want %q", err.Error(), "timeout")
+	if result.Output != "could not reach user" {
+		t.Errorf("Output = %q, want %q", result.Output, "could not reach user")
 	}
 }
 

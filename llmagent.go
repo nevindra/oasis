@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"sync"
 )
 
 const defaultMaxIter = 10
@@ -115,32 +116,15 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 			ToolCalls: resp.ToolCalls,
 		})
 
-		// Execute each tool call
-		for _, tc := range resp.ToolCalls {
-			// Special case: ask_user tool
-			if tc.Name == "ask_user" && a.inputHandler != nil {
-				content, err := a.executeAskUser(ctx, tc)
-				if err != nil {
-					return AgentResult{Usage: totalUsage}, err
-				}
-				messages = append(messages, ToolResultMessage(tc.ID, content))
-				continue
-			}
+		// Execute tool calls in parallel
+		results := a.executeToolsParallel(ctx, resp.ToolCalls)
 
-			result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
-			content := result.Content
-			if execErr != nil {
-				content = "error: " + execErr.Error()
-			} else if result.Error != "" {
-				content = "error: " + result.Error
-			}
-
-			// PostToolProcessor hook
-			result.Content = content
+		// Process results sequentially (PostToolProcessor + message assembly)
+		for i, tc := range resp.ToolCalls {
+			result := ToolResult{Content: results[i].content}
 			if err := a.processors.RunPostTool(ctx, tc, &result); err != nil {
 				return handleProcessorError(err, totalUsage)
 			}
-
 			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
 		}
 	}
@@ -218,32 +202,15 @@ func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- 
 				ToolCalls: resp.ToolCalls,
 			})
 
-			// Execute each tool call (same as Execute)
-			for _, tc := range resp.ToolCalls {
-				if tc.Name == "ask_user" && a.inputHandler != nil {
-					content, err := a.executeAskUser(ctx, tc)
-					if err != nil {
-						close(ch)
-						return AgentResult{Usage: totalUsage}, err
-					}
-					messages = append(messages, ToolResultMessage(tc.ID, content))
-					continue
-				}
+			// Execute tool calls in parallel
+			results := a.executeToolsParallel(ctx, resp.ToolCalls)
 
-				result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
-				content := result.Content
-				if execErr != nil {
-					content = "error: " + execErr.Error()
-				} else if result.Error != "" {
-					content = "error: " + result.Error
-				}
-
-				result.Content = content
+			for i, tc := range resp.ToolCalls {
+				result := ToolResult{Content: results[i].content}
 				if err := a.processors.RunPostTool(ctx, tc, &result); err != nil {
 					close(ch)
 					return handleProcessorError(err, totalUsage)
 				}
-
 				messages = append(messages, ToolResultMessage(tc.ID, result.Content))
 			}
 			continue
@@ -337,6 +304,52 @@ func (a *LLMAgent) executeAskUser(ctx context.Context, tc ToolCall) (string, err
 		return "", err
 	}
 	return resp.Value, nil
+}
+
+// --- parallel tool execution ---
+
+// toolExecResult holds the result of a single parallel tool call.
+type toolExecResult struct {
+	content string
+	usage   Usage
+}
+
+// executeToolsParallel runs all tool calls concurrently and returns results
+// in the same order as the input calls. PostToolProcessor is NOT run here —
+// callers must run it sequentially after collecting results.
+func (a *LLMAgent) executeToolsParallel(ctx context.Context, calls []ToolCall) []toolExecResult {
+	results := make([]toolExecResult, len(calls))
+	var wg sync.WaitGroup
+
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(idx int, tc ToolCall) {
+			defer wg.Done()
+
+			// Special case: ask_user tool
+			if tc.Name == "ask_user" && a.inputHandler != nil {
+				content, err := a.executeAskUser(ctx, tc)
+				if err != nil {
+					results[idx] = toolExecResult{content: "error: " + err.Error()}
+					return
+				}
+				results[idx] = toolExecResult{content: content}
+				return
+			}
+
+			result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
+			content := result.Content
+			if execErr != nil {
+				content = "error: " + execErr.Error()
+			} else if result.Error != "" {
+				content = "error: " + result.Error
+			}
+			results[idx] = toolExecResult{content: content}
+		}(i, tc)
+	}
+
+	wg.Wait()
+	return results
 }
 
 // compile-time check

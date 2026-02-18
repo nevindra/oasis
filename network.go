@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 )
 
 // Network is an Agent that coordinates subagents and tools via an LLM router.
@@ -115,18 +116,18 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 			ToolCalls: resp.ToolCalls,
 		})
 
-		// Execute each tool call
-		for _, tc := range resp.ToolCalls {
-			content, agentUsage := n.dispatch(ctx, tc, task)
-			totalUsage.InputTokens += agentUsage.InputTokens
-			totalUsage.OutputTokens += agentUsage.OutputTokens
+		// Execute tool calls in parallel
+		results := n.dispatchParallel(ctx, resp.ToolCalls, task)
 
-			// PostToolProcessor hook
-			result := ToolResult{Content: content}
+		// Process results sequentially (PostToolProcessor + message assembly)
+		for i, tc := range resp.ToolCalls {
+			totalUsage.InputTokens += results[i].usage.InputTokens
+			totalUsage.OutputTokens += results[i].usage.OutputTokens
+
+			result := ToolResult{Content: results[i].content}
 			if err := n.processors.RunPostTool(ctx, tc, &result); err != nil {
 				return handleProcessorError(err, totalUsage)
 			}
-
 			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
 		}
 	}
@@ -199,17 +200,17 @@ func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- s
 			ToolCalls: resp.ToolCalls,
 		})
 
-		for _, tc := range resp.ToolCalls {
-			content, agentUsage := n.dispatch(ctx, tc, task)
-			totalUsage.InputTokens += agentUsage.InputTokens
-			totalUsage.OutputTokens += agentUsage.OutputTokens
+		results := n.dispatchParallel(ctx, resp.ToolCalls, task)
 
-			result := ToolResult{Content: content}
+		for i, tc := range resp.ToolCalls {
+			totalUsage.InputTokens += results[i].usage.InputTokens
+			totalUsage.OutputTokens += results[i].usage.OutputTokens
+
+			result := ToolResult{Content: results[i].content}
 			if err := n.processors.RunPostTool(ctx, tc, &result); err != nil {
 				close(ch)
 				return handleProcessorError(err, totalUsage)
 			}
-
 			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
 		}
 	}
@@ -290,6 +291,25 @@ func (n *Network) dispatch(ctx context.Context, tc ToolCall, parentTask AgentTas
 		return "error: " + result.Error, Usage{}
 	}
 	return result.Content, Usage{}
+}
+
+// dispatchParallel runs all tool calls concurrently via dispatch and returns
+// results in the same order as the input calls.
+func (n *Network) dispatchParallel(ctx context.Context, calls []ToolCall, task AgentTask) []toolExecResult {
+	results := make([]toolExecResult, len(calls))
+	var wg sync.WaitGroup
+
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(idx int, tc ToolCall) {
+			defer wg.Done()
+			content, usage := n.dispatch(ctx, tc, task)
+			results[idx] = toolExecResult{content: content, usage: usage}
+		}(i, tc)
+	}
+
+	wg.Wait()
+	return results
 }
 
 // buildToolDefs builds tool definitions from subagents and direct tools.

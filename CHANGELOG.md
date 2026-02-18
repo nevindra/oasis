@@ -8,6 +8,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- Parallel tool execution — `LLMAgent` and `Network` now execute multiple tool calls concurrently using goroutines
+  - When the LLM returns multiple tool calls in a single response, they run in parallel instead of sequentially
+  - Results are collected in order; `PostToolProcessor` hooks still run sequentially after all calls complete
+  - Applies to both `Execute()` and `ExecuteStream()` methods
 - `StreamingAgent` interface — optional capability for agents that support token streaming
   - `ExecuteStream(ctx, task, chan<-string)` streams the final response tokens; tool-calling iterations remain blocking
   - Both `LLMAgent` and `Network` implement `StreamingAgent`; check via type assertion
@@ -22,6 +26,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ### Changed
 
 - **Breaking:** `AgentTask.Context` type changed from `map[string]string` to `map[string]any` — enables rich metadata (attachments, typed values). Use typed accessors for standard keys.
+- `LLMAgent` ask_user handler errors are now soft errors (returned as tool result strings) instead of hard errors — consistent with `Network.dispatch` behavior
 
 ## [0.2.0] - 2026-02-18
 
