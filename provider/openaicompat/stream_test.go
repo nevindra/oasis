@@ -1,6 +1,7 @@
 package openaicompat
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestStreamSSE_TextChunks(t *testing.T) {
 	reader := strings.NewReader(sse)
 	ch := make(chan string, 10)
 
-	resp, err := StreamSSE(reader, ch)
+	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
 		t.Fatalf("StreamSSE returned error: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestStreamSSE_ToolCallChunks(t *testing.T) {
 	reader := strings.NewReader(sse)
 	ch := make(chan string, 10)
 
-	resp, err := StreamSSE(reader, ch)
+	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
 		t.Fatalf("StreamSSE returned error: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestStreamSSE_MultipleToolCalls(t *testing.T) {
 	reader := strings.NewReader(sse)
 	ch := make(chan string, 10)
 
-	resp, err := StreamSSE(reader, ch)
+	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
 		t.Fatalf("StreamSSE returned error: %v", err)
 	}
@@ -167,7 +168,7 @@ func TestStreamSSE_EmptyStream(t *testing.T) {
 	reader := strings.NewReader(sse)
 	ch := make(chan string, 10)
 
-	resp, err := StreamSSE(reader, ch)
+	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
 		t.Fatalf("StreamSSE returned error: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestStreamSSE_UsageOnlyChunk(t *testing.T) {
 	reader := strings.NewReader(sse)
 	ch := make(chan string, 10)
 
-	resp, err := StreamSSE(reader, ch)
+	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
 		t.Fatalf("StreamSSE returned error: %v", err)
 	}
@@ -227,7 +228,7 @@ func TestStreamSSE_SkipsMalformedChunks(t *testing.T) {
 	reader := strings.NewReader(sse)
 	ch := make(chan string, 10)
 
-	resp, err := StreamSSE(reader, ch)
+	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
 		t.Fatalf("StreamSSE returned error: %v", err)
 	}
@@ -253,7 +254,7 @@ func TestStreamSSE_NonDataLinesIgnored(t *testing.T) {
 	reader := strings.NewReader(raw)
 	ch := make(chan string, 10)
 
-	resp, err := StreamSSE(reader, ch)
+	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
 		t.Fatalf("StreamSSE returned error: %v", err)
 	}

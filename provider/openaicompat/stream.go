@@ -2,6 +2,7 @@ package openaicompat
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"strings"
@@ -13,13 +14,14 @@ import (
 // the fully accumulated response (content + tool calls + usage).
 //
 // The channel is closed when streaming completes. Callers should read from ch
-// in a separate goroutine.
+// in a separate goroutine. The context is used to cancel channel sends if the
+// consumer is no longer interested.
 //
 // SSE format expected:
 //
 //	data: {"id":"...","choices":[...]}\n
 //	data: [DONE]\n
-func StreamSSE(body io.Reader, ch chan<- string) (oasis.ChatResponse, error) {
+func StreamSSE(ctx context.Context, body io.Reader, ch chan<- string) (oasis.ChatResponse, error) {
 	defer close(ch)
 
 	scanner := bufio.NewScanner(body)
@@ -76,7 +78,11 @@ func StreamSSE(body io.Reader, ch chan<- string) (oasis.ChatResponse, error) {
 		// Accumulate text content.
 		if delta.Content != "" {
 			fullContent.WriteString(delta.Content)
-			ch <- delta.Content
+			select {
+			case ch <- delta.Content:
+			case <-ctx.Done():
+				return oasis.ChatResponse{}, ctx.Err()
+			}
 		}
 
 		// Accumulate tool calls.
@@ -103,6 +109,10 @@ func StreamSSE(body io.Reader, ch chan<- string) (oasis.ChatResponse, error) {
 			usage.InputTokens = chunk.Usage.PromptTokens
 			usage.OutputTokens = chunk.Usage.CompletionTokens
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return oasis.ChatResponse{}, err
 	}
 
 	// Build final tool calls.

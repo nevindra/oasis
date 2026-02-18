@@ -71,9 +71,12 @@ func Spawn(ctx context.Context, agent Agent, task AgentTask) *AgentHandle {
 	h.state.Store(int32(StatePending))
 
 	go func() {
+		defer cancel() // release context resources on completion
 		h.state.Store(int32(StateRunning))
 		result, err := agent.Execute(ctx, task)
 
+		h.result = result
+		h.err = err
 		if ctx.Err() != nil && err != nil {
 			h.state.Store(int32(StateCancelled))
 		} else if err != nil {
@@ -81,8 +84,6 @@ func Spawn(ctx context.Context, agent Agent, task AgentTask) *AgentHandle {
 		} else {
 			h.state.Store(int32(StateCompleted))
 		}
-		h.result = result
-		h.err = err
 		close(h.done)
 	}()
 
