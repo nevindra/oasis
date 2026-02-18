@@ -33,6 +33,12 @@ type Provider interface {
 | `provider/gemini` | `gemini.New(apiKey, model string) *Gemini` | Also implements `EmbeddingProvider` |
 | `provider/openaicompat` | `openaicompat.New(apiKey, model, baseURL string) *Client` | Works with OpenAI, Ollama, and any compatible API |
 
+**Middleware (root package):**
+
+| Constructor | Description |
+|-------------|-------------|
+| `WithRetry(p Provider, opts ...RetryOption) Provider` | Wraps any Provider with automatic retry on transient HTTP errors (429, 503) |
+
 ---
 
 ### EmbeddingProvider
@@ -1083,6 +1089,41 @@ type Config struct {
 ```
 
 See [Configuration](configuration.md) for all fields, defaults, and environment variable mappings.
+
+---
+
+## WithRetry
+
+**File:** `retry.go`
+
+Wraps any `Provider` with automatic retry on transient HTTP errors (429 Too Many Requests, 503 Service Unavailable). Uses exponential backoff with jitter. Composes cleanly with `observer.WrapProvider`.
+
+```go
+// Basic usage — 3 attempts, 1s base delay (doubles each retry)
+chatLLM = oasis.WithRetry(gemini.New(apiKey, model))
+
+// Custom limits
+chatLLM = oasis.WithRetry(gemini.New(apiKey, model),
+    oasis.RetryMaxAttempts(5),
+    oasis.RetryBaseDelay(500*time.Millisecond),
+)
+
+// Compose with observer (retry happens inside, before recording)
+chatLLM = observer.WrapProvider(
+    oasis.WithRetry(gemini.New(apiKey, model)),
+    modelName, inst,
+)
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `RetryMaxAttempts(n int)` | `3` | Maximum total attempts |
+| `RetryBaseDelay(d time.Duration)` | `1s` | Initial delay; doubles each attempt with up to 50% random jitter |
+
+**Notes:**
+- Only 429 and 503 are retried — all other errors pass through immediately.
+- `ChatStream` retries only if no tokens have been forwarded yet. Once streaming has started, errors are returned as-is to avoid duplicate content.
+- Each retry attempt is logged: `[retry] gemini: transient 503 (attempt 1/3), retrying`
 
 ---
 

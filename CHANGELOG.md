@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- `WithRetry(p Provider, opts ...RetryOption) Provider` — wraps any Provider with automatic retry on transient HTTP errors (429, 503) using exponential backoff with jitter
 - `Scheduler` primitive — polls the store for due actions and executes them via any `Agent` (`NewScheduler`, `Start`, `WithSchedulerInterval`, `WithSchedulerTZOffset`, `WithOnRun`)
 - Parallel tool execution — `LLMAgent` and `Network` now execute multiple tool calls concurrently using goroutines
   - When the LLM returns multiple tool calls in a single response, they run in parallel instead of sequentially

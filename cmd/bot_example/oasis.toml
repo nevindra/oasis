@@ -5,7 +5,7 @@ allowed_user_id = 0  # 0 = auto-register first user as owner
 
 [llm]
 provider = "gemini"
-model = "gemini-2.5-flash-preview-09-2025"
+model = "gemini-2.5-flash"
 
 [embedding]
 provider = "gemini"
@@ -24,7 +24,7 @@ overlap_tokens = 50
 
 [action]
 provider = "gemini"
-model = "gemini-2.5-flash-preview-09-2025"
+model = "gemini-2.5-flash"
 
 [brain]
 context_window = 20
