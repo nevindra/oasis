@@ -1,0 +1,111 @@
+# Processor
+
+Processors are middleware hooks in the agent execution loop. They transform, validate, or control messages at three points: before the LLM call, after the LLM response, and after each tool execution.
+
+## Hook Points
+
+```mermaid
+flowchart TD
+    INPUT[Build messages] --> PRE["PreProcessor<br>PreLLM(req)"]
+    PRE --> LLM[Call LLM]
+    LLM --> POST["PostProcessor<br>PostLLM(resp)"]
+    POST --> CHECK{Tool calls?}
+    CHECK -->|No| DONE([Return result])
+    CHECK -->|Yes| EXEC[Execute tools]
+    EXEC --> POSTTOOL["PostToolProcessor<br>PostTool(call, result)"]
+    POSTTOOL --> APPEND[Append to messages]
+    APPEND --> PRE
+
+    PRE -.->|ErrHalt| HALT([Return canned response])
+    POST -.->|ErrHalt| HALT
+    POSTTOOL -.->|ErrHalt| HALT
+
+    style PRE fill:#fff3e0
+    style POST fill:#fff3e0
+    style POSTTOOL fill:#fff3e0
+```
+
+## Three Interfaces
+
+**File:** `processor.go`
+
+```go
+// Before LLM call — modify the request
+type PreProcessor interface {
+    PreLLM(ctx context.Context, req *ChatRequest) error
+}
+
+// After LLM response — modify/filter the response
+type PostProcessor interface {
+    PostLLM(ctx context.Context, resp *ChatResponse) error
+}
+
+// After each tool execution — modify the result
+type PostToolProcessor interface {
+    PostTool(ctx context.Context, call ToolCall, result *ToolResult) error
+}
+```
+
+A processor implements whichever phases it needs. A guardrail only needs `PreProcessor`. A redactor may need all three.
+
+## ErrHalt
+
+Return `ErrHalt` from any processor to short-circuit execution:
+
+```go
+type ErrHalt struct {
+    Response string
+}
+```
+
+The agent loop catches `ErrHalt` and returns `AgentResult{Output: halt.Response}` with a nil error. Other errors propagate as infrastructure failures.
+
+## Registration
+
+```go
+agent := oasis.NewLLMAgent("safe-agent", "Agent with guardrails", provider,
+    oasis.WithTools(searchTool),
+    oasis.WithProcessors(&guardrail, &piiRedactor, &tokenBudget),
+)
+```
+
+Processors run in registration order at each hook point. An empty chain is a no-op.
+
+## Use Cases
+
+| Use Case | Interface | What it does |
+|----------|-----------|-------------|
+| Guardrails | PreProcessor | Block prompt injection, validate input |
+| PII redaction | All three | Redact sensitive data at every stage |
+| Content moderation | PostProcessor | Filter harmful LLM output |
+| Tool filtering | PostProcessor | Remove/block specific tool calls |
+| Token budget | PreProcessor | Trim message history to fit budget |
+| Audit logging | PostToolProcessor | Log all tool executions |
+| Approval gates | PostProcessor | Ask human before executing dangerous tools |
+
+## ProcessorChain
+
+Holds and runs processors in order:
+
+```go
+chain := oasis.NewProcessorChain()
+chain.Add(processor)
+chain.Len()
+
+err := chain.RunPreLLM(ctx, &req)
+err := chain.RunPostLLM(ctx, &resp)
+err := chain.RunPostTool(ctx, toolCall, &result)
+```
+
+## Key Behaviors
+
+- Processors receive pointers and modify in place (`*ChatRequest`, `*ChatResponse`, `*ToolResult`)
+- Must be safe for concurrent use — multiple agent executions may share instances
+- A processor that implements none of the three interfaces causes a panic at registration
+- The chain skips processors that don't implement a given phase
+
+## See Also
+
+- [Processors & Guardrails Guide](../guides/processors-and-guardrails.md) — examples
+- [Agent](agent.md) — the execution loop
+- [InputHandler](input-handler.md) — approval gates via processor + handler

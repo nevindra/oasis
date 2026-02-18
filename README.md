@@ -102,7 +102,7 @@ pipeline, err := oasis.NewWorkflow("research-pipeline", "Research and write",
 result, err := pipeline.Execute(ctx, oasis.AgentTask{Input: "Go error handling"})
 ```
 
-Step types: `Step` (function), `AgentStep` (delegate to Agent), `ToolStep` (call a tool), `ForEach` (iterate with concurrency), `DoUntil`/`DoWhile` (loop). See [docs/framework/workflows.md](docs/framework/workflows.md) for the full guide.
+Step types: `Step` (function), `AgentStep` (delegate to Agent), `ToolStep` (call a tool), `ForEach` (iterate with concurrency), `DoUntil`/`DoWhile` (loop). See [docs/concepts/workflow.md](docs/concepts/workflow.md) for the full guide.
 
 ### Processors
 
@@ -254,16 +254,16 @@ oasis/
 
 Config loading order: **defaults -> `oasis.toml` -> environment variables** (env vars win).
 
-See [docs/framework/configuration.md](docs/framework/configuration.md) for the full reference.
+See [docs/configuration/reference.md](docs/configuration/reference.md) for the full reference.
 
 ## Documentation
 
-- [Getting Started](docs/framework/getting-started.md) -- installation and first run
-- [Architecture](docs/framework/architecture.md) -- component design and data flow
-- [Workflows](docs/framework/workflows.md) -- deterministic DAG-based task orchestration
-- [Configuration](docs/framework/configuration.md) -- all config options and environment variables
-- [Extending Oasis](docs/framework/extending.md) -- adding custom tools, providers, frontends, and stores
-- [API Reference](docs/framework/api-reference.md) -- complete interface definitions and types
+- [Getting Started](docs/getting-started/) -- installation, quick start, reference app
+- [Concepts](docs/concepts/) -- architecture, interfaces, and primitives
+- [Guides](docs/guides/) -- how-to guides for building custom components
+- [Configuration](docs/configuration/reference.md) -- all config options and environment variables
+- [API Reference](docs/api/) -- complete interface definitions, types, and options
+- [Contributing](docs/contributing.md) -- engineering principles and coding conventions
 - [Deployment](cmd/bot_example/DEPLOYMENT.md) -- Docker, cloud deployment for the reference bot
 
 ## License
