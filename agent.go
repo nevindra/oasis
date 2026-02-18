@@ -39,6 +39,9 @@ type agentConfig struct {
 	maxIter      int
 	processors   []any
 	inputHandler InputHandler
+	store        Store
+	embedding    EmbeddingProvider
+	memory       MemoryStore
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -77,6 +80,29 @@ func WithProcessors(processors ...any) AgentOption {
 // can access the handler via InputHandlerFromContext(ctx).
 func WithInputHandler(h InputHandler) AgentOption {
 	return func(c *agentConfig) { c.inputHandler = h }
+}
+
+// WithConversationMemory enables conversation history on the agent.
+// When set and task.Context["thread_id"] is present, the agent loads
+// recent messages before the LLM call and persists the exchange afterward.
+// Combine with WithEmbedding to enable cross-thread semantic search.
+func WithConversationMemory(s Store) AgentOption {
+	return func(c *agentConfig) { c.store = s }
+}
+
+// WithSemanticSearch sets the embedding provider for semantic features.
+// Enables: semantic search across conversation threads (with WithConversationMemory),
+// and semantic fact retrieval (with WithUserMemory).
+func WithSemanticSearch(e EmbeddingProvider) AgentOption {
+	return func(c *agentConfig) { c.embedding = e }
+}
+
+// WithUserMemory enables user fact injection into the system prompt.
+// On each Execute call, the agent embeds the input, retrieves relevant facts
+// via BuildContext, and appends them to the system prompt.
+// Requires WithEmbedding — without it, user memory is silently skipped.
+func WithUserMemory(m MemoryStore) AgentOption {
+	return func(c *agentConfig) { c.memory = m }
 }
 
 func buildConfig(opts []AgentOption) agentConfig {

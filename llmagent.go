@@ -10,6 +10,8 @@ import (
 const defaultMaxIter = 10
 
 // LLMAgent is an Agent that uses an LLM with tools to complete tasks.
+// Optionally supports conversation memory, user memory, and semantic search
+// when configured via WithConversationMemory, WithUserMemory, and WithSemanticSearch.
 type LLMAgent struct {
 	name         string
 	description  string
@@ -19,6 +21,7 @@ type LLMAgent struct {
 	systemPrompt string
 	maxIter      int
 	inputHandler InputHandler
+	mem          agentMemory
 }
 
 // NewLLMAgent creates an LLMAgent with the given provider and options.
@@ -32,6 +35,11 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 		processors:   NewProcessorChain(),
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
+		mem: agentMemory{
+			store:     cfg.store,
+			embedding: cfg.embedding,
+			memory:    cfg.memory,
+		},
 	}
 	if cfg.maxIter > 0 {
 		a.maxIter = cfg.maxIter
@@ -58,12 +66,8 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 		ctx = WithInputHandlerContext(ctx, a.inputHandler)
 	}
 
-	// Build initial messages
-	var messages []ChatMessage
-	if a.systemPrompt != "" {
-		messages = append(messages, SystemMessage(a.systemPrompt))
-	}
-	messages = append(messages, UserMessage(task.Input))
+	// Build initial messages (system prompt + user memory + history + user input)
+	messages := a.mem.buildMessages(ctx, a.name, a.systemPrompt, task)
 
 	toolDefs := a.tools.AllDefinitions()
 
@@ -100,6 +104,7 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 
 		// No tool calls — final response
 		if len(resp.ToolCalls) == 0 {
+			a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
 			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
 		}
 
@@ -151,6 +156,7 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 	totalUsage.InputTokens += resp.Usage.InputTokens
 	totalUsage.OutputTokens += resp.Usage.OutputTokens
 
+	a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
 	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
 }
 

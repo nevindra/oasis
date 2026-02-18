@@ -253,6 +253,18 @@ Since Workflow implements Agent, it composes with Networks and other Workflows. 
 | `WithAgents(agents ...Agent)` | Add subagents to a Network (ignored by LLMAgent) |
 | `WithProcessors(processors ...any)` | Add processors to the execution pipeline (see Processors below) |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop interactions (see InputHandler below) |
+| `WithConversationMemory(s Store)` | Enable conversation history load/persist per thread (see Memory below) |
+| `WithSemanticSearch(e EmbeddingProvider)` | Enable semantic search across threads and user memory |
+| `WithUserMemory(m MemoryStore)` | Enable user fact injection into the system prompt (requires `WithSemanticSearch`) |
+
+**Memory wiring** -- agents are stateless by default. When memory options are configured and `task.Context["thread_id"]` is present, agents automatically:
+
+1. Load recent conversation history from the Store
+2. Inject user facts from MemoryStore into the system prompt
+3. Search for semantically relevant messages across all threads (when EmbeddingProvider is set)
+4. Persist user and assistant messages after producing a final response
+
+All memory features are opt-in. Without these options, agents behave exactly as before.
 
 ### Processors (`processor.go`)
 

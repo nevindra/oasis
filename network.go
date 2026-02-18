@@ -10,6 +10,8 @@ import (
 // Network is an Agent that coordinates subagents and tools via an LLM router.
 // The router sees subagents as callable tools ("agent_<name>") and decides
 // which primitives to invoke, in what order, and with what data.
+// Optionally supports conversation memory, user memory, and semantic search
+// when configured via WithConversationMemory, WithUserMemory, and WithSemanticSearch.
 type Network struct {
 	name         string
 	description  string
@@ -20,6 +22,7 @@ type Network struct {
 	systemPrompt string
 	maxIter      int
 	inputHandler InputHandler
+	mem          agentMemory
 }
 
 // NewNetwork creates a Network with the given router provider and options.
@@ -34,6 +37,11 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 		processors:   NewProcessorChain(),
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
+		mem: agentMemory{
+			store:     cfg.store,
+			embedding: cfg.embedding,
+			memory:    cfg.memory,
+		},
 	}
 	if cfg.maxIter > 0 {
 		n.maxIter = cfg.maxIter
@@ -71,12 +79,8 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 		toolDefs = append(toolDefs, askUserToolDef)
 	}
 
-	// Build initial messages
-	var messages []ChatMessage
-	if n.systemPrompt != "" {
-		messages = append(messages, SystemMessage(n.systemPrompt))
-	}
-	messages = append(messages, UserMessage(task.Input))
+	// Build initial messages (system prompt + user memory + history + user input)
+	messages := n.mem.buildMessages(ctx, n.name, n.systemPrompt, task)
 
 	for i := 0; i < n.maxIter; i++ {
 		req := ChatRequest{Messages: messages}
@@ -100,6 +104,7 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 
 		// No tool calls — final response
 		if len(resp.ToolCalls) == 0 {
+			n.mem.persistMessages(ctx, n.name, task, task.Input, resp.Content)
 			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
 		}
 
@@ -137,6 +142,7 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 	totalUsage.InputTokens += resp.Usage.InputTokens
 	totalUsage.OutputTokens += resp.Usage.OutputTokens
 
+	n.mem.persistMessages(ctx, n.name, task, task.Input, resp.Content)
 	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
 }
 

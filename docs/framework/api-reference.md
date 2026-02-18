@@ -622,12 +622,33 @@ result, err := registry.Execute(ctx, name, argsJSON)   // Dispatch by name
 agent := oasis.NewLLMAgent(name, description string, provider oasis.Provider, opts ...oasis.AgentOption)
 
 // AgentOption functions (shared with Network)
-oasis.WithTools(tools ...oasis.Tool)          // Add tools
-oasis.WithPrompt(s string)                   // Set system prompt
-oasis.WithMaxIter(n int)                     // Max tool-calling iterations (default 10)
-oasis.WithAgents(agents ...oasis.Agent)       // Ignored by LLMAgent
-oasis.WithProcessors(processors ...any)       // Add processors to execution pipeline
-oasis.WithInputHandler(h oasis.InputHandler)  // Enable human-in-the-loop (ask_user tool + context)
+oasis.WithTools(tools ...oasis.Tool)                    // Add tools
+oasis.WithPrompt(s string)                             // Set system prompt
+oasis.WithMaxIter(n int)                               // Max tool-calling iterations (default 10)
+oasis.WithAgents(agents ...oasis.Agent)                 // Ignored by LLMAgent
+oasis.WithProcessors(processors ...any)                 // Add processors to execution pipeline
+oasis.WithInputHandler(h oasis.InputHandler)            // Enable human-in-the-loop (ask_user tool + context)
+oasis.WithConversationMemory(s oasis.Store)             // Enable history load/persist per thread
+oasis.WithSemanticSearch(e oasis.EmbeddingProvider)     // Enable semantic search across threads + user memory
+oasis.WithUserMemory(m oasis.MemoryStore)               // Inject user facts into system prompt (requires WithSemanticSearch)
+```
+
+**Memory wiring example:**
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
+    oasis.WithConversationMemory(store),
+    oasis.WithSemanticSearch(embedding),
+    oasis.WithUserMemory(memoryStore),
+    oasis.WithPrompt("You are a helpful assistant."),
+    oasis.WithTools(searchTool),
+)
+
+// Pass thread_id to enable history. Without it, agent runs stateless.
+result, err := agent.Execute(ctx, oasis.AgentTask{
+    Input:   "What did we discuss yesterday?",
+    Context: map[string]string{"thread_id": "thread-123"},
+})
 ```
 
 ### Network
@@ -639,12 +660,15 @@ oasis.WithInputHandler(h oasis.InputHandler)  // Enable human-in-the-loop (ask_u
 network := oasis.NewNetwork(name, description string, router oasis.Provider, opts ...oasis.AgentOption)
 
 // AgentOption functions (shared with LLMAgent)
-oasis.WithAgents(agents ...oasis.Agent)       // Add subagents (exposed as "agent_<name>" tools)
-oasis.WithTools(tools ...oasis.Tool)          // Add direct tools
-oasis.WithPrompt(s string)                   // Set router system prompt
-oasis.WithMaxIter(n int)                     // Max routing iterations (default 10)
-oasis.WithProcessors(processors ...any)       // Add processors to execution pipeline
-oasis.WithInputHandler(h oasis.InputHandler)  // Enable human-in-the-loop (propagated to subagents)
+oasis.WithAgents(agents ...oasis.Agent)                 // Add subagents (exposed as "agent_<name>" tools)
+oasis.WithTools(tools ...oasis.Tool)                    // Add direct tools
+oasis.WithPrompt(s string)                             // Set router system prompt
+oasis.WithMaxIter(n int)                               // Max routing iterations (default 10)
+oasis.WithProcessors(processors ...any)                 // Add processors to execution pipeline
+oasis.WithInputHandler(h oasis.InputHandler)            // Enable human-in-the-loop (propagated to subagents)
+oasis.WithConversationMemory(s oasis.Store)             // Enable history load/persist per thread
+oasis.WithSemanticSearch(e oasis.EmbeddingProvider)     // Enable semantic search across threads + user memory
+oasis.WithUserMemory(m oasis.MemoryStore)               // Inject user facts into system prompt (requires WithSemanticSearch)
 ```
 
 ### Workflow

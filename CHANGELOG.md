@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- Memory wiring for agent primitives — `LLMAgent` and `Network` now support built-in conversation memory, user memory, and semantic recall
+  - `WithConversationMemory(Store)` — load/persist conversation history per thread via `task.Context["thread_id"]`
+  - `WithSemanticSearch(EmbeddingProvider)` — cross-thread semantic search + embed persisted messages
+  - `WithUserMemory(MemoryStore)` — inject user facts into system prompt (requires `WithSemanticSearch`)
+
 ## [0.2.0] - 2026-02-18
 
 ### Added
