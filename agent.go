@@ -2,7 +2,9 @@ package oasis
 
 import (
 	"context"
+	"errors"
 	"log"
+	"sync"
 )
 
 // Agent is a unit of work that takes a task and returns a result.
@@ -217,4 +219,203 @@ func buildConfig(opts []AgentOption) agentConfig {
 		log.Printf("[oasis] warning: WithUserMemory without WithConversationMemory — fact extraction (write) will be silently skipped")
 	}
 	return c
+}
+
+// --- shared execution loop ---
+
+// dispatchFunc executes a single tool call and returns its content and usage.
+// LLMAgent provides one that calls ToolRegistry.Execute + ask_user.
+// Network provides one that also routes to subagents via the agent_* prefix.
+type dispatchFunc func(ctx context.Context, tc ToolCall) (string, Usage)
+
+// loopConfig holds everything the shared runLoop needs to run.
+type loopConfig struct {
+	name         string           // for logging (e.g. "agent:foo", "network:bar")
+	provider     Provider
+	tools        []ToolDefinition // pre-built tool defs (including ask_user if applicable)
+	processors   *ProcessorChain
+	maxIter      int
+	mem          *agentMemory
+	inputHandler InputHandler
+	dispatch     dispatchFunc
+	systemPrompt string
+}
+
+// runLoop is the shared tool-calling loop used by both LLMAgent and Network.
+// When ch is nil, it operates in blocking mode (Execute). When ch is non-nil,
+// it streams the final response into ch and closes it (ExecuteStream).
+func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- string) (AgentResult, error) {
+	var totalUsage Usage
+
+	// Inject InputHandler into context for processors.
+	if cfg.inputHandler != nil {
+		ctx = WithInputHandlerContext(ctx, cfg.inputHandler)
+	}
+
+	// Build initial messages (system prompt + user memory + history + user input).
+	messages := cfg.mem.buildMessages(ctx, cfg.name, cfg.systemPrompt, task)
+
+	// lastAgentOutput tracks the most recent sub-agent result so we can fall
+	// back to it when the router produces an empty final response (common for
+	// pure-routing LLMs that don't synthesize a reply after delegating).
+	// For LLMAgent this is never set (no agent_* tools).
+	var lastAgentOutput string
+
+	for i := 0; i < cfg.maxIter; i++ {
+		req := ChatRequest{Messages: messages}
+
+		// PreProcessor hook.
+		if err := cfg.processors.RunPreLLM(ctx, &req); err != nil {
+			if ch != nil {
+				close(ch)
+			}
+			return handleProcessorError(err, totalUsage)
+		}
+
+		var resp ChatResponse
+		var err error
+
+		if len(cfg.tools) > 0 {
+			resp, err = cfg.provider.ChatWithTools(ctx, req, cfg.tools)
+		} else if ch != nil {
+			// No tools, streaming — stream the response directly.
+			resp, err = cfg.provider.ChatStream(ctx, req, ch)
+			if err != nil {
+				return AgentResult{Usage: totalUsage}, err
+			}
+			totalUsage.InputTokens += resp.Usage.InputTokens
+			totalUsage.OutputTokens += resp.Usage.OutputTokens
+			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
+			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+		} else {
+			resp, err = cfg.provider.Chat(ctx, req)
+		}
+
+		if err != nil {
+			if ch != nil {
+				close(ch)
+			}
+			return AgentResult{Usage: totalUsage}, err
+		}
+		totalUsage.InputTokens += resp.Usage.InputTokens
+		totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+		// PostProcessor hook.
+		if err := cfg.processors.RunPostLLM(ctx, &resp); err != nil {
+			if ch != nil {
+				close(ch)
+			}
+			return handleProcessorError(err, totalUsage)
+		}
+
+		// No tool calls — final response.
+		if len(resp.ToolCalls) == 0 {
+			content := resp.Content
+			if content == "" {
+				content = lastAgentOutput
+			}
+			if ch != nil {
+				ch <- content
+				close(ch)
+			}
+			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, content)
+			return AgentResult{Output: content, Usage: totalUsage}, nil
+		}
+
+		// Append assistant message with tool calls.
+		messages = append(messages, ChatMessage{
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		})
+
+		// Execute tool calls in parallel.
+		results := dispatchParallel(ctx, resp.ToolCalls, cfg.dispatch)
+
+		// Process results sequentially (PostToolProcessor + message assembly).
+		for j, tc := range resp.ToolCalls {
+			totalUsage.InputTokens += results[j].usage.InputTokens
+			totalUsage.OutputTokens += results[j].usage.OutputTokens
+
+			result := ToolResult{Content: results[j].content}
+			if err := cfg.processors.RunPostTool(ctx, tc, &result); err != nil {
+				if ch != nil {
+					close(ch)
+				}
+				return handleProcessorError(err, totalUsage)
+			}
+			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
+
+			// Track the last sub-agent output for fallback.
+			if len(tc.Name) > 6 && tc.Name[:6] == "agent_" {
+				lastAgentOutput = result.Content
+			}
+		}
+	}
+
+	// Max iterations — force synthesis.
+	log.Printf("[%s] max iterations reached, forcing synthesis", cfg.name)
+	messages = append(messages, UserMessage(
+		"You have used all available tool calls. Summarize what you found and respond to the user."))
+
+	var resp ChatResponse
+	var err error
+	if ch != nil {
+		resp, err = cfg.provider.ChatStream(ctx, ChatRequest{Messages: messages}, ch)
+	} else {
+		resp, err = cfg.provider.Chat(ctx, ChatRequest{Messages: messages})
+	}
+	if err != nil {
+		return AgentResult{Usage: totalUsage}, err
+	}
+	totalUsage.InputTokens += resp.Usage.InputTokens
+	totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+	cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
+	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+}
+
+// handleProcessorError converts a processor error into an AgentResult.
+// ErrHalt produces a graceful result; other errors propagate as failures.
+func handleProcessorError(err error, usage Usage) (AgentResult, error) {
+	var halt *ErrHalt
+	if errors.As(err, &halt) {
+		return AgentResult{Output: halt.Response, Usage: usage}, nil
+	}
+	return AgentResult{Usage: usage}, err
+}
+
+// --- parallel tool dispatch ---
+
+// toolExecResult holds the result of a single parallel tool call.
+type toolExecResult struct {
+	content string
+	usage   Usage
+}
+
+// dispatchParallel runs all tool calls concurrently via the dispatch function
+// and returns results in the same order as the input calls.
+func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch dispatchFunc) []toolExecResult {
+	results := make([]toolExecResult, len(calls))
+	var wg sync.WaitGroup
+
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(idx int, tc ToolCall) {
+			defer wg.Done()
+			content, usage := dispatch(ctx, tc)
+			results[idx] = toolExecResult{content: content, usage: usage}
+		}(i, tc)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// truncateStr truncates a string to n characters.
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

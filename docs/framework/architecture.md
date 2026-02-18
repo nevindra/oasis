@@ -219,7 +219,7 @@ type Agent interface {
 
 Any struct implementing `Agent` can be used standalone or composed into a Network.
 
-**LLMAgent** -- a concrete Agent that runs a `ChatWithTools` loop with a single Provider. It iterates: call LLM -> execute tool calls -> feed results back -> repeat until the LLM produces a final text response.
+**LLMAgent** -- a concrete Agent that runs a tool-calling loop with a single Provider. It iterates: call LLM -> execute tool calls -> feed results back -> repeat until the LLM produces a final text response.
 
 ```go
 agent := oasis.NewLLMAgent("researcher", "Searches for information", provider,
@@ -231,6 +231,8 @@ result, err := agent.Execute(ctx, oasis.AgentTask{Input: "Find info about Go int
 ```
 
 **Network** -- a concrete Agent that coordinates subagents and tools via an LLM router. The router sees subagents as callable tools (`agent_<name>`) and decides which to invoke. Networks can contain other Networks (recursive composition).
+
+**Shared execution loop** -- internally, both LLMAgent and Network delegate to a single `runLoop` function (`agent.go`) that handles the tool-calling iteration, processor hooks, memory wiring, streaming, and parallel tool dispatch. The only difference is the **dispatch function**: LLMAgent dispatches to its `ToolRegistry`, while Network also routes `agent_*` calls to subagents. This eliminates code duplication and ensures both types stay in sync as the loop evolves.
 
 ```go
 network := oasis.NewNetwork("coordinator", "Routes tasks to specialists", routerProvider,
@@ -559,4 +561,5 @@ Raw content (text/HTML/file/PDF)
 - **Observer as middleware** -- The `observer/` package wraps `Provider`, `EmbeddingProvider`, `Tool`, and `Agent` with OTEL instrumentation using the decorator pattern. `ObservedAgent` creates a parent span that contains all inner operations (LLM calls, tool executions) as child spans via context propagation. Zero changes to existing implementations, zero overhead when disabled.
 - **Agent as interface** -- `Agent` is a composable primitive like `Tool` or `Provider`. `LLMAgent`, `Network`, and `Workflow` are concrete implementations. All three implement Agent, so they compose recursively: Networks can contain Workflows, Workflows can contain Agents via AgentStep, and Workflows can nest inside other Workflows.
 - **Background spawning** -- `Spawn()` launches any Agent in a goroutine and returns an `AgentHandle` for state tracking (`Pending → Running → Completed | Failed | Cancelled`), result delivery (`Done()` channel + `Await()`), and cancellation. The handle is a thin primitive (~50 lines); concurrency limits and retry logic are application-level concerns.
+- **Shared execution loop** -- `LLMAgent` and `Network` share a single `runLoop` function (`agent.go`) for the tool-calling iteration. The only customization point is a `dispatchFunc` callback: LLMAgent dispatches to `ToolRegistry`, Network also routes `agent_*` calls to subagents. This keeps both types in sync and eliminates duplication across Execute/ExecuteStream.
 - **Scheduler as primitive, not app code** -- `Scheduler` is a framework primitive like `Workflow`, not application orchestration. It delegates all execution to an Agent and routes output via a `RunHook` callback, keeping it decoupled from any frontend or application concern. Sequential execution per tick is intentional: predictable, no uncontrolled concurrency against LLM providers.

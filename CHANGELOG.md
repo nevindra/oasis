@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+
+- **Internal**: extracted shared `runLoop` from `LLMAgent` and `Network` — the core tool-calling loop (Execute + ExecuteStream) now lives in a single function in `agent.go`, eliminating 4-way code duplication. Both types delegate via a `dispatchFunc` callback. No public API changes.
+
 ### Fixed
 
 - `Network.Execute` and `Network.ExecuteStream` now fall back to the last sub-agent output when the router LLM returns an empty final response — fixes messages getting stuck on "Thinking..." when using a pure-routing LLM that doesn't synthesize a reply after delegating

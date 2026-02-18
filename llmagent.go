@@ -3,9 +3,6 @@ package oasis
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"log"
-	"sync"
 )
 
 const defaultMaxIter = 10
@@ -63,88 +60,7 @@ func (a *LLMAgent) Description() string { return a.description }
 
 // Execute runs the tool-calling loop until the LLM produces a final text response.
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
-	var totalUsage Usage
-
-	// Inject InputHandler into context for processors.
-	if a.inputHandler != nil {
-		ctx = WithInputHandlerContext(ctx, a.inputHandler)
-	}
-
-	// Build initial messages (system prompt + user memory + history + user input)
-	messages := a.mem.buildMessages(ctx, a.name, a.systemPrompt, task)
-
-	toolDefs := a.tools.AllDefinitions()
-
-	// Append ask_user tool definition if handler is configured.
-	if a.inputHandler != nil {
-		toolDefs = append(toolDefs, askUserToolDef)
-	}
-
-	for i := 0; i < a.maxIter; i++ {
-		req := ChatRequest{Messages: messages}
-
-		// PreProcessor hook
-		if err := a.processors.RunPreLLM(ctx, &req); err != nil {
-			return handleProcessorError(err, totalUsage)
-		}
-
-		var resp ChatResponse
-		var err error
-		if len(toolDefs) > 0 {
-			resp, err = a.provider.ChatWithTools(ctx, req, toolDefs)
-		} else {
-			resp, err = a.provider.Chat(ctx, req)
-		}
-		if err != nil {
-			return AgentResult{Usage: totalUsage}, err
-		}
-		totalUsage.InputTokens += resp.Usage.InputTokens
-		totalUsage.OutputTokens += resp.Usage.OutputTokens
-
-		// PostProcessor hook
-		if err := a.processors.RunPostLLM(ctx, &resp); err != nil {
-			return handleProcessorError(err, totalUsage)
-		}
-
-		// No tool calls — final response
-		if len(resp.ToolCalls) == 0 {
-			a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
-			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
-		}
-
-		// Append assistant message with tool calls
-		messages = append(messages, ChatMessage{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
-		})
-
-		// Execute tool calls in parallel
-		results := a.executeToolsParallel(ctx, resp.ToolCalls)
-
-		// Process results sequentially (PostToolProcessor + message assembly)
-		for i, tc := range resp.ToolCalls {
-			result := ToolResult{Content: results[i].content}
-			if err := a.processors.RunPostTool(ctx, tc, &result); err != nil {
-				return handleProcessorError(err, totalUsage)
-			}
-			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
-		}
-	}
-
-	// Max iterations — force synthesis
-	log.Printf("[agent:%s] max iterations reached, forcing synthesis", a.name)
-	messages = append(messages, UserMessage(
-		"You have used all available tool calls. Summarize what you found and respond to the user."))
-	resp, err := a.provider.Chat(ctx, ChatRequest{Messages: messages})
-	if err != nil {
-		return AgentResult{Usage: totalUsage}, err
-	}
-	totalUsage.InputTokens += resp.Usage.InputTokens
-	totalUsage.OutputTokens += resp.Usage.OutputTokens
-
-	a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
-	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+	return runLoop(ctx, a.buildLoopConfig(), task, nil)
 }
 
 // ExecuteStream runs the tool-calling loop like Execute, but streams the final
@@ -152,112 +68,57 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 // only the final response (no tool calls) uses ChatStream. The channel is
 // closed when streaming completes.
 func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error) {
-	var totalUsage Usage
+	return runLoop(ctx, a.buildLoopConfig(), task, ch)
+}
 
-	if a.inputHandler != nil {
-		ctx = WithInputHandlerContext(ctx, a.inputHandler)
-	}
-
-	messages := a.mem.buildMessages(ctx, a.name, a.systemPrompt, task)
-
+// buildLoopConfig wires LLMAgent fields into a loopConfig for runLoop.
+func (a *LLMAgent) buildLoopConfig() loopConfig {
 	toolDefs := a.tools.AllDefinitions()
 	if a.inputHandler != nil {
 		toolDefs = append(toolDefs, askUserToolDef)
 	}
+	return loopConfig{
+		name:         "agent:" + a.name,
+		provider:     a.provider,
+		tools:        toolDefs,
+		processors:   a.processors,
+		maxIter:      a.maxIter,
+		mem:          &a.mem,
+		inputHandler: a.inputHandler,
+		dispatch:     a.makeDispatch(),
+		systemPrompt: a.systemPrompt,
+	}
+}
 
-	for i := 0; i < a.maxIter; i++ {
-		req := ChatRequest{Messages: messages}
-
-		if err := a.processors.RunPreLLM(ctx, &req); err != nil {
-			close(ch)
-			return handleProcessorError(err, totalUsage)
-		}
-
-		// If there are tools, use blocking ChatWithTools for tool iterations
-		if len(toolDefs) > 0 {
-			resp, err := a.provider.ChatWithTools(ctx, req, toolDefs)
+// makeDispatch returns a dispatchFunc that executes tools via ToolRegistry
+// and handles the ask_user special case.
+func (a *LLMAgent) makeDispatch() dispatchFunc {
+	return func(ctx context.Context, tc ToolCall) (string, Usage) {
+		// Special case: ask_user tool
+		if tc.Name == "ask_user" && a.inputHandler != nil {
+			content, err := executeAskUser(ctx, a.inputHandler, a.name, tc)
 			if err != nil {
-				close(ch)
-				return AgentResult{Usage: totalUsage}, err
+				return "error: " + err.Error(), Usage{}
 			}
-			totalUsage.InputTokens += resp.Usage.InputTokens
-			totalUsage.OutputTokens += resp.Usage.OutputTokens
-
-			if err := a.processors.RunPostLLM(ctx, &resp); err != nil {
-				close(ch)
-				return handleProcessorError(err, totalUsage)
-			}
-
-			// No tool calls — stream the final response
-			if len(resp.ToolCalls) == 0 {
-				// We already have the full content from ChatWithTools.
-				// Stream it as a single chunk since we can't re-request with ChatStream.
-				ch <- resp.Content
-				close(ch)
-				a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
-				return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
-			}
-
-			// Append assistant message with tool calls
-			messages = append(messages, ChatMessage{
-				Role:      "assistant",
-				Content:   resp.Content,
-				ToolCalls: resp.ToolCalls,
-			})
-
-			// Execute tool calls in parallel
-			results := a.executeToolsParallel(ctx, resp.ToolCalls)
-
-			for i, tc := range resp.ToolCalls {
-				result := ToolResult{Content: results[i].content}
-				if err := a.processors.RunPostTool(ctx, tc, &result); err != nil {
-					close(ch)
-					return handleProcessorError(err, totalUsage)
-				}
-				messages = append(messages, ToolResultMessage(tc.ID, result.Content))
-			}
-			continue
+			return content, Usage{}
 		}
 
-		// No tools — stream the response directly via ChatStream
-		resp, err := a.provider.ChatStream(ctx, req, ch)
-		if err != nil {
-			return AgentResult{Usage: totalUsage}, err
+		result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
+		content := result.Content
+		if execErr != nil {
+			content = "error: " + execErr.Error()
+		} else if result.Error != "" {
+			content = "error: " + result.Error
 		}
-		totalUsage.InputTokens += resp.Usage.InputTokens
-		totalUsage.OutputTokens += resp.Usage.OutputTokens
-
-		a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
-		return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+		return content, Usage{}
 	}
-
-	// Max iterations — force synthesis, stream the final response
-	log.Printf("[agent:%s] max iterations reached, forcing synthesis", a.name)
-	messages = append(messages, UserMessage(
-		"You have used all available tool calls. Summarize what you found and respond to the user."))
-	resp, err := a.provider.ChatStream(ctx, ChatRequest{Messages: messages}, ch)
-	if err != nil {
-		return AgentResult{Usage: totalUsage}, err
-	}
-	totalUsage.InputTokens += resp.Usage.InputTokens
-	totalUsage.OutputTokens += resp.Usage.OutputTokens
-
-	a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
-	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
 }
 
-// compile-time check: LLMAgent implements StreamingAgent
-var _ StreamingAgent = (*LLMAgent)(nil)
-
-// handleProcessorError converts a processor error into an AgentResult.
-// ErrHalt produces a graceful result; other errors propagate as failures.
-func handleProcessorError(err error, usage Usage) (AgentResult, error) {
-	var halt *ErrHalt
-	if errors.As(err, &halt) {
-		return AgentResult{Output: halt.Response, Usage: usage}, nil
-	}
-	return AgentResult{Usage: usage}, err
-}
+// compile-time checks
+var (
+	_ Agent          = (*LLMAgent)(nil)
+	_ StreamingAgent = (*LLMAgent)(nil)
+)
 
 // --- ask_user tool ---
 
@@ -289,17 +150,18 @@ type askUserArgs struct {
 }
 
 // executeAskUser handles the ask_user special-case tool call.
-func (a *LLMAgent) executeAskUser(ctx context.Context, tc ToolCall) (string, error) {
+// Shared by both LLMAgent and Network dispatch functions.
+func executeAskUser(ctx context.Context, handler InputHandler, agentName string, tc ToolCall) (string, error) {
 	var args askUserArgs
 	if err := json.Unmarshal(tc.Args, &args); err != nil {
 		return "", err
 	}
 
-	resp, err := a.inputHandler.RequestInput(ctx, InputRequest{
+	resp, err := handler.RequestInput(ctx, InputRequest{
 		Question: args.Question,
 		Options:  args.Options,
 		Metadata: map[string]string{
-			"agent":  a.name,
+			"agent":  agentName,
 			"source": "llm",
 		},
 	})
@@ -308,52 +170,3 @@ func (a *LLMAgent) executeAskUser(ctx context.Context, tc ToolCall) (string, err
 	}
 	return resp.Value, nil
 }
-
-// --- parallel tool execution ---
-
-// toolExecResult holds the result of a single parallel tool call.
-type toolExecResult struct {
-	content string
-	usage   Usage
-}
-
-// executeToolsParallel runs all tool calls concurrently and returns results
-// in the same order as the input calls. PostToolProcessor is NOT run here —
-// callers must run it sequentially after collecting results.
-func (a *LLMAgent) executeToolsParallel(ctx context.Context, calls []ToolCall) []toolExecResult {
-	results := make([]toolExecResult, len(calls))
-	var wg sync.WaitGroup
-
-	for i, tc := range calls {
-		wg.Add(1)
-		go func(idx int, tc ToolCall) {
-			defer wg.Done()
-
-			// Special case: ask_user tool
-			if tc.Name == "ask_user" && a.inputHandler != nil {
-				content, err := a.executeAskUser(ctx, tc)
-				if err != nil {
-					results[idx] = toolExecResult{content: "error: " + err.Error()}
-					return
-				}
-				results[idx] = toolExecResult{content: content}
-				return
-			}
-
-			result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
-			content := result.Content
-			if execErr != nil {
-				content = "error: " + execErr.Error()
-			} else if result.Error != "" {
-				content = "error: " + result.Error
-			}
-			results[idx] = toolExecResult{content: content}
-		}(i, tc)
-	}
-
-	wg.Wait()
-	return results
-}
-
-// compile-time check
-var _ Agent = (*LLMAgent)(nil)
