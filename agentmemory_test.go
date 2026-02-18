@@ -9,6 +9,39 @@ import (
 
 // --- Test doubles for memory wiring ---
 
+// stubStore is a no-op implementation of Store for embedding in test doubles.
+type stubStore struct{}
+
+func (s *stubStore) Init(_ context.Context) error  { return nil }
+func (s *stubStore) Close() error                   { return nil }
+func (s *stubStore) CreateThread(_ context.Context, _ Thread) error { return nil }
+func (s *stubStore) GetThread(_ context.Context, _ string) (Thread, error) { return Thread{}, nil }
+func (s *stubStore) ListThreads(_ context.Context, _ string, _ int) ([]Thread, error) { return nil, nil }
+func (s *stubStore) UpdateThread(_ context.Context, _ Thread) error { return nil }
+func (s *stubStore) DeleteThread(_ context.Context, _ string) error { return nil }
+func (s *stubStore) StoreMessage(_ context.Context, _ Message) error { return nil }
+func (s *stubStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error) { return nil, nil }
+func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]Message, error) { return nil, nil }
+func (s *stubStore) StoreDocument(_ context.Context, _ Document, _ []Chunk) error { return nil }
+func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int) ([]Chunk, error) { return nil, nil }
+func (s *stubStore) GetChunksByIDs(_ context.Context, _ []string) ([]Chunk, error) { return nil, nil }
+func (s *stubStore) GetConfig(_ context.Context, _ string) (string, error) { return "", nil }
+func (s *stubStore) SetConfig(_ context.Context, _, _ string) error { return nil }
+func (s *stubStore) CreateScheduledAction(_ context.Context, _ ScheduledAction) error { return nil }
+func (s *stubStore) ListScheduledActions(_ context.Context) ([]ScheduledAction, error) { return nil, nil }
+func (s *stubStore) GetDueScheduledActions(_ context.Context, _ int64) ([]ScheduledAction, error) { return nil, nil }
+func (s *stubStore) UpdateScheduledAction(_ context.Context, _ ScheduledAction) error { return nil }
+func (s *stubStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ bool) error { return nil }
+func (s *stubStore) DeleteScheduledAction(_ context.Context, _ string) error { return nil }
+func (s *stubStore) DeleteAllScheduledActions(_ context.Context) (int, error) { return 0, nil }
+func (s *stubStore) FindScheduledActionsByDescription(_ context.Context, _ string) ([]ScheduledAction, error) { return nil, nil }
+func (s *stubStore) CreateSkill(_ context.Context, _ Skill) error { return nil }
+func (s *stubStore) GetSkill(_ context.Context, _ string) (Skill, error) { return Skill{}, nil }
+func (s *stubStore) ListSkills(_ context.Context) ([]Skill, error) { return nil, nil }
+func (s *stubStore) UpdateSkill(_ context.Context, _ Skill) error { return nil }
+func (s *stubStore) DeleteSkill(_ context.Context, _ string) error { return nil }
+func (s *stubStore) SearchSkills(_ context.Context, _ []float32, _ int) ([]Skill, error) { return nil, nil }
+
 // recordingStore tracks calls to StoreMessage and returns canned history.
 type recordingStore struct {
 	stubStore

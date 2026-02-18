@@ -6,28 +6,40 @@
 //
 // # Quick Start
 //
-// Create an agent by composing implementations of the core interfaces:
+// Create an agent using the LLMAgent primitive:
 //
-//	agent := oasis.New(
-//		oasis.WithProvider(gemini.New(apiKey, model)),
-//		oasis.WithEmbedding(gemini.NewEmbedding(apiKey)),
-//		oasis.WithStore(sqlite.New("oasis.db")),
-//		oasis.WithFrontend(telegram.New(token)),
-//		oasis.WithSystemPrompt("You are a helpful assistant."),
+//	provider := gemini.New(apiKey, model)
+//	embedding := gemini.NewEmbedding(apiKey)
+//	store := sqlite.New("oasis.db")
+//	memoryStore := sqlitemem.New("memory.db")
+//
+//	agent := oasis.NewLLMAgent(
+//		"assistant",
+//		"You are a helpful assistant.",
+//		provider,
+//		oasis.WithTools(
+//			knowledge.New(store, embedding),
+//			search.New(),
+//		),
+//		oasis.WithConversationMemory(store),
+//		oasis.WithSemanticSearch(embedding),
+//		oasis.WithUserMemory(memoryStore),
 //	)
-//	agent.AddTool(knowledge.New(agent.Store(), agent.Embedding()))
-//	agent.Run(ctx)
+//
+//	result, err := agent.Execute(ctx, "What's the weather like?")
 //
 // # Core Interfaces
 //
 // The root package defines the contracts that all components implement:
 //
+//   - [Agent] — composable work unit (LLMAgent, Network, Workflow, or custom)
 //   - [Provider] — LLM backend (chat, tool calling, streaming)
 //   - [EmbeddingProvider] — text-to-vector embedding
 //   - [Frontend] — messaging platform (Telegram, Discord, CLI, etc.)
 //   - [Store] — persistence with vector search
 //   - [MemoryStore] — long-term semantic memory
 //   - [Tool] — pluggable capability for LLM function calling
+//   - [PreProcessor], [PostProcessor], [PostToolProcessor] — message/response/tool result transformers
 //
 // # Included Implementations
 //
