@@ -8,13 +8,15 @@ import oasis "github.com/nevindra/oasis"
 
 ## Features
 
-- **Composable agents** -- `LLMAgent` for single-provider tool loops, `Network` for multi-agent coordination, `Workflow` for deterministic DAG-based orchestration. All three nest recursively.
+- **Composable agents** -- `LLMAgent` for single-provider tool loops, `Network` for multi-agent coordination, `Workflow` for deterministic DAG-based orchestration. All three nest recursively. Multiple tool calls execute in parallel automatically.
+- **Streaming** -- `StreamingAgent` interface with channel-based token streaming. Tool-calling iterations run in blocking mode; the final response streams token-by-token. Built-in edit batching for messaging platforms.
+- **Memory & recall** -- conversation history (`WithConversationMemory`), cross-thread semantic search (`WithSemanticSearch`), and user fact injection (`WithUserMemory`). Built into `LLMAgent` and `Network`.
 - **Processor pipeline** -- `PreProcessor`, `PostProcessor`, `PostToolProcessor` hooks for guardrails, PII redaction, logging, and custom middleware.
 - **Human-in-the-loop** -- `InputHandler` interface for agents to pause and request human input, both LLM-driven (`ask_user` tool) and programmatic (processor gates).
+- **Background agents** -- `Spawn()` launches agents in background goroutines with `AgentHandle` for state tracking, cancellation, and `select`-based multiplexing.
 - **Interface-driven** -- every component (LLM, storage, tools, frontends, memory) is a Go interface. Swap implementations without touching the rest of the system.
-- **Streaming** -- channel-based token streaming with built-in edit batching for messaging platforms.
 - **Built-in tools** -- knowledge search (RAG), web search, scheduled actions, shell execution, file I/O, HTTP requests.
-- **Observability** -- OpenTelemetry wrappers for providers, tools, and embeddings with cost tracking.
+- **Observability** -- OpenTelemetry wrappers for providers, tools, embeddings, and agent executions with cost tracking.
 - **No LLM SDKs** -- all providers use raw `net/http`. Zero vendor lock-in.
 - **Pure-Go SQLite** -- `modernc.org/sqlite`, no CGO required.
 
@@ -137,6 +139,60 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 
 Networks propagate the handler to all subagents automatically.
 
+### Memory & Recall
+
+Agents can load conversation history, recall relevant context from past threads, and inject user facts into the system prompt -- all via options.
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithTools(searchTool),
+    oasis.WithConversationMemory(store),          // load/persist history per thread
+    oasis.WithSemanticSearch(embedding),           // cross-thread semantic recall
+    oasis.WithUserMemory(memoryStore),             // inject user facts into system prompt
+)
+
+result, err := agent.Execute(ctx, oasis.AgentTask{
+    Input: "What did we discuss yesterday?",
+    Context: map[string]any{
+        oasis.ContextThreadID: "thread-123",
+        oasis.ContextUserID:   "user-42",
+    },
+})
+```
+
+### Streaming
+
+Both `LLMAgent` and `Network` implement the `StreamingAgent` interface. Tool-calling iterations run in blocking mode; only the final response streams token-by-token.
+
+```go
+if sa, ok := agent.(oasis.StreamingAgent); ok {
+    ch := make(chan string)
+    go func() {
+        for token := range ch {
+            fmt.Print(token)
+        }
+    }()
+    result, err := sa.ExecuteStream(ctx, task, ch)
+}
+```
+
+### Background Agents
+
+`Spawn()` launches an agent in a background goroutine and returns an `AgentHandle` for tracking, awaiting, and cancelling.
+
+```go
+h := oasis.Spawn(ctx, agent, task)
+
+// Check state without blocking
+fmt.Println(h.State()) // Running, Completed, Failed, Cancelled
+
+// Wait for completion
+result, err := h.Wait()
+
+// Or cancel
+h.Cancel()
+```
+
 ## Core Interfaces
 
 | Interface | Purpose |
@@ -148,6 +204,7 @@ Networks propagate the handler to all subagents automatically.
 | `Tool` | Pluggable capability for LLM function calling |
 | `Frontend` | Messaging platform -- `Poll`, `Send`, `Edit` |
 | `Agent` | Composable work unit -- `LLMAgent`, `Network`, `Workflow`, or custom |
+| `StreamingAgent` | Optional `Agent` capability -- `ExecuteStream` with channel-based token streaming |
 | `InputHandler` | Human-in-the-loop -- pause agent and request human input |
 
 ## Included Implementations

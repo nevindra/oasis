@@ -56,7 +56,10 @@ oasis/                              # FRAMEWORK
 |-- store.go, frontend.go, memory.go
 |-- processor.go                    # Processor interfaces + ProcessorChain
 |-- agent.go, llmagent.go, network.go  # Agent primitives (composable)
+|-- agentmemory.go                 # Shared memory wiring (conversation, user, semantic)
 |-- workflow.go                     # Workflow primitive (DAG-based orchestration)
+|-- input.go                       # InputHandler interface (human-in-the-loop)
+|-- handle.go                      # Spawn() + AgentHandle (background agents)
 |
 |-- provider/gemini/               # Google Gemini (Provider + EmbeddingProvider)
 |-- provider/openaicompat/         # OpenAI-compatible (Provider)
@@ -84,6 +87,8 @@ oasis/                              # FRAMEWORK
 | `Tool` | `tool.go` | Pluggable tool for LLM function calling |
 | `Frontend` | `frontend.go` | Messaging platform: Poll, Send, Edit |
 | `Agent` | `agent.go` | Composable work unit: LLMAgent, Network, Workflow, or custom |
+| `StreamingAgent` | `agent.go` | Optional Agent capability: ExecuteStream with channel-based token streaming |
+| `InputHandler` | `input.go` | Human-in-the-loop: pause agent and request human input |
 | `PreProcessor` | `processor.go` | Transform/validate messages before LLM call |
 | `PostProcessor` | `processor.go` | Transform/validate LLM responses before tool execution |
 | `PostToolProcessor` | `processor.go` | Transform/validate tool results before appending to history |
@@ -112,8 +117,21 @@ pipeline, _ := oasis.NewWorkflow("pipeline", "Research and write",
     oasis.AgentStep("write", writer, oasis.InputFrom("research.output"), oasis.After("research")),
 )
 
+// Agent with memory (conversation history + semantic recall + user facts)
+assistant := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
+    oasis.WithTools(searchTool),
+    oasis.WithConversationMemory(store),
+    oasis.WithSemanticSearch(embedding),
+    oasis.WithUserMemory(memoryStore),
+    oasis.WithInputHandler(myHandler),  // enables ask_user tool
+)
+
 // Networks of networks (or workflows)
 org := oasis.NewNetwork("org", "Top-level", ceo, oasis.WithAgents(team, pipeline))
+
+// Background agent execution
+h := oasis.Spawn(ctx, assistant, task)
+result, err := h.Wait()
 ```
 
 ### Key Design Decisions
@@ -122,7 +140,8 @@ org := oasis.NewNetwork("org", "Top-level", ceo, oasis.WithAgents(team, pipeline
 - **Interface-driven** — every major component is a Go interface
 - **Constructor injection** — no global state, dependencies via structs
 - **Forward-compatible** — interfaces grow by addition, never removal
-- **Streaming** — channel-based token streaming with 1s edit batching
+- **Parallel tool execution** — multiple tool calls in a single response run concurrently via goroutines
+- **Streaming** — `StreamingAgent` interface with channel-based token streaming
 - **Pure-Go SQLite** — `modernc.org/sqlite`, no CGO required
 
 ## Releasing
