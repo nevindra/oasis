@@ -53,8 +53,9 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 		}
 	}
 
-	// Current user message
-	messages = append(messages, UserMessage(task.Input))
+	// Current user message, with optional multimodal attachments.
+	userMsg := ChatMessage{Role: "user", Content: task.Input, Attachments: task.Attachments}
+	messages = append(messages, userMsg)
 	return messages
 }
 

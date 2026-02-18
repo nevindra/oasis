@@ -7,6 +7,8 @@ import (
 
 	oasis "github.com/nevindra/oasis"
 	"github.com/nevindra/oasis/frontend/telegram"
+	"github.com/nevindra/oasis/ingest"
+	ingestpdf "github.com/nevindra/oasis/ingest/pdf"
 	"github.com/nevindra/oasis/internal/config"
 	memsqlite "github.com/nevindra/oasis/memory/sqlite"
 	"github.com/nevindra/oasis/observer"
@@ -69,6 +71,7 @@ func main() {
 	// 7. Build agents
 	chatAgent := oasis.NewLLMAgent("chat", "Handle casual conversation, questions, and general chat", chatLLM,
 		oasis.WithPrompt(chatPrompt(cfg)),
+		oasis.WithTools(wrapTool(knowledge.New(store, embedding), inst)),
 		oasis.WithConversationMemory(store),
 		oasis.WithUserMemory(memStore),
 		oasis.WithSemanticSearch(embedding),
@@ -92,7 +95,10 @@ func main() {
 	// 8. Run
 	// Note: observer wrapping is on individual providers/tools.
 	// ObservedAgent doesn't support StreamingAgent yet.
-	app := New(&cfg, frontend, network, store, memStore, inputHandler)
+	ingestor := ingest.NewIngestor(store, embedding,
+		ingest.WithExtractor(ingestpdf.TypePDF, ingestpdf.NewExtractor()),
+	)
+	app := New(&cfg, frontend, network, store, memStore, inputHandler, ingestor)
 	log.Fatal(app.RunWithSignal())
 }
 
@@ -126,8 +132,22 @@ func wrapTool(t oasis.Tool, inst *observer.Instruments) oasis.Tool {
 
 func chatPrompt(cfg config.Config) string {
 	return `You are Oasis, a personal AI assistant. You are helpful, concise, and friendly.
-Respond naturally in the same language the user uses.
-If the user writes in Indonesian, respond in Indonesian. If in English, respond in English.`
+
+## Memory & context
+- Your conversation history and any known facts about the user are injected automatically before each message.
+- Use this context to give relevant, personalized responses.
+- If the user asks about their personal details (name, job, skills, preferences, etc.), use knowledge_search to look it up before answering.
+- If you don't have enough information to answer accurately, say so honestly — do not guess or make things up.
+- If the user refers to something from a previous message, use the conversation history to understand it.
+
+## Tools
+- knowledge_search: Search the user's personal knowledge base and past conversations. Use it when the user asks about personal details, saved information, or anything you're unsure about.
+
+## Attachments
+- If the user sends a file or photo, its content is included in the message — read and analyze it directly.
+
+## Language
+ALWAYS respond in the same language the user used. If they write in Indonesian, respond in Indonesian. If in English, respond in English. Never switch languages unless the user does first.`
 }
 
 func actionPrompt() string {
@@ -142,19 +162,20 @@ func actionPrompt() string {
 - file_read/file_write: Read/write files in the workspace.
 - http_fetch: Fetch and extract content from URLs.
 
-Be concise in your final response. Respond in the same language as the user.`
+Be concise in your final response. ALWAYS respond in the same language the user used. If they write in Indonesian, respond in Indonesian. If in English, respond in English.`
 }
 
 func routerPrompt() string {
-	return `You are a router for Oasis, a personal AI assistant. Your job is to decide which agent should handle the user's message.
+	return `You are a router for Oasis, a personal AI assistant. Your only job is to delegate messages to the right agent and return their response directly.
 
 You have two agents:
-- agent_chat: For casual conversation, questions, opinions, recommendations, explanations, or anything you can answer from knowledge. Use this for: "what is X?", "recommend me Y", greetings, follow-up questions, casual talk.
-- agent_action: For tasks that require using tools: searching the web, managing schedules, saving/searching knowledge, reading/writing files, running commands. Use this when the user wants to CREATE, UPDATE, DELETE, SEARCH, SCHEDULE, or MONITOR something.
+- agent_chat: For casual conversation, questions, opinions, recommendations, explanations, analyzing files/photos, or anything answerable from knowledge.
+- agent_action: For tasks requiring tools: searching the web, managing schedules, saving/searching knowledge, reading/writing files, running commands.
 
 Rules:
-- If the user is asking a question or having conversation, route to agent_chat.
-- If the user wants to perform an operation (search, save, schedule, file ops, etc.), route to agent_action.
+- If the user is asking a question, chatting, or sent a file/photo to analyze → route to agent_chat.
+- If the user wants to perform an operation (web search, schedule, file ops, run commands) → route to agent_action.
 - When in doubt, prefer agent_chat.
-- Always delegate to exactly one agent per message. Pass the user's full message as the task.`
+- Always delegate to exactly one agent. Pass the user's ORIGINAL message as the task — do NOT paraphrase, translate, or summarize it. Keep it exactly as the user wrote it.
+- After the agent responds, return their response VERBATIM. Do NOT summarize, explain, or add any commentary about what you did or which agent you used.`
 }

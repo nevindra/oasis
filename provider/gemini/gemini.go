@@ -398,7 +398,7 @@ func buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schem
 				parts = append(parts, map[string]any{"text": m.Content})
 			}
 
-			for _, img := range m.Images {
+			for _, img := range m.Attachments {
 				parts = append(parts, map[string]any{
 					"inlineData": map[string]any{
 						"mimeType": img.MimeType,

@@ -182,7 +182,7 @@ func TestBuildBody_Images(t *testing.T) {
 		{
 			Role:    "user",
 			Content: "What is this?",
-			Images: []oasis.ImageData{
+			Attachments: []oasis.Attachment{
 				{MimeType: "image/png", Base64: "iVBOR..."},
 			},
 		},

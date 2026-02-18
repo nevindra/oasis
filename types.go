@@ -93,13 +93,15 @@ type Skill struct {
 type ChatMessage struct {
 	Role       string          `json:"role"` // "system", "user", "assistant", "tool"
 	Content    string          `json:"content"`
-	Images     []ImageData     `json:"images,omitempty"`
+	Attachments []Attachment    `json:"attachments,omitempty"`
 	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	Metadata   json.RawMessage `json:"metadata,omitempty"` // provider-specific (e.g. Gemini thoughtSignature)
 }
 
-type ImageData struct {
+// Attachment represents binary content (image, PDF, audio, etc.) sent inline to a multimodal LLM.
+// The MimeType determines how the provider interprets the data.
+type Attachment struct {
 	MimeType string `json:"mime_type"`
 	Base64   string `json:"base64"`
 }

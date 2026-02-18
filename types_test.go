@@ -16,8 +16,8 @@ func TestUserMessage(t *testing.T) {
 	if len(msg.ToolCalls) != 0 {
 		t.Errorf("ToolCalls = %v, want empty", msg.ToolCalls)
 	}
-	if len(msg.Images) != 0 {
-		t.Errorf("Images = %v, want empty", msg.Images)
+	if len(msg.Attachments) != 0 {
+		t.Errorf("Images = %v, want empty", msg.Attachments)
 	}
 	if msg.Metadata != nil {
 		t.Errorf("Metadata = %v, want nil", msg.Metadata)

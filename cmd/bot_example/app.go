@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	oasis "github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/ingest"
+	ingestpdf "github.com/nevindra/oasis/ingest/pdf"
 	"github.com/nevindra/oasis/internal/config"
 )
 
@@ -23,10 +25,11 @@ type App struct {
 	memory   oasis.MemoryStore
 	config   *config.Config
 	input    *TelegramInputHandler
+	ingestor *ingest.Ingestor
 }
 
 // New creates an App.
-func New(cfg *config.Config, frontend oasis.Frontend, agent oasis.StreamingAgent, store oasis.Store, memory oasis.MemoryStore, input *TelegramInputHandler) *App {
+func New(cfg *config.Config, frontend oasis.Frontend, agent oasis.StreamingAgent, store oasis.Store, memory oasis.MemoryStore, input *TelegramInputHandler, ingestor *ingest.Ingestor) *App {
 	return &App{
 		frontend: frontend,
 		agent:    agent,
@@ -34,6 +37,7 @@ func New(cfg *config.Config, frontend oasis.Frontend, agent oasis.StreamingAgent
 		memory:   memory,
 		config:   cfg,
 		input:    input,
+		ingestor: ingestor,
 	}
 }
 
@@ -96,6 +100,17 @@ func (a *App) handle(ctx context.Context, msg oasis.IncomingMessage) {
 
 	_ = a.frontend.SendTyping(ctx, msg.ChatID)
 
+	// Download file/photo attachments before resolving thread.
+	images, docs, fileText, attachErr := downloadAttachments(ctx, a.frontend, msg)
+	if attachErr != nil {
+		log.Printf(" [attach] download error: %v", attachErr)
+	}
+
+	// Auto-ingest documents into the knowledge store in the background.
+	if len(docs) > 0 {
+		go a.autoIngest(ctx, docs)
+	}
+
 	// Resolve thread
 	thread, err := a.getOrCreateThread(ctx, msg.ChatID)
 	if err != nil {
@@ -108,8 +123,21 @@ func (a *App) handle(ctx context.Context, msg oasis.IncomingMessage) {
 	if text == "" {
 		text = msg.Caption
 	}
-	if text == "" {
+	// Prepend extracted file text (for non-image documents).
+	if fileText != "" {
+		if text != "" {
+			text = text + "\n\n" + fileText
+		} else {
+			text = fileText
+		}
+	}
+	// Allow messages with only attachments through (no text required).
+	if text == "" && len(images) == 0 {
 		return
+	}
+	// Images with no text: use a neutral prompt so the LLM knows what to do.
+	if text == "" {
+		text = "Please analyze this."
 	}
 
 	if strings.TrimSpace(text) == "/new" {
@@ -124,7 +152,8 @@ func (a *App) handle(ctx context.Context, msg oasis.IncomingMessage) {
 
 	// Build task with context
 	task := oasis.AgentTask{
-		Input: text,
+		Input:       text,
+		Attachments: images,
 		Context: map[string]any{
 			oasis.ContextThreadID: thread.ID,
 			oasis.ContextUserID:   msg.UserID,
@@ -141,6 +170,34 @@ func (a *App) handle(ctx context.Context, msg oasis.IncomingMessage) {
 
 	// Stream response
 	a.streamResponse(ctx, msg.ChatID, placeholderID, task)
+}
+
+// autoIngest extracts text from uploaded documents and saves them to the knowledge store.
+// PDFs are extracted via the PDF extractor; other files are treated as plain text.
+// Runs in a goroutine — errors are logged and do not affect the main response flow.
+func (a *App) autoIngest(ctx context.Context, docs []RawDoc) {
+	pdfExtractor := ingestpdf.NewExtractor()
+	for _, doc := range docs {
+		var text string
+		var err error
+		if doc.MimeType == "application/pdf" {
+			text, err = pdfExtractor.Extract(doc.Data)
+			if err != nil {
+				log.Printf(" [ingest] PDF extract error (%s): %v", doc.Filename, err)
+				continue
+			}
+		} else {
+			text = string(doc.Data)
+		}
+		if text == "" {
+			continue
+		}
+		if _, err := a.ingestor.IngestText(ctx, text, doc.Filename, doc.Filename); err != nil {
+			log.Printf(" [ingest] error (%s): %v", doc.Filename, err)
+		} else {
+			log.Printf(" [ingest] saved %q to knowledge store", doc.Filename)
+		}
+	}
 }
 
 // isOwner checks if the user is the authorized owner.

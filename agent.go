@@ -30,6 +30,10 @@ type StreamingAgent interface {
 type AgentTask struct {
 	// Input is the natural language task description.
 	Input string
+	// Attachments carries optional multimodal content (photos, PDFs, documents, etc.) to pass to the LLM.
+	// Providers that support multimodal input will attach these to the user message as inline data.
+	// Providers that don't support it will ignore this field.
+	Attachments []Attachment
 	// Context carries optional metadata (thread ID, user ID, etc.).
 	// Use the Context* constants as keys and the Task* accessors for type-safe reads.
 	Context map[string]any

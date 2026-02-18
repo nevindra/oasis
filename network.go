@@ -302,6 +302,7 @@ func (n *Network) dispatch(ctx context.Context, tc ToolCall, parentTask AgentTas
 
 		result, err := agent.Execute(ctx, AgentTask{
 			Input:   params.Task,
+			Attachments: parentTask.Attachments,
 			Context: parentTask.Context,
 		})
 		if err != nil {

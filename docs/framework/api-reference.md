@@ -472,15 +472,16 @@ const (
 
 ```go
 type ChatMessage struct {
-    Role       string          `json:"role"`        // "system", "user", "assistant", "tool"
-    Content    string          `json:"content"`
-    Images     []ImageData     `json:"images,omitempty"`
-    ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
-    ToolCallID string          `json:"tool_call_id,omitempty"`
-    Metadata   json.RawMessage `json:"metadata,omitempty"`
+    Role        string          `json:"role"`        // "system", "user", "assistant", "tool"
+    Content     string          `json:"content"`
+    Attachments []Attachment    `json:"attachments,omitempty"`
+    ToolCalls   []ToolCall      `json:"tool_calls,omitempty"`
+    ToolCallID  string          `json:"tool_call_id,omitempty"`
+    Metadata    json.RawMessage `json:"metadata,omitempty"`
 }
 
-type ImageData struct {
+// Attachment holds binary content (image, PDF, document) for multimodal LLM calls.
+type Attachment struct {
     MimeType string `json:"mime_type"`
     Base64   string `json:"base64"`
 }
@@ -555,8 +556,9 @@ type FileInfo struct {
 
 ```go
 type AgentTask struct {
-    Input   string         // Natural language task description
-    Context map[string]any // Optional metadata (thread ID, user ID, attachments, etc.)
+    Input       string         // Natural language task description
+    Attachments []Attachment   // Optional multimodal content (images, PDFs, documents)
+    Context     map[string]any // Optional metadata (thread ID, user ID, etc.)
 }
 
 type AgentResult struct {
@@ -1014,6 +1016,16 @@ type Chunker interface {
 ```
 
 Built-in extractors: `PlainTextExtractor`, `HTMLExtractor`, `MarkdownExtractor`.
+
+**PDF extractor** (`ingest/pdf` subpackage — opt-in, pulls `ledongthuc/pdf`):
+
+```go
+import ingestpdf "github.com/nevindra/oasis/ingest/pdf"
+
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithExtractor(ingestpdf.TypePDF, ingestpdf.NewExtractor()),
+)
+```
 
 ### Chunkers
 

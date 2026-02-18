@@ -372,6 +372,14 @@ result, err := ingestor.IngestReader(ctx, reader, filename)
 - `Extractor` — converts raw `[]byte` to plain text (pluggable: PDF, DOCX, etc.)
 - `Chunker` — splits text into `[]string` chunks (pluggable strategies)
 
+**PDF support** (`ingest/pdf` subpackage, opt-in):
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithExtractor(ingestpdf.TypePDF, ingestpdf.NewExtractor()),
+)
+```
+
 **Built-in chunkers:**
 
 - `RecursiveChunker` — paragraphs → sentences → words (default). Improved sentence boundaries: abbreviation-aware (Mr., Dr.), decimal-safe (3.14), CJK punctuation (。！？).
@@ -411,14 +419,14 @@ All framework types live in the root `oasis` package:
 | `Fact` | Memory fact | ID, Fact, Category, Confidence, Embedding, CreatedAt, UpdatedAt |
 | `ScheduledAction` | Recurring automation | ID, Description, Schedule, ToolCalls (JSON), NextRun, Enabled, SkillID |
 | `Skill` | Stored instruction package for specializing agents | ID, Name, Description, Instructions, Tools, Model, Embedding, CreatedAt, UpdatedAt |
-| `ChatMessage` | LLM protocol message | Role, Content, Images, ToolCalls, ToolCallID |
+| `ChatMessage` | LLM protocol message | Role, Content, Attachments, ToolCalls, ToolCallID |
 | `ChatRequest` | LLM request | Messages |
 | `ChatResponse` | LLM response | Content, ToolCalls, Usage |
 | `ToolDefinition` | Tool schema | Name, Description, Parameters (JSON Schema) |
 | `ToolCall` | LLM tool invocation | ID, Name, Args |
 | `ToolResult` | Tool execution result | Content, Error |
 | `IncomingMessage` | Frontend message | ID, ChatID, UserID, Text, Document, Photos |
-| `AgentTask` | Input to an Agent | Input, Context (`map[string]any`), typed accessors (`TaskThreadID()`, `TaskUserID()`, `TaskChatID()`) |
+| `AgentTask` | Input to an Agent | Input, Attachments (`[]Attachment`), Context (`map[string]any`), typed accessors (`TaskThreadID()`, `TaskUserID()`, `TaskChatID()`) |
 | `AgentResult` | Output of an Agent | Output, Usage (aggregate tokens) |
 
 **Convenience constructors:**

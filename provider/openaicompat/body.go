@@ -55,7 +55,7 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 
 		default:
 			// Regular user or assistant message.
-			if len(m.Images) > 0 {
+			if len(m.Attachments) > 0 {
 				// Multimodal: build content blocks.
 				var blocks []ContentBlock
 				if m.Content != "" {
@@ -64,7 +64,7 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 						Text: m.Content,
 					})
 				}
-				for _, img := range m.Images {
+				for _, img := range m.Attachments {
 					dataURL := fmt.Sprintf("data:%s;base64,%s", img.MimeType, img.Base64)
 					blocks = append(blocks, ContentBlock{
 						Type:     "image_url",

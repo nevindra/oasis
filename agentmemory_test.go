@@ -455,6 +455,49 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 	}
 }
 
+func TestBuildMessagesImagesFromTask(t *testing.T) {
+	images := []Attachment{
+		{MimeType: "image/jpeg", Base64: "abc123"},
+		{MimeType: "application/pdf", Base64: "pdfdata"},
+	}
+
+	var capturedReq ChatRequest
+	provider := &capturingProvider{
+		resp: ChatResponse{Content: "ok"},
+		capture: func(req ChatRequest) {
+			capturedReq = req
+		},
+	}
+
+	agent := NewLLMAgent("test", "test", provider)
+	_, err := agent.Execute(context.Background(), AgentTask{
+		Input:  "analyze this",
+		Attachments: images,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Last message should be the user message with images attached.
+	msgs := capturedReq.Messages
+	last := msgs[len(msgs)-1]
+	if last.Role != "user" {
+		t.Fatalf("last message role = %q, want user", last.Role)
+	}
+	if last.Content != "analyze this" {
+		t.Errorf("user message content = %q, want %q", last.Content, "analyze this")
+	}
+	if len(last.Attachments) != 2 {
+		t.Fatalf("user message images count = %d, want 2", len(last.Attachments))
+	}
+	if last.Attachments[0].MimeType != "image/jpeg" || last.Attachments[0].Base64 != "abc123" {
+		t.Errorf("first image = %+v, want {image/jpeg, abc123}", last.Attachments[0])
+	}
+	if last.Attachments[1].MimeType != "application/pdf" || last.Attachments[1].Base64 != "pdfdata" {
+		t.Errorf("second image = %+v, want {application/pdf, pdfdata}", last.Attachments[1])
+	}
+}
+
 // --- Test helpers ---
 
 // capturingProvider records the ChatRequest for inspection.
