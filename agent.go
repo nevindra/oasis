@@ -412,10 +412,11 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch dispatchFu
 	return results
 }
 
-// truncateStr truncates a string to n characters.
+// truncateStr truncates a string to n runes.
 func truncateStr(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n]
+	return string(r[:n])
 }

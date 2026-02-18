@@ -8,10 +8,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Changed
 
+- **Breaking:** `Workflow.Execute` now returns `*WorkflowError` (non-nil `error`) when a step fails — previously returned `nil` error with the failure description embedded in `AgentResult.Output`. Callers that check `err != nil` will now correctly detect workflow failures. Use `errors.As(err, &wfErr)` to access per-step results via `wfErr.Result`
 - **Internal**: extracted shared `runLoop` from `LLMAgent` and `Network` — the core tool-calling loop (Execute + ExecuteStream) now lives in a single function in `agent.go`, eliminating 4-way code duplication. Both types delegate via a `dispatchFunc` callback. No public API changes.
+
+### Added
+
+- `WorkflowError` type — returned by `Workflow.Execute` on step failure; carries `StepName`, `Err` (unwrappable via `errors.Is`/`errors.As`), and the full `WorkflowResult` with per-step outcomes
 
 ### Fixed
 
+- `truncateStr` now operates on runes instead of bytes — previously could produce invalid UTF-8 when truncating multibyte strings (emoji, CJK, Arabic)
+- `Workflow` `Retry()` option now works on all step types — previously `ForEach`, `DoUntil`, and `DoWhile` steps silently ignored retry configuration; only basic `Step` was retried
+- `Workflow` `ForEach` now cancels remaining iterations on first failure — previously all sibling goroutines continued running to completion even after one failed, wasting resources and risking side effects
 - `Network.Execute` and `Network.ExecuteStream` now fall back to the last sub-agent output when the router LLM returns an empty final response — fixes messages getting stuck on "Thinking..." when using a pure-routing LLM that doesn't synthesize a reply after delegating
 - `store/sqlite`: eliminated `SQLITE_BUSY` (error 5) under concurrent writes — `Store` now keeps a single shared `*sql.DB` with `SetMaxOpenConns(1)` instead of opening a new connection per operation; `Close()` now properly closes the underlying connection
 - `Network` sub-agent routing: task parameter description changed to "copied verbatim" — prevents the router LLM from paraphrasing or translating the user's message before delegating, which caused language switching and hallucinations

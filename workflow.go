@@ -116,6 +116,31 @@ type WorkflowResult struct {
 	Usage Usage
 }
 
+// WorkflowError is returned by Workflow.Execute when one or more steps fail.
+// Callers can inspect per-step results via errors.As:
+//
+//	result, err := wf.Execute(ctx, task)
+//	var wfErr *WorkflowError
+//	if errors.As(err, &wfErr) {
+//	    for name, step := range wfErr.Result.Steps { ... }
+//	}
+type WorkflowError struct {
+	// StepName is the name of the first step that failed.
+	StepName string
+	// Err is the underlying error from the failed step.
+	Err error
+	// Result is the full workflow result with per-step outcomes.
+	Result WorkflowResult
+}
+
+func (e *WorkflowError) Error() string {
+	return fmt.Sprintf("workflow step %q failed: %v", e.StepName, e.Err)
+}
+
+func (e *WorkflowError) Unwrap() error {
+	return e.Err
+}
+
 // --- Step function type ---
 
 // StepFunc is the signature for custom function steps. The function receives
@@ -734,10 +759,15 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 		w.safeCallback(func() { w.onFinish(wfResult) })
 	}
 
-	if wfStatus == StepFailed && lastOutput == "" {
-		// Use failedStep for a direct error summary.
-		if sr, ok := state.results[state.failedStep]; ok && sr.Error != nil {
-			lastOutput = fmt.Sprintf("workflow %s failed at step %s: %s", w.name, state.failedStep, sr.Error)
+	if wfStatus == StepFailed {
+		var stepErr error
+		if sr, ok := state.results[state.failedStep]; ok {
+			stepErr = sr.Error
+		}
+		return AgentResult{Output: lastOutput, Usage: totalUsage}, &WorkflowError{
+			StepName: state.failedStep,
+			Err:      stepErr,
+			Result:   wfResult,
 		}
 	}
 
@@ -870,17 +900,18 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 		Status: StepRunning,
 	})
 
-	var err error
+	var run func() error
 	switch s.stepType {
 	case stepTypeForEach:
-		err = w.executeForEach(ctx, s, state)
+		run = func() error { return w.executeForEach(ctx, s, state) }
 	case stepTypeDoUntil:
-		err = w.executeDoUntil(ctx, s, state)
+		run = func() error { return w.executeDoUntil(ctx, s, state) }
 	case stepTypeDoWhile:
-		err = w.executeDoWhile(ctx, s, state)
+		run = func() error { return w.executeDoWhile(ctx, s, state) }
 	default:
-		err = w.executeWithRetry(ctx, s, state)
+		run = func() error { return s.fn(ctx, state.wCtx) }
 	}
+	err := w.executeWithRetry(ctx, s, run)
 
 	duration := time.Since(start)
 
@@ -920,8 +951,9 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 	log.Printf(" [workflow] step %q completed in %s", s.name, duration)
 }
 
-// executeWithRetry runs a step function with retry logic.
-func (w *Workflow) executeWithRetry(ctx context.Context, s *stepConfig, state *executionState) error {
+// executeWithRetry wraps a step execution function with retry logic.
+// All step types (basic, ForEach, DoUntil, DoWhile) are routed through this.
+func (w *Workflow) executeWithRetry(ctx context.Context, s *stepConfig, run func() error) error {
 	maxAttempts := 1 + s.retry
 	var lastErr error
 
@@ -937,7 +969,7 @@ func (w *Workflow) executeWithRetry(ctx context.Context, s *stepConfig, state *e
 			log.Printf(" [workflow] step %q retry %d/%d", s.name, attempt, s.retry)
 		}
 
-		lastErr = s.fn(ctx, state.wCtx)
+		lastErr = run()
 		if lastErr == nil {
 			return nil
 		}
@@ -977,33 +1009,36 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 		concurrency = 1
 	}
 
+	// Cancel remaining iterations on first failure.
+	iterCtx, iterCancel := context.WithCancel(ctx)
+	defer iterCancel()
+
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(items))
 
 	for i, item := range items {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-iterCtx.Done():
 		case sem <- struct{}{}:
+			wg.Add(1)
+			go func(elem any, idx int) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				elemCtx := context.WithValue(iterCtx, forEachIterCtxKey{}, forEachIter{
+					item:  elem,
+					index: idx,
+				})
+
+				if err := s.fn(elemCtx, state.wCtx); err != nil {
+					errCh <- err
+					iterCancel()
+				}
+			}(item, i)
+			continue
 		}
-
-		wg.Add(1)
-		go func(elem any, idx int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			// Carry the element via context.Context (per-goroutine, no race).
-			// Step functions retrieve it via ForEachItem(ctx).
-			iterCtx := context.WithValue(ctx, forEachIterCtxKey{}, forEachIter{
-				item:  elem,
-				index: idx,
-			})
-
-			if err := s.fn(iterCtx, state.wCtx); err != nil {
-				errCh <- err
-			}
-		}(item, i)
+		break // iterCtx cancelled — stop launching new iterations
 	}
 
 	wg.Wait()

@@ -298,14 +298,17 @@ func TestWorkflowFailFast(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "fail"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, err = wf.Execute(context.Background(), AgentTask{Input: "fail"})
 
-	// Should not have an error at Go level (workflow ran), but output indicates failure.
-	if result.Output == "" {
-		t.Error("expected error summary in output")
+	var wfErr *WorkflowError
+	if !errors.As(err, &wfErr) {
+		t.Fatalf("expected *WorkflowError, got %v", err)
+	}
+	if wfErr.StepName != "b" {
+		t.Errorf("WorkflowError.StepName = %q, want %q", wfErr.StepName, "b")
+	}
+	if !errors.Is(err, stepErr) {
+		t.Errorf("Unwrap chain should contain stepErr, got %v", wfErr.Err)
 	}
 	if cRan {
 		t.Error("step c should not have run after b failed")
@@ -336,8 +339,12 @@ func TestWorkflowFailureCascadesThroughMultipleLevels(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wf.Execute(context.Background(), AgentTask{Input: "test"})
+	_, err = wf.Execute(context.Background(), AgentTask{Input: "test"})
 
+	var wfErr *WorkflowError
+	if !errors.As(err, &wfErr) {
+		t.Fatalf("expected *WorkflowError, got %v", err)
+	}
 	if cRan {
 		t.Error("step c should not have run (upstream b failed)")
 	}
@@ -390,17 +397,14 @@ func TestWorkflowRetryExhausted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
 	// 1 initial + 2 retries = 3.
 	if attempts != 3 {
 		t.Errorf("attempts = %d, want 3", attempts)
 	}
-	// Output should contain error info.
-	if result.Output == "" {
-		t.Error("expected error summary in output")
+	var wfErr *WorkflowError
+	if !errors.As(err, &wfErr) {
+		t.Fatalf("expected *WorkflowError, got %v", err)
 	}
 }
 
@@ -664,13 +668,10 @@ func TestWorkflowForEachMissingIterOver(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Should fail with error about missing IterOver.
-	if result.Output == "" {
-		t.Error("expected error output for missing IterOver")
+	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	var wfErr *WorkflowError
+	if !errors.As(err, &wfErr) {
+		t.Fatalf("expected *WorkflowError, got %v", err)
 	}
 }
 
@@ -734,12 +735,10 @@ func TestWorkflowDoUntilMissingCondition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Output == "" {
-		t.Error("expected error output for missing Until condition")
+	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	var wfErr *WorkflowError
+	if !errors.As(err, &wfErr) {
+		t.Fatalf("expected *WorkflowError, got %v", err)
 	}
 }
 
@@ -778,12 +777,10 @@ func TestWorkflowDoWhileMissingCondition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Output == "" {
-		t.Error("expected error output for missing While condition")
+	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	var wfErr *WorkflowError
+	if !errors.As(err, &wfErr) {
+		t.Fatalf("expected *WorkflowError, got %v", err)
 	}
 }
 

@@ -149,7 +149,7 @@ oasis.DoWhile("paginate", func(ctx context.Context, wCtx *oasis.WorkflowContext)
 | `InputFrom(key)` | AgentStep | Context key for agent input (default: original task input) |
 | `ArgsFrom(key)` | ToolStep | Context key for tool arguments (default: empty `{}`) |
 | `OutputTo(key)` | AgentStep, ToolStep | Override default output key |
-| `Retry(n, delay)` | All (basic) | Retry up to n times with delay between attempts |
+| `Retry(n, delay)` | All | Retry up to n times with delay between attempts |
 | `IterOver(key)` | ForEach | Context key containing `[]any` collection |
 | `Concurrency(n)` | ForEach | Max parallel iterations (default 1) |
 | `Until(fn)` | DoUntil | Exit condition (evaluated after each iteration) |
@@ -273,9 +273,33 @@ These are carried on the Go `context.Context` (not WorkflowContext), so each gor
 
 ## Error Handling
 
+### WorkflowError
+
+When a step fails, `Workflow.Execute` returns a `*WorkflowError` that carries the full `WorkflowResult`:
+
+```go
+result, err := wf.Execute(ctx, task)
+if err != nil {
+    var wfErr *oasis.WorkflowError
+    if errors.As(err, &wfErr) {
+        fmt.Println("failed step:", wfErr.StepName)
+        fmt.Println("cause:", wfErr.Err)
+
+        // Inspect per-step outcomes
+        for name, step := range wfErr.Result.Steps {
+            fmt.Printf("  %s: %s\n", name, step.Status)
+        }
+    }
+}
+```
+
+`WorkflowError` implements `Unwrap()`, so `errors.Is` chains work on the underlying step error.
+
+When a Workflow is used as a sub-agent inside a Network, the error is surfaced to the router LLM as a tool result — the LLM can then decide how to handle the failure.
+
 ### Fail-Fast
 
-The first step failure cancels the workflow context. All in-flight steps receive the cancellation, and downstream steps are marked `StepSkipped`.
+The first step failure cancels the workflow context. All in-flight steps receive the cancellation, and downstream steps are marked `StepSkipped`. ForEach steps cancel remaining iterations on first failure.
 
 ### Failure Cascade
 
@@ -283,11 +307,12 @@ When a step fails, all steps that depend on it (directly or transitively) are sk
 
 ### Retry
 
-Configure per-step or workflow-wide retries:
+Configure per-step or workflow-wide retries. Retry works on all step types: `Step`, `AgentStep`, `ToolStep`, `ForEach`, `DoUntil`, and `DoWhile`.
 
 ```go
-// Per-step retry
+// Per-step retry (works on any step type)
 oasis.Step("flaky", flakyFn, oasis.Retry(3, 2*time.Second))
+oasis.ForEach("batch", batchFn, oasis.IterOver("items"), oasis.Retry(2, time.Second))
 
 // Default retry for all steps
 oasis.WithDefaultRetry(2, time.Second)

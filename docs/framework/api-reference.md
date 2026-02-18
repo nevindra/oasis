@@ -625,6 +625,14 @@ type WorkflowResult struct {
     Usage   Usage
 }
 
+// WorkflowError is returned by Workflow.Execute when a step fails.
+// Carries the full WorkflowResult for per-step inspection via errors.As.
+type WorkflowError struct {
+    StepName string         // first step that failed
+    Err      error          // underlying step error (unwrappable)
+    Result   WorkflowResult // full per-step outcomes
+}
+
 // StepOption configures an individual workflow step.
 type StepOption func(*stepConfig)
 
