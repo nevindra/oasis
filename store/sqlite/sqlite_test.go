@@ -2,8 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/nevindra/oasis"
@@ -155,10 +157,8 @@ func TestStoreDocument(t *testing.T) {
 	}
 
 	// Verify via raw query
-	db, _ := s.openDB()
-	defer db.Close()
 	var count int
-	db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks WHERE document_id = ?", doc.ID).Scan(&count)
+	s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks WHERE document_id = ?", doc.ID).Scan(&count)
 	if count != 2 {
 		t.Errorf("expected 2 chunks, got %d", count)
 	}
@@ -409,6 +409,51 @@ func TestSearchSkills(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Name != "writing" {
 		t.Errorf("expected top result 'writing', got %v", results)
+	}
+}
+
+func TestConcurrentWrites_NoBusyError(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	now := oasis.NowUnix()
+	thread := oasis.Thread{ID: oasis.NewID(), ChatID: "concurrent-test", CreatedAt: now, UpdatedAt: now}
+	if err := s.CreateThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 20
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			msg := oasis.Message{
+				ID:        oasis.NewID(),
+				ThreadID:  thread.ID,
+				Role:      "user",
+				Content:   fmt.Sprintf("message %d", i),
+				CreatedAt: oasis.NowUnix(),
+			}
+			errs <- s.StoreMessage(ctx, msg)
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent write failed: %v", err)
+		}
+	}
+
+	msgs, err := s.GetMessages(ctx, thread.ID, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != n {
+		t.Errorf("expected %d messages stored, got %d", n, len(msgs))
 	}
 }
 

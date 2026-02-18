@@ -20,32 +20,28 @@ import (
 // Embeddings are stored as JSON text and vector search is done
 // in-process using brute-force cosine similarity.
 type Store struct {
-	dbPath string
+	db *sql.DB
 }
 
 var _ oasis.Store = (*Store)(nil)
 
 // New creates a Store using a local SQLite file at dbPath.
+// It opens a single shared connection pool with SetMaxOpenConns(1) so that
+// all goroutines serialize through one connection, eliminating SQLITE_BUSY
+// errors caused by concurrent writers opening independent connections.
 func New(dbPath string) *Store {
-	return &Store{dbPath: dbPath}
-}
-
-func (s *Store) openDB() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", s.dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+		// sql.Open only fails when the driver is not registered; with the
+		// blank import above that never happens.
+		panic(fmt.Sprintf("sqlite: open driver: %v", err))
 	}
-	return db, nil
+	db.SetMaxOpenConns(1)
+	return &Store{db: db}
 }
 
 // Init creates all required tables.
 func (s *Store) Init(ctx context.Context) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
@@ -84,13 +80,13 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 
 	for _, ddl := range tables {
-		if _, err := db.ExecContext(ctx, ddl); err != nil {
+		if _, err := s.db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("create table: %w", err)
 		}
 	}
 
 	// Scheduled actions
-	_, err = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS scheduled_actions (
+	_, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS scheduled_actions (
 		id TEXT PRIMARY KEY,
 		description TEXT,
 		schedule TEXT,
@@ -106,7 +102,7 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 
 	// Skills
-	_, err = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS skills (
+	_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS skills (
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
 		description TEXT NOT NULL,
@@ -122,35 +118,29 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 
 	// Migrations (best-effort, silent fail if already applied)
-	_, _ = db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
-	_, _ = db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")
 
 	// Migrate conversations → threads
-	_, _ = db.ExecContext(ctx, "ALTER TABLE conversations RENAME TO threads")
-	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN title TEXT")
-	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN metadata TEXT")
-	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN updated_at INTEGER")
-	_, _ = db.ExecContext(ctx, "UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL")
-	_, _ = db.ExecContext(ctx, "ALTER TABLE messages RENAME COLUMN conversation_id TO thread_id")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE conversations RENAME TO threads")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN title TEXT")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN metadata TEXT")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN updated_at INTEGER")
+	_, _ = s.db.ExecContext(ctx, "UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE messages RENAME COLUMN conversation_id TO thread_id")
 
 	return nil
 }
 
 // StoreMessage inserts or replaces a message.
 func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
 	var embJSON *string
 	if len(msg.Embedding) > 0 {
 		v := serializeEmbedding(msg.Embedding)
 		embJSON = &v
 	}
 
-	_, err = db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		msg.ID, msg.ThreadID, msg.Role, msg.Content, embJSON, msg.CreatedAt,
@@ -164,13 +154,7 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 // GetMessages returns the most recent messages for a thread,
 // ordered chronologically (oldest first).
 func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]oasis.Message, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.QueryContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, thread_id, role, content, created_at
 		 FROM messages
 		 WHERE thread_id = ?
@@ -205,13 +189,7 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 
 // SearchMessages performs brute-force cosine similarity search over messages.
 func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.Message, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.QueryContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, thread_id, role, content, embedding, created_at
 		 FROM messages WHERE embedding IS NOT NULL`,
 	)
@@ -260,13 +238,7 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 
 // StoreDocument inserts a document and all its chunks in a single transaction.
 func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []oasis.Chunk) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -309,13 +281,7 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 
 // SearchChunks performs brute-force cosine similarity search over chunks.
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.Chunk, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.QueryContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, document_id, parent_id, content, chunk_index, embedding
 		 FROM chunks WHERE embedding IS NOT NULL`,
 	)
@@ -371,11 +337,6 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
 
 	placeholders := make([]string, len(ids))
 	args := make([]any, len(ids))
@@ -386,7 +347,7 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 	query := fmt.Sprintf(`SELECT id, document_id, parent_id, content, chunk_index FROM chunks WHERE id IN (%s)`,
 		strings.Join(placeholders, ","))
 
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get chunks by ids: %w", err)
 	}
@@ -409,12 +370,6 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 
 // CreateThread inserts a new thread.
 func (s *Store) CreateThread(ctx context.Context, thread oasis.Thread) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
 	var metaJSON *string
 	if len(thread.Metadata) > 0 {
 		data, _ := json.Marshal(thread.Metadata)
@@ -422,7 +377,7 @@ func (s *Store) CreateThread(ctx context.Context, thread oasis.Thread) error {
 		metaJSON = &v
 	}
 
-	_, err = db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO threads (id, chat_id, title, metadata, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		thread.ID, thread.ChatID, thread.Title, metaJSON, thread.CreatedAt, thread.UpdatedAt,
@@ -435,16 +390,10 @@ func (s *Store) CreateThread(ctx context.Context, thread oasis.Thread) error {
 
 // GetThread returns a thread by ID.
 func (s *Store) GetThread(ctx context.Context, id string) (oasis.Thread, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return oasis.Thread{}, err
-	}
-	defer db.Close()
-
 	var t oasis.Thread
 	var title sql.NullString
 	var metaJSON sql.NullString
-	err = db.QueryRowContext(ctx,
+	err := s.db.QueryRowContext(ctx,
 		`SELECT id, chat_id, title, metadata, created_at, updated_at FROM threads WHERE id = ?`,
 		id,
 	).Scan(&t.ID, &t.ChatID, &title, &metaJSON, &t.CreatedAt, &t.UpdatedAt)
@@ -462,13 +411,7 @@ func (s *Store) GetThread(ctx context.Context, id string) (oasis.Thread, error) 
 
 // ListThreads returns threads for a chatID, ordered by most recently updated first.
 func (s *Store) ListThreads(ctx context.Context, chatID string, limit int) ([]oasis.Thread, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.QueryContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, chat_id, title, metadata, created_at, updated_at
 		 FROM threads WHERE chat_id = ?
 		 ORDER BY updated_at DESC
@@ -501,12 +444,6 @@ func (s *Store) ListThreads(ctx context.Context, chatID string, limit int) ([]oa
 
 // UpdateThread updates a thread's title, metadata, and updated_at.
 func (s *Store) UpdateThread(ctx context.Context, thread oasis.Thread) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
 	var metaJSON *string
 	if len(thread.Metadata) > 0 {
 		data, _ := json.Marshal(thread.Metadata)
@@ -514,7 +451,7 @@ func (s *Store) UpdateThread(ctx context.Context, thread oasis.Thread) error {
 		metaJSON = &v
 	}
 
-	_, err = db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`UPDATE threads SET title=?, metadata=?, updated_at=? WHERE id=?`,
 		thread.Title, metaJSON, thread.UpdatedAt, thread.ID,
 	)
@@ -526,13 +463,7 @@ func (s *Store) UpdateThread(ctx context.Context, thread oasis.Thread) error {
 
 // DeleteThread removes a thread and its messages.
 func (s *Store) DeleteThread(ctx context.Context, id string) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -550,14 +481,8 @@ func (s *Store) DeleteThread(ctx context.Context, id string) error {
 }
 
 func (s *Store) GetConfig(ctx context.Context, key string) (string, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return "", err
-	}
-	defer db.Close()
-
 	var value string
-	err = db.QueryRowContext(ctx, `SELECT value FROM config WHERE key = ?`, key).Scan(&value)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM config WHERE key = ?`, key).Scan(&value)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -568,13 +493,7 @@ func (s *Store) GetConfig(ctx context.Context, key string) (string, error) {
 }
 
 func (s *Store) SetConfig(ctx context.Context, key, value string) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	_, err = db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)`,
 		key, value,
 	)
@@ -587,12 +506,7 @@ func (s *Store) SetConfig(ctx context.Context, key, value string) error {
 // --- Scheduled Actions ---
 
 func (s *Store) CreateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	_, err = db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		action.ID, action.Description, action.Schedule, action.ToolCalls,
@@ -601,12 +515,7 @@ func (s *Store) CreateScheduledAction(ctx context.Context, action oasis.Schedule
 }
 
 func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledAction, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions ORDER BY next_run`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions ORDER BY next_run`)
 	if err != nil {
 		return nil, err
 	}
@@ -615,12 +524,7 @@ func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledActi
 }
 
 func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.ScheduledAction, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions WHERE enabled = 1 AND next_run <= ?`, now)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions WHERE enabled = 1 AND next_run <= ?`, now)
 	if err != nil {
 		return nil, err
 	}
@@ -629,44 +533,24 @@ func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.
 }
 
 func (s *Store) UpdateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	_, err = db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`UPDATE scheduled_actions SET description=?, schedule=?, tool_calls=?, synthesis_prompt=?, next_run=?, enabled=? WHERE id=?`,
 		action.Description, action.Schedule, action.ToolCalls, action.SynthesisPrompt, action.NextRun, boolToInt(action.Enabled), action.ID)
 	return err
 }
 
 func (s *Store) UpdateScheduledActionEnabled(ctx context.Context, id string, enabled bool) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	_, err = db.ExecContext(ctx, `UPDATE scheduled_actions SET enabled=? WHERE id=?`, boolToInt(enabled), id)
+	_, err := s.db.ExecContext(ctx, `UPDATE scheduled_actions SET enabled=? WHERE id=?`, boolToInt(enabled), id)
 	return err
 }
 
 func (s *Store) DeleteScheduledAction(ctx context.Context, id string) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	_, err = db.ExecContext(ctx, `DELETE FROM scheduled_actions WHERE id=?`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM scheduled_actions WHERE id=?`, id)
 	return err
 }
 
 func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return 0, err
-	}
-	defer db.Close()
-	res, err := db.ExecContext(ctx, `DELETE FROM scheduled_actions`)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM scheduled_actions`)
 	if err != nil {
 		return 0, err
 	}
@@ -675,12 +559,7 @@ func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
 }
 
 func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions WHERE description LIKE ?`, "%"+pattern+"%")
+	rows, err := s.db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions WHERE description LIKE ?`, "%"+pattern+"%")
 	if err != nil {
 		return nil, err
 	}
@@ -691,12 +570,6 @@ func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern s
 // --- Skills ---
 
 func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
 	var toolsJSON *string
 	if len(skill.Tools) > 0 {
 		data, _ := json.Marshal(skill.Tools)
@@ -709,7 +582,7 @@ func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
 		embJSON = &v
 	}
 
-	_, err = db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO skills (id, name, description, instructions, tools, model, embedding, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		skill.ID, skill.Name, skill.Description, skill.Instructions,
@@ -718,16 +591,10 @@ func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
 }
 
 func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return oasis.Skill{}, err
-	}
-	defer db.Close()
-
 	var sk oasis.Skill
 	var tools sql.NullString
 	var model sql.NullString
-	err = db.QueryRowContext(ctx,
+	err := s.db.QueryRowContext(ctx,
 		`SELECT id, name, description, instructions, tools, model, created_at, updated_at
 		 FROM skills WHERE id = ?`, id,
 	).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt)
@@ -744,13 +611,7 @@ func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
 }
 
 func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.QueryContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, description, instructions, tools, model, created_at, updated_at
 		 FROM skills ORDER BY created_at`)
 	if err != nil {
@@ -778,12 +639,6 @@ func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
 }
 
 func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
 	var toolsJSON *string
 	if len(skill.Tools) > 0 {
 		data, _ := json.Marshal(skill.Tools)
@@ -796,30 +651,19 @@ func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
 		embJSON = &v
 	}
 
-	_, err = db.ExecContext(ctx,
+	_, err := s.db.ExecContext(ctx,
 		`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, embedding=?, updated_at=? WHERE id=?`,
 		skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, embJSON, skill.UpdatedAt, skill.ID)
 	return err
 }
 
 func (s *Store) DeleteSkill(ctx context.Context, id string) error {
-	db, err := s.openDB()
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	_, err = db.ExecContext(ctx, `DELETE FROM skills WHERE id=?`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM skills WHERE id=?`, id)
 	return err
 }
 
 func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.Skill, error) {
-	db, err := s.openDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.QueryContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, description, instructions, tools, model, embedding, created_at, updated_at
 		 FROM skills WHERE embedding IS NOT NULL`)
 	if err != nil {
@@ -873,9 +717,9 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 	return skills, nil
 }
 
-// Close is a no-op since we use fresh connections per call.
+// Close closes the underlying database connection.
 func (s *Store) Close() error {
-	return nil
+	return s.db.Close()
 }
 
 func boolToInt(b bool) int {

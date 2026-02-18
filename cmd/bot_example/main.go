@@ -69,12 +69,15 @@ func main() {
 	tools := collectTools(cfg, store, embedding, inst)
 
 	// 7. Build agents
+	clock := newClockPreProcessor(cfg.Brain.TimezoneOffset)
+
 	chatAgent := oasis.NewLLMAgent("chat", "Handle casual conversation, questions, and general chat", chatLLM,
 		oasis.WithPrompt(chatPrompt(cfg)),
 		oasis.WithTools(wrapTool(knowledge.New(store, embedding), inst)),
 		oasis.WithConversationMemory(store),
 		oasis.WithUserMemory(memStore),
 		oasis.WithSemanticSearch(embedding),
+		oasis.WithProcessors(clock),
 	)
 
 	actionAgent := oasis.NewLLMAgent("action", "Execute tasks using tools: search the web, manage schedules, save knowledge, read/write files, run commands", actionLLM,
@@ -83,6 +86,7 @@ func main() {
 		oasis.WithConversationMemory(store),
 		oasis.WithUserMemory(memStore),
 		oasis.WithSemanticSearch(embedding),
+		oasis.WithProcessors(clock),
 	)
 
 	network := oasis.NewNetwork("oasis", "AI personal assistant", routerLLM,
