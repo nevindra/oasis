@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-18
+
 ### Added
 
 - `InputHandler` interface — human-in-the-loop for agents (built-in `ask_user` tool + programmatic gates via `InputHandlerFromContext`)
@@ -72,7 +74,8 @@ Initial release of the Oasis AI agent framework.
 - Channel-based token streaming with edit batching
 - Reference app in cmd/bot_example/
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nevindra/oasis/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/nevindra/oasis/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/nevindra/oasis/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nevindra/oasis/releases/tag/v0.1.0
