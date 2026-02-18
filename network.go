@@ -146,6 +146,92 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
 }
 
+// ExecuteStream runs the network's routing loop like Execute, but streams the
+// final text response into ch. Tool-calling/routing iterations use blocking
+// ChatWithTools; only the final response (no tool calls) is streamed.
+// The channel is closed when streaming completes.
+func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error) {
+	var totalUsage Usage
+
+	if n.inputHandler != nil {
+		ctx = WithInputHandlerContext(ctx, n.inputHandler)
+	}
+
+	toolDefs := n.buildToolDefs()
+	if n.inputHandler != nil {
+		toolDefs = append(toolDefs, askUserToolDef)
+	}
+
+	messages := n.mem.buildMessages(ctx, n.name, n.systemPrompt, task)
+
+	for i := 0; i < n.maxIter; i++ {
+		req := ChatRequest{Messages: messages}
+
+		if err := n.processors.RunPreLLM(ctx, &req); err != nil {
+			close(ch)
+			return handleProcessorError(err, totalUsage)
+		}
+
+		resp, err := n.router.ChatWithTools(ctx, req, toolDefs)
+		if err != nil {
+			close(ch)
+			return AgentResult{Usage: totalUsage}, err
+		}
+		totalUsage.InputTokens += resp.Usage.InputTokens
+		totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+		if err := n.processors.RunPostLLM(ctx, &resp); err != nil {
+			close(ch)
+			return handleProcessorError(err, totalUsage)
+		}
+
+		// No tool calls — stream the final response
+		if len(resp.ToolCalls) == 0 {
+			ch <- resp.Content
+			close(ch)
+			n.mem.persistMessages(ctx, n.name, task, task.Input, resp.Content)
+			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+		}
+
+		messages = append(messages, ChatMessage{
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		})
+
+		for _, tc := range resp.ToolCalls {
+			content, agentUsage := n.dispatch(ctx, tc, task)
+			totalUsage.InputTokens += agentUsage.InputTokens
+			totalUsage.OutputTokens += agentUsage.OutputTokens
+
+			result := ToolResult{Content: content}
+			if err := n.processors.RunPostTool(ctx, tc, &result); err != nil {
+				close(ch)
+				return handleProcessorError(err, totalUsage)
+			}
+
+			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
+		}
+	}
+
+	// Max iterations — force synthesis, stream the response
+	log.Printf("[network:%s] max iterations reached, forcing synthesis", n.name)
+	messages = append(messages, UserMessage(
+		"You have used all available calls. Summarize what you have and respond to the user."))
+	resp, err := n.router.ChatStream(ctx, ChatRequest{Messages: messages}, ch)
+	if err != nil {
+		return AgentResult{Usage: totalUsage}, err
+	}
+	totalUsage.InputTokens += resp.Usage.InputTokens
+	totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+	n.mem.persistMessages(ctx, n.name, task, task.Input, resp.Content)
+	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+}
+
+// compile-time check: Network implements StreamingAgent
+var _ StreamingAgent = (*Network)(nil)
+
 // dispatch routes a tool call to either a subagent, ask_user, or a direct tool.
 func (n *Network) dispatch(ctx context.Context, tc ToolCall, parentTask AgentTask) (string, Usage) {
 	// Special case: ask_user tool

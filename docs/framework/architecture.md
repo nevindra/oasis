@@ -257,7 +257,33 @@ Since Workflow implements Agent, it composes with Networks and other Workflows. 
 | `WithSemanticSearch(e EmbeddingProvider)` | Enable semantic search across threads and user memory |
 | `WithUserMemory(m MemoryStore)` | Enable user fact injection into the system prompt (requires `WithSemanticSearch`) |
 
-**Memory wiring** -- agents are stateless by default. When memory options are configured and `task.Context["thread_id"]` is present, agents automatically:
+**StreamingAgent** -- optional interface for agents that support token streaming. Both `LLMAgent` and `Network` implement it. Tool-calling iterations run in blocking mode; only the final text response is streamed.
+
+```go
+if sa, ok := agent.(oasis.StreamingAgent); ok {
+    ch := make(chan string, 64)
+    go func() {
+        for token := range ch { fmt.Print(token) }
+    }()
+    result, err := sa.ExecuteStream(ctx, task, ch)
+}
+```
+
+**AgentTask.Context** -- `map[string]any` metadata map. Use the `Context*` constants as keys and `Task*()` accessors for type-safe reads:
+
+```go
+task := oasis.AgentTask{
+    Input:   "hello",
+    Context: map[string]any{
+        oasis.ContextThreadID: "thread-123",
+        oasis.ContextUserID:   "user-42",
+        "custom_key":          anyValue,  // extensible
+    },
+}
+threadID := task.TaskThreadID()  // "thread-123"
+```
+
+**Memory wiring** -- agents are stateless by default. When memory options are configured and `task.TaskThreadID()` returns a non-empty value, agents automatically:
 
 1. Load recent conversation history from the Store
 2. Inject user facts from MemoryStore into the system prompt
@@ -376,7 +402,7 @@ All framework types live in the root `oasis` package:
 | `ToolCall` | LLM tool invocation | ID, Name, Args |
 | `ToolResult` | Tool execution result | Content, Error |
 | `IncomingMessage` | Frontend message | ID, ChatID, UserID, Text, Document, Photos |
-| `AgentTask` | Input to an Agent | Input, Context (metadata map) |
+| `AgentTask` | Input to an Agent | Input, Context (`map[string]any`), typed accessors (`TaskThreadID()`, `TaskUserID()`, `TaskChatID()`) |
 | `AgentResult` | Output of an Agent | Output, Usage (aggregate tokens) |
 
 **Convenience constructors:**

@@ -8,10 +8,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- `StreamingAgent` interface — optional capability for agents that support token streaming
+  - `ExecuteStream(ctx, task, chan<-string)` streams the final response tokens; tool-calling iterations remain blocking
+  - Both `LLMAgent` and `Network` implement `StreamingAgent`; check via type assertion
+- `AgentTask.Context` context key constants and typed accessors
+  - Constants: `ContextThreadID`, `ContextUserID`, `ContextChatID`
+  - Accessors: `task.TaskThreadID()`, `task.TaskUserID()`, `task.TaskChatID()`
 - Memory wiring for agent primitives — `LLMAgent` and `Network` now support built-in conversation memory, user memory, and semantic recall
-  - `WithConversationMemory(Store)` — load/persist conversation history per thread via `task.Context["thread_id"]`
+  - `WithConversationMemory(Store)` — load/persist conversation history per thread
   - `WithSemanticSearch(EmbeddingProvider)` — cross-thread semantic search + embed persisted messages
   - `WithUserMemory(MemoryStore)` — inject user facts into system prompt (requires `WithSemanticSearch`)
+
+### Changed
+
+- **Breaking:** `AgentTask.Context` type changed from `map[string]string` to `map[string]any` — enables rich metadata (attachments, typed values). Use typed accessors for standard keys.
 
 ## [0.2.0] - 2026-02-18
 

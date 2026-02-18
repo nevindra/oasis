@@ -160,6 +160,125 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
 }
 
+// ExecuteStream runs the tool-calling loop like Execute, but streams the final
+// text response into ch. Tool-calling iterations use blocking ChatWithTools;
+// only the final response (no tool calls) uses ChatStream. The channel is
+// closed when streaming completes.
+func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error) {
+	var totalUsage Usage
+
+	if a.inputHandler != nil {
+		ctx = WithInputHandlerContext(ctx, a.inputHandler)
+	}
+
+	messages := a.mem.buildMessages(ctx, a.name, a.systemPrompt, task)
+
+	toolDefs := a.tools.AllDefinitions()
+	if a.inputHandler != nil {
+		toolDefs = append(toolDefs, askUserToolDef)
+	}
+
+	for i := 0; i < a.maxIter; i++ {
+		req := ChatRequest{Messages: messages}
+
+		if err := a.processors.RunPreLLM(ctx, &req); err != nil {
+			close(ch)
+			return handleProcessorError(err, totalUsage)
+		}
+
+		// If there are tools, use blocking ChatWithTools for tool iterations
+		if len(toolDefs) > 0 {
+			resp, err := a.provider.ChatWithTools(ctx, req, toolDefs)
+			if err != nil {
+				close(ch)
+				return AgentResult{Usage: totalUsage}, err
+			}
+			totalUsage.InputTokens += resp.Usage.InputTokens
+			totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+			if err := a.processors.RunPostLLM(ctx, &resp); err != nil {
+				close(ch)
+				return handleProcessorError(err, totalUsage)
+			}
+
+			// No tool calls — stream the final response
+			if len(resp.ToolCalls) == 0 {
+				// We already have the full content from ChatWithTools.
+				// Stream it as a single chunk since we can't re-request with ChatStream.
+				ch <- resp.Content
+				close(ch)
+				a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
+				return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+			}
+
+			// Append assistant message with tool calls
+			messages = append(messages, ChatMessage{
+				Role:      "assistant",
+				Content:   resp.Content,
+				ToolCalls: resp.ToolCalls,
+			})
+
+			// Execute each tool call (same as Execute)
+			for _, tc := range resp.ToolCalls {
+				if tc.Name == "ask_user" && a.inputHandler != nil {
+					content, err := a.executeAskUser(ctx, tc)
+					if err != nil {
+						close(ch)
+						return AgentResult{Usage: totalUsage}, err
+					}
+					messages = append(messages, ToolResultMessage(tc.ID, content))
+					continue
+				}
+
+				result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
+				content := result.Content
+				if execErr != nil {
+					content = "error: " + execErr.Error()
+				} else if result.Error != "" {
+					content = "error: " + result.Error
+				}
+
+				result.Content = content
+				if err := a.processors.RunPostTool(ctx, tc, &result); err != nil {
+					close(ch)
+					return handleProcessorError(err, totalUsage)
+				}
+
+				messages = append(messages, ToolResultMessage(tc.ID, result.Content))
+			}
+			continue
+		}
+
+		// No tools — stream the response directly via ChatStream
+		resp, err := a.provider.ChatStream(ctx, req, ch)
+		if err != nil {
+			return AgentResult{Usage: totalUsage}, err
+		}
+		totalUsage.InputTokens += resp.Usage.InputTokens
+		totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+		a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
+		return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+	}
+
+	// Max iterations — force synthesis, stream the final response
+	log.Printf("[agent:%s] max iterations reached, forcing synthesis", a.name)
+	messages = append(messages, UserMessage(
+		"You have used all available tool calls. Summarize what you found and respond to the user."))
+	resp, err := a.provider.ChatStream(ctx, ChatRequest{Messages: messages}, ch)
+	if err != nil {
+		return AgentResult{Usage: totalUsage}, err
+	}
+	totalUsage.InputTokens += resp.Usage.InputTokens
+	totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+	a.mem.persistMessages(ctx, a.name, task, task.Input, resp.Content)
+	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+}
+
+// compile-time check: LLMAgent implements StreamingAgent
+var _ StreamingAgent = (*LLMAgent)(nil)
+
 // handleProcessorError converts a processor error into an AgentResult.
 // ErrHalt produces a graceful result; other errors propagate as failures.
 func handleProcessorError(err error, usage Usage) (AgentResult, error) {

@@ -26,7 +26,7 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 	}
 
 	// Conversation history
-	threadID := task.Context["thread_id"]
+	threadID := task.TaskThreadID()
 	if m.store != nil && threadID != "" {
 		history, err := m.store.GetMessages(ctx, threadID, 20)
 		if err != nil {
@@ -82,7 +82,7 @@ func (m *agentMemory) buildSystemPrompt(ctx context.Context, basePrompt, input s
 // persistMessages stores user and assistant messages in the background.
 // No-op if Store is not configured or thread_id is absent.
 func (m *agentMemory) persistMessages(ctx context.Context, agentName string, task AgentTask, userText, assistantText string) {
-	threadID := task.Context["thread_id"]
+	threadID := task.TaskThreadID()
 	if m.store == nil || threadID == "" {
 		return
 	}

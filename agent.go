@@ -15,12 +15,58 @@ type Agent interface {
 	Execute(ctx context.Context, task AgentTask) (AgentResult, error)
 }
 
+// StreamingAgent is an optional capability for agents that support token streaming.
+// Check via type assertion: if sa, ok := agent.(StreamingAgent); ok { ... }
+type StreamingAgent interface {
+	Agent
+	// ExecuteStream runs the agent like Execute, but streams the final response
+	// tokens into ch. The channel is closed when streaming completes.
+	// Tool-calling iterations run in blocking mode; only the final text
+	// response is streamed.
+	ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error)
+}
+
 // AgentTask is the input to an Agent.
 type AgentTask struct {
 	// Input is the natural language task description.
 	Input string
 	// Context carries optional metadata (thread ID, user ID, etc.).
-	Context map[string]string
+	// Use the Context* constants as keys and the Task* accessors for type-safe reads.
+	Context map[string]any
+}
+
+// Context key constants for AgentTask.Context.
+const (
+	// ContextThreadID identifies the conversation thread.
+	ContextThreadID = "thread_id"
+	// ContextUserID identifies the user.
+	ContextUserID = "user_id"
+	// ContextChatID identifies the chat/channel.
+	ContextChatID = "chat_id"
+)
+
+// TaskThreadID returns the thread ID from task context, or "" if absent.
+func (t AgentTask) TaskThreadID() string {
+	if v, ok := t.Context[ContextThreadID].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// TaskUserID returns the user ID from task context, or "" if absent.
+func (t AgentTask) TaskUserID() string {
+	if v, ok := t.Context[ContextUserID].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// TaskChatID returns the chat ID from task context, or "" if absent.
+func (t AgentTask) TaskChatID() string {
+	if v, ok := t.Context[ContextChatID].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // AgentResult is the output of an Agent.

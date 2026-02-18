@@ -41,7 +41,7 @@ func TestAgentInterface(t *testing.T) {
 
 	result, err := agent.Execute(context.Background(), AgentTask{
 		Input:   "hello",
-		Context: map[string]string{"user_id": "123"},
+		Context: map[string]any{"user_id": "123"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -526,5 +526,193 @@ func TestNetworkInvalidAgentArgs(t *testing.T) {
 	}
 	if result.Output != "handled bad args" {
 		t.Errorf("Output = %q, want %q", result.Output, "handled bad args")
+	}
+}
+
+// --- Streaming tests ---
+
+func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "streamed hello"}},
+	}
+
+	agent := NewLLMAgent("streamer", "Streams output", provider)
+
+	ch := make(chan string, 10)
+	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "hi"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "streamed hello" {
+		t.Errorf("Output = %q, want %q", result.Output, "streamed hello")
+	}
+
+	// Verify tokens were sent to channel
+	var tokens []string
+	for tok := range ch {
+		tokens = append(tokens, tok)
+	}
+	if len(tokens) == 0 {
+		t.Error("expected at least one token on channel")
+	}
+}
+
+func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			// First: tool call (blocking)
+			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			// Second: final text response (streamed as single chunk since from ChatWithTools)
+			{Content: "after tool call"},
+		},
+	}
+
+	agent := NewLLMAgent("streamer", "Streams with tools", provider,
+		WithTools(mockTool{}),
+	)
+
+	ch := make(chan string, 10)
+	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "greet"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "after tool call" {
+		t.Errorf("Output = %q, want %q", result.Output, "after tool call")
+	}
+
+	// Channel should be closed and contain the final content
+	var tokens []string
+	for tok := range ch {
+		tokens = append(tokens, tok)
+	}
+	if len(tokens) == 0 {
+		t.Error("expected at least one token on channel")
+	}
+}
+
+func TestLLMAgentStreamingInterfaceCompliance(t *testing.T) {
+	agent := NewLLMAgent("test", "test", &mockProvider{name: "test"})
+	var _ StreamingAgent = agent
+}
+
+func TestNetworkExecuteStream(t *testing.T) {
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			// Router calls agent_echo
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "agent_echo",
+				Args: json.RawMessage(`{"task":"say hi"}`),
+			}}},
+			// Final response (streamed as single chunk)
+			{Content: "network streamed response"},
+		},
+	}
+
+	echoAgent := &stubAgent{
+		name: "echo",
+		desc: "Echoes",
+		fn: func(task AgentTask) (AgentResult, error) {
+			return AgentResult{Output: "echoed: " + task.Input}, nil
+		},
+	}
+
+	network := NewNetwork("net", "Streams", router, WithAgents(echoAgent))
+
+	ch := make(chan string, 10)
+	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "network streamed response" {
+		t.Errorf("Output = %q, want %q", result.Output, "network streamed response")
+	}
+
+	var tokens []string
+	for tok := range ch {
+		tokens = append(tokens, tok)
+	}
+	if len(tokens) == 0 {
+		t.Error("expected at least one token on channel")
+	}
+}
+
+func TestNetworkStreamingInterfaceCompliance(t *testing.T) {
+	network := NewNetwork("test", "test", &mockProvider{name: "test"})
+	var _ StreamingAgent = network
+}
+
+func TestLLMAgentExecuteStreamProviderError(t *testing.T) {
+	agent := NewLLMAgent("broken", "Broken", &errProvider{
+		name: "fail",
+		err:  errors.New("stream error"),
+	})
+
+	ch := make(chan string, 10)
+	_, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "hi"}, ch)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if err.Error() != "stream error" {
+		t.Errorf("error = %q, want %q", err.Error(), "stream error")
+	}
+
+	// Channel should be closed
+	_, open := <-ch
+	if open {
+		t.Error("channel should be closed after error")
+	}
+}
+
+// --- Context accessor tests ---
+
+func TestTaskAccessors(t *testing.T) {
+	task := AgentTask{
+		Input: "test",
+		Context: map[string]any{
+			ContextThreadID: "thread-1",
+			ContextUserID:   "user-42",
+			ContextChatID:   "chat-99",
+		},
+	}
+
+	if got := task.TaskThreadID(); got != "thread-1" {
+		t.Errorf("TaskThreadID() = %q, want %q", got, "thread-1")
+	}
+	if got := task.TaskUserID(); got != "user-42" {
+		t.Errorf("TaskUserID() = %q, want %q", got, "user-42")
+	}
+	if got := task.TaskChatID(); got != "chat-99" {
+		t.Errorf("TaskChatID() = %q, want %q", got, "chat-99")
+	}
+}
+
+func TestTaskAccessorsEmptyContext(t *testing.T) {
+	task := AgentTask{Input: "test"}
+
+	if got := task.TaskThreadID(); got != "" {
+		t.Errorf("TaskThreadID() = %q, want empty", got)
+	}
+	if got := task.TaskUserID(); got != "" {
+		t.Errorf("TaskUserID() = %q, want empty", got)
+	}
+	if got := task.TaskChatID(); got != "" {
+		t.Errorf("TaskChatID() = %q, want empty", got)
+	}
+}
+
+func TestTaskAccessorsWrongType(t *testing.T) {
+	task := AgentTask{
+		Input: "test",
+		Context: map[string]any{
+			ContextThreadID: 123, // int, not string
+		},
+	}
+
+	if got := task.TaskThreadID(); got != "" {
+		t.Errorf("TaskThreadID() = %q, want empty for non-string value", got)
 	}
 }

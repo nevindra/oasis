@@ -242,6 +242,39 @@ type Agent interface {
 
 ---
 
+### StreamingAgent
+
+**File:** `agent.go`
+
+Optional capability for agents that support token streaming. Check via type assertion.
+
+```go
+type StreamingAgent interface {
+    Agent
+    ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error)
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `ExecuteStream` | Like `Execute`, but streams the final response tokens into `ch`. Tool-calling iterations run in blocking mode; only the final text response is streamed. The channel is closed when streaming completes. |
+
+Both `LLMAgent` and `Network` implement `StreamingAgent`. Check at runtime:
+
+```go
+if sa, ok := agent.(oasis.StreamingAgent); ok {
+    ch := make(chan string, 64)
+    go func() {
+        for token := range ch {
+            fmt.Print(token) // process each token as it arrives
+        }
+    }()
+    result, err := sa.ExecuteStream(ctx, task, ch)
+}
+```
+
+---
+
 ### InputHandler
 
 **File:** `input.go`
@@ -516,8 +549,8 @@ type FileInfo struct {
 
 ```go
 type AgentTask struct {
-    Input   string            // Natural language task description
-    Context map[string]string // Optional metadata (thread ID, user ID, etc.)
+    Input   string         // Natural language task description
+    Context map[string]any // Optional metadata (thread ID, user ID, attachments, etc.)
 }
 
 type AgentResult struct {
@@ -526,6 +559,24 @@ type AgentResult struct {
 }
 
 type AgentOption func(*agentConfig) // Shared option type for LLMAgent and Network
+```
+
+**Context key constants:**
+
+```go
+const (
+    ContextThreadID = "thread_id" // Conversation thread identifier
+    ContextUserID   = "user_id"   // User identifier
+    ContextChatID   = "chat_id"   // Chat/channel identifier
+)
+```
+
+**Typed accessors** (return zero value if key is absent or wrong type):
+
+```go
+task.TaskThreadID() string  // Read ContextThreadID as string
+task.TaskUserID() string    // Read ContextUserID as string
+task.TaskChatID() string    // Read ContextChatID as string
 ```
 
 ### Workflow Types
@@ -647,8 +698,22 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
 // Pass thread_id to enable history. Without it, agent runs stateless.
 result, err := agent.Execute(ctx, oasis.AgentTask{
     Input:   "What did we discuss yesterday?",
-    Context: map[string]string{"thread_id": "thread-123"},
+    Context: map[string]any{oasis.ContextThreadID: "thread-123"},
 })
+
+// Streaming: check for StreamingAgent and stream tokens
+if sa, ok := agent.(oasis.StreamingAgent); ok {
+    ch := make(chan string, 64)
+    go func() {
+        for token := range ch {
+            fmt.Print(token)
+        }
+    }()
+    result, err = sa.ExecuteStream(ctx, oasis.AgentTask{
+        Input:   "Tell me a story",
+        Context: map[string]any{oasis.ContextThreadID: "thread-123"},
+    }, ch)
+}
 ```
 
 ### Network

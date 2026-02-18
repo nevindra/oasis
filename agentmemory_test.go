@@ -106,7 +106,7 @@ func TestLLMAgentConversationMemory(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "new question",
-		Context: map[string]string{"thread_id": "thread-1"},
+		Context: map[string]any{ContextThreadID: "thread-1"},
 	}
 	result, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -269,7 +269,7 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "question",
-		Context: map[string]string{"thread_id": "t1"},
+		Context: map[string]any{ContextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -317,7 +317,7 @@ func TestLLMAgentAllMemoryTypes(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "hi",
-		Context: map[string]string{"thread_id": "t1"},
+		Context: map[string]any{ContextThreadID: "t1"},
 	}
 	result, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -364,7 +364,7 @@ func TestNetworkConversationMemory(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "new input",
-		Context: map[string]string{"thread_id": "t1"},
+		Context: map[string]any{ContextThreadID: "t1"},
 	}
 	result, err := network.Execute(context.Background(), task)
 	if err != nil {
@@ -398,7 +398,7 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "embed me",
-		Context: map[string]string{"thread_id": "t1"},
+		Context: map[string]any{ContextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
