@@ -24,6 +24,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Changed
 
+- Switch ID generation from xid to UUIDv7 (RFC 9562) — standard format, native Postgres `UUID` type support
 - `ContentType` is now `string` (MIME type) instead of `int` enum
 - Remember tool uses `Ingestor` instead of manual embed+store boilerplate
 - Search tool uses `Chunker` interface instead of `ChunkerConfig`

@@ -3,12 +3,12 @@ package oasis
 import (
 	"time"
 
-	"github.com/rs/xid"
+	"github.com/google/uuid"
 )
 
-// NewID generates a globally unique, time-sortable ID (20 chars, base32).
+// NewID generates a globally unique, time-sortable UUIDv7 (RFC 9562).
 func NewID() string {
-	return xid.New().String()
+	return uuid.Must(uuid.NewV7()).String()
 }
 
 // NowUnix returns current time as Unix seconds.
