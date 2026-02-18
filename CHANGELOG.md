@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- `InputHandler` interface — human-in-the-loop for agents (built-in `ask_user` tool + programmatic gates via `InputHandlerFromContext`)
 - `Workflow` agent primitive — deterministic DAG-based task orchestration
   - Step types: `Step`, `AgentStep`, `ToolStep`, `ForEach`, `DoUntil`/`DoWhile`
   - DAG validation at construction (duplicate, unknown dep, cycle detection)

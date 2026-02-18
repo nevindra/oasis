@@ -252,6 +252,7 @@ Since Workflow implements Agent, it composes with Networks and other Workflows. 
 | `WithMaxIter(n int)` | Set the maximum tool-calling iterations (default 10) |
 | `WithAgents(agents ...Agent)` | Add subagents to a Network (ignored by LLMAgent) |
 | `WithProcessors(processors ...any)` | Add processors to the execution pipeline (see Processors below) |
+| `WithInputHandler(h InputHandler)` | Enable human-in-the-loop interactions (see InputHandler below) |
 
 ### Processors (`processor.go`)
 
@@ -277,6 +278,28 @@ agent := oasis.NewLLMAgent("safe-agent", "Agent with guardrails", provider,
 Processors run in registration order. An empty chain is a no-op (zero overhead).
 
 **Use cases:** input validation, guardrails, prompt injection detection, content moderation, PII redaction, token budget enforcement, tool call filtering, message transformation.
+
+### InputHandler (`input.go`)
+
+Human-in-the-loop mechanism that lets agents pause mid-execution to ask a human for input. Frontend-agnostic -- implement `InputHandler` for your communication channel (Telegram, CLI, HTTP, etc.).
+
+```go
+type InputHandler interface {
+    RequestInput(ctx context.Context, req InputRequest) (InputResponse, error)
+}
+```
+
+**Two patterns:**
+
+1. **LLM-driven** -- when `WithInputHandler` is set, the agent gains a built-in `ask_user` tool. The LLM decides when to call it (e.g. ambiguous instructions, dangerous actions). The handler blocks until the human responds or the context is cancelled.
+
+2. **Programmatic** -- developers build approval gates and review steps using existing Processors or Workflow Steps. Processors access the handler via `InputHandlerFromContext(ctx)`.
+
+**Key behaviors:**
+
+- Optional: agents without a handler work identically to before (no `ask_user` tool, processors skip gracefully)
+- `ask_user` is a special-case in the execution loop, not a registered tool -- cannot be shadowed by user tools
+- Network propagates the handler to subagents via context
 
 ## Ingest Pipeline (`ingest/`)
 

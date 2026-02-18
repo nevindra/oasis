@@ -10,6 +10,7 @@ import oasis "github.com/nevindra/oasis"
 
 - **Composable agents** -- `LLMAgent` for single-provider tool loops, `Network` for multi-agent coordination, `Workflow` for deterministic DAG-based orchestration. All three nest recursively.
 - **Processor pipeline** -- `PreProcessor`, `PostProcessor`, `PostToolProcessor` hooks for guardrails, PII redaction, logging, and custom middleware.
+- **Human-in-the-loop** -- `InputHandler` interface for agents to pause and request human input, both LLM-driven (`ask_user` tool) and programmatic (processor gates).
 - **Interface-driven** -- every component (LLM, storage, tools, frontends, memory) is a Go interface. Swap implementations without touching the rest of the system.
 - **Streaming** -- channel-based token streaming with built-in edit batching for messaging platforms.
 - **Built-in tools** -- knowledge search (RAG), web search, scheduled actions, shell execution, file I/O, HTTP requests.
@@ -120,6 +121,22 @@ agent := oasis.NewLLMAgent("guarded", "Safe agent", llm,
 
 Return `ErrHalt` from any processor to short-circuit execution with a canned response.
 
+### Human-in-the-Loop
+
+The `InputHandler` interface lets agents pause execution and ask a human for input. Two patterns:
+
+- **LLM-driven** -- the LLM calls a built-in `ask_user` tool when it decides it needs clarification.
+- **Programmatic** -- processors or workflow steps retrieve the handler from context via `InputHandlerFromContext(ctx)` for approval gates, review steps, etc.
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithTools(searchTool),
+    oasis.WithInputHandler(myHandler), // enables ask_user tool + context propagation
+)
+```
+
+Networks propagate the handler to all subagents automatically.
+
 ## Core Interfaces
 
 | Interface | Purpose |
@@ -131,6 +148,7 @@ Return `ErrHalt` from any processor to short-circuit execution with a canned res
 | `Tool` | Pluggable capability for LLM function calling |
 | `Frontend` | Messaging platform -- `Poll`, `Send`, `Edit` |
 | `Agent` | Composable work unit -- `LLMAgent`, `Network`, `Workflow`, or custom |
+| `InputHandler` | Human-in-the-loop -- pause agent and request human input |
 
 ## Included Implementations
 
@@ -161,6 +179,7 @@ oasis/
 |-- agent.go, llmagent.go, network.go   # Agent primitives
 |-- workflow.go                        # Workflow primitive (DAG orchestration)
 |-- processor.go                        # Processor pipeline
+|-- input.go                            # Human-in-the-loop (InputHandler)
 |
 |-- provider/gemini/                    # Google Gemini provider
 |-- provider/openaicompat/              # OpenAI-compatible provider

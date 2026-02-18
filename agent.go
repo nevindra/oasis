@@ -33,11 +33,12 @@ type AgentResult struct {
 
 // agentConfig holds shared configuration for LLMAgent and Network.
 type agentConfig struct {
-	tools      []Tool
-	agents     []Agent
-	prompt     string
-	maxIter    int
-	processors []any
+	tools        []Tool
+	agents       []Agent
+	prompt       string
+	maxIter      int
+	processors   []any
+	inputHandler InputHandler
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -69,6 +70,13 @@ func WithAgents(agents ...Agent) AgentOption {
 // respective hook points during Execute().
 func WithProcessors(processors ...any) AgentOption {
 	return func(c *agentConfig) { c.processors = append(c.processors, processors...) }
+}
+
+// WithInputHandler sets the handler for human-in-the-loop interactions.
+// When set, the agent gains an "ask_user" tool (LLM-driven) and processors
+// can access the handler via InputHandlerFromContext(ctx).
+func WithInputHandler(h InputHandler) AgentOption {
+	return func(c *agentConfig) { c.inputHandler = h }
 }
 
 func buildConfig(opts []AgentOption) agentConfig {

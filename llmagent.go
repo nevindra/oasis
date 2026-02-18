@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 )
@@ -17,6 +18,7 @@ type LLMAgent struct {
 	processors   *ProcessorChain
 	systemPrompt string
 	maxIter      int
+	inputHandler InputHandler
 }
 
 // NewLLMAgent creates an LLMAgent with the given provider and options.
@@ -40,6 +42,7 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	for _, p := range cfg.processors {
 		a.processors.Add(p)
 	}
+	a.inputHandler = cfg.inputHandler
 	return a
 }
 
@@ -50,6 +53,11 @@ func (a *LLMAgent) Description() string { return a.description }
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	var totalUsage Usage
 
+	// Inject InputHandler into context for processors.
+	if a.inputHandler != nil {
+		ctx = WithInputHandlerContext(ctx, a.inputHandler)
+	}
+
 	// Build initial messages
 	var messages []ChatMessage
 	if a.systemPrompt != "" {
@@ -58,6 +66,11 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 	messages = append(messages, UserMessage(task.Input))
 
 	toolDefs := a.tools.AllDefinitions()
+
+	// Append ask_user tool definition if handler is configured.
+	if a.inputHandler != nil {
+		toolDefs = append(toolDefs, askUserToolDef)
+	}
 
 	for i := 0; i < a.maxIter; i++ {
 		req := ChatRequest{Messages: messages}
@@ -99,6 +112,16 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 
 		// Execute each tool call
 		for _, tc := range resp.ToolCalls {
+			// Special case: ask_user tool
+			if tc.Name == "ask_user" && a.inputHandler != nil {
+				content, err := a.executeAskUser(ctx, tc)
+				if err != nil {
+					return AgentResult{Usage: totalUsage}, err
+				}
+				messages = append(messages, ToolResultMessage(tc.ID, content))
+				continue
+			}
+
 			result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
 			content := result.Content
 			if execErr != nil {
@@ -139,6 +162,56 @@ func handleProcessorError(err error, usage Usage) (AgentResult, error) {
 		return AgentResult{Output: halt.Response, Usage: usage}, nil
 	}
 	return AgentResult{Usage: usage}, err
+}
+
+// --- ask_user tool ---
+
+// askUserToolDef is the tool definition for the built-in ask_user tool.
+var askUserToolDef = ToolDefinition{
+	Name:        "ask_user",
+	Description: "Ask the user a question when you need clarification, confirmation, or additional information to proceed.",
+	Parameters: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"question": {
+				"type": "string",
+				"description": "The question to ask the user"
+			},
+			"options": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Optional suggested answers for the user to choose from"
+			}
+		},
+		"required": ["question"]
+	}`),
+}
+
+// askUserArgs is the parsed arguments for the ask_user tool call.
+type askUserArgs struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
+}
+
+// executeAskUser handles the ask_user special-case tool call.
+func (a *LLMAgent) executeAskUser(ctx context.Context, tc ToolCall) (string, error) {
+	var args askUserArgs
+	if err := json.Unmarshal(tc.Args, &args); err != nil {
+		return "", err
+	}
+
+	resp, err := a.inputHandler.RequestInput(ctx, InputRequest{
+		Question: args.Question,
+		Options:  args.Options,
+		Metadata: map[string]string{
+			"agent":  a.name,
+			"source": "llm",
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Value, nil
 }
 
 // compile-time check

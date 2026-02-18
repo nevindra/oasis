@@ -554,6 +554,136 @@ Processors run in registration order at each hook point. If a processor returns 
 - **Processors must be safe for concurrent use.** Multiple agent executions may share the same processor instance.
 - **Modify in place.** Processors receive pointers (`*ChatRequest`, `*ChatResponse`, `*ToolResult`) and modify them directly.
 
+## Adding Human-in-the-Loop
+
+The `InputHandler` interface lets agents ask humans for input mid-execution. Two patterns: LLM-driven (the LLM decides when to ask) and programmatic (you define gates in code).
+
+### Implementing InputHandler
+
+```go
+package myhandler
+
+import (
+    "bufio"
+    "context"
+    "fmt"
+    "os"
+
+    oasis "github.com/nevindra/oasis"
+)
+
+// CLIInputHandler reads input from stdin.
+type CLIInputHandler struct{}
+
+func (h *CLIInputHandler) RequestInput(ctx context.Context, req oasis.InputRequest) (oasis.InputResponse, error) {
+    fmt.Printf("\n[Agent %s asks]: %s\n", req.Metadata["agent"], req.Question)
+    if len(req.Options) > 0 {
+        for i, opt := range req.Options {
+            fmt.Printf("  %d. %s\n", i+1, opt)
+        }
+    }
+    fmt.Print("> ")
+
+    scanner := bufio.NewScanner(os.Stdin)
+    scanner.Scan()
+    return oasis.InputResponse{Value: scanner.Text()}, nil
+}
+```
+
+### LLM-Driven: ask_user Tool
+
+When `WithInputHandler` is set, the agent automatically gains an `ask_user` tool. The LLM calls it when it needs clarification:
+
+```go
+handler := &CLIInputHandler{}
+
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
+    oasis.WithTools(shellTool, fileTool),
+    oasis.WithInputHandler(handler),
+)
+
+// During execution, if the LLM calls ask_user:
+//   [Agent assistant asks]: Delete all files in /tmp? (Yes/No)
+//   > No
+// The LLM sees "No" as the tool result and adjusts.
+```
+
+### Programmatic: Approval Gate
+
+Build gates using existing Processor interfaces + `InputHandlerFromContext(ctx)`:
+
+```go
+type ApprovalGate struct {
+    RequireApproval map[string]bool // tool names that need human approval
+}
+
+func (g *ApprovalGate) PostLLM(ctx context.Context, resp *oasis.ChatResponse) error {
+    handler, ok := oasis.InputHandlerFromContext(ctx)
+    if !ok {
+        return nil // no handler configured, skip gate
+    }
+    for i, tc := range resp.ToolCalls {
+        if !g.RequireApproval[tc.Name] {
+            continue
+        }
+        res, err := handler.RequestInput(ctx, oasis.InputRequest{
+            Question: fmt.Sprintf("Allow %s(%s)?", tc.Name, tc.Args),
+            Options:  []string{"Yes", "No"},
+        })
+        if err != nil {
+            return err
+        }
+        if res.Value != "Yes" {
+            resp.ToolCalls = append(resp.ToolCalls[:i], resp.ToolCalls[i+1:]...)
+        }
+    }
+    return nil
+}
+
+agent := oasis.NewLLMAgent("safe-agent", "Agent with approval gate", provider,
+    oasis.WithTools(shellTool),
+    oasis.WithInputHandler(handler),
+    oasis.WithProcessors(&ApprovalGate{
+        RequireApproval: map[string]bool{"shell_exec": true},
+    }),
+)
+```
+
+### Workflow Gate
+
+Use a regular `Step` to gate between agent steps:
+
+```go
+pipeline, _ := oasis.NewWorkflow("pipeline", "Research with approval",
+    oasis.AgentStep("research", researcher),
+    oasis.Step("approve", func(ctx context.Context, wCtx *oasis.WorkflowContext) error {
+        handler, ok := oasis.InputHandlerFromContext(ctx)
+        if !ok {
+            return fmt.Errorf("no input handler")
+        }
+        output, _ := wCtx.Get("research.output")
+        res, err := handler.RequestInput(ctx, oasis.InputRequest{
+            Question: fmt.Sprintf("Research result:\n%v\n\nProceed?", output),
+            Options:  []string{"Yes", "No"},
+        })
+        if err != nil {
+            return err
+        }
+        if res.Value != "Yes" {
+            return fmt.Errorf("rejected by human")
+        }
+        return nil
+    }, oasis.After("research")),
+    oasis.AgentStep("write", writer, oasis.After("approve")),
+)
+```
+
+### InputHandler Patterns
+
+- **No handler = no-op.** Processors that call `InputHandlerFromContext` should skip gracefully when no handler is set. This lets the same processor work in both interactive and batch modes.
+- **Use `context.WithTimeout` for deadlines.** The handler blocks until a response arrives or `ctx` is cancelled. Wrap the context if you need a timeout.
+- **Metadata is auto-populated for `ask_user`.** The framework sets `"agent"` (agent name) and `"source"` (`"llm"`) in metadata. Programmatic gates can set their own metadata (e.g. `"source": "gate"`, `"tool": toolName`).
+
 ## Creating Custom Agents
 
 Agents are composable units of work. The framework ships with three concrete implementations (`LLMAgent`, `Network`, and `Workflow`), but you can implement the `Agent` interface directly for custom behavior.

@@ -19,6 +19,7 @@ type Network struct {
 	processors   *ProcessorChain
 	systemPrompt string
 	maxIter      int
+	inputHandler InputHandler
 }
 
 // NewNetwork creates a Network with the given router provider and options.
@@ -46,6 +47,7 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	for _, p := range cfg.processors {
 		n.processors.Add(p)
 	}
+	n.inputHandler = cfg.inputHandler
 	return n
 }
 
@@ -56,8 +58,18 @@ func (n *Network) Description() string { return n.description }
 func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	var totalUsage Usage
 
+	// Inject InputHandler into context for processors and subagents.
+	if n.inputHandler != nil {
+		ctx = WithInputHandlerContext(ctx, n.inputHandler)
+	}
+
 	// Build tool definitions: agent tools + direct tools
 	toolDefs := n.buildToolDefs()
+
+	// Append ask_user tool definition if handler is configured.
+	if n.inputHandler != nil {
+		toolDefs = append(toolDefs, askUserToolDef)
+	}
 
 	// Build initial messages
 	var messages []ChatMessage
@@ -128,8 +140,28 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
 }
 
-// dispatch routes a tool call to either a subagent or a direct tool.
+// dispatch routes a tool call to either a subagent, ask_user, or a direct tool.
 func (n *Network) dispatch(ctx context.Context, tc ToolCall, parentTask AgentTask) (string, Usage) {
+	// Special case: ask_user tool
+	if tc.Name == "ask_user" && n.inputHandler != nil {
+		var args askUserArgs
+		if err := json.Unmarshal(tc.Args, &args); err != nil {
+			return "error: invalid ask_user args: " + err.Error(), Usage{}
+		}
+		resp, err := n.inputHandler.RequestInput(ctx, InputRequest{
+			Question: args.Question,
+			Options:  args.Options,
+			Metadata: map[string]string{
+				"agent":  n.name,
+				"source": "llm",
+			},
+		})
+		if err != nil {
+			return "error: " + err.Error(), Usage{}
+		}
+		return resp.Value, Usage{}
+	}
+
 	// Check if it's an agent call (prefixed with "agent_")
 	if len(tc.Name) > 6 && tc.Name[:6] == "agent_" {
 		agentName := tc.Name[6:]

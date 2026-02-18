@@ -242,6 +242,45 @@ type Agent interface {
 
 ---
 
+### InputHandler
+
+**File:** `input.go`
+
+```go
+type InputHandler interface {
+    RequestInput(ctx context.Context, req InputRequest) (InputResponse, error)
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `RequestInput` | Deliver a question to a human and block until a response is received or `ctx` is cancelled. |
+
+Human-in-the-loop mechanism for agents. When set via `WithInputHandler`, the agent gains a built-in `ask_user` tool (LLM-driven) and processors can access the handler via `InputHandlerFromContext(ctx)` (programmatic gates).
+
+**Types:**
+
+```go
+type InputRequest struct {
+    Question string            // The question to show the human
+    Options  []string          // Suggested choices (empty = free-form)
+    Metadata map[string]string // Context: agent name, source ("llm" or "gate"), tool name, etc.
+}
+
+type InputResponse struct {
+    Value string // The human's text response
+}
+```
+
+**Context helpers:**
+
+```go
+oasis.WithInputHandlerContext(ctx, handler) context.Context  // Inject handler into context
+oasis.InputHandlerFromContext(ctx) (InputHandler, bool)       // Retrieve handler from context
+```
+
+---
+
 ### Processors
 
 **File:** `processor.go`
@@ -588,6 +627,7 @@ oasis.WithPrompt(s string)                   // Set system prompt
 oasis.WithMaxIter(n int)                     // Max tool-calling iterations (default 10)
 oasis.WithAgents(agents ...oasis.Agent)       // Ignored by LLMAgent
 oasis.WithProcessors(processors ...any)       // Add processors to execution pipeline
+oasis.WithInputHandler(h oasis.InputHandler)  // Enable human-in-the-loop (ask_user tool + context)
 ```
 
 ### Network
@@ -604,6 +644,7 @@ oasis.WithTools(tools ...oasis.Tool)          // Add direct tools
 oasis.WithPrompt(s string)                   // Set router system prompt
 oasis.WithMaxIter(n int)                     // Max routing iterations (default 10)
 oasis.WithProcessors(processors ...any)       // Add processors to execution pipeline
+oasis.WithInputHandler(h oasis.InputHandler)  // Enable human-in-the-loop (propagated to subagents)
 ```
 
 ### Workflow
