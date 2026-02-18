@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-02-18
+
 ### Changed
 
 - **Breaking:** `Workflow.Execute` now returns `*WorkflowError` (non-nil `error`) when a step fails — previously returned `nil` error with the failure description embedded in `AgentResult.Output`. Callers that check `err != nil` will now correctly detect workflow failures. Use `errors.As(err, &wfErr)` to access per-step results via `wfErr.Result`
@@ -143,7 +145,8 @@ Initial release of the Oasis AI agent framework.
 - Channel-based token streaming with edit batching
 - Reference app in cmd/bot_example/
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/nevindra/oasis/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/nevindra/oasis/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/nevindra/oasis/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/nevindra/oasis/compare/v0.1.0...v0.1.1
