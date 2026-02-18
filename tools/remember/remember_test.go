@@ -38,10 +38,10 @@ func (s *mockStore) StoreMessage(context.Context, oasis.Message) error   { retur
 func (s *mockStore) GetMessages(context.Context, string, int) ([]oasis.Message, error) {
 	return nil, nil
 }
-func (s *mockStore) SearchMessages(context.Context, []float32, int) ([]oasis.Message, error) {
+func (s *mockStore) SearchMessages(context.Context, []float32, int) ([]oasis.ScoredMessage, error) {
 	return nil, nil
 }
-func (s *mockStore) SearchChunks(context.Context, []float32, int) ([]oasis.Chunk, error) {
+func (s *mockStore) SearchChunks(context.Context, []float32, int) ([]oasis.ScoredChunk, error) {
 	return nil, nil
 }
 func (s *mockStore) GetChunksByIDs(context.Context, []string) ([]oasis.Chunk, error) {
@@ -79,7 +79,7 @@ func (s *mockStore) GetSkill(context.Context, string) (oasis.Skill, error)    { 
 func (s *mockStore) ListSkills(context.Context) ([]oasis.Skill, error)        { return nil, nil }
 func (s *mockStore) UpdateSkill(context.Context, oasis.Skill) error           { return nil }
 func (s *mockStore) DeleteSkill(context.Context, string) error                { return nil }
-func (s *mockStore) SearchSkills(context.Context, []float32, int) ([]oasis.Skill, error) {
+func (s *mockStore) SearchSkills(context.Context, []float32, int) ([]oasis.ScoredSkill, error) {
 	return nil, nil
 }
 

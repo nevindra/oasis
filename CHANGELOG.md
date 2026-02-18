@@ -10,6 +10,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 - `Network.Execute` and `Network.ExecuteStream` now fall back to the last sub-agent output when the router LLM returns an empty final response — fixes messages getting stuck on "Thinking..." when using a pure-routing LLM that doesn't synthesize a reply after delegating
 - `store/sqlite`: eliminated `SQLITE_BUSY` (error 5) under concurrent writes — `Store` now keeps a single shared `*sql.DB` with `SetMaxOpenConns(1)` instead of opening a new connection per operation; `Close()` now properly closes the underlying connection
+- `Network` sub-agent routing: task parameter description changed to "copied verbatim" — prevents the router LLM from paraphrasing or translating the user's message before delegating, which caused language switching and hallucinations
+- `observer`: fixed data race in `ObservedProvider.ChatStream` — the chunk counter goroutine now signals completion via a done channel before the counter is read
+- Semantic recall: cross-thread messages are now filtered by cosine similarity score before injection into LLM context, preventing irrelevant messages from polluting context (previously all top-K results were injected regardless of score)
+- Semantic recall: messages from the current conversation thread are now excluded from cross-thread recall (they are already present in conversation history — previously they were double-injected)
 
 ### Added
 
@@ -18,10 +22,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `Network` now forwards `AgentTask.Attachments` to sub-agents when routing — multimodal content is available at every level of a multi-agent hierarchy
 - `ingest/pdf` extractor implemented using `ledongthuc/pdf` (pure Go, no CGO) — previously a stub; register with `ingest.WithExtractor(ingestpdf.TypePDF, ingestpdf.NewExtractor())`
 - `WithRetry(p Provider, opts ...RetryOption) Provider` — wraps any Provider with automatic retry on transient HTTP errors (429, 503) using exponential backoff with jitter
+- `ScoredMessage`, `ScoredChunk`, `ScoredSkill`, `ScoredFact` — scored result types that embed the original type with a `Score float32` field; returned by all semantic search methods so callers can make relevance decisions; `Score == 0` means the store did not compute similarity (e.g. libsql ANN index) — callers should treat it as "relevance unknown"
+- `WithSemanticSearchThreshold(minScore float32)` — configures the minimum cosine similarity for cross-thread semantic recall; messages below the threshold are silently dropped; zero value uses the built-in default of 0.60; requires `WithConversationMemory` and `WithSemanticSearch`
+- `ExtractedFact` type (`Fact string`, `Category string`) — represents a user fact extracted from a conversation turn
+- **Auto fact extraction** — `WithUserMemory` now completes the full read+write cycle: after each conversation turn, the agent uses its own LLM to extract durable user facts from the exchange and persists them to `MemoryStore` via `UpsertFact`; no new option required; extraction runs in the background goroutine alongside message persistence
 
 ### Changed
 
 - **Breaking:** `ChatMessage.Images []ImageData` renamed to `ChatMessage.Attachments []Attachment`; `ImageData` type renamed to `Attachment` — broader name reflects that PDFs and documents are also supported, not just images
+- **Breaking:** `Store.SearchMessages`, `Store.SearchChunks`, `Store.SearchSkills` now return `[]ScoredMessage`, `[]ScoredChunk`, `[]ScoredSkill` respectively — `store/sqlite` computes brute-force cosine similarity; `store/libsql` returns `Score: 0` (ANN index does not expose scores)
+- **Breaking:** `MemoryStore.SearchFacts` now returns `[]ScoredFact` instead of `[]Fact`
 - `Scheduler` primitive — polls the store for due actions and executes them via any `Agent` (`NewScheduler`, `Start`, `WithSchedulerInterval`, `WithSchedulerTZOffset`, `WithOnRun`)
 - Parallel tool execution — `LLMAgent` and `Network` now execute multiple tool calls concurrently using goroutines
   - When the LLM returns multiple tool calls in a single response, they run in parallel instead of sequentially
@@ -36,7 +46,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - Memory wiring for agent primitives — `LLMAgent` and `Network` now support built-in conversation memory, user memory, and semantic recall
   - `WithConversationMemory(Store)` — load/persist conversation history per thread
   - `WithSemanticSearch(EmbeddingProvider)` — cross-thread semantic search + embed persisted messages
-  - `WithUserMemory(MemoryStore)` — inject user facts into system prompt (requires `WithSemanticSearch`)
+  - `WithUserMemory(MemoryStore)` — inject user facts into system prompt **and** auto-extract new facts after each turn (requires `WithSemanticSearch` and `WithConversationMemory`)
 
 ### Changed
 

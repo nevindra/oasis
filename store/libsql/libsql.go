@@ -238,8 +238,10 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 }
 
 // SearchMessages performs vector similarity search over messages using
-// the libsql vector_top_k function.
-func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.Message, error) {
+// the libsql vector_top_k function. Score is always 0 because libsql's ANN
+// index does not expose similarity scores; callers treat Score==0 as
+// "relevance unknown" and skip threshold filtering.
+func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
 	db, err := s.openDB()
 	if err != nil {
 		return nil, err
@@ -258,13 +260,13 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 	}
 	defer rows.Close()
 
-	var messages []oasis.Message
+	var messages []oasis.ScoredMessage
 	for rows.Next() {
 		var m oasis.Message
 		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
-		messages = append(messages, m)
+		messages = append(messages, oasis.ScoredMessage{Message: m})
 	}
 	return messages, rows.Err()
 }
@@ -323,8 +325,8 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 }
 
 // SearchChunks performs vector similarity search over document chunks
-// using the libsql vector_top_k function.
-func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.Chunk, error) {
+// using the libsql vector_top_k function. Score is always 0 (see SearchMessages).
+func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredChunk, error) {
 	db, err := s.openDB()
 	if err != nil {
 		return nil, err
@@ -343,7 +345,7 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 	}
 	defer rows.Close()
 
-	var chunks []oasis.Chunk
+	var chunks []oasis.ScoredChunk
 	for rows.Next() {
 		var c oasis.Chunk
 		var parentID sql.NullString
@@ -353,7 +355,7 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 		if parentID.Valid {
 			c.ParentID = parentID.String
 		}
-		chunks = append(chunks, c)
+		chunks = append(chunks, oasis.ScoredChunk{Chunk: c})
 	}
 	return chunks, rows.Err()
 }
@@ -817,7 +819,9 @@ func (s *Store) DeleteSkill(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.Skill, error) {
+// SearchSkills performs vector similarity search over skills using the libsql
+// vector_top_k function. Score is always 0 (see SearchMessages).
+func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredSkill, error) {
 	db, err := s.openDB()
 	if err != nil {
 		return nil, err
@@ -836,7 +840,7 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 	}
 	defer rows.Close()
 
-	var skills []oasis.Skill
+	var skills []oasis.ScoredSkill
 	for rows.Next() {
 		var sk oasis.Skill
 		var tools sql.NullString
@@ -850,7 +854,7 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		if model.Valid {
 			sk.Model = model.String
 		}
-		skills = append(skills, sk)
+		skills = append(skills, oasis.ScoredSkill{Skill: sk})
 	}
 	return skills, rows.Err()
 }

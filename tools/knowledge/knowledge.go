@@ -60,14 +60,14 @@ func (k *KnowledgeTool) Execute(ctx context.Context, _ string, args json.RawMess
 	var out strings.Builder
 	if len(chunks) > 0 {
 		out.WriteString("From knowledge base:\n")
-		for i, chunk := range chunks {
-			fmt.Fprintf(&out, "%d. %s\n\n", i+1, chunk.Content)
+		for i, sc := range chunks {
+			fmt.Fprintf(&out, "%d. %s\n\n", i+1, sc.Content)
 		}
 	}
 	if len(messages) > 0 {
 		out.WriteString("From past conversations:\n")
-		for _, msg := range messages {
-			fmt.Fprintf(&out, "[%s]: %s\n", msg.Role, msg.Content)
+		for _, sm := range messages {
+			fmt.Fprintf(&out, "[%s]: %s\n", sm.Role, sm.Content)
 		}
 	}
 	if out.Len() == 0 {

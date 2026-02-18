@@ -188,7 +188,7 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 }
 
 // SearchMessages performs brute-force cosine similarity search over messages.
-func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.Message, error) {
+func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, thread_id, role, content, embedding, created_at
 		 FROM messages WHERE embedding IS NOT NULL`,
@@ -198,11 +198,7 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 	}
 	defer rows.Close()
 
-	type scored struct {
-		msg   oasis.Message
-		score float32
-	}
-	var results []scored
+	var results []oasis.ScoredMessage
 
 	for rows.Next() {
 		var m oasis.Message
@@ -214,26 +210,20 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 		if err != nil {
 			continue
 		}
-		score := cosineSimilarity(embedding, stored)
-		results = append(results, scored{msg: m, score: score})
+		results = append(results, oasis.ScoredMessage{Message: m, Score: cosineSimilarity(embedding, stored)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate messages: %w", err)
 	}
 
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].score > results[j].score
+		return results[i].Score > results[j].Score
 	})
 
 	if len(results) > topK {
 		results = results[:topK]
 	}
-
-	messages := make([]oasis.Message, len(results))
-	for i, r := range results {
-		messages[i] = r.msg
-	}
-	return messages, nil
+	return results, nil
 }
 
 // StoreDocument inserts a document and all its chunks in a single transaction.
@@ -280,7 +270,7 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 }
 
 // SearchChunks performs brute-force cosine similarity search over chunks.
-func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.Chunk, error) {
+func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredChunk, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, document_id, parent_id, content, chunk_index, embedding
 		 FROM chunks WHERE embedding IS NOT NULL`,
@@ -290,11 +280,7 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 	}
 	defer rows.Close()
 
-	type scored struct {
-		chunk oasis.Chunk
-		score float32
-	}
-	var results []scored
+	var results []oasis.ScoredChunk
 
 	for rows.Next() {
 		var c oasis.Chunk
@@ -310,26 +296,20 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 		if err != nil {
 			continue
 		}
-		score := cosineSimilarity(embedding, stored)
-		results = append(results, scored{chunk: c, score: score})
+		results = append(results, oasis.ScoredChunk{Chunk: c, Score: cosineSimilarity(embedding, stored)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate chunks: %w", err)
 	}
 
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].score > results[j].score
+		return results[i].Score > results[j].Score
 	})
 
 	if len(results) > topK {
 		results = results[:topK]
 	}
-
-	chunks := make([]oasis.Chunk, len(results))
-	for i, r := range results {
-		chunks[i] = r.chunk
-	}
-	return chunks, nil
+	return results, nil
 }
 
 // GetChunksByIDs returns chunks matching the given IDs.
@@ -662,7 +642,7 @@ func (s *Store) DeleteSkill(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.Skill, error) {
+func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredSkill, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, description, instructions, tools, model, embedding, created_at, updated_at
 		 FROM skills WHERE embedding IS NOT NULL`)
@@ -671,11 +651,7 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 	}
 	defer rows.Close()
 
-	type scored struct {
-		skill oasis.Skill
-		score float32
-	}
-	var results []scored
+	var results []oasis.ScoredSkill
 
 	for rows.Next() {
 		var sk oasis.Skill
@@ -695,26 +671,20 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		if err != nil {
 			continue
 		}
-		score := cosineSimilarity(embedding, stored)
-		results = append(results, scored{skill: sk, score: score})
+		results = append(results, oasis.ScoredSkill{Skill: sk, Score: cosineSimilarity(embedding, stored)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate skills: %w", err)
 	}
 
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].score > results[j].score
+		return results[i].Score > results[j].Score
 	})
 
 	if len(results) > topK {
 		results = results[:topK]
 	}
-
-	skills := make([]oasis.Skill, len(results))
-	for i, r := range results {
-		skills[i] = r.skill
-	}
-	return skills, nil
+	return results, nil
 }
 
 // Close closes the underlying database connection.

@@ -21,9 +21,9 @@ func (s *stubStore) UpdateThread(_ context.Context, _ Thread) error { return nil
 func (s *stubStore) DeleteThread(_ context.Context, _ string) error { return nil }
 func (s *stubStore) StoreMessage(_ context.Context, _ Message) error { return nil }
 func (s *stubStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error) { return nil, nil }
-func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]Message, error) { return nil, nil }
+func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]ScoredMessage, error) { return nil, nil }
 func (s *stubStore) StoreDocument(_ context.Context, _ Document, _ []Chunk) error { return nil }
-func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int) ([]Chunk, error) { return nil, nil }
+func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int) ([]ScoredChunk, error) { return nil, nil }
 func (s *stubStore) GetChunksByIDs(_ context.Context, _ []string) ([]Chunk, error) { return nil, nil }
 func (s *stubStore) GetConfig(_ context.Context, _ string) (string, error) { return "", nil }
 func (s *stubStore) SetConfig(_ context.Context, _, _ string) error { return nil }
@@ -40,22 +40,22 @@ func (s *stubStore) GetSkill(_ context.Context, _ string) (Skill, error) { retur
 func (s *stubStore) ListSkills(_ context.Context) ([]Skill, error) { return nil, nil }
 func (s *stubStore) UpdateSkill(_ context.Context, _ Skill) error { return nil }
 func (s *stubStore) DeleteSkill(_ context.Context, _ string) error { return nil }
-func (s *stubStore) SearchSkills(_ context.Context, _ []float32, _ int) ([]Skill, error) { return nil, nil }
+func (s *stubStore) SearchSkills(_ context.Context, _ []float32, _ int) ([]ScoredSkill, error) { return nil, nil }
 
 // recordingStore tracks calls to StoreMessage and returns canned history.
 type recordingStore struct {
 	stubStore
 	mu       sync.Mutex
-	history  []Message        // returned by GetMessages
-	related  []Message        // returned by SearchMessages
-	stored   []Message        // recorded by StoreMessage
+	history  []Message         // returned by GetMessages
+	related  []ScoredMessage   // returned by SearchMessages
+	stored   []Message         // recorded by StoreMessage
 }
 
 func (s *recordingStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error) {
 	return s.history, nil
 }
 
-func (s *recordingStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]Message, error) {
+func (s *recordingStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]ScoredMessage, error) {
 	return s.related, nil
 }
 
@@ -94,7 +94,7 @@ type stubMemoryStore struct {
 
 func (m *stubMemoryStore) Init(_ context.Context) error                                        { return nil }
 func (m *stubMemoryStore) UpsertFact(_ context.Context, _, _ string, _ []float32) error        { return nil }
-func (m *stubMemoryStore) SearchFacts(_ context.Context, _ []float32, _ int) ([]Fact, error)   { return nil, nil }
+func (m *stubMemoryStore) SearchFacts(_ context.Context, _ []float32, _ int) ([]ScoredFact, error) { return nil, nil }
 func (m *stubMemoryStore) DeleteMatchingFacts(_ context.Context, _ string) error                { return nil }
 func (m *stubMemoryStore) DecayOldFacts(_ context.Context) error                                { return nil }
 func (m *stubMemoryStore) BuildContext(_ context.Context, _ []float32) (string, error) {
@@ -207,14 +207,7 @@ func TestLLMAgentUserMemory(t *testing.T) {
 	mem := &stubMemoryStore{context: "## What you know about the user\n- Likes Go"}
 	emb := &stubEmbedding{}
 
-	// Use a provider that captures the request to verify system prompt content
-	var capturedReq ChatRequest
-	provider := &capturingProvider{
-		resp: ChatResponse{Content: "I know you like Go"},
-		capture: func(req ChatRequest) {
-			capturedReq = req
-		},
-	}
+	provider := &capturingProvider{resp: ChatResponse{Content: "I know you like Go"}}
 
 	agent := NewLLMAgent("test", "test", provider,
 		WithUserMemory(mem),
@@ -230,11 +223,12 @@ func TestLLMAgentUserMemory(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "I know you like Go")
 	}
 
-	// Verify system prompt contains user memory
-	if len(capturedReq.Messages) == 0 {
+	// Verify system prompt contains user memory (firstCall = main LLM call)
+	req := provider.firstCall()
+	if len(req.Messages) == 0 {
 		t.Fatal("no messages captured")
 	}
-	sysMsg := capturedReq.Messages[0]
+	sysMsg := req.Messages[0]
 	if sysMsg.Role != "system" {
 		t.Fatalf("first message role = %q, want system", sysMsg.Role)
 	}
@@ -249,13 +243,7 @@ func TestLLMAgentUserMemory(t *testing.T) {
 func TestLLMAgentUserMemoryWithoutEmbeddingSkipped(t *testing.T) {
 	mem := &stubMemoryStore{context: "should not appear"}
 
-	var capturedReq ChatRequest
-	provider := &capturingProvider{
-		resp: ChatResponse{Content: "ok"},
-		capture: func(req ChatRequest) {
-			capturedReq = req
-		},
-	}
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	// WithUserMemory but NO WithSemanticSearch — memory should be silently skipped
 	agent := NewLLMAgent("test", "test", provider,
@@ -268,10 +256,11 @@ func TestLLMAgentUserMemoryWithoutEmbeddingSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(capturedReq.Messages) == 0 {
+	req := provider.firstCall()
+	if len(req.Messages) == 0 {
 		t.Fatal("no messages captured")
 	}
-	sysMsg := capturedReq.Messages[0]
+	sysMsg := req.Messages[0]
 	if contains(sysMsg.Content, "should not appear") {
 		t.Error("user memory should be skipped without embedding provider")
 	}
@@ -280,20 +269,14 @@ func TestLLMAgentUserMemoryWithoutEmbeddingSkipped(t *testing.T) {
 func TestLLMAgentSemanticRecall(t *testing.T) {
 	store := &recordingStore{
 		history: []Message{{Role: "user", Content: "recent msg"}},
-		related: []Message{
-			{Role: "user", Content: "old relevant msg"},
-			{Role: "assistant", Content: "old relevant answer"},
+		related: []ScoredMessage{
+			{Message: Message{Role: "user", Content: "old relevant msg"}},
+			{Message: Message{Role: "assistant", Content: "old relevant answer"}},
 		},
 	}
 	emb := &stubEmbedding{}
 
-	var capturedReq ChatRequest
-	provider := &capturingProvider{
-		resp: ChatResponse{Content: "combined answer"},
-		capture: func(req ChatRequest) {
-			capturedReq = req
-		},
-	}
+	provider := &capturingProvider{resp: ChatResponse{Content: "combined answer"}}
 
 	agent := NewLLMAgent("test", "test", provider,
 		WithConversationMemory(store),
@@ -311,7 +294,7 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 
 	// Should have: history messages + semantic recall system message + user input
 	foundRecall := false
-	for _, msg := range capturedReq.Messages {
+	for _, msg := range provider.firstCall().Messages {
 		if msg.Role == "system" && contains(msg.Content, "Relevant context from past conversations") {
 			foundRecall = true
 			if !contains(msg.Content, "old relevant msg") {
@@ -328,18 +311,12 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 func TestLLMAgentAllMemoryTypes(t *testing.T) {
 	store := &recordingStore{
 		history: []Message{{Role: "user", Content: "previous"}},
-		related: []Message{{Role: "assistant", Content: "related context"}},
+		related: []ScoredMessage{{Message: Message{Role: "assistant", Content: "related context"}}},
 	}
 	mem := &stubMemoryStore{context: "## User facts\n- Name: Test"}
 	emb := &stubEmbedding{}
 
-	var capturedReq ChatRequest
-	provider := &capturingProvider{
-		resp: ChatResponse{Content: "full memory response"},
-		capture: func(req ChatRequest) {
-			capturedReq = req
-		},
-	}
+	provider := &capturingProvider{resp: ChatResponse{Content: "full memory response"}}
 
 	agent := NewLLMAgent("test", "test", provider,
 		WithConversationMemory(store),
@@ -361,7 +338,8 @@ func TestLLMAgentAllMemoryTypes(t *testing.T) {
 	}
 
 	// Verify message order: system (with user memory) → history → semantic recall → user input
-	msgs := capturedReq.Messages
+	// Use firstCall() — extraction runs later in the background goroutine.
+	msgs := provider.firstCall().Messages
 	if len(msgs) < 4 {
 		t.Fatalf("expected at least 4 messages, got %d", len(msgs))
 	}
@@ -461,17 +439,11 @@ func TestBuildMessagesImagesFromTask(t *testing.T) {
 		{MimeType: "application/pdf", Base64: "pdfdata"},
 	}
 
-	var capturedReq ChatRequest
-	provider := &capturingProvider{
-		resp: ChatResponse{Content: "ok"},
-		capture: func(req ChatRequest) {
-			capturedReq = req
-		},
-	}
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	agent := NewLLMAgent("test", "test", provider)
 	_, err := agent.Execute(context.Background(), AgentTask{
-		Input:  "analyze this",
+		Input:       "analyze this",
 		Attachments: images,
 	})
 	if err != nil {
@@ -479,7 +451,7 @@ func TestBuildMessagesImagesFromTask(t *testing.T) {
 	}
 
 	// Last message should be the user message with images attached.
-	msgs := capturedReq.Messages
+	msgs := provider.firstCall().Messages
 	last := msgs[len(msgs)-1]
 	if last.Role != "user" {
 		t.Fatalf("last message role = %q, want user", last.Role)
@@ -500,24 +472,43 @@ func TestBuildMessagesImagesFromTask(t *testing.T) {
 
 // --- Test helpers ---
 
-// capturingProvider records the ChatRequest for inspection.
+// capturingProvider records all ChatRequests for inspection.
+// Thread-safe: auto-extraction calls the provider from a background goroutine.
 type capturingProvider struct {
-	resp    ChatResponse
-	capture func(ChatRequest)
+	resp ChatResponse
+	mu   sync.Mutex
+	reqs []ChatRequest
 }
 
 func (p *capturingProvider) Name() string { return "capturing" }
+
+func (p *capturingProvider) record(req ChatRequest) {
+	p.mu.Lock()
+	p.reqs = append(p.reqs, req)
+	p.mu.Unlock()
+}
+
+// firstCall returns the first captured request (the main LLM call, not extraction).
+func (p *capturingProvider) firstCall() ChatRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.reqs) == 0 {
+		return ChatRequest{}
+	}
+	return p.reqs[0]
+}
+
 func (p *capturingProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
-	p.capture(req)
+	p.record(req)
 	return p.resp, nil
 }
 func (p *capturingProvider) ChatWithTools(_ context.Context, req ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
-	p.capture(req)
+	p.record(req)
 	return p.resp, nil
 }
 func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- string) (ChatResponse, error) {
 	defer close(ch)
-	p.capture(req)
+	p.record(req)
 	ch <- p.resp.Content
 	return p.resp, nil
 }

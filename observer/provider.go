@@ -86,11 +86,14 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 	defer span.End()
 	start := time.Now()
 
-	// Wrap channel to count chunks
+	// Wrap channel to count chunks.
+	// Use a done channel to wait for the goroutine before reading chunks.
 	wrappedCh := make(chan string, cap(ch))
 	chunks := 0
+	done := make(chan struct{})
 	go func() {
 		defer close(ch)
+		defer close(done)
 		for token := range wrappedCh {
 			chunks++
 			ch <- token
@@ -98,6 +101,7 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 	}()
 
 	resp, err := o.inner.ChatStream(ctx, req, wrappedCh)
+	<-done // wait for goroutine to finish before reading chunks
 
 	durationMs := float64(time.Since(start).Milliseconds())
 	status := "ok"

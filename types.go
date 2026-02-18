@@ -4,6 +4,32 @@ import "encoding/json"
 
 // --- Domain types (database records) ---
 
+// ScoredMessage is a Message paired with its cosine similarity score from a
+// semantic search. Score is in [0, 1]; higher means more relevant.
+// Score is 0 when the store does not compute similarity (e.g. libsql ANN index).
+type ScoredMessage struct {
+	Message
+	Score float32
+}
+
+// ScoredChunk is a Chunk paired with its cosine similarity score.
+type ScoredChunk struct {
+	Chunk
+	Score float32
+}
+
+// ScoredSkill is a Skill paired with its cosine similarity score.
+type ScoredSkill struct {
+	Skill
+	Score float32
+}
+
+// ScoredFact is a Fact paired with its cosine similarity score.
+type ScoredFact struct {
+	Fact
+	Score float32
+}
+
 type Document struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`

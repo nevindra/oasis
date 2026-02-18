@@ -39,9 +39,11 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
 		mem: agentMemory{
-			store:     cfg.store,
-			embedding: cfg.embedding,
-			memory:    cfg.memory,
+			store:            cfg.store,
+			embedding:        cfg.embedding,
+			memory:           cfg.memory,
+			semanticMinScore: cfg.semanticMinScore,
+			provider:         router,
 		},
 	}
 	if cfg.maxIter > 0 {
@@ -351,7 +353,7 @@ func (n *Network) buildToolDefs() []ToolDefinition {
 			Name:        "agent_" + name,
 			Description: agent.Description(),
 			Parameters: json.RawMessage(
-				`{"type":"object","properties":{"task":{"type":"string","description":"Natural language description of the task to delegate to this agent"}},"required":["task"]}`,
+				`{"type":"object","properties":{"task":{"type":"string","description":"The user's original message, copied verbatim. Do not paraphrase, translate, or summarize."}},"required":["task"]}`,
 			),
 		})
 	}

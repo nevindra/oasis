@@ -142,7 +142,7 @@ Long-term semantic memory. Stores user facts with confidence scoring, semantic d
 | Method | Purpose |
 |--------|---------|
 | `UpsertFact(ctx, fact, category, embedding)` | Insert or merge a fact (deduplicates by cosine similarity > 0.85) |
-| `SearchFacts(ctx, embedding, topK)` | Semantic search over stored facts |
+| `SearchFacts(ctx, embedding, topK) -> []ScoredFact` | Semantic search over stored facts, sorted by score descending |
 | `BuildContext(ctx, queryEmbedding) -> string` | Build a formatted memory context string (top 15 facts by confidence + recency) |
 | `DeleteMatchingFacts(ctx, pattern)` | Delete facts matching a text pattern |
 | `DecayOldFacts(ctx)` | Reduce confidence of un-reinforced facts (multiply by 0.95 if not updated in 7+ days) |
@@ -155,6 +155,8 @@ Long-term semantic memory. Stores user facts with confidence scoring, semantic d
 - Re-extracted facts get `+0.1` (capped at 1.0)
 - Decay: `confidence *= 0.95` for facts not reinforced in 7+ days
 - Pruning: facts with `confidence < 0.3` and `age > 30 days` are removed
+
+**Auto-extraction**: when `WithUserMemory` is set on a `LLMAgent`, the agent automatically extracts user facts from each conversation exchange using its own LLM and persists them via `UpsertFact`. No extra configuration required. This is the write path that populates `user_facts` from real conversations.
 
 ### Tool + ToolRegistry (`tool.go`)
 
@@ -303,8 +305,9 @@ threadID := task.TaskThreadID()  // "thread-123"
 
 1. Load recent conversation history from the Store
 2. Inject user facts from MemoryStore into the system prompt
-3. Search for semantically relevant messages across all threads (when EmbeddingProvider is set)
+3. Search for semantically relevant messages across all threads (when EmbeddingProvider is set), filtered by cosine similarity score
 4. Persist user and assistant messages after producing a final response
+5. Extract durable user facts from the conversation turn and upsert them to MemoryStore (when `WithUserMemory` is set) — runs in the background goroutine using the agent's own LLM
 
 All memory features are opt-in. Without these options, agents behave exactly as before.
 

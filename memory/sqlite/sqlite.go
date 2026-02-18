@@ -114,7 +114,7 @@ func (s *Store) UpsertFact(ctx context.Context, fact, category string, embedding
 	return err
 }
 
-func (s *Store) SearchFacts(ctx context.Context, embedding []float32, topK int) ([]oasis.Fact, error) {
+func (s *Store) SearchFacts(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredFact, error) {
 	db, err := s.openDB()
 	if err != nil {
 		return nil, err
@@ -127,11 +127,7 @@ func (s *Store) SearchFacts(ctx context.Context, embedding []float32, topK int) 
 	}
 	defer rows.Close()
 
-	type scored struct {
-		fact  oasis.Fact
-		score float32
-	}
-	var all []scored
+	var all []oasis.ScoredFact
 
 	for rows.Next() {
 		var f oasis.Fact
@@ -141,34 +137,39 @@ func (s *Store) SearchFacts(ctx context.Context, embedding []float32, topK int) 
 		}
 		emb := deserializeEmbedding(embText)
 		if len(emb) > 0 {
-			all = append(all, scored{fact: f, score: cosineSimilarity(embedding, emb)})
+			all = append(all, oasis.ScoredFact{Fact: f, Score: cosineSimilarity(embedding, emb)})
 		}
 	}
 
 	// Sort by score descending (selection sort — fine for small N)
 	for i := 0; i < len(all); i++ {
 		for j := i + 1; j < len(all); j++ {
-			if all[j].score > all[i].score {
+			if all[j].Score > all[i].Score {
 				all[i], all[j] = all[j], all[i]
 			}
 		}
 	}
 
-	var facts []oasis.Fact
-	for i := 0; i < len(all) && i < topK; i++ {
-		facts = append(facts, all[i].fact)
+	if len(all) > topK {
+		all = all[:topK]
 	}
-	return facts, nil
+	return all, nil
 }
 
 func (s *Store) BuildContext(ctx context.Context, queryEmbedding []float32) (string, error) {
-	var facts []oasis.Fact
+	var facts []oasis.ScoredFact
 	var err error
 
 	if len(queryEmbedding) > 0 {
 		facts, err = s.SearchFacts(ctx, queryEmbedding, 10)
 	} else {
-		facts, err = s.getTopFacts(ctx, 15)
+		rawFacts, ferr := s.getTopFacts(ctx, 15)
+		if ferr != nil {
+			return "", ferr
+		}
+		for _, f := range rawFacts {
+			facts = append(facts, oasis.ScoredFact{Fact: f})
+		}
 	}
 	if err != nil || len(facts) == 0 {
 		return "", err
@@ -176,8 +177,8 @@ func (s *Store) BuildContext(ctx context.Context, queryEmbedding []float32) (str
 
 	var b strings.Builder
 	b.WriteString("## What you know about the user\n")
-	for _, f := range facts {
-		fmt.Fprintf(&b, "- %s [%s]\n", f.Fact, f.Category)
+	for _, sf := range facts {
+		fmt.Fprintf(&b, "- %s [%s]\n", sf.Fact.Fact, sf.Fact.Category)
 	}
 	return b.String(), nil
 }

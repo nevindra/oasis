@@ -37,9 +37,11 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
 		mem: agentMemory{
-			store:     cfg.store,
-			embedding: cfg.embedding,
-			memory:    cfg.memory,
+			store:            cfg.store,
+			embedding:        cfg.embedding,
+			memory:           cfg.memory,
+			semanticMinScore: cfg.semanticMinScore,
+			provider:         provider,
 		},
 	}
 	if cfg.maxIter > 0 {

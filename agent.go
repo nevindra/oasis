@@ -83,15 +83,16 @@ type AgentResult struct {
 
 // agentConfig holds shared configuration for LLMAgent and Network.
 type agentConfig struct {
-	tools        []Tool
-	agents       []Agent
-	prompt       string
-	maxIter      int
-	processors   []any
-	inputHandler InputHandler
-	store        Store
-	embedding    EmbeddingProvider
-	memory       MemoryStore
+	tools               []Tool
+	agents              []Agent
+	prompt              string
+	maxIter             int
+	processors          []any
+	inputHandler        InputHandler
+	store               Store
+	embedding           EmbeddingProvider
+	memory              MemoryStore
+	semanticMinScore    float32
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -147,12 +148,26 @@ func WithSemanticSearch(e EmbeddingProvider) AgentOption {
 	return func(c *agentConfig) { c.embedding = e }
 }
 
-// WithUserMemory enables user fact injection into the system prompt.
-// On each Execute call, the agent embeds the input, retrieves relevant facts
-// via BuildContext, and appends them to the system prompt.
-// Requires WithEmbedding — without it, user memory is silently skipped.
+// WithUserMemory enables the full user memory pipeline: read + write.
+//
+// Read (every Execute call): embeds the input, retrieves relevant facts via
+// BuildContext, and appends them to the system prompt. Requires WithSemanticSearch.
+//
+// Write (after each turn, background): uses the agent's own LLM to extract
+// durable user facts from the conversation exchange and persists them via
+// UpsertFact. Requires WithConversationMemory + WithSemanticSearch — without
+// either, extraction is silently skipped.
 func WithUserMemory(m MemoryStore) AgentOption {
 	return func(c *agentConfig) { c.memory = m }
+}
+
+// WithSemanticSearchThreshold sets the minimum cosine similarity score for
+// cross-thread semantic recall. Messages with Score below this threshold are
+// silently dropped before being injected into the LLM context.
+// The zero value (default) uses a built-in threshold of 0.60.
+// Requires WithConversationMemory and WithSemanticSearch.
+func WithSemanticSearchThreshold(minScore float32) AgentOption {
+	return func(c *agentConfig) { c.semanticMinScore = minScore }
 }
 
 func buildConfig(opts []AgentOption) agentConfig {

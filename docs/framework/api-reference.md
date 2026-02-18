@@ -165,7 +165,7 @@ type Store interface {
 ```go
 type MemoryStore interface {
     UpsertFact(ctx context.Context, fact, category string, embedding []float32) error
-    SearchFacts(ctx context.Context, embedding []float32, topK int) ([]Fact, error)
+    SearchFacts(ctx context.Context, embedding []float32, topK int) ([]ScoredFact, error)
     BuildContext(ctx context.Context, queryEmbedding []float32) (string, error)
     DeleteMatchingFacts(ctx context.Context, pattern string) error
     DecayOldFacts(ctx context.Context) error
@@ -176,7 +176,7 @@ type MemoryStore interface {
 | Method | Description |
 |--------|-------------|
 | `UpsertFact` | Insert a new fact or merge with semantically similar existing fact (cosine > 0.85) |
-| `SearchFacts` | Vector search over stored facts |
+| `SearchFacts` | Vector search over stored facts; returns `[]ScoredFact` sorted by score descending |
 | `BuildContext` | Build formatted memory context string from top facts (by confidence + recency) |
 | `DeleteMatchingFacts` | Delete facts whose text matches a pattern (SQL LIKE) |
 | `DecayOldFacts` | Multiply confidence by 0.95 for facts not updated in 7+ days; prune if < 0.3 and > 30 days old |
@@ -689,7 +689,7 @@ oasis.WithProcessors(processors ...any)                 // Add processors to exe
 oasis.WithInputHandler(h oasis.InputHandler)            // Enable human-in-the-loop (ask_user tool + context)
 oasis.WithConversationMemory(s oasis.Store)             // Enable history load/persist per thread
 oasis.WithSemanticSearch(e oasis.EmbeddingProvider)     // Enable semantic search across threads + user memory
-oasis.WithUserMemory(m oasis.MemoryStore)               // Inject user facts into system prompt (requires WithSemanticSearch)
+oasis.WithUserMemory(m oasis.MemoryStore)               // Inject user facts into system prompt + auto-extract facts after each turn (requires WithSemanticSearch + WithConversationMemory)
 ```
 
 **Memory wiring example:**
@@ -741,7 +741,7 @@ oasis.WithProcessors(processors ...any)                 // Add processors to exe
 oasis.WithInputHandler(h oasis.InputHandler)            // Enable human-in-the-loop (propagated to subagents)
 oasis.WithConversationMemory(s oasis.Store)             // Enable history load/persist per thread
 oasis.WithSemanticSearch(e oasis.EmbeddingProvider)     // Enable semantic search across threads + user memory
-oasis.WithUserMemory(m oasis.MemoryStore)               // Inject user facts into system prompt (requires WithSemanticSearch)
+oasis.WithUserMemory(m oasis.MemoryStore)               // Inject user facts into system prompt + auto-extract facts after each turn (requires WithSemanticSearch + WithConversationMemory)
 ```
 
 ### Workflow
