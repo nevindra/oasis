@@ -23,4 +23,8 @@ var (
 	AttrToolName         = attribute.Key("tool.name")
 	AttrToolStatus       = attribute.Key("tool.status")
 	AttrToolResultLength = attribute.Key("tool.result_length")
+
+	AttrAgentName   = attribute.Key("agent.name")
+	AttrAgentType   = attribute.Key("agent.type")
+	AttrAgentStatus = attribute.Key("agent.status")
 )

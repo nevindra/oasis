@@ -20,6 +20,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `StrategyParentChild` — two-level hierarchical chunking with `Chunk.ParentID` linking
 - `Store.GetChunksByIDs` for batch chunk retrieval (parent-child resolution)
 - PDF extractor stub subpackage (`ingest/pdf/`)
+- `ObservedAgent` in `observer/` — OTEL lifecycle spans, metrics, and logs for any Agent execution
+- `Spawn()` + `AgentHandle` — background agent execution with state tracking, cancellation, and select-based multiplexing
 - ~110 new test cases across framework packages
 
 ### Changed

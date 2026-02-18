@@ -297,3 +297,92 @@ func TestObservedEmbeddingEmbedError(t *testing.T) {
 		t.Errorf("Embed error = %v, want %v", err, wantErr)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ObservedAgent tests
+// ---------------------------------------------------------------------------
+
+// mockAgentObs for observer agent tests.
+type mockAgentObs struct {
+	name   string
+	desc   string
+	result oasis.AgentResult
+	err    error
+}
+
+func (m *mockAgentObs) Name() string        { return m.name }
+func (m *mockAgentObs) Description() string { return m.desc }
+func (m *mockAgentObs) Execute(_ context.Context, _ oasis.AgentTask) (oasis.AgentResult, error) {
+	return m.result, m.err
+}
+
+func TestObservedAgentName(t *testing.T) {
+	inner := &mockAgentObs{name: "researcher", desc: "does research"}
+	oa := WrapAgent(inner, testInstruments(t))
+
+	if got := oa.Name(); got != "researcher" {
+		t.Errorf("Name() = %q, want %q", got, "researcher")
+	}
+}
+
+func TestObservedAgentDescription(t *testing.T) {
+	inner := &mockAgentObs{name: "researcher", desc: "does research"}
+	oa := WrapAgent(inner, testInstruments(t))
+
+	if got := oa.Description(); got != "does research" {
+		t.Errorf("Description() = %q, want %q", got, "does research")
+	}
+}
+
+func TestObservedAgentExecute(t *testing.T) {
+	want := oasis.AgentResult{
+		Output: "research complete",
+		Usage:  oasis.Usage{InputTokens: 100, OutputTokens: 50},
+	}
+	inner := &mockAgentObs{name: "researcher", desc: "does research", result: want}
+	oa := WrapAgent(inner, testInstruments(t))
+
+	got, err := oa.Execute(context.Background(), oasis.AgentTask{Input: "find info"})
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if got.Output != want.Output {
+		t.Errorf("Output = %q, want %q", got.Output, want.Output)
+	}
+	if got.Usage != want.Usage {
+		t.Errorf("Usage = %+v, want %+v", got.Usage, want.Usage)
+	}
+}
+
+func TestObservedAgentExecuteError(t *testing.T) {
+	wantErr := errors.New("agent broke")
+	inner := &mockAgentObs{name: "researcher", err: wantErr}
+	oa := WrapAgent(inner, testInstruments(t))
+
+	_, err := oa.Execute(context.Background(), oasis.AgentTask{Input: "find info"})
+	if !errors.Is(err, wantErr) {
+		t.Errorf("Execute error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestObservedAgentExecuteCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before execute
+
+	inner := &mockAgentObs{name: "researcher", err: context.Canceled}
+	oa := WrapAgent(inner, testInstruments(t))
+
+	_, err := oa.Execute(ctx, oasis.AgentTask{Input: "find info"})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Execute error = %v, want context.Canceled", err)
+	}
+}
+
+func TestDetectAgentType(t *testing.T) {
+	// Custom agent type
+	custom := &mockAgentObs{name: "custom"}
+	got := detectAgentType(custom)
+	if got != "*observer.mockAgentObs" {
+		t.Errorf("detectAgentType(mockAgentObs) = %q, want %q", got, "*observer.mockAgentObs")
+	}
+}

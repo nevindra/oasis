@@ -692,6 +692,72 @@ oasis.DoWhile(name string, fn StepFunc, opts ...StepOption)                 // L
 | `WithOnError(fn func(string, error))` | Callback when a step fails |
 | `WithDefaultRetry(n int, delay time.Duration)` | Default retry for all steps |
 
+### AgentHandle
+
+**File:** `handle.go`
+
+Background agent execution with state tracking, result delivery, and cancellation.
+
+```go
+// AgentState represents the execution state of a spawned agent.
+type AgentState int32
+
+const (
+    StatePending   AgentState = iota // created, not yet running
+    StateRunning                     // Execute() in progress
+    StateCompleted                   // finished successfully
+    StateFailed                      // finished with error
+    StateCancelled                   // cancelled by caller or parent context
+)
+
+func (s AgentState) String() string    // "pending", "running", etc.
+func (s AgentState) IsTerminal() bool  // true for completed, failed, cancelled
+```
+
+**Spawn and Handle:**
+
+```go
+// Launch an agent in a background goroutine.
+handle := oasis.Spawn(ctx, agent, task)
+
+handle.ID() string                                         // Unique execution ID (xid-based)
+handle.Agent() Agent                                       // The agent being executed
+handle.State() AgentState                                  // Current state
+handle.Done() <-chan struct{}                               // Closed when execution finishes
+handle.Await(ctx context.Context) (AgentResult, error)     // Block until done or ctx cancelled
+handle.Result() (AgentResult, error)                       // Non-blocking; zero value if not done
+handle.Cancel()                                            // Request cancellation (non-blocking)
+```
+
+**Usage patterns:**
+
+```go
+// Simple: spawn and await
+handle := oasis.Spawn(ctx, researcher, task)
+result, err := handle.Await(ctx)
+
+// Multiplex: race two agents
+h1 := oasis.Spawn(ctx, fast, task)
+h2 := oasis.Spawn(ctx, thorough, task)
+select {
+case <-h1.Done():
+    h2.Cancel()
+    result, _ = h1.Result()
+case <-h2.Done():
+    h1.Cancel()
+    result, _ = h2.Result()
+}
+
+// Fire-and-forget with later check
+handle := oasis.Spawn(ctx, bg, task)
+// ... later ...
+if handle.State() == oasis.StateCompleted {
+    result, _ := handle.Result()
+}
+```
+
+---
+
 ### ID and Time
 
 **File:** `id.go`
@@ -873,7 +939,7 @@ See [Configuration](configuration.md) for all fields, defaults, and environment 
 
 **Package:** `github.com/nevindra/oasis/observer`
 
-OTEL-based observability middleware. Wraps `Provider`, `EmbeddingProvider`, and `Tool` with instrumented versions that emit traces, metrics, and structured logs via OpenTelemetry.
+OTEL-based observability middleware. Wraps `Provider`, `EmbeddingProvider`, `Tool`, and `Agent` with instrumented versions that emit traces, metrics, and structured logs via OpenTelemetry.
 
 ### Setup
 
@@ -893,9 +959,12 @@ observed := observer.WrapEmbedding(embedding, modelName, inst)
 
 // Wrap a Tool (emits tool.execute spans)
 observed := observer.WrapTool(tool, inst)
+
+// Wrap an Agent (emits agent.execute parent span + lifecycle events)
+observed := observer.WrapAgent(agent, inst)
 ```
 
-All wrappers implement their respective interfaces (`oasis.Provider`, `oasis.EmbeddingProvider`, `oasis.Tool`), so they plug into existing code with no changes.
+All wrappers implement their respective interfaces (`oasis.Provider`, `oasis.EmbeddingProvider`, `oasis.Tool`, `oasis.Agent`), so they plug into existing code with no changes.
 
 ### Traces
 
@@ -906,6 +975,7 @@ All wrappers implement their respective interfaces (`oasis.Provider`, `oasis.Emb
 | `llm.chat_stream` | model, provider, input_tokens, output_tokens, cost_usd, stream_chunks |
 | `llm.embed` | model, provider, text_count, dimensions |
 | `tool.execute` | tool_name, status, result_length |
+| `agent.execute` | agent_name, agent_type, agent_status, tokens_input, tokens_output |
 
 ### Metrics
 
@@ -919,6 +989,8 @@ All wrappers implement their respective interfaces (`oasis.Provider`, `oasis.Emb
 | `tool.duration` | Histogram | Tool latency in ms |
 | `embedding.requests` | Counter | Embedding call count |
 | `embedding.duration` | Histogram | Embedding latency in ms |
+| `agent.executions` | Counter | Agent execution count (by name, status) |
+| `agent.duration` | Histogram | Agent execution latency in ms |
 
 ### Cost Calculation
 
