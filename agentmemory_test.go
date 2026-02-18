@@ -211,7 +211,7 @@ func TestLLMAgentUserMemory(t *testing.T) {
 
 	agent := NewLLMAgent("test", "test", provider,
 		WithUserMemory(mem),
-		WithSemanticSearch(emb),
+		WithEmbedding(emb),
 		WithPrompt("You are helpful"),
 	)
 
@@ -245,7 +245,7 @@ func TestLLMAgentUserMemoryWithoutEmbeddingSkipped(t *testing.T) {
 
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
-	// WithUserMemory but NO WithSemanticSearch — memory should be silently skipped
+	// WithUserMemory but NO WithEmbedding — memory should be silently skipped
 	agent := NewLLMAgent("test", "test", provider,
 		WithUserMemory(mem),
 		WithPrompt("base prompt"),
@@ -279,8 +279,8 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "combined answer"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
-		WithSemanticSearch(emb),
+		WithConversationMemory(store, CrossThreadSearch()),
+		WithEmbedding(emb),
 	)
 
 	task := AgentTask{
@@ -292,7 +292,7 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Should have: history messages + semantic recall system message + user input
+	// Should have: history messages + cross-thread recall system message + user input
 	foundRecall := false
 	for _, msg := range provider.firstCall().Messages {
 		if msg.Role == "system" && contains(msg.Content, "Relevant context from past conversations") {
@@ -319,9 +319,9 @@ func TestLLMAgentAllMemoryTypes(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "full memory response"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithConversationMemory(store, CrossThreadSearch()),
 		WithUserMemory(mem),
-		WithSemanticSearch(emb),
+		WithEmbedding(emb),
 		WithPrompt("base"),
 	)
 
@@ -404,7 +404,7 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 
 	agent := NewLLMAgent("test", "test", provider,
 		WithConversationMemory(store),
-		WithSemanticSearch(emb),
+		WithEmbedding(emb),
 	)
 
 	task := AgentTask{
@@ -416,20 +416,19 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for background persist + embed
+	// Wait for background persist
 	time.Sleep(100 * time.Millisecond)
 	stored := store.storedMessages()
 
-	// Should have: user msg (no embed), user msg (with embed), assistant msg
-	foundEmbedded := false
-	for _, m := range stored {
-		if m.Role == "user" && len(m.Embedding) > 0 {
-			foundEmbedded = true
-			break
-		}
+	// Should have: user msg (with embed) + assistant msg — single write per message.
+	if len(stored) != 2 {
+		t.Fatalf("expected 2 stored messages, got %d", len(stored))
 	}
-	if !foundEmbedded {
-		t.Error("user message should be persisted with embedding when SemanticSearch is configured")
+	if stored[0].Role != "user" || len(stored[0].Embedding) == 0 {
+		t.Error("user message should be persisted with embedding when WithEmbedding is configured")
+	}
+	if stored[1].Role != "assistant" {
+		t.Errorf("second stored message role = %q, want assistant", stored[1].Role)
 	}
 }
 

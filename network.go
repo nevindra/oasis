@@ -11,8 +11,8 @@ import (
 // Network is an Agent that coordinates subagents and tools via an LLM router.
 // The router sees subagents as callable tools ("agent_<name>") and decides
 // which primitives to invoke, in what order, and with what data.
-// Optionally supports conversation memory, user memory, and semantic search
-// when configured via WithConversationMemory, WithUserMemory, and WithSemanticSearch.
+// Optionally supports conversation memory, user memory, and cross-thread search
+// when configured via WithConversationMemory, WithEmbedding, and WithUserMemory.
 type Network struct {
 	name         string
 	description  string
@@ -39,11 +39,12 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
 		mem: agentMemory{
-			store:            cfg.store,
-			embedding:        cfg.embedding,
-			memory:           cfg.memory,
-			semanticMinScore: cfg.semanticMinScore,
-			provider:         router,
+			store:             cfg.store,
+			embedding:         cfg.embedding,
+			memory:            cfg.memory,
+			crossThreadSearch: cfg.crossThreadSearch,
+			semanticMinScore:  cfg.semanticMinScore,
+			provider:          router,
 		},
 	}
 	if cfg.maxIter > 0 {

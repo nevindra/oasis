@@ -23,7 +23,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `ingest/pdf` extractor implemented using `ledongthuc/pdf` (pure Go, no CGO) — previously a stub; register with `ingest.WithExtractor(ingestpdf.TypePDF, ingestpdf.NewExtractor())`
 - `WithRetry(p Provider, opts ...RetryOption) Provider` — wraps any Provider with automatic retry on transient HTTP errors (429, 503) using exponential backoff with jitter
 - `ScoredMessage`, `ScoredChunk`, `ScoredSkill`, `ScoredFact` — scored result types that embed the original type with a `Score float32` field; returned by all semantic search methods so callers can make relevance decisions; `Score == 0` means the store did not compute similarity (e.g. libsql ANN index) — callers should treat it as "relevance unknown"
-- `WithSemanticSearchThreshold(minScore float32)` — configures the minimum cosine similarity for cross-thread semantic recall; messages below the threshold are silently dropped; zero value uses the built-in default of 0.60; requires `WithConversationMemory` and `WithSemanticSearch`
+- `ConversationOption` type and `CrossThreadSearch(opts ...SemanticOption) ConversationOption` — opt-in cross-thread semantic recall as a sub-option of `WithConversationMemory`; e.g. `WithConversationMemory(store, CrossThreadSearch(MinScore(0.7)))`
+- `SemanticOption` type and `MinScore(score float32) SemanticOption` — tune cross-thread search threshold (default 0.60); passed to `CrossThreadSearch`
+- `WithEmbedding(e EmbeddingProvider)` — shared embedding provider used by `CrossThreadSearch` and `WithUserMemory`
 - `ExtractedFact` type (`Fact string`, `Category string`) — represents a user fact extracted from a conversation turn
 - **Auto fact extraction** — `WithUserMemory` now completes the full read+write cycle: after each conversation turn, the agent uses its own LLM to extract durable user facts from the exchange and persists them to `MemoryStore` via `UpsertFact`; no new option required; extraction runs in the background goroutine alongside message persistence
 
@@ -43,10 +45,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `AgentTask.Context` context key constants and typed accessors
   - Constants: `ContextThreadID`, `ContextUserID`, `ContextChatID`
   - Accessors: `task.TaskThreadID()`, `task.TaskUserID()`, `task.TaskChatID()`
-- Memory wiring for agent primitives — `LLMAgent` and `Network` now support built-in conversation memory, user memory, and semantic recall
-  - `WithConversationMemory(Store)` — load/persist conversation history per thread
-  - `WithSemanticSearch(EmbeddingProvider)` — cross-thread semantic search + embed persisted messages
-  - `WithUserMemory(MemoryStore)` — inject user facts into system prompt **and** auto-extract new facts after each turn (requires `WithSemanticSearch` and `WithConversationMemory`)
+- Memory wiring for agent primitives — `LLMAgent` and `Network` now support built-in conversation memory, user memory, and cross-thread recall
+  - `WithConversationMemory(Store, ...ConversationOption)` — load/persist conversation history per thread; pass `CrossThreadSearch()` to enable cross-thread semantic recall
+  - `WithEmbedding(EmbeddingProvider)` — shared embedding provider for cross-thread search and user memory
+  - `WithUserMemory(MemoryStore)` — inject user facts into system prompt **and** auto-extract new facts after each turn (requires `WithEmbedding` and `WithConversationMemory`)
 
 ### Changed
 

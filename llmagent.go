@@ -11,8 +11,8 @@ import (
 const defaultMaxIter = 10
 
 // LLMAgent is an Agent that uses an LLM with tools to complete tasks.
-// Optionally supports conversation memory, user memory, and semantic search
-// when configured via WithConversationMemory, WithUserMemory, and WithSemanticSearch.
+// Optionally supports conversation memory, user memory, and cross-thread search
+// when configured via WithConversationMemory, WithEmbedding, and WithUserMemory.
 type LLMAgent struct {
 	name         string
 	description  string
@@ -37,11 +37,12 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
 		mem: agentMemory{
-			store:            cfg.store,
-			embedding:        cfg.embedding,
-			memory:           cfg.memory,
-			semanticMinScore: cfg.semanticMinScore,
-			provider:         provider,
+			store:             cfg.store,
+			embedding:         cfg.embedding,
+			memory:            cfg.memory,
+			crossThreadSearch: cfg.crossThreadSearch,
+			semanticMinScore:  cfg.semanticMinScore,
+			provider:          provider,
 		},
 	}
 	if cfg.maxIter > 0 {

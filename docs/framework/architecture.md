@@ -271,9 +271,9 @@ g.Go(func() error { return scheduler.Start(ctx) })
 | `WithAgents(agents ...Agent)` | Add subagents to a Network (ignored by LLMAgent) |
 | `WithProcessors(processors ...any)` | Add processors to the execution pipeline (see Processors below) |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop interactions (see InputHandler below) |
-| `WithConversationMemory(s Store)` | Enable conversation history load/persist per thread (see Memory below) |
-| `WithSemanticSearch(e EmbeddingProvider)` | Enable semantic search across threads and user memory |
-| `WithUserMemory(m MemoryStore)` | Enable user fact injection into the system prompt (requires `WithSemanticSearch`) |
+| `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable conversation history load/persist per thread; pass `CrossThreadSearch()` for cross-thread recall |
+| `WithEmbedding(e EmbeddingProvider)` | Shared embedding provider for cross-thread search and user memory |
+| `WithUserMemory(m MemoryStore)` | Enable user fact injection into the system prompt (requires `WithEmbedding`) |
 
 **StreamingAgent** -- optional interface for agents that support token streaming. Both `LLMAgent` and `Network` implement it. Tool-calling iterations run in blocking mode; only the final text response is streamed.
 

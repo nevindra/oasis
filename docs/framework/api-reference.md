@@ -687,17 +687,23 @@ oasis.WithMaxIter(n int)                               // Max tool-calling itera
 oasis.WithAgents(agents ...oasis.Agent)                 // Ignored by LLMAgent
 oasis.WithProcessors(processors ...any)                 // Add processors to execution pipeline
 oasis.WithInputHandler(h oasis.InputHandler)            // Enable human-in-the-loop (ask_user tool + context)
-oasis.WithConversationMemory(s oasis.Store)             // Enable history load/persist per thread
-oasis.WithSemanticSearch(e oasis.EmbeddingProvider)     // Enable semantic search across threads + user memory
-oasis.WithUserMemory(m oasis.MemoryStore)               // Inject user facts into system prompt + auto-extract facts after each turn (requires WithSemanticSearch + WithConversationMemory)
+oasis.WithConversationMemory(s oasis.Store, opts ...oasis.ConversationOption) // Enable history load/persist per thread
+oasis.WithEmbedding(e oasis.EmbeddingProvider)           // Shared embedding provider (used by CrossThreadSearch + WithUserMemory)
+oasis.WithUserMemory(m oasis.MemoryStore)                // Inject user facts into system prompt + auto-extract facts after each turn (requires WithEmbedding + WithConversationMemory)
+
+// ConversationOption sub-options (pass to WithConversationMemory):
+oasis.CrossThreadSearch(opts ...oasis.SemanticOption)     // Enable cross-thread semantic recall (requires WithEmbedding)
+
+// SemanticOption sub-options (pass to CrossThreadSearch):
+oasis.MinScore(score float32)                             // Minimum cosine similarity for cross-thread recall (default 0.60)
 ```
 
 **Memory wiring example:**
 
 ```go
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
-    oasis.WithConversationMemory(store),
-    oasis.WithSemanticSearch(embedding),
+    oasis.WithConversationMemory(store, oasis.CrossThreadSearch(oasis.MinScore(0.7))),
+    oasis.WithEmbedding(embedding),
     oasis.WithUserMemory(memoryStore),
     oasis.WithPrompt("You are a helpful assistant."),
     oasis.WithTools(searchTool),
@@ -739,9 +745,9 @@ oasis.WithPrompt(s string)                             // Set router system prom
 oasis.WithMaxIter(n int)                               // Max routing iterations (default 10)
 oasis.WithProcessors(processors ...any)                 // Add processors to execution pipeline
 oasis.WithInputHandler(h oasis.InputHandler)            // Enable human-in-the-loop (propagated to subagents)
-oasis.WithConversationMemory(s oasis.Store)             // Enable history load/persist per thread
-oasis.WithSemanticSearch(e oasis.EmbeddingProvider)     // Enable semantic search across threads + user memory
-oasis.WithUserMemory(m oasis.MemoryStore)               // Inject user facts into system prompt + auto-extract facts after each turn (requires WithSemanticSearch + WithConversationMemory)
+oasis.WithConversationMemory(s oasis.Store, opts ...oasis.ConversationOption) // Enable history load/persist per thread
+oasis.WithEmbedding(e oasis.EmbeddingProvider)           // Shared embedding provider
+oasis.WithUserMemory(m oasis.MemoryStore)                // Inject user facts into system prompt + auto-extract facts after each turn (requires WithEmbedding + WithConversationMemory)
 ```
 
 ### Workflow

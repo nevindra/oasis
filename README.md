@@ -10,7 +10,7 @@ import oasis "github.com/nevindra/oasis"
 
 - **Composable agents** -- `LLMAgent` for single-provider tool loops, `Network` for multi-agent coordination, `Workflow` for deterministic DAG-based orchestration. All three nest recursively. Multiple tool calls execute in parallel automatically.
 - **Streaming** -- `StreamingAgent` interface with channel-based token streaming. Tool-calling iterations run in blocking mode; the final response streams token-by-token. Built-in edit batching for messaging platforms.
-- **Memory & recall** -- conversation history (`WithConversationMemory`), cross-thread semantic search (`WithSemanticSearch`), and user fact injection (`WithUserMemory`). Built into `LLMAgent` and `Network`.
+- **Memory & recall** -- conversation history (`WithConversationMemory`), cross-thread semantic search (`CrossThreadSearch`), shared embedding (`WithEmbedding`), and user fact injection (`WithUserMemory`). Built into `LLMAgent` and `Network`.
 - **Processor pipeline** -- `PreProcessor`, `PostProcessor`, `PostToolProcessor` hooks for guardrails, PII redaction, logging, and custom middleware.
 - **Human-in-the-loop** -- `InputHandler` interface for agents to pause and request human input, both LLM-driven (`ask_user` tool) and programmatic (processor gates).
 - **Background agents** -- `Spawn()` launches agents in background goroutines with `AgentHandle` for state tracking, cancellation, and `select`-based multiplexing.
@@ -146,9 +146,9 @@ Agents can load conversation history, recall relevant context from past threads,
 ```go
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithTools(searchTool),
-    oasis.WithConversationMemory(store),          // load/persist history per thread
-    oasis.WithSemanticSearch(embedding),           // cross-thread semantic recall
-    oasis.WithUserMemory(memoryStore),             // inject user facts into system prompt
+    oasis.WithConversationMemory(store, oasis.CrossThreadSearch()), // load/persist history + cross-thread recall
+    oasis.WithEmbedding(embedding),                               // shared embedding provider
+    oasis.WithUserMemory(memoryStore),                            // inject user facts into system prompt
 )
 
 result, err := agent.Execute(ctx, oasis.AgentTask{

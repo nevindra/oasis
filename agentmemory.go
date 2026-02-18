@@ -10,17 +10,18 @@ import (
 
 // defaultSemanticRecallMinScore is the minimum cosine similarity required for
 // a cross-thread message to be injected into LLM context during semantic recall.
-// Applied when WithSemanticSearchThreshold is not explicitly set.
+// Applied when MinScore is not passed to CrossThreadSearch.
 const defaultSemanticRecallMinScore float32 = 0.60
 
 // agentMemory provides shared memory wiring for LLMAgent and Network.
 // All fields are optional — nil means the feature is disabled.
 type agentMemory struct {
-	store            Store             // conversation history
-	embedding        EmbeddingProvider // semantic search
-	memory           MemoryStore       // user facts
-	semanticMinScore float32           // 0 = use defaultSemanticRecallMinScore
-	provider         Provider          // for auto-extraction when memory != nil
+	store             Store             // conversation history
+	embedding         EmbeddingProvider // shared embedding provider
+	memory            MemoryStore       // user facts
+	crossThreadSearch bool              // enabled by CrossThreadSearch option
+	semanticMinScore  float32           // 0 = use defaultSemanticRecallMinScore
+	provider          Provider          // for auto-extraction when memory != nil
 }
 
 // buildMessages constructs the message list: system prompt + user memory + conversation history + user input.
@@ -44,9 +45,9 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 			messages = append(messages, ChatMessage{Role: msg.Role, Content: msg.Content})
 		}
 
-		// Semantic recall: search relevant messages across all threads,
+		// Cross-thread recall: search relevant messages across all threads,
 		// excluding the current thread (already in history) and low-score results.
-		if m.embedding != nil {
+		if m.crossThreadSearch && m.embedding != nil {
 			embs, err := m.embedding.Embed(ctx, []string{task.Input})
 			if err == nil && len(embs) > 0 {
 				minScore := m.semanticMinScore
@@ -118,17 +119,17 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 			ID: NewID(), ThreadID: threadID,
 			Role: "user", Content: userText, CreatedAt: NowUnix(),
 		}
-		if err := m.store.StoreMessage(ctx, userMsg); err != nil {
-			log.Printf("[agent:%s] persist user msg: %v", agentName, err)
-		}
 
-		// Embed user message for future semantic search
+		// Embed before storing so we only write once.
 		if m.embedding != nil {
 			embs, err := m.embedding.Embed(ctx, []string{userText})
 			if err == nil && len(embs) > 0 {
 				userMsg.Embedding = embs[0]
-				_ = m.store.StoreMessage(ctx, userMsg)
 			}
+		}
+
+		if err := m.store.StoreMessage(ctx, userMsg); err != nil {
+			log.Printf("[agent:%s] persist user msg: %v", agentName, err)
 		}
 
 		asstMsg := Message{

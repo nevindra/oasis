@@ -83,16 +83,17 @@ type AgentResult struct {
 
 // agentConfig holds shared configuration for LLMAgent and Network.
 type agentConfig struct {
-	tools               []Tool
-	agents              []Agent
-	prompt              string
-	maxIter             int
-	processors          []any
-	inputHandler        InputHandler
-	store               Store
-	embedding           EmbeddingProvider
-	memory              MemoryStore
-	semanticMinScore    float32
+	tools            []Tool
+	agents           []Agent
+	prompt           string
+	maxIter          int
+	processors       []any
+	inputHandler     InputHandler
+	store            Store
+	embedding        EmbeddingProvider
+	memory           MemoryStore
+	crossThreadSearch bool    // enabled by CrossThreadSearch option
+	semanticMinScore  float32 // set by MinScore inside CrossThreadSearch
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -133,42 +134,77 @@ func WithInputHandler(h InputHandler) AgentOption {
 	return func(c *agentConfig) { c.inputHandler = h }
 }
 
+// ConversationOption configures conversation memory behavior.
+// Pass to WithConversationMemory to enable optional features like cross-thread search.
+type ConversationOption func(*agentConfig)
+
+// CrossThreadSearch enables semantic recall across all conversation threads.
+// When the agent receives a message, it embeds the input and searches all
+// stored messages for semantically similar content from other threads.
+// Requires WithEmbedding to be set.
+//
+// Optional SemanticOption values tune recall behavior:
+//
+//	oasis.CrossThreadSearch()                    // default threshold (0.60)
+//	oasis.CrossThreadSearch(oasis.MinScore(0.7)) // custom threshold
+func CrossThreadSearch(opts ...SemanticOption) ConversationOption {
+	return func(c *agentConfig) {
+		c.crossThreadSearch = true
+		for _, o := range opts {
+			o(c)
+		}
+	}
+}
+
+// SemanticOption tunes semantic search parameters within CrossThreadSearch.
+type SemanticOption func(*agentConfig)
+
+// MinScore sets the minimum cosine similarity score for cross-thread semantic
+// recall. Messages with a score below this threshold are silently dropped
+// before being injected into the LLM context. The zero value (or omitting this
+// option) uses a built-in default of 0.60.
+func MinScore(score float32) SemanticOption {
+	return func(c *agentConfig) { c.semanticMinScore = score }
+}
+
 // WithConversationMemory enables conversation history on the agent.
 // When set and task.Context["thread_id"] is present, the agent loads
 // recent messages before the LLM call and persists the exchange afterward.
-// Combine with WithEmbedding to enable cross-thread semantic search.
-func WithConversationMemory(s Store) AgentOption {
-	return func(c *agentConfig) { c.store = s }
+//
+// Optional ConversationOption values enable additional features:
+//
+//	oasis.WithConversationMemory(store)                                     // history only
+//	oasis.WithConversationMemory(store, oasis.CrossThreadSearch())          // + cross-thread recall
+//	oasis.WithConversationMemory(store, oasis.CrossThreadSearch(oasis.MinScore(0.7))) // + custom threshold
+func WithConversationMemory(s Store, opts ...ConversationOption) AgentOption {
+	return func(c *agentConfig) {
+		c.store = s
+		for _, o := range opts {
+			o(c)
+		}
+	}
 }
 
-// WithSemanticSearch sets the embedding provider for semantic features.
-// Enables: semantic search across conversation threads (with WithConversationMemory),
-// and semantic fact retrieval (with WithUserMemory).
-func WithSemanticSearch(e EmbeddingProvider) AgentOption {
+// WithEmbedding sets the embedding provider for semantic features.
+// Used by: CrossThreadSearch (cross-thread recall), WithUserMemory (fact retrieval),
+// and message persistence (embed before storing).
+func WithEmbedding(e EmbeddingProvider) AgentOption {
 	return func(c *agentConfig) { c.embedding = e }
 }
 
 // WithUserMemory enables the full user memory pipeline: read + write.
 //
 // Read (every Execute call): embeds the input, retrieves relevant facts via
-// BuildContext, and appends them to the system prompt. Requires WithSemanticSearch.
+// BuildContext, and appends them to the system prompt. Requires WithEmbedding.
 //
 // Write (after each turn, background): uses the agent's own LLM to extract
 // durable user facts from the conversation exchange and persists them via
-// UpsertFact. Requires WithConversationMemory + WithSemanticSearch — without
+// UpsertFact. Requires WithConversationMemory + WithEmbedding — without
 // either, extraction is silently skipped.
 func WithUserMemory(m MemoryStore) AgentOption {
 	return func(c *agentConfig) { c.memory = m }
 }
 
-// WithSemanticSearchThreshold sets the minimum cosine similarity score for
-// cross-thread semantic recall. Messages with Score below this threshold are
-// silently dropped before being injected into the LLM context.
-// The zero value (default) uses a built-in threshold of 0.60.
-// Requires WithConversationMemory and WithSemanticSearch.
-func WithSemanticSearchThreshold(minScore float32) AgentOption {
-	return func(c *agentConfig) { c.semanticMinScore = minScore }
-}
 
 func buildConfig(opts []AgentOption) agentConfig {
 	var c agentConfig

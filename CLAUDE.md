@@ -120,8 +120,8 @@ pipeline, _ := oasis.NewWorkflow("pipeline", "Research and write",
 // Agent with memory (conversation history + semantic recall + user facts)
 assistant := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
     oasis.WithTools(searchTool),
-    oasis.WithConversationMemory(store),
-    oasis.WithSemanticSearch(embedding),
+    oasis.WithConversationMemory(store, oasis.CrossThreadSearch()),
+    oasis.WithEmbedding(embedding),
     oasis.WithUserMemory(memoryStore),
     oasis.WithInputHandler(myHandler),  // enables ask_user tool
 )
