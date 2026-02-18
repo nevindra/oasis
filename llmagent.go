@@ -12,7 +12,7 @@ const defaultMaxIter = 10
 
 // LLMAgent is an Agent that uses an LLM with tools to complete tasks.
 // Optionally supports conversation memory, user memory, and cross-thread search
-// when configured via WithConversationMemory, WithEmbedding, and WithUserMemory.
+// when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
 type LLMAgent struct {
 	name         string
 	description  string

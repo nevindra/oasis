@@ -26,9 +26,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `ingest/pdf` extractor implemented using `ledongthuc/pdf` (pure Go, no CGO) — previously a stub; register with `ingest.WithExtractor(ingestpdf.TypePDF, ingestpdf.NewExtractor())`
 - `WithRetry(p Provider, opts ...RetryOption) Provider` — wraps any Provider with automatic retry on transient HTTP errors (429, 503) using exponential backoff with jitter
 - `ScoredMessage`, `ScoredChunk`, `ScoredSkill`, `ScoredFact` — scored result types that embed the original type with a `Score float32` field; returned by all semantic search methods so callers can make relevance decisions; `Score == 0` means the store did not compute similarity (e.g. libsql ANN index) — callers should treat it as "relevance unknown"
-- `ConversationOption` type and `CrossThreadSearch(opts ...SemanticOption) ConversationOption` — opt-in cross-thread semantic recall as a sub-option of `WithConversationMemory`; e.g. `WithConversationMemory(store, CrossThreadSearch(MinScore(0.7)))`
+- `ConversationOption` type and `CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption) ConversationOption` — opt-in cross-thread semantic recall as a sub-option of `WithConversationMemory`; e.g. `WithConversationMemory(store, CrossThreadSearch(embedding, MinScore(0.7)))`
 - `SemanticOption` type and `MinScore(score float32) SemanticOption` — tune cross-thread search threshold (default 0.60); passed to `CrossThreadSearch`
-- `WithEmbedding(e EmbeddingProvider)` — shared embedding provider used by `CrossThreadSearch` and `WithUserMemory`
 - `ExtractedFact` type (`Fact string`, `Category string`, `Supersedes *string`) — represents a user fact extracted from a conversation turn; optional `Supersedes` field names the old fact being replaced
 - `MemoryStore.DeleteFact(ctx, factID)` — delete a single fact by ID; used by the supersedes pipeline to remove contradicted facts
 - **Auto fact extraction** — `WithUserMemory` now completes the full read+write cycle: after each conversation turn, the agent uses its own LLM to extract durable user facts from the exchange and persists them to `MemoryStore` via `UpsertFact`; no new option required; extraction runs in the background goroutine alongside message persistence
@@ -53,9 +52,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   - Constants: `ContextThreadID`, `ContextUserID`, `ContextChatID`
   - Accessors: `task.TaskThreadID()`, `task.TaskUserID()`, `task.TaskChatID()`
 - Memory wiring for agent primitives — `LLMAgent` and `Network` now support built-in conversation memory, user memory, and cross-thread recall
-  - `WithConversationMemory(Store, ...ConversationOption)` — load/persist conversation history per thread; pass `CrossThreadSearch()` to enable cross-thread semantic recall
-  - `WithEmbedding(EmbeddingProvider)` — shared embedding provider for cross-thread search and user memory
-  - `WithUserMemory(MemoryStore)` — inject user facts into system prompt **and** auto-extract new facts after each turn (requires `WithEmbedding` and `WithConversationMemory`)
+  - `WithConversationMemory(Store, ...ConversationOption)` — load/persist conversation history per thread; pass `CrossThreadSearch(embedding)` to enable cross-thread semantic recall
+  - `WithUserMemory(MemoryStore, EmbeddingProvider)` — inject user facts into system prompt **and** auto-extract new facts after each turn (requires `WithConversationMemory` for write path)
+- **Breaking:** `CrossThreadSearch` now takes `EmbeddingProvider` as required first argument — previously a standalone `WithEmbedding` option was needed; compile-time enforcement prevents silent misconfiguration
+- **Breaking:** `WithUserMemory` now takes `EmbeddingProvider` as required second argument — previously required a separate `WithEmbedding` call; compile-time enforcement prevents silent misconfiguration
+- **Breaking:** removed `WithEmbedding(EmbeddingProvider)` — embedding provider is now passed directly to `CrossThreadSearch` and `WithUserMemory`
 
 ### Changed
 

@@ -12,7 +12,7 @@ import (
 // The router sees subagents as callable tools ("agent_<name>") and decides
 // which primitives to invoke, in what order, and with what data.
 // Optionally supports conversation memory, user memory, and cross-thread search
-// when configured via WithConversationMemory, WithEmbedding, and WithUserMemory.
+// when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
 type Network struct {
 	name         string
 	description  string

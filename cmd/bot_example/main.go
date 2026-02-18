@@ -74,18 +74,16 @@ func main() {
 	chatAgent := oasis.NewLLMAgent("chat", "Handle casual conversation, questions, and general chat", chatLLM,
 		oasis.WithPrompt(chatPrompt(cfg)),
 		oasis.WithTools(wrapTool(knowledge.New(store, embedding), inst)),
-		oasis.WithConversationMemory(store, oasis.CrossThreadSearch()),
-		oasis.WithEmbedding(embedding),
-		oasis.WithUserMemory(memStore),
+		oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding)),
+		oasis.WithUserMemory(memStore, embedding),
 		oasis.WithProcessors(clock),
 	)
 
 	actionAgent := oasis.NewLLMAgent("action", "Execute tasks using tools: search the web, manage schedules, save knowledge, read/write files, run commands", actionLLM,
 		oasis.WithPrompt(actionPrompt()),
 		oasis.WithTools(tools...),
-		oasis.WithConversationMemory(store, oasis.CrossThreadSearch()),
-		oasis.WithEmbedding(embedding),
-		oasis.WithUserMemory(memStore),
+		oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding)),
+		oasis.WithUserMemory(memStore, embedding),
 		oasis.WithProcessors(clock),
 	)
 

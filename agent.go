@@ -1,6 +1,9 @@
 package oasis
 
-import "context"
+import (
+	"context"
+	"log"
+)
 
 // Agent is a unit of work that takes a task and returns a result.
 // Implementations range from single LLM tool-calling agents (LLMAgent)
@@ -141,15 +144,17 @@ type ConversationOption func(*agentConfig)
 // CrossThreadSearch enables semantic recall across all conversation threads.
 // When the agent receives a message, it embeds the input and searches all
 // stored messages for semantically similar content from other threads.
-// Requires WithEmbedding to be set.
+// The embedding provider is required (compile-time enforced) and is also used
+// to embed messages before storing them for future recall.
 //
 // Optional SemanticOption values tune recall behavior:
 //
-//	oasis.CrossThreadSearch()                    // default threshold (0.60)
-//	oasis.CrossThreadSearch(oasis.MinScore(0.7)) // custom threshold
-func CrossThreadSearch(opts ...SemanticOption) ConversationOption {
+//	oasis.CrossThreadSearch(embedding)                    // default threshold (0.60)
+//	oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7)) // custom threshold
+func CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption) ConversationOption {
 	return func(c *agentConfig) {
 		c.crossThreadSearch = true
+		c.embedding = e
 		for _, o := range opts {
 			o(c)
 		}
@@ -173,9 +178,9 @@ func MinScore(score float32) SemanticOption {
 //
 // Optional ConversationOption values enable additional features:
 //
-//	oasis.WithConversationMemory(store)                                     // history only
-//	oasis.WithConversationMemory(store, oasis.CrossThreadSearch())          // + cross-thread recall
-//	oasis.WithConversationMemory(store, oasis.CrossThreadSearch(oasis.MinScore(0.7))) // + custom threshold
+//	oasis.WithConversationMemory(store)                                                  // history only
+//	oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding))              // + cross-thread recall
+//	oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7))) // + custom threshold
 func WithConversationMemory(s Store, opts ...ConversationOption) AgentOption {
 	return func(c *agentConfig) {
 		c.store = s
@@ -185,24 +190,20 @@ func WithConversationMemory(s Store, opts ...ConversationOption) AgentOption {
 	}
 }
 
-// WithEmbedding sets the embedding provider for semantic features.
-// Used by: CrossThreadSearch (cross-thread recall), WithUserMemory (fact retrieval),
-// and message persistence (embed before storing).
-func WithEmbedding(e EmbeddingProvider) AgentOption {
-	return func(c *agentConfig) { c.embedding = e }
-}
-
 // WithUserMemory enables the full user memory pipeline: read + write.
 //
 // Read (every Execute call): embeds the input, retrieves relevant facts via
-// BuildContext, and appends them to the system prompt. Requires WithEmbedding.
+// BuildContext, and appends them to the system prompt.
 //
 // Write (after each turn, background): uses the agent's own LLM to extract
 // durable user facts from the conversation exchange and persists them via
-// UpsertFact. Requires WithConversationMemory + WithEmbedding — without
-// either, extraction is silently skipped.
-func WithUserMemory(m MemoryStore) AgentOption {
-	return func(c *agentConfig) { c.memory = m }
+// UpsertFact. Write requires WithConversationMemory — without it, extraction
+// is silently skipped (logged as a warning at construction time).
+func WithUserMemory(m MemoryStore, e EmbeddingProvider) AgentOption {
+	return func(c *agentConfig) {
+		c.memory = m
+		c.embedding = e
+	}
 }
 
 
@@ -210,6 +211,10 @@ func buildConfig(opts []AgentOption) agentConfig {
 	var c agentConfig
 	for _, opt := range opts {
 		opt(&c)
+	}
+	// Warn about misconfigurations that can't be caught at compile time.
+	if c.memory != nil && c.store == nil {
+		log.Printf("[oasis] warning: WithUserMemory without WithConversationMemory — fact extraction (write) will be silently skipped")
 	}
 	return c
 }

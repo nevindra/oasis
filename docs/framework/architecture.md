@@ -278,9 +278,8 @@ g.Go(func() error { return scheduler.Start(ctx) })
 | `WithAgents(agents ...Agent)` | Add subagents to a Network (ignored by LLMAgent) |
 | `WithProcessors(processors ...any)` | Add processors to the execution pipeline (see Processors below) |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop interactions (see InputHandler below) |
-| `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable conversation history load/persist per thread; pass `CrossThreadSearch()` for cross-thread recall |
-| `WithEmbedding(e EmbeddingProvider)` | Shared embedding provider for cross-thread search and user memory |
-| `WithUserMemory(m MemoryStore)` | Enable user fact injection into the system prompt (requires `WithEmbedding`) |
+| `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable conversation history load/persist per thread; pass `CrossThreadSearch(embedding)` for cross-thread recall |
+| `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact injection into the system prompt + auto-extract facts (requires `WithConversationMemory` for write path) |
 
 **StreamingAgent** -- optional interface for agents that support token streaming. Both `LLMAgent` and `Network` implement it. Tool-calling iterations run in blocking mode; only the final text response is streamed.
 
@@ -312,7 +311,7 @@ threadID := task.TaskThreadID()  // "thread-123"
 
 1. Load recent conversation history from the Store
 2. Inject user facts from MemoryStore into the system prompt
-3. Search for semantically relevant messages across all threads (when EmbeddingProvider is set), filtered by cosine similarity score
+3. Search for semantically relevant messages across all threads (when `CrossThreadSearch` is configured), filtered by cosine similarity score
 4. Persist user and assistant messages after producing a final response
 5. Extract durable user facts from the conversation turn and upsert them to MemoryStore (when `WithUserMemory` is set) — runs in the background goroutine using the agent's own LLM; trivial messages are filtered, contradictions are resolved via semantic supersedes, and `DecayOldFacts` runs probabilistically
 

@@ -211,8 +211,7 @@ func TestLLMAgentUserMemory(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "I know you like Go"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithUserMemory(mem),
-		WithEmbedding(emb),
+		WithUserMemory(mem, emb),
 		WithPrompt("You are helpful"),
 	)
 
@@ -241,32 +240,6 @@ func TestLLMAgentUserMemory(t *testing.T) {
 	}
 }
 
-func TestLLMAgentUserMemoryWithoutEmbeddingSkipped(t *testing.T) {
-	mem := &stubMemoryStore{context: "should not appear"}
-
-	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
-
-	// WithUserMemory but NO WithEmbedding — memory should be silently skipped
-	agent := NewLLMAgent("test", "test", provider,
-		WithUserMemory(mem),
-		WithPrompt("base prompt"),
-	)
-
-	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	req := provider.firstCall()
-	if len(req.Messages) == 0 {
-		t.Fatal("no messages captured")
-	}
-	sysMsg := req.Messages[0]
-	if contains(sysMsg.Content, "should not appear") {
-		t.Error("user memory should be skipped without embedding provider")
-	}
-}
-
 func TestLLMAgentSemanticRecall(t *testing.T) {
 	store := &recordingStore{
 		history: []Message{{Role: "user", Content: "recent msg"}},
@@ -280,8 +253,7 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "combined answer"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, CrossThreadSearch()),
-		WithEmbedding(emb),
+		WithConversationMemory(store, CrossThreadSearch(emb)),
 	)
 
 	task := AgentTask{
@@ -320,9 +292,8 @@ func TestLLMAgentAllMemoryTypes(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "full memory response"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, CrossThreadSearch()),
-		WithUserMemory(mem),
-		WithEmbedding(emb),
+		WithConversationMemory(store, CrossThreadSearch(emb)),
+		WithUserMemory(mem, emb),
 		WithPrompt("base"),
 	)
 
@@ -404,8 +375,7 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
-		WithEmbedding(emb),
+		WithConversationMemory(store, CrossThreadSearch(emb)),
 	)
 
 	task := AgentTask{
@@ -426,7 +396,7 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 		t.Fatalf("expected 2 stored messages, got %d", len(stored))
 	}
 	if stored[0].Role != "user" || len(stored[0].Embedding) == 0 {
-		t.Error("user message should be persisted with embedding when WithEmbedding is configured")
+		t.Error("user message should be persisted with embedding when CrossThreadSearch is configured")
 	}
 	if stored[1].Role != "assistant" {
 		t.Errorf("second stored message role = %q, want assistant", stored[1].Role)
@@ -555,8 +525,7 @@ func TestExtractionPipelineExtractsFacts(t *testing.T) {
 
 	agent := NewLLMAgent("test", "test", provider,
 		WithConversationMemory(store),
-		WithUserMemory(mem),
-		WithEmbedding(emb),
+		WithUserMemory(mem, emb),
 	)
 
 	task := AgentTask{
@@ -589,8 +558,7 @@ func TestExtractionSkipsTrivialInput(t *testing.T) {
 
 	agent := NewLLMAgent("test", "test", provider,
 		WithConversationMemory(store),
-		WithUserMemory(mem),
-		WithEmbedding(emb),
+		WithUserMemory(mem, emb),
 	)
 
 	task := AgentTask{
@@ -633,8 +601,7 @@ func TestExtractionHandlesSupersedes(t *testing.T) {
 
 	agent := NewLLMAgent("test", "test", provider,
 		WithConversationMemory(store),
-		WithUserMemory(mem),
-		WithEmbedding(emb),
+		WithUserMemory(mem, emb),
 	)
 
 	task := AgentTask{
