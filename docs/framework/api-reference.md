@@ -845,6 +845,68 @@ if handle.State() == oasis.StateCompleted {
 }
 ```
 
+### Scheduler
+
+**File:** `scheduler.go`
+
+Polls the store for due `ScheduledAction` records and executes them via an Agent. Enables proactive agents that act at scheduled times without waiting for user input. Framework primitive — compose it with any `Agent` implementation.
+
+```go
+// RunHook is called after each scheduled action completes — success or failure.
+// Use it to route output without coupling Scheduler to a specific destination.
+type RunHook func(action ScheduledAction, result AgentResult, err error)
+
+// NewScheduler creates a Scheduler.
+// store is the source of ScheduledAction records.
+// agent executes each due action (LLMAgent, Network, Workflow, or custom).
+func NewScheduler(store Store, agent Agent, opts ...SchedulerOption) *Scheduler
+
+// Start begins the polling loop. Blocks until ctx is cancelled.
+// Returns nil on clean shutdown.
+func (s *Scheduler) Start(ctx context.Context) error
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `WithSchedulerInterval(d time.Duration)` | Polling interval | 1 minute |
+| `WithSchedulerTZOffset(hours int)` | UTC offset for schedule computation | 0 (UTC) |
+| `WithOnRun(hook RunHook)` | Hook called after each action (success or failure) | nil |
+
+**Execution order per action:**
+
+1. Update `NextRun` in store — prevents re-fire if agent is slow
+2. Disable action if recurrence is `once`
+3. Execute: `agent.Execute(ctx, AgentTask{Input: action.Description, Context: {...}})`
+4. Call `RunHook` with result and error (nil on success)
+
+**Error policy:**
+
+| Error | Behavior |
+|-------|----------|
+| Agent execution error | Log + call hook + continue to next action |
+| Store query error (`GetDue`) | Log + skip this tick entirely |
+| Store update error (`NextRun`) | Log + still fire agent |
+
+**Usage:**
+
+```go
+scheduler := oasis.NewScheduler(store, agent,
+    oasis.WithSchedulerInterval(time.Minute),
+    oasis.WithSchedulerTZOffset(7), // WIB
+    oasis.WithOnRun(func(action oasis.ScheduledAction, result oasis.AgentResult, err error) {
+        if err != nil {
+            log.Printf("scheduler: %s failed: %v", action.Description, err)
+            return
+        }
+        frontend.Send(ctx, chatID, result.Output, nil)
+    }),
+)
+
+g.Go(func() error { return scheduler.Start(ctx) })
+```
+
 ---
 
 ### ID and Time

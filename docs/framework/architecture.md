@@ -34,7 +34,8 @@ For application-level orchestration (routing, intent classification, agent manag
                               |     Agent       |
                               | (LLMAgent,      |
                               |  Network,       |
-                              |  Workflow)       |
+                              |  Workflow,      |
+                              |  Scheduler*)    |
                               +-----------------+
                                        |
                                        v
@@ -44,7 +45,7 @@ For application-level orchestration (routing, intent classification, agent manag
                                   +-----------+
 ```
 
-Every box above is a Go interface (except Ingest which is a concrete struct). You can swap any implementation without affecting the others.
+Every box above is a Go interface (except Ingest and Scheduler* which are concrete structs). You can swap any implementation without affecting the others.
 
 ## Core Interfaces
 
@@ -242,6 +243,21 @@ result, err := wf.Execute(ctx, oasis.AgentTask{Input: "Go error handling"})
 ```
 
 Since Workflow implements Agent, it composes with Networks and other Workflows. See [Workflows](workflows.md) for the full guide.
+
+**Scheduler** -- a proactive execution primitive that polls the store for due `ScheduledAction` records and executes them via an Agent. Unlike the reactive primitives above (which wait for user input), Scheduler drives execution from time-based triggers. It is not an Agent itself — it wraps one.
+
+```go
+scheduler := oasis.NewScheduler(store, agent,
+    oasis.WithSchedulerInterval(time.Minute),
+    oasis.WithSchedulerTZOffset(7), // WIB
+    oasis.WithOnRun(func(action oasis.ScheduledAction, result oasis.AgentResult, err error) {
+        frontend.Send(ctx, chatID, result.Output, nil)
+    }),
+)
+g.Go(func() error { return scheduler.Start(ctx) })
+```
+
+`Start` blocks until `ctx` is cancelled (consistent with `http.ListenAndServe`). Due actions are executed sequentially per tick. The `RunHook` callback handles output routing without coupling Scheduler to any specific destination (frontend, log, webhook).
 
 **AgentOption** -- unified option type shared by both `NewLLMAgent` and `NewNetwork`:
 
@@ -526,3 +542,4 @@ Raw content (text/HTML/file/PDF)
 - **Observer as middleware** -- The `observer/` package wraps `Provider`, `EmbeddingProvider`, `Tool`, and `Agent` with OTEL instrumentation using the decorator pattern. `ObservedAgent` creates a parent span that contains all inner operations (LLM calls, tool executions) as child spans via context propagation. Zero changes to existing implementations, zero overhead when disabled.
 - **Agent as interface** -- `Agent` is a composable primitive like `Tool` or `Provider`. `LLMAgent`, `Network`, and `Workflow` are concrete implementations. All three implement Agent, so they compose recursively: Networks can contain Workflows, Workflows can contain Agents via AgentStep, and Workflows can nest inside other Workflows.
 - **Background spawning** -- `Spawn()` launches any Agent in a goroutine and returns an `AgentHandle` for state tracking (`Pending → Running → Completed | Failed | Cancelled`), result delivery (`Done()` channel + `Await()`), and cancellation. The handle is a thin primitive (~50 lines); concurrency limits and retry logic are application-level concerns.
+- **Scheduler as primitive, not app code** -- `Scheduler` is a framework primitive like `Workflow`, not application orchestration. It delegates all execution to an Agent and routes output via a `RunHook` callback, keeping it decoupled from any frontend or application concern. Sequential execution per tick is intentional: predictable, no uncontrolled concurrency against LLM providers.
