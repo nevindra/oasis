@@ -17,14 +17,16 @@ import (
 type WorkflowContext struct {
 	values map[string]any
 	input  string
+	task   AgentTask // original task (for propagating Context/Attachments to AgentSteps)
 	mu     sync.RWMutex
 }
 
-// newWorkflowContext creates a WorkflowContext initialized with the original task input.
-func newWorkflowContext(input string) *WorkflowContext {
+// newWorkflowContext creates a WorkflowContext initialized with the original task.
+func newWorkflowContext(task AgentTask) *WorkflowContext {
 	return &WorkflowContext{
 		values: make(map[string]any),
-		input:  input,
+		input:  task.Input,
+		task:   task,
 	}
 }
 
@@ -400,7 +402,11 @@ func agentStepFunc(agent Agent, cfg *stepConfig) StepFunc {
 			}
 		}
 
-		result, err := agent.Execute(ctx, AgentTask{Input: input})
+		result, err := agent.Execute(ctx, AgentTask{
+			Input:       input,
+			Attachments: wCtx.task.Attachments,
+			Context:     wCtx.task.Context,
+		})
 		if err != nil {
 			return err
 		}
@@ -684,7 +690,7 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 	defer cancel()
 
 	state := &executionState{
-		wCtx:           newWorkflowContext(task.Input),
+		wCtx:           newWorkflowContext(task),
 		results:        make(map[string]StepResult),
 		failureSkipped: make(map[string]bool),
 		cancel:         cancel,

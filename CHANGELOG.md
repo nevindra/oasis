@@ -16,6 +16,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - Semantic recall: messages from the current conversation thread are now excluded from cross-thread recall (they are already present in conversation history — previously they were double-injected)
 - Background persist goroutine now uses `context.WithoutCancel` — message persistence and fact extraction complete even when the parent handler context is canceled; context values (trace IDs) are still inherited
 - User messages are now embedded before storing (single write) instead of store-then-embed-then-re-store (double write)
+- `Workflow` `AgentStep` now propagates `AgentTask.Context` (thread ID, user ID, chat ID) and `Attachments` to sub-agents — previously these were dropped, silently breaking conversation memory, user memory, and cross-thread search for agents running inside workflows
 
 ### Added
 

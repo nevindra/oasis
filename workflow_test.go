@@ -13,7 +13,7 @@ import (
 // --- WorkflowContext tests ---
 
 func TestWorkflowContextGetSet(t *testing.T) {
-	ctx := newWorkflowContext("hello")
+	ctx := newWorkflowContext(AgentTask{Input: "hello"})
 
 	if ctx.Input() != "hello" {
 		t.Errorf("Input() = %q, want %q", ctx.Input(), "hello")
@@ -41,7 +41,7 @@ func TestWorkflowContextGetSet(t *testing.T) {
 }
 
 func TestWorkflowContextAddUsage(t *testing.T) {
-	ctx := newWorkflowContext("")
+	ctx := newWorkflowContext(AgentTask{})
 	ctx.addUsage(Usage{InputTokens: 10, OutputTokens: 5})
 	ctx.addUsage(Usage{InputTokens: 20, OutputTokens: 15})
 

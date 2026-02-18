@@ -59,6 +59,8 @@ oasis.Step("transform", func(ctx context.Context, wCtx *oasis.WorkflowContext) e
 
 Delegates to an `Agent` (LLMAgent, Network, or another Workflow). Input is read from context via `InputFrom()`, or from the original task input if not set. Output is written to `"{name}.output"`.
 
+The original `AgentTask.Context` (thread ID, user ID, chat ID) and `Attachments` are propagated to the sub-agent, so memory features (conversation history, user memory, cross-thread search) work correctly inside workflow steps.
+
 ```go
 researcher := oasis.NewLLMAgent("researcher", "Searches info", provider,
     oasis.WithTools(searchTool),
