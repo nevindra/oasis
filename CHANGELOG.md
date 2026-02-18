@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Fixed
+
+- `Network.Execute` and `Network.ExecuteStream` now fall back to the last sub-agent output when the router LLM returns an empty final response — fixes messages getting stuck on "Thinking..." when using a pure-routing LLM that doesn't synthesize a reply after delegating
+
 ### Added
 
 - `WithRetry(p Provider, opts ...RetryOption) Provider` — wraps any Provider with automatic retry on transient HTTP errors (429, 503) using exponential backoff with jitter

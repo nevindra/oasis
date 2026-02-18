@@ -83,6 +83,11 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 	// Build initial messages (system prompt + user memory + history + user input)
 	messages := n.mem.buildMessages(ctx, n.name, n.systemPrompt, task)
 
+	// lastAgentOutput tracks the most recent sub-agent result so we can fall
+	// back to it when the router produces an empty final response (common for
+	// pure-routing LLMs that don't synthesize a reply after delegating).
+	var lastAgentOutput string
+
 	for i := 0; i < n.maxIter; i++ {
 		req := ChatRequest{Messages: messages}
 
@@ -105,8 +110,12 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 
 		// No tool calls — final response
 		if len(resp.ToolCalls) == 0 {
-			n.mem.persistMessages(ctx, n.name, task, task.Input, resp.Content)
-			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+			content := resp.Content
+			if content == "" {
+				content = lastAgentOutput
+			}
+			n.mem.persistMessages(ctx, n.name, task, task.Input, content)
+			return AgentResult{Output: content, Usage: totalUsage}, nil
 		}
 
 		// Append assistant message
@@ -129,6 +138,11 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 				return handleProcessorError(err, totalUsage)
 			}
 			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
+
+			// Track the last sub-agent output for fallback.
+			if len(tc.Name) > 6 && tc.Name[:6] == "agent_" {
+				lastAgentOutput = result.Content
+			}
 		}
 	}
 
@@ -165,6 +179,11 @@ func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- s
 
 	messages := n.mem.buildMessages(ctx, n.name, n.systemPrompt, task)
 
+	// lastAgentOutput tracks the most recent sub-agent result so we can fall
+	// back to it when the router produces an empty final response (common for
+	// pure-routing LLMs that don't synthesize a reply after delegating).
+	var lastAgentOutput string
+
 	for i := 0; i < n.maxIter; i++ {
 		req := ChatRequest{Messages: messages}
 
@@ -188,10 +207,14 @@ func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- s
 
 		// No tool calls — stream the final response
 		if len(resp.ToolCalls) == 0 {
-			ch <- resp.Content
+			content := resp.Content
+			if content == "" {
+				content = lastAgentOutput
+			}
+			ch <- content
 			close(ch)
-			n.mem.persistMessages(ctx, n.name, task, task.Input, resp.Content)
-			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+			n.mem.persistMessages(ctx, n.name, task, task.Input, content)
+			return AgentResult{Output: content, Usage: totalUsage}, nil
 		}
 
 		messages = append(messages, ChatMessage{
@@ -212,6 +235,11 @@ func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- s
 				return handleProcessorError(err, totalUsage)
 			}
 			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
+
+			// Track the last sub-agent output for fallback.
+			if len(tc.Name) > 6 && tc.Name[:6] == "agent_" {
+				lastAgentOutput = result.Content
+			}
 		}
 	}
 
