@@ -9,9 +9,8 @@ import (
 
 // BuildBody converts oasis ChatMessages and a model name into an OpenAI-format ChatRequest.
 // System messages are kept in the messages array as role:"system".
-// Tool definitions are NOT included here — use BuildToolDefs and set them on the request separately,
-// or pass tools to ChatRequest.Tools directly.
-func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model string, schema *oasis.ResponseSchema) ChatRequest {
+// Options configure generation parameters (temperature, top_p, etc.).
+func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model string, schema *oasis.ResponseSchema, opts ...Option) ChatRequest {
 	var msgs []Message
 
 	for _, m := range messages {
@@ -103,6 +102,10 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 				Strict: true,
 			},
 		}
+	}
+
+	for _, opt := range opts {
+		opt(&req)
 	}
 
 	return req

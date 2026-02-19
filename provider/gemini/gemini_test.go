@@ -7,14 +7,20 @@ import (
 	"github.com/nevindra/oasis"
 )
 
+// testGemini returns a Gemini instance with default config for testing buildBody.
+func testGemini() *Gemini {
+	return New("test-key", "test-model")
+}
+
 func TestBuildBody_SystemMessages(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "system", Content: "You are a helpful assistant."},
 		{Role: "system", Content: "Be concise."},
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -50,13 +56,14 @@ func TestBuildBody_SystemMessages(t *testing.T) {
 }
 
 func TestBuildBody_AssistantMapsToModel(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "user", Content: "Hi"},
 		{Role: "assistant", Content: "Hello!"},
 		{Role: "user", Content: "How are you?"},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -81,6 +88,7 @@ func TestBuildBody_AssistantMapsToModel(t *testing.T) {
 }
 
 func TestBuildBody_ToolResults(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "user", Content: "Search for cats"},
 		{
@@ -100,7 +108,7 @@ func TestBuildBody_ToolResults(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -144,6 +152,7 @@ func TestBuildBody_ToolResults(t *testing.T) {
 }
 
 func TestBuildBody_ToolDeclarations(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "user", Content: "Hello"},
 	}
@@ -155,7 +164,7 @@ func TestBuildBody_ToolDeclarations(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, tools, nil)
+	body, err := g.buildBody(messages, tools, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -178,6 +187,7 @@ func TestBuildBody_ToolDeclarations(t *testing.T) {
 }
 
 func TestBuildBody_Images(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{
 			Role:    "user",
@@ -188,7 +198,7 @@ func TestBuildBody_Images(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -222,11 +232,12 @@ func TestBuildBody_Images(t *testing.T) {
 }
 
 func TestBuildBody_EmptyContentGetsFallbackPart(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "user", Content: ""},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -242,11 +253,12 @@ func TestBuildBody_EmptyContentGetsFallbackPart(t *testing.T) {
 }
 
 func TestBuildBody_GenerationConfig(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -255,13 +267,169 @@ func TestBuildBody_GenerationConfig(t *testing.T) {
 	if !ok {
 		t.Fatal("expected generationConfig in body")
 	}
+
+	// Default temperature should be 0.1.
 	temp, ok := gc["temperature"].(float64)
-	if !ok || temp != 1.0 {
-		t.Errorf("expected temperature 1.0, got %v", gc["temperature"])
+	if !ok || temp != 0.1 {
+		t.Errorf("expected temperature 0.1, got %v", gc["temperature"])
+	}
+
+	// Default topP should be 0.9.
+	topP, ok := gc["topP"].(float64)
+	if !ok || topP != 0.9 {
+		t.Errorf("expected topP 0.9, got %v", gc["topP"])
+	}
+
+	// Default mediaResolution.
+	mr, ok := gc["mediaResolution"].(string)
+	if !ok || mr != "MEDIA_RESOLUTION_MEDIUM" {
+		t.Errorf("expected mediaResolution MEDIA_RESOLUTION_MEDIUM, got %v", gc["mediaResolution"])
+	}
+
+	// Thinking disabled by default.
+	tc, ok := gc["thinkingConfig"].(map[string]any)
+	if !ok {
+		t.Fatal("expected thinkingConfig in generationConfig")
+	}
+	if tc["thinkingBudget"] != 0 {
+		t.Errorf("expected thinkingBudget 0, got %v", tc["thinkingBudget"])
+	}
+}
+
+func TestBuildBody_GenerationConfigWithOptions(t *testing.T) {
+	g := New("key", "model",
+		WithTemperature(0.7),
+		WithTopP(0.95),
+		WithMediaResolution("MEDIA_RESOLUTION_HIGH"),
+		WithThinking(true),
+	)
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+
+	body, err := g.buildBody(messages, nil, nil)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	gc := body["generationConfig"].(map[string]any)
+	if gc["temperature"] != 0.7 {
+		t.Errorf("expected temperature 0.7, got %v", gc["temperature"])
+	}
+	if gc["topP"] != 0.95 {
+		t.Errorf("expected topP 0.95, got %v", gc["topP"])
+	}
+	if gc["mediaResolution"] != "MEDIA_RESOLUTION_HIGH" {
+		t.Errorf("expected MEDIA_RESOLUTION_HIGH, got %v", gc["mediaResolution"])
+	}
+
+	// Thinking enabled: thinkingConfig should be absent.
+	if _, ok := gc["thinkingConfig"]; ok {
+		t.Error("expected no thinkingConfig when thinking is enabled")
+	}
+}
+
+func TestBuildBody_ToolConfigDisabledByDefault(t *testing.T) {
+	g := testGemini()
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+
+	body, err := g.buildBody(messages, nil, nil)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	// With no tools and functionCalling disabled (default), toolConfig should be set to NONE.
+	tc, ok := body["toolConfig"].(map[string]any)
+	if !ok {
+		t.Fatal("expected toolConfig in body when function calling is disabled")
+	}
+	fc := tc["functionCallingConfig"].(map[string]any)
+	if fc["mode"] != "NONE" {
+		t.Errorf("expected mode NONE, got %v", fc["mode"])
+	}
+}
+
+func TestBuildBody_ToolConfigNotSetWithTools(t *testing.T) {
+	g := testGemini()
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+	tools := []oasis.ToolDefinition{
+		{Name: "search", Description: "Search", Parameters: json.RawMessage(`{"type":"object"}`)},
+	}
+
+	body, err := g.buildBody(messages, tools, nil)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	// When tools are provided, toolConfig should not force NONE.
+	if _, ok := body["toolConfig"]; ok {
+		t.Error("expected no toolConfig when tools are explicitly provided")
+	}
+}
+
+func TestBuildBody_AdditionalToolTypes(t *testing.T) {
+	g := New("key", "model",
+		WithCodeExecution(true),
+		WithGoogleSearch(true),
+		WithURLContext(true),
+	)
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+
+	body, err := g.buildBody(messages, nil, nil)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	toolsField, ok := body["tools"].([]map[string]any)
+	if !ok {
+		t.Fatal("expected tools array when tool types are enabled")
+	}
+	if len(toolsField) != 3 {
+		t.Fatalf("expected 3 tool entries (codeExecution, googleSearch, urlContext), got %d", len(toolsField))
+	}
+
+	if _, ok := toolsField[0]["codeExecution"]; !ok {
+		t.Error("expected codeExecution tool entry")
+	}
+	if _, ok := toolsField[1]["googleSearch"]; !ok {
+		t.Error("expected googleSearch tool entry")
+	}
+	if _, ok := toolsField[2]["urlContext"]; !ok {
+		t.Error("expected urlContext tool entry")
+	}
+}
+
+func TestBuildBody_StructuredOutputDisabled(t *testing.T) {
+	g := New("key", "model", WithStructuredOutput(false))
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+	schema := &oasis.ResponseSchema{
+		Schema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`),
+	}
+
+	body, err := g.buildBody(messages, nil, schema)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	gc := body["generationConfig"].(map[string]any)
+	if _, ok := gc["responseMimeType"]; ok {
+		t.Error("expected no responseMimeType when structured output is disabled")
+	}
+	if _, ok := gc["responseSchema"]; ok {
+		t.Error("expected no responseSchema when structured output is disabled")
 	}
 }
 
 func TestBuildBody_ThoughtSignaturePreserved(t *testing.T) {
+	g := testGemini()
 	meta, _ := json.Marshal(map[string]string{
 		"thoughtSignature": "abc123sig",
 	})
@@ -281,7 +449,7 @@ func TestBuildBody_ThoughtSignaturePreserved(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -344,11 +512,12 @@ func TestIsCompleteJSON(t *testing.T) {
 }
 
 func TestBuildBody_NoSystemInstruction(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -359,11 +528,12 @@ func TestBuildBody_NoSystemInstruction(t *testing.T) {
 }
 
 func TestBuildBody_NoToolsOmitted(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -374,6 +544,7 @@ func TestBuildBody_NoToolsOmitted(t *testing.T) {
 }
 
 func TestBuildBody_MultipleToolCalls(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "user", Content: "Search and calculate"},
 		{
@@ -385,7 +556,7 @@ func TestBuildBody_MultipleToolCalls(t *testing.T) {
 		},
 	}
 
-	body, err := buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -422,6 +593,20 @@ func TestNewConstructors(t *testing.T) {
 		t.Errorf("expected name 'gemini', got %q", g.Name())
 	}
 
+	// Verify default config values.
+	if g.temperature != 0.1 {
+		t.Errorf("expected default temperature 0.1, got %v", g.temperature)
+	}
+	if g.topP != 0.9 {
+		t.Errorf("expected default topP 0.9, got %v", g.topP)
+	}
+	if g.mediaResolution != "MEDIA_RESOLUTION_MEDIUM" {
+		t.Errorf("expected default mediaResolution MEDIA_RESOLUTION_MEDIUM, got %q", g.mediaResolution)
+	}
+	if g.structuredOutput != true {
+		t.Error("expected default structuredOutput true")
+	}
+
 	e := NewEmbedding("embed-key", "text-embedding-004", 768)
 	if e.apiKey != "embed-key" {
 		t.Errorf("expected apiKey 'embed-key', got %q", e.apiKey)
@@ -437,14 +622,57 @@ func TestNewConstructors(t *testing.T) {
 	}
 }
 
+func TestNewWithOptions(t *testing.T) {
+	g := New("key", "model",
+		WithTemperature(0.5),
+		WithTopP(0.8),
+		WithMediaResolution("MEDIA_RESOLUTION_LOW"),
+		WithThinking(true),
+		WithStructuredOutput(false),
+		WithCodeExecution(true),
+		WithFunctionCalling(true),
+		WithGoogleSearch(true),
+		WithURLContext(true),
+	)
+
+	if g.temperature != 0.5 {
+		t.Errorf("expected temperature 0.5, got %v", g.temperature)
+	}
+	if g.topP != 0.8 {
+		t.Errorf("expected topP 0.8, got %v", g.topP)
+	}
+	if g.mediaResolution != "MEDIA_RESOLUTION_LOW" {
+		t.Errorf("expected MEDIA_RESOLUTION_LOW, got %q", g.mediaResolution)
+	}
+	if !g.thinkingEnabled {
+		t.Error("expected thinkingEnabled true")
+	}
+	if g.structuredOutput {
+		t.Error("expected structuredOutput false")
+	}
+	if !g.codeExecution {
+		t.Error("expected codeExecution true")
+	}
+	if !g.functionCalling {
+		t.Error("expected functionCalling true")
+	}
+	if !g.googleSearch {
+		t.Error("expected googleSearch true")
+	}
+	if !g.urlContext {
+		t.Error("expected urlContext true")
+	}
+}
+
 // TestBuildBody_JSONRoundTrip verifies that the body can be marshaled to valid JSON.
 func TestBuildBody_JSONRoundTrip(t *testing.T) {
+	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{Role: "system", Content: "You are helpful."},
 		{Role: "user", Content: "Hello"},
 		{Role: "assistant", Content: "Hi there!"},
 		{
-			Role: "user",
+			Role:    "user",
 			Content: "Search for something",
 		},
 		{
@@ -459,7 +687,7 @@ func TestBuildBody_JSONRoundTrip(t *testing.T) {
 		{Name: "search", Description: "Search the web", Parameters: json.RawMessage(`{"type":"object"}`)},
 	}
 
-	body, err := buildBody(messages, tools, nil)
+	body, err := g.buildBody(messages, tools, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}

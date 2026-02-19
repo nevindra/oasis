@@ -8,13 +8,19 @@ import "encoding/json"
 
 // ChatRequest is the OpenAI chat completions request body.
 type ChatRequest struct {
-	Model          string          `json:"model"`
-	Messages       []Message       `json:"messages"`
-	Tools          []Tool          `json:"tools,omitempty"`
-	Stream         bool            `json:"stream,omitempty"`
-	Temperature    float64         `json:"temperature,omitempty"`
-	MaxTokens      int             `json:"max_tokens,omitempty"`
-	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+	Model            string          `json:"model"`
+	Messages         []Message       `json:"messages"`
+	Tools            []Tool          `json:"tools,omitempty"`
+	Stream           bool            `json:"stream,omitempty"`
+	Temperature      *float64        `json:"temperature,omitempty"`
+	TopP             *float64        `json:"top_p,omitempty"`
+	MaxTokens        int             `json:"max_tokens,omitempty"`
+	FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64        `json:"presence_penalty,omitempty"`
+	Stop             []string        `json:"stop,omitempty"`
+	Seed             *int            `json:"seed,omitempty"`
+	ResponseFormat   *ResponseFormat `json:"response_format,omitempty"`
+	ToolChoice       any             `json:"tool_choice,omitempty"`
 	// When streaming, request usage in the final chunk.
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
 }

@@ -350,3 +350,128 @@ func TestBuildBody_MultipleToolCalls(t *testing.T) {
 		t.Errorf("expected second tool call 'calc', got %q", msg.ToolCalls[1].Function.Name)
 	}
 }
+
+func TestBuildBody_WithOptions(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil,
+		WithTemperature(0.3),
+		WithTopP(0.9),
+		WithMaxTokens(1024),
+		WithFrequencyPenalty(0.5),
+		WithPresencePenalty(0.2),
+		WithStop("END", "STOP"),
+		WithSeed(42),
+	)
+
+	if req.Temperature == nil || *req.Temperature != 0.3 {
+		t.Errorf("expected temperature 0.3, got %v", req.Temperature)
+	}
+	if req.TopP == nil || *req.TopP != 0.9 {
+		t.Errorf("expected topP 0.9, got %v", req.TopP)
+	}
+	if req.MaxTokens != 1024 {
+		t.Errorf("expected maxTokens 1024, got %d", req.MaxTokens)
+	}
+	if req.FrequencyPenalty == nil || *req.FrequencyPenalty != 0.5 {
+		t.Errorf("expected frequencyPenalty 0.5, got %v", req.FrequencyPenalty)
+	}
+	if req.PresencePenalty == nil || *req.PresencePenalty != 0.2 {
+		t.Errorf("expected presencePenalty 0.2, got %v", req.PresencePenalty)
+	}
+	if len(req.Stop) != 2 || req.Stop[0] != "END" || req.Stop[1] != "STOP" {
+		t.Errorf("expected stop [END, STOP], got %v", req.Stop)
+	}
+	if req.Seed == nil || *req.Seed != 42 {
+		t.Errorf("expected seed 42, got %v", req.Seed)
+	}
+}
+
+func TestBuildBody_WithToolChoice(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+	tools := []oasis.ToolDefinition{
+		{Name: "search", Description: "Search", Parameters: json.RawMessage(`{"type":"object"}`)},
+	}
+
+	req := BuildBody(messages, tools, "gpt-4o", nil,
+		WithToolChoice("required"),
+	)
+
+	if req.ToolChoice != "required" {
+		t.Errorf("expected toolChoice 'required', got %v", req.ToolChoice)
+	}
+}
+
+func TestBuildBody_NoOptions(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil)
+
+	// No options set: pointer fields should be nil.
+	if req.Temperature != nil {
+		t.Errorf("expected nil temperature, got %v", req.Temperature)
+	}
+	if req.TopP != nil {
+		t.Errorf("expected nil topP, got %v", req.TopP)
+	}
+	if req.FrequencyPenalty != nil {
+		t.Errorf("expected nil frequencyPenalty, got %v", req.FrequencyPenalty)
+	}
+	if req.PresencePenalty != nil {
+		t.Errorf("expected nil presencePenalty, got %v", req.PresencePenalty)
+	}
+	if req.Seed != nil {
+		t.Errorf("expected nil seed, got %v", req.Seed)
+	}
+}
+
+func TestBuildBody_OptionsJSONRoundTrip(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello"},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil,
+		WithTemperature(0.0),
+		WithTopP(1.0),
+		WithMaxTokens(500),
+		WithSeed(123),
+	)
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+
+	// Temperature 0.0 should be present (pointer, not omitted).
+	if parsed["temperature"] != 0.0 {
+		t.Errorf("expected temperature 0.0 in JSON, got %v", parsed["temperature"])
+	}
+	if parsed["top_p"] != 1.0 {
+		t.Errorf("expected top_p 1.0 in JSON, got %v", parsed["top_p"])
+	}
+	if parsed["max_tokens"] != 500.0 {
+		t.Errorf("expected max_tokens 500 in JSON, got %v", parsed["max_tokens"])
+	}
+	if parsed["seed"] != 123.0 {
+		t.Errorf("expected seed 123 in JSON, got %v", parsed["seed"])
+	}
+
+	// Fields not set should be absent.
+	if _, ok := parsed["frequency_penalty"]; ok {
+		t.Error("expected frequency_penalty to be omitted")
+	}
+	if _, ok := parsed["presence_penalty"]; ok {
+		t.Error("expected presence_penalty to be omitted")
+	}
+}

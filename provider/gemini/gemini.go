@@ -20,15 +20,33 @@ type Gemini struct {
 	apiKey     string
 	model      string
 	httpClient *http.Client
+
+	temperature      float64
+	topP             float64
+	mediaResolution  string
+	thinkingEnabled  bool
+	structuredOutput bool
+	codeExecution    bool
+	functionCalling  bool
+	googleSearch     bool
+	urlContext       bool
 }
 
-// New creates a new Gemini chat provider.
-func New(apiKey, model string) *Gemini {
-	return &Gemini{
-		apiKey:     apiKey,
-		model:      model,
-		httpClient: &http.Client{},
+// New creates a new Gemini chat provider with functional options.
+func New(apiKey, model string, opts ...Option) *Gemini {
+	g := &Gemini{
+		apiKey:           apiKey,
+		model:            model,
+		httpClient:       &http.Client{},
+		temperature:      0.1,
+		topP:             0.9,
+		mediaResolution:  "MEDIA_RESOLUTION_MEDIUM",
+		structuredOutput: true,
 	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 // Name returns "gemini".
@@ -36,7 +54,7 @@ func (g *Gemini) Name() string { return "gemini" }
 
 // Chat sends a non-streaming chat request and returns the complete response.
 func (g *Gemini) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-	body, err := buildBody(req.Messages, nil, req.ResponseSchema)
+	body, err := g.buildBody(req.Messages, nil, req.ResponseSchema)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -45,7 +63,7 @@ func (g *Gemini) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatRes
 
 // ChatWithTools sends a chat request with tool definitions.
 func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-	body, err := buildBody(req.Messages, tools, req.ResponseSchema)
+	body, err := g.buildBody(req.Messages, tools, req.ResponseSchema)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -57,7 +75,7 @@ func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools
 func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- string) (oasis.ChatResponse, error) {
 	defer close(ch)
 
-	body, err := buildBody(req.Messages, nil, nil)
+	body, err := g.buildBody(req.Messages, nil, nil)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -327,7 +345,7 @@ func (e *GeminiEmbedding) Embed(ctx context.Context, texts []string) ([][]float3
 // ---- Body builder ----
 
 // buildBody constructs the Gemini API request body from chat messages and optional tool definitions.
-func buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schema *oasis.ResponseSchema) (map[string]any, error) {
+func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schema *oasis.ResponseSchema) (map[string]any, error) {
 	var systemParts []string
 	var contents []map[string]any
 
@@ -435,11 +453,12 @@ func buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schem
 		}
 	}
 
-	// Tool declarations.
+	// Tool entries: function declarations, code execution, grounding, URL context.
+	var toolEntries []map[string]any
+
 	if len(tools) > 0 {
 		declarations := make([]map[string]any, 0, len(tools))
 		for _, t := range tools {
-			// Parse parameters from json.RawMessage into a generic value.
 			var params any
 			if len(t.Parameters) > 0 {
 				if err := json.Unmarshal(t.Parameters, &params); err != nil {
@@ -454,18 +473,55 @@ func buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schem
 				"parameters":  params,
 			})
 		}
-		body["tools"] = []map[string]any{
-			{"functionDeclarations": declarations},
+		toolEntries = append(toolEntries, map[string]any{
+			"functionDeclarations": declarations,
+		})
+	}
+
+	if g.codeExecution {
+		toolEntries = append(toolEntries, map[string]any{
+			"codeExecution": map[string]any{},
+		})
+	}
+	if g.googleSearch {
+		toolEntries = append(toolEntries, map[string]any{
+			"googleSearch": map[string]any{},
+		})
+	}
+	if g.urlContext {
+		toolEntries = append(toolEntries, map[string]any{
+			"urlContext": map[string]any{},
+		})
+	}
+
+	if len(toolEntries) > 0 {
+		body["tools"] = toolEntries
+	}
+
+	// Disable function calling when no tools are explicitly provided.
+	if !g.functionCalling && len(tools) == 0 {
+		body["toolConfig"] = map[string]any{
+			"functionCallingConfig": map[string]any{
+				"mode": "NONE",
+			},
 		}
 	}
 
-	// Generation config with default temperature.
+	// Generation config.
 	genConfig := map[string]any{
-		"temperature": 1.0,
+		"temperature":     g.temperature,
+		"topP":            g.topP,
+		"mediaResolution": g.mediaResolution,
+	}
+
+	if !g.thinkingEnabled {
+		genConfig["thinkingConfig"] = map[string]any{
+			"thinkingBudget": 0,
+		}
 	}
 
 	// Structured output: enforce JSON response matching the schema.
-	if schema != nil && len(schema.Schema) > 0 {
+	if g.structuredOutput && schema != nil && len(schema.Schema) > 0 {
 		genConfig["responseMimeType"] = "application/json"
 		var schemaObj any
 		if err := json.Unmarshal(schema.Schema, &schemaObj); err == nil {
