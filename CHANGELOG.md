@@ -10,7 +10,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 - **Plan execution** (`WithPlanExecution()`) — built-in `execute_plan` tool that batches multiple tool calls in a single LLM turn. The LLM calls it with an array of steps (tool name + args), and the framework executes all steps in parallel without re-sampling between each call. Returns structured per-step JSON results with ok/error status. Reduces latency and token usage for fan-out patterns (e.g., querying 5 regions = 2 samplings instead of 6). Works with both `LLMAgent` and `Network`. Inspired by [Anthropic's programmatic tool calling](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/programmatic-tool-calling), implemented provider-agnostically.
 - **`ServeSSE` HTTP helper** — stream agent responses as Server-Sent Events with zero boilerplate; handles flusher validation, SSE headers, channel management, done/error events, and client disconnection via context cancellation
+- **`ListDocuments` and `DeleteDocument`** on Store interface — list documents ordered by creation time, delete with cascade (chunks + FTS). Implemented in all three store backends (SQLite, libSQL, PostgreSQL)
+- **PDF extension mapping** — `.pdf` files now correctly map to `TypePDF` content type; `TypePDF` promoted from subpackage to core `ingest` constants
 - **Conversation model documentation** — new section in Store docs explaining the ChatID/UserID/ThreadID hierarchy, context key mapping, and common patterns (single-user, multi-user, ownership checks)
+
+### Fixed
+
+- **Binary file ingestion error** — `IngestFile` now returns a clear error when a binary format (PDF, DOCX) has no registered extractor, instead of silently producing garbage via plaintext fallback
 
 ## [0.4.0] - 2026-02-19
 

@@ -293,6 +293,47 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 	return nil
 }
 
+// ListDocuments returns all documents ordered by most recently created first.
+func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, title, source, content, created_at
+		 FROM documents
+		 ORDER BY created_at DESC
+		 LIMIT $1`,
+		limit)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list documents: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []oasis.Document
+	for rows.Next() {
+		var d oasis.Document
+		if err := rows.Scan(&d.ID, &d.Title, &d.Source, &d.Content, &d.CreatedAt); err != nil {
+			return nil, fmt.Errorf("postgres: scan document: %w", err)
+		}
+		docs = append(docs, d)
+	}
+	return docs, rows.Err()
+}
+
+// DeleteDocument removes a document and all its chunks in a single transaction.
+func (s *Store) DeleteDocument(ctx context.Context, id string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `DELETE FROM chunks WHERE document_id = $1`, id); err != nil {
+		return fmt.Errorf("postgres: delete document chunks: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM documents WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("postgres: delete document: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
 // SearchChunks performs vector similarity search over document chunks
 // using pgvector's cosine distance operator with HNSW index.
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredChunk, error) {

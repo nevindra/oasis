@@ -105,8 +105,10 @@ func TestContentTypeFromExtensionNew(t *testing.T) {
 		{"csv", TypeCSV},
 		{"json", TypeJSON},
 		{"docx", TypeDOCX},
+		{"pdf", TypePDF},
 		{"CSV", TypeCSV},
 		{"JSON", TypeJSON},
+		{"PDF", TypePDF},
 	}
 	for _, tt := range tests {
 		if got := ContentTypeFromExtension(tt.ext); got != tt.want {

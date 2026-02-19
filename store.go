@@ -22,6 +22,9 @@ type Store interface {
 
 	// --- Documents + Chunks ---
 	StoreDocument(ctx context.Context, doc Document, chunks []Chunk) error
+	ListDocuments(ctx context.Context, limit int) ([]Document, error)
+	// DeleteDocument removes a document and all its chunks (cascade).
+	DeleteDocument(ctx context.Context, id string) error
 	// SearchChunks performs semantic similarity search over document chunks.
 	// Results are sorted by Score descending.
 	SearchChunks(ctx context.Context, embedding []float32, topK int) ([]ScoredChunk, error)

@@ -53,6 +53,8 @@ func (nopStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]oasis.S
 func (nopStore) StoreDocument(_ context.Context, _ oasis.Document, _ []oasis.Chunk) error {
 	return nil
 }
+func (nopStore) ListDocuments(_ context.Context, _ int) ([]oasis.Document, error) { return nil, nil }
+func (nopStore) DeleteDocument(_ context.Context, _ string) error                 { return nil }
 func (nopStore) SearchChunks(_ context.Context, _ []float32, _ int) ([]oasis.ScoredChunk, error) {
 	return nil, nil
 }

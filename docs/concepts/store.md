@@ -97,11 +97,13 @@ store.DeleteThread(ctx, threadID)
 
 ```go
 StoreDocument(ctx, doc, chunks) error
+ListDocuments(ctx, limit) ([]Document, error)
+DeleteDocument(ctx, id) error  // cascade deletes chunks + FTS
 SearchChunks(ctx, embedding, topK) ([]ScoredChunk, error)
 GetChunksByIDs(ctx, ids) ([]Chunk, error)
 ```
 
-Used by the [ingest pipeline](ingest.md) and knowledge search tool.
+Used by the [ingest pipeline](ingest.md) and knowledge search tool. `ListDocuments` returns documents ordered by creation time (newest first). `DeleteDocument` removes a document and all its chunks in a single transaction.
 
 ### Scheduled Actions
 

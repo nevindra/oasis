@@ -89,6 +89,9 @@ func (ing *Ingestor) IngestFile(ctx context.Context, content []byte, filename st
 
 	extractor, ok := ing.extractors[ct]
 	if !ok {
+		if isBinaryContentType(ct) {
+			return IngestResult{}, fmt.Errorf("no extractor registered for %s; import the corresponding subpackage and use WithExtractor()", ct)
+		}
 		extractor = PlainTextExtractor{}
 	}
 

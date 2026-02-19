@@ -47,7 +47,9 @@ func (s *mockStore) SearchChunks(context.Context, []float32, int) ([]oasis.Score
 func (s *mockStore) GetChunksByIDs(context.Context, []string) ([]oasis.Chunk, error) {
 	return nil, nil
 }
-func (s *mockStore) CreateThread(context.Context, oasis.Thread) error          { return nil }
+func (s *mockStore) ListDocuments(context.Context, int) ([]oasis.Document, error) { return nil, nil }
+func (s *mockStore) DeleteDocument(context.Context, string) error                 { return nil }
+func (s *mockStore) CreateThread(context.Context, oasis.Thread) error             { return nil }
 func (s *mockStore) GetThread(context.Context, string) (oasis.Thread, error)   { return oasis.Thread{}, nil }
 func (s *mockStore) ListThreads(context.Context, string, int) ([]oasis.Thread, error) {
 	return nil, nil

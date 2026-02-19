@@ -32,15 +32,17 @@ result, _ := ingestor.IngestFile(ctx, fileBytes, "report.md")
 result, _ := ingestor.IngestReader(ctx, resp.Body, "page.html")
 ```
 
-Returns:
+Returns `IngestResult`:
 
 ```go
 type IngestResult struct {
-    DocumentID string
-    Document   oasis.Document
-    ChunkCount int
+    DocumentID string          // unique ID for the stored document
+    Document   oasis.Document  // full Document (ID, Title, Source, Content, CreatedAt)
+    ChunkCount int             // total chunks created (flat) or parents + children combined
 }
 ```
+
+Use `result.DocumentID` to reference the document later (e.g., in upload responses or `Store.DeleteDocument`).
 
 ## Extractors
 
@@ -57,6 +59,16 @@ Convert raw bytes to plain text:
 | `docx.NewExtractor()` | DOCX (opt-in, `ingest/docx` subpackage) |
 
 Content type is detected from file extension via `ContentTypeFromExtension()`.
+
+**Binary formats (PDF, DOCX) require explicit registration.** If you call `IngestFile` with a `.pdf` or `.docx` file without registering the corresponding extractor, it returns an error. Import the subpackage and register with `WithExtractor()`:
+
+```go
+import ingestpdf "github.com/nevindra/oasis/ingest/pdf"
+
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithExtractor(ingest.TypePDF, ingestpdf.NewExtractor()),
+)
+```
 
 ### MetadataExtractor
 

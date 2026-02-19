@@ -15,7 +15,8 @@ import (
 )
 
 // TypePDF is the content type for PDF documents.
-const TypePDF ingest.ContentType = "application/pdf"
+// Deprecated: Use ingest.TypePDF instead. Kept for backward compatibility.
+const TypePDF = ingest.TypePDF
 
 // Extractor implements ingest.Extractor and ingest.MetadataExtractor for PDF documents.
 type Extractor struct{}

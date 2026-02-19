@@ -46,6 +46,7 @@ const (
 	TypeCSV       ContentType = "text/csv"
 	TypeJSON      ContentType = "application/json"
 	TypeDOCX      ContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	TypePDF       ContentType = "application/pdf"
 )
 
 // ContentTypeFromExtension maps file extensions to content types.
@@ -61,9 +62,21 @@ func ContentTypeFromExtension(ext string) ContentType {
 		return TypeJSON
 	case "docx":
 		return TypeDOCX
+	case "pdf":
+		return TypePDF
 	default:
 		return TypePlainText
 	}
+}
+
+// isBinaryContentType returns true for content types that require a dedicated
+// extractor and cannot be meaningfully processed as plain text.
+func isBinaryContentType(ct ContentType) bool {
+	switch ct {
+	case TypePDF, TypeDOCX:
+		return true
+	}
+	return false
 }
 
 // --- Built-in extractors ---

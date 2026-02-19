@@ -14,9 +14,11 @@ func (nopStore) DeleteThread(_ context.Context, _ string) error                 
 func (nopStore) StoreMessage(_ context.Context, _ Message) error                              { return nil }
 func (nopStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error)            { return nil, nil }
 func (nopStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]ScoredMessage, error) { return nil, nil }
-func (nopStore) StoreDocument(_ context.Context, _ Document, _ []Chunk) error                  { return nil }
-func (nopStore) SearchChunks(_ context.Context, _ []float32, _ int) ([]ScoredChunk, error)     { return nil, nil }
-func (nopStore) GetChunksByIDs(_ context.Context, _ []string) ([]Chunk, error)                 { return nil, nil }
+func (nopStore) StoreDocument(_ context.Context, _ Document, _ []Chunk) error              { return nil }
+func (nopStore) ListDocuments(_ context.Context, _ int) ([]Document, error)                { return nil, nil }
+func (nopStore) DeleteDocument(_ context.Context, _ string) error                          { return nil }
+func (nopStore) SearchChunks(_ context.Context, _ []float32, _ int) ([]ScoredChunk, error) { return nil, nil }
+func (nopStore) GetChunksByIDs(_ context.Context, _ []string) ([]Chunk, error)             { return nil, nil }
 func (nopStore) GetConfig(_ context.Context, _ string) (string, error)                        { return "", nil }
 func (nopStore) SetConfig(_ context.Context, _, _ string) error                               { return nil }
 func (nopStore) CreateScheduledAction(_ context.Context, _ ScheduledAction) error             { return nil }

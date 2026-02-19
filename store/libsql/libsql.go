@@ -342,6 +342,68 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 	return nil
 }
 
+// ListDocuments returns the most recent documents, ordered by creation time
+// (newest first), limited by limit.
+func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, title, source, content, created_at
+		 FROM documents
+		 ORDER BY created_at DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list documents: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []oasis.Document
+	for rows.Next() {
+		var d oasis.Document
+		if err := rows.Scan(&d.ID, &d.Title, &d.Source, &d.Content, &d.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan document: %w", err)
+		}
+		docs = append(docs, d)
+	}
+	return docs, rows.Err()
+}
+
+// DeleteDocument removes a document, its chunks, and associated FTS entries
+// in a single transaction.
+func (s *Store) DeleteDocument(ctx context.Context, id string) error {
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, err = tx.ExecContext(ctx, `DELETE FROM chunks_fts WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)`, id)
+	if err != nil {
+		return fmt.Errorf("delete document fts: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM chunks WHERE document_id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete document chunks: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM documents WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete document: %w", err)
+	}
+	return tx.Commit()
+}
+
 // SearchChunks performs vector similarity search over document chunks
 // using the libsql vector_top_k function. Score is always 0 (see SearchMessages).
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredChunk, error) {

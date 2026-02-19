@@ -53,7 +53,9 @@ func (s *mockStore) SearchChunks(context.Context, []float32, int) ([]oasis.Score
 func (s *mockStore) GetChunksByIDs(context.Context, []string) ([]oasis.Chunk, error) {
 	return nil, nil
 }
-func (s *mockStore) CreateThread(context.Context, oasis.Thread) error          { return nil }
+func (s *mockStore) ListDocuments(context.Context, int) ([]oasis.Document, error) { return nil, nil }
+func (s *mockStore) DeleteDocument(context.Context, string) error                 { return nil }
+func (s *mockStore) CreateThread(context.Context, oasis.Thread) error             { return nil }
 func (s *mockStore) GetThread(context.Context, string) (oasis.Thread, error)   { return oasis.Thread{}, nil }
 func (s *mockStore) ListThreads(context.Context, string, int) ([]oasis.Thread, error) {
 	return nil, nil
@@ -133,6 +135,20 @@ func TestIngestorIngestFile(t *testing.T) {
 	}
 	if r.ChunkCount == 0 {
 		t.Error("expected chunks")
+	}
+}
+
+func TestIngestFileBinaryWithoutExtractor(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	ing := NewIngestor(store, emb) // no PDF extractor registered
+
+	_, err := ing.IngestFile(context.Background(), []byte("%PDF-1.4 binary"), "report.pdf")
+	if err == nil {
+		t.Fatal("expected error for unregistered PDF extractor")
+	}
+	if !strings.Contains(err.Error(), "no extractor registered") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
