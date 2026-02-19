@@ -80,8 +80,18 @@ Processors run in registration order at each hook point. An empty chain is a no-
 | Content moderation | PostProcessor | Filter harmful LLM output |
 | Tool filtering | PostProcessor | Remove/block specific tool calls |
 | Token budget | PreProcessor | Trim message history to fit budget |
+| Logging | PostProcessor + PostToolProcessor | Log LLM responses, token usage, and tool executions |
 | Audit logging | PostToolProcessor | Log all tool executions |
 | Approval gates | PostProcessor | Ask human before executing dangerous tools |
+
+## What Processors Don't Do
+
+Processors handle per-iteration hooks inside the agent loop. For other cross-cutting concerns:
+
+- **Retries on transient HTTP errors** — use `oasis.WithRetry(provider)` at the Provider level
+- **Retries on step failure** — use `oasis.Retry(n, delay)` on Workflow steps
+- **Post-execution analysis** (which agent ran, per-step token counts, latency) — use `result.Steps` ([execution traces](observability.md#built-in-execution-traces-no-otel-required))
+- **Distributed tracing and metrics** — use the `observer` package ([observability](observability.md))
 
 ## ProcessorChain
 

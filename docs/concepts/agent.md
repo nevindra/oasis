@@ -99,8 +99,24 @@ type AgentResult struct {
     Output      string       // final response text
     Attachments []Attachment // multimodal content from LLM response
     Usage       Usage        // aggregate token usage across all LLM calls
+    Steps       []StepTrace  // per-step execution trace, chronological order
 }
 ```
+
+### Execution Traces
+
+`Steps` records every tool call and agent delegation that occurred during execution. Each `StepTrace` includes name, type (`"tool"`, `"agent"`, or `"step"` for Workflows), input, output, token usage, and wall-clock duration:
+
+```go
+result, _ := network.Execute(ctx, task)
+for _, step := range result.Steps {
+    fmt.Printf("%-6s %-20s %5dms  in=%-4d out=%d\n",
+        step.Type, step.Name, step.Duration.Milliseconds(),
+        step.Usage.InputTokens, step.Usage.OutputTokens)
+}
+```
+
+`Steps` is nil when no tools were called. See [Observability](observability.md#built-in-execution-traces-no-otel-required) for details.
 
 ## AgentOptions
 

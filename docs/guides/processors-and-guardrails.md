@@ -97,6 +97,62 @@ func (g *ApprovalGate) PostLLM(ctx context.Context, resp *oasis.ChatResponse) er
 }
 ```
 
+## Logging (PostProcessor + PostToolProcessor)
+
+Log every LLM response and tool execution:
+
+```go
+type Logger struct{}
+
+func (l *Logger) PostLLM(_ context.Context, resp *oasis.ChatResponse) error {
+    log.Printf("[llm] tokens: in=%d out=%d, tool_calls=%d",
+        resp.Usage.InputTokens, resp.Usage.OutputTokens, len(resp.ToolCalls))
+    return nil
+}
+
+func (l *Logger) PostTool(_ context.Context, call oasis.ToolCall, result *oasis.ToolResult) error {
+    log.Printf("[tool] %s → %.100s", call.Name, result.Content)
+    return nil
+}
+```
+
+For post-execution analysis without a processor, use `result.Steps` — see [Execution Traces](../concepts/observability.md#built-in-execution-traces-no-otel-required).
+
+## Token Budget (PreProcessor)
+
+Enforce a per-request token limit by trimming older messages:
+
+```go
+type TokenBudget struct {
+    MaxMessages int // keep only the N most recent messages (plus system prompt)
+}
+
+func (t *TokenBudget) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
+    if len(req.Messages) <= t.MaxMessages+1 { // +1 for system prompt
+        return nil
+    }
+    // Keep the system prompt (first message) and the most recent N messages.
+    req.Messages = append(req.Messages[:1], req.Messages[len(req.Messages)-t.MaxMessages:]...)
+    return nil
+}
+```
+
+## Retries
+
+Retries are handled at different levels depending on what you're retrying:
+
+- **LLM call retries** (429, 503) — use `oasis.WithRetry(provider)` at the Provider level. Wraps the provider with exponential backoff before the agent loop sees the error.
+- **Workflow step retries** — use `oasis.Retry(n, delay)` on individual steps. Re-executes the step function up to N times with the specified delay.
+- **Processors** cannot trigger retries — they transform/validate within a single iteration. If you need to retry an entire agent execution, wrap the `Execute` call at the application level.
+
+```go
+// Provider-level retries (transient HTTP errors)
+provider := oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryMaxAttempts(5))
+
+// Workflow step-level retries
+oasis.Step("fetch", fetchFunc, oasis.Retry(3, 2*time.Second))
+```
+
 ## Registration
 
 Processors run in registration order. Put guardrails first:
