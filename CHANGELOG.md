@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-02-19
+
 ### Added
 
 - **Metadata filtering for vector search** — `SearchChunks` now accepts variadic `...ChunkFilter` for scoping search results by document, source, metadata, or time range. Five convenience constructors: `ByDocument(ids...)`, `BySource(source)`, `ByMeta(key, value)`, `CreatedAfter(unix)`, `CreatedBefore(unix)`. Filter types: `ChunkFilter`, `FilterOp` (`OpEq`, `OpIn`, `OpGt`, `OpLt`). Implemented in all three store backends — SQLite and Postgres use SQL-level filtering with conditional JOINs; LibSQL uses an overfetch + in-memory filter strategy (since `vector_top_k()` doesn't support WHERE). `KeywordSearcher.SearchChunksKeyword` also accepts `...ChunkFilter`. `HybridRetriever` gains `WithFilters(...ChunkFilter)` option to pass filters through to both search paths
@@ -267,7 +269,10 @@ Initial release of the Oasis AI agent framework.
 - Channel-based token streaming with edit batching
 - Reference app in cmd/bot_example/
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nevindra/oasis/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/nevindra/oasis/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/nevindra/oasis/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/nevindra/oasis/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nevindra/oasis/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/nevindra/oasis/compare/v0.2.0...v0.2.1
