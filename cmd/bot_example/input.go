@@ -30,13 +30,13 @@ func chatIDFromContext(ctx context.Context) string {
 // TelegramInputHandler implements oasis.InputHandler by sending questions
 // as Telegram messages and waiting for user replies.
 type TelegramInputHandler struct {
-	frontend oasis.Frontend
+	frontend Frontend
 	mu       sync.Mutex
 	pending  map[string]chan string // bot message ID -> reply channel
 }
 
 // NewTelegramInputHandler creates a new InputHandler for Telegram.
-func NewTelegramInputHandler(frontend oasis.Frontend) *TelegramInputHandler {
+func NewTelegramInputHandler(frontend Frontend) *TelegramInputHandler {
 	return &TelegramInputHandler{
 		frontend: frontend,
 		pending:  make(map[string]chan string),

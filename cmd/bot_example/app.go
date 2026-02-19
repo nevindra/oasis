@@ -12,24 +12,23 @@ import (
 	oasis "github.com/nevindra/oasis"
 	"github.com/nevindra/oasis/ingest"
 	ingestpdf "github.com/nevindra/oasis/ingest/pdf"
-	"github.com/nevindra/oasis/internal/config"
 )
 
 // App is a thin orchestration layer that connects a Frontend to a StreamingAgent.
 // All routing, tool-calling, memory, and conversation history are handled by
 // the framework's agent primitives (Network, LLMAgent).
 type App struct {
-	frontend oasis.Frontend
+	frontend Frontend
 	agent    oasis.StreamingAgent
 	store    oasis.Store
 	memory   oasis.MemoryStore
-	config   *config.Config
+	config   *Config
 	input    *TelegramInputHandler
 	ingestor *ingest.Ingestor
 }
 
 // New creates an App.
-func New(cfg *config.Config, frontend oasis.Frontend, agent oasis.StreamingAgent, store oasis.Store, memory oasis.MemoryStore, input *TelegramInputHandler, ingestor *ingest.Ingestor) *App {
+func New(cfg *Config, frontend Frontend, agent oasis.StreamingAgent, store oasis.Store, memory oasis.MemoryStore, input *TelegramInputHandler, ingestor *ingest.Ingestor) *App {
 	return &App{
 		frontend: frontend,
 		agent:    agent,
@@ -81,7 +80,7 @@ func (a *App) RunWithSignal() error {
 }
 
 // handle processes a single incoming message.
-func (a *App) handle(ctx context.Context, msg oasis.IncomingMessage) {
+func (a *App) handle(ctx context.Context, msg IncomingMessage) {
 	log.Printf(" [recv] from=%s chat=%s", msg.UserID, msg.ChatID)
 
 	// Auth check

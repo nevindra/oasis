@@ -6,10 +6,8 @@ import (
 	"os"
 
 	oasis "github.com/nevindra/oasis"
-	"github.com/nevindra/oasis/frontend/telegram"
 	"github.com/nevindra/oasis/ingest"
 	ingestpdf "github.com/nevindra/oasis/ingest/pdf"
-	"github.com/nevindra/oasis/internal/config"
 	"github.com/nevindra/oasis/observer"
 	"github.com/nevindra/oasis/provider/gemini"
 	"github.com/nevindra/oasis/store/sqlite"
@@ -24,7 +22,7 @@ import (
 
 func main() {
 	// 1. Load config
-	cfg := config.Load(os.Getenv("OASIS_CONFIG"))
+	cfg := LoadConfig(os.Getenv("OASIS_CONFIG"))
 
 	// 2. Create providers
 	var routerLLM oasis.Provider = gemini.New(cfg.Intent.APIKey, cfg.Intent.Model)
@@ -61,7 +59,7 @@ func main() {
 	memStore := sqlite.NewMemoryStore(store.DB())
 
 	// 5. Create frontend + input handler
-	frontend := telegram.New(cfg.Telegram.Token)
+	frontend := NewBot(cfg.Telegram.Token)
 	inputHandler := NewTelegramInputHandler(frontend)
 
 	// 6. Create tools
@@ -104,7 +102,7 @@ func main() {
 }
 
 // collectTools creates all tools with optional observer wrapping.
-func collectTools(cfg config.Config, store oasis.Store, embedding oasis.EmbeddingProvider, inst *observer.Instruments) []oasis.Tool {
+func collectTools(cfg Config, store oasis.Store, embedding oasis.EmbeddingProvider, inst *observer.Instruments) []oasis.Tool {
 	var tools []oasis.Tool
 
 	tools = append(tools, wrapTool(knowledge.New(store, embedding), inst))
@@ -131,7 +129,7 @@ func wrapTool(t oasis.Tool, inst *observer.Instruments) oasis.Tool {
 
 // --- System Prompts ---
 
-func chatPrompt(cfg config.Config) string {
+func chatPrompt(cfg Config) string {
 	return `You are Oasis, a personal AI assistant.
 
 ## Personality

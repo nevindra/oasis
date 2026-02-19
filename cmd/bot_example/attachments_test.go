@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"testing"
-
-	oasis "github.com/nevindra/oasis"
 )
 
 // stubFrontend is a minimal Frontend stub for testing downloadAttachments.
@@ -19,7 +17,7 @@ type stubFile struct {
 	filename string
 }
 
-func (f *stubFrontend) Poll(_ context.Context) (<-chan oasis.IncomingMessage, error) { return nil, nil }
+func (f *stubFrontend) Poll(_ context.Context) (<-chan IncomingMessage, error) { return nil, nil }
 func (f *stubFrontend) Send(_ context.Context, _ string, _ string) (string, error)  { return "", nil }
 func (f *stubFrontend) Edit(_ context.Context, _, _, _ string) error                { return nil }
 func (f *stubFrontend) EditFormatted(_ context.Context, _, _, _ string) error       { return nil }
@@ -39,8 +37,8 @@ func TestDownloadAttachments_Photo(t *testing.T) {
 			"photo-large": {data: imgBytes, filename: "large.jpg"},
 		},
 	}
-	msg := oasis.IncomingMessage{
-		Photos: []oasis.FileInfo{
+	msg := IncomingMessage{
+		Photos: []FileInfo{
 			{FileID: "photo-small", MimeType: "image/jpeg"},
 			{FileID: "photo-large", MimeType: "image/jpeg"},
 		},
@@ -76,8 +74,8 @@ func TestDownloadAttachments_DocumentPDF(t *testing.T) {
 			"doc-pdf": {data: pdfBytes, filename: "report.pdf"},
 		},
 	}
-	msg := oasis.IncomingMessage{
-		Document: &oasis.FileInfo{
+	msg := IncomingMessage{
+		Document: &FileInfo{
 			FileID:   "doc-pdf",
 			FileName: "report.pdf",
 			MimeType: "application/pdf",
@@ -123,8 +121,8 @@ func TestDownloadAttachments_DocumentImage(t *testing.T) {
 			"doc-img": {data: imgBytes, filename: "photo.png"},
 		},
 	}
-	msg := oasis.IncomingMessage{
-		Document: &oasis.FileInfo{
+	msg := IncomingMessage{
+		Document: &FileInfo{
 			FileID:   "doc-img",
 			FileName: "photo.png",
 			MimeType: "image/png",
@@ -156,8 +154,8 @@ func TestDownloadAttachments_DocumentTextFile(t *testing.T) {
 			"doc-go": {data: []byte(src), filename: "main.go"},
 		},
 	}
-	msg := oasis.IncomingMessage{
-		Document: &oasis.FileInfo{
+	msg := IncomingMessage{
+		Document: &FileInfo{
 			FileID:   "doc-go",
 			FileName: "main.go",
 			MimeType: "text/x-go",
@@ -191,7 +189,7 @@ func TestDownloadAttachments_DocumentTextFile(t *testing.T) {
 
 func TestDownloadAttachments_NoAttachments(t *testing.T) {
 	fe := &stubFrontend{files: map[string]stubFile{}}
-	msg := oasis.IncomingMessage{Text: "hello"}
+	msg := IncomingMessage{Text: "hello"}
 
 	images, docs, textContent, err := downloadAttachments(context.Background(), fe, msg)
 	if err != nil {

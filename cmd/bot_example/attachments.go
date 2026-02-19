@@ -25,7 +25,7 @@ type RawDoc struct {
 //
 // For photos, only the largest size (last in the slice) is downloaded.
 // MIME type is taken from FileInfo when available; otherwise detected from bytes.
-func downloadAttachments(ctx context.Context, fe oasis.Frontend, msg oasis.IncomingMessage) (images []oasis.Attachment, docs []RawDoc, textContent string, err error) {
+func downloadAttachments(ctx context.Context, fe Frontend, msg IncomingMessage) (images []oasis.Attachment, docs []RawDoc, textContent string, err error) {
 	if len(msg.Photos) > 0 {
 		largest := msg.Photos[len(msg.Photos)-1]
 		data, _, err := fe.DownloadFile(ctx, largest.FileID)

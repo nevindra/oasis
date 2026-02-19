@@ -1,4 +1,4 @@
-package config
+package main
 
 import (
 	"os"
@@ -76,8 +76,8 @@ type ObserverPricing struct {
 	Output float64 `toml:"output"`
 }
 
-// Default returns a Config with all defaults applied.
-func Default() Config {
+// DefaultConfig returns a Config with all defaults applied.
+func DefaultConfig() Config {
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		home = "/tmp"
@@ -91,9 +91,9 @@ func Default() Config {
 	}
 }
 
-// Load reads config: defaults -> TOML file -> env vars (env wins).
-func Load(path string) Config {
-	cfg := Default()
+// LoadConfig reads config: defaults -> TOML file -> env vars (env wins).
+func LoadConfig(path string) Config {
+	cfg := DefaultConfig()
 
 	if path == "" {
 		path = "oasis.toml"

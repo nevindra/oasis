@@ -1,4 +1,4 @@
-package config
+package main
 
 import (
 	"os"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestDefaultConfig(t *testing.T) {
-	cfg := Default()
+	cfg := DefaultConfig()
 	if cfg.LLM.Provider != "gemini" {
 		t.Errorf("expected gemini, got %s", cfg.LLM.Provider)
 	}
@@ -30,7 +30,7 @@ token = "bot123"
 timezone_offset = 9
 `), 0644)
 
-	cfg := Load(path)
+	cfg := LoadConfig(path)
 	if cfg.Telegram.Token != "bot123" {
 		t.Errorf("expected bot123, got %s", cfg.Telegram.Token)
 	}
@@ -47,7 +47,7 @@ func TestEnvOverride(t *testing.T) {
 	t.Setenv("OASIS_TELEGRAM_TOKEN", "env-token")
 	t.Setenv("OASIS_LLM_API_KEY", "env-key")
 
-	cfg := Load("/nonexistent/path.toml")
+	cfg := LoadConfig("/nonexistent/path.toml")
 	if cfg.Telegram.Token != "env-token" {
 		t.Errorf("expected env-token, got %s", cfg.Telegram.Token)
 	}
@@ -61,12 +61,12 @@ func TestEnvOverride(t *testing.T) {
 }
 
 func TestActionFallback(t *testing.T) {
-	cfg := Default()
+	cfg := DefaultConfig()
 	cfg.LLM.Provider = "gemini"
 	cfg.LLM.Model = "gemini-2.5-flash"
 	cfg.LLM.APIKey = "test-key"
 
-	// Simulate Load fallback
+	// Simulate LoadConfig fallback
 	if cfg.Action.Provider == "" {
 		cfg.Action.Provider = cfg.LLM.Provider
 		cfg.Action.Model = cfg.LLM.Model

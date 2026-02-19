@@ -25,11 +25,10 @@ export OASIS_EMBEDDING_API_KEY="your-gemini-key"
 ## Loading
 
 ```go
-import "github.com/nevindra/oasis/internal/config"
-
-cfg := config.Load("")              // loads from oasis.toml
-cfg := config.Load("/path/to.toml") // loads from specific file
-cfg := config.Default()             // defaults only
+// In cmd/bot_example/main.go:
+cfg := LoadConfig("")              // loads from oasis.toml
+cfg := LoadConfig("/path/to.toml") // loads from specific file
+cfg := DefaultConfig()             // defaults only
 ```
 
 The config file path can also be set via `OASIS_CONFIG` env var.
