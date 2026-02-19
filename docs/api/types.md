@@ -246,6 +246,64 @@ type WorkflowError struct {
 }
 ```
 
+## Runtime Workflow Definition Types
+
+**File:** `types.go`
+
+```go
+type NodeType string
+
+const (
+    NodeLLM       NodeType = "llm"       // delegates to a registered Agent
+    NodeTool      NodeType = "tool"      // calls a registered Tool
+    NodeCondition NodeType = "condition" // evaluates expression, routes to branches
+    NodeTemplate  NodeType = "template"  // performs string interpolation
+)
+
+type WorkflowDefinition struct {
+    Name        string           `json:"name"`
+    Description string           `json:"description"`
+    Nodes       []NodeDefinition `json:"nodes"`
+    Edges       [][2]string      `json:"edges"` // [from, to] pairs
+}
+
+type NodeDefinition struct {
+    ID          string         `json:"id"`
+    Type        NodeType       `json:"type"`
+
+    // LLM node
+    Agent       string         `json:"agent,omitempty"`
+    Input       string         `json:"input,omitempty"`       // template: "Summarize: {{search.output}}"
+
+    // Tool node
+    Tool        string         `json:"tool,omitempty"`
+    ToolName    string         `json:"tool_name,omitempty"`
+    Args        map[string]any `json:"args,omitempty"`        // values may contain {{key}} templates
+
+    // Condition node
+    Expression  string         `json:"expression,omitempty"`  // "{{score}} >= 0.8" or registered function name
+    TrueBranch  []string       `json:"true_branch,omitempty"`
+    FalseBranch []string       `json:"false_branch,omitempty"`
+
+    // Template node
+    Template    string         `json:"template,omitempty"`
+
+    // Common
+    OutputTo    string         `json:"output_to,omitempty"`   // override default output key
+    Retry       int            `json:"retry,omitempty"`
+}
+
+type DefinitionRegistry struct {
+    Agents     map[string]Agent                         // for "llm" nodes
+    Tools      map[string]Tool                          // for "tool" nodes
+    Conditions map[string]func(*WorkflowContext) bool   // escape hatch for complex logic
+}
+```
+
+`WorkflowDefinition` is JSON-serializable. Pass to `FromDefinition` with a `DefinitionRegistry` to produce an executable `*Workflow`.
+
+`DefinitionRegistry` maps string names in the definition to concrete Go objects. The `Conditions` map is optional — use it when condition logic can't be expressed as a simple comparison expression.
+
 ## AgentHandle Types
 
 **File:** `handle.go`

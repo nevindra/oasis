@@ -1,6 +1,9 @@
 package oasis
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestUserMessage(t *testing.T) {
 	msg := UserMessage("hello")
@@ -79,6 +82,42 @@ func TestToolResultMessageFields(t *testing.T) {
 	}
 }
 
+func TestChunkFilterConstructors(t *testing.T) {
+	tests := []struct {
+		name  string
+		f     ChunkFilter
+		field string
+		op    FilterOp
+	}{
+		{"ByDocument single", ByDocument("doc1"), "document_id", OpIn},
+		{"ByDocument multi", ByDocument("doc1", "doc2"), "document_id", OpIn},
+		{"BySource", BySource("/tmp/file.pdf"), "source", OpEq},
+		{"ByMeta", ByMeta("section_heading", "Introduction"), "meta.section_heading", OpEq},
+		{"CreatedAfter", CreatedAfter(1000), "created_at", OpGt},
+		{"CreatedBefore", CreatedBefore(2000), "created_at", OpLt},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.f.Field != tt.field {
+				t.Errorf("Field = %q, want %q", tt.f.Field, tt.field)
+			}
+			if tt.f.Op != tt.op {
+				t.Errorf("Op = %d, want %d", tt.f.Op, tt.op)
+			}
+		})
+	}
+
+	// Verify ByDocument value is []string
+	f := ByDocument("a", "b")
+	ids, ok := f.Value.([]string)
+	if !ok {
+		t.Fatalf("ByDocument value type = %T, want []string", f.Value)
+	}
+	if len(ids) != 2 || ids[0] != "a" || ids[1] != "b" {
+		t.Errorf("ByDocument value = %v, want [a b]", ids)
+	}
+}
+
 func TestMessageConstructorsEmpty(t *testing.T) {
 	tests := []struct {
 		name string
@@ -96,5 +135,186 @@ func TestMessageConstructorsEmpty(t *testing.T) {
 				t.Errorf("%s(\"\").Role = %q, want %q", tt.name, tt.msg.Role, tt.role)
 			}
 		})
+	}
+}
+
+// --- Error type tests (from errors_test.go) ---
+
+func TestErrLLMError(t *testing.T) {
+	tests := []struct {
+		provider string
+		message  string
+		want     string
+	}{
+		{"gemini", "rate limited", "gemini: rate limited"},
+		{"openai", "context length exceeded", "openai: context length exceeded"},
+	}
+	for _, tt := range tests {
+		e := &ErrLLM{Provider: tt.provider, Message: tt.message}
+		if got := e.Error(); got != tt.want {
+			t.Errorf("ErrLLM{%q, %q}.Error() = %q, want %q", tt.provider, tt.message, got, tt.want)
+		}
+	}
+}
+
+func TestErrLLMImplementsError(t *testing.T) {
+	var _ error = (*ErrLLM)(nil)
+}
+
+func TestErrHTTPError(t *testing.T) {
+	tests := []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{429, "too many requests", "http 429: too many requests"},
+		{500, "internal server error", "http 500: internal server error"},
+	}
+	for _, tt := range tests {
+		e := &ErrHTTP{Status: tt.status, Body: tt.body}
+		if got := e.Error(); got != tt.want {
+			t.Errorf("ErrHTTP{%d, %q}.Error() = %q, want %q", tt.status, tt.body, got, tt.want)
+		}
+	}
+}
+
+func TestErrHTTPImplementsError(t *testing.T) {
+	var _ error = (*ErrHTTP)(nil)
+}
+
+func TestErrLLMEmptyFields(t *testing.T) {
+	e := &ErrLLM{}
+	want := ": "
+	if got := e.Error(); got != want {
+		t.Errorf("ErrLLM{}.Error() = %q, want %q", got, want)
+	}
+}
+
+func TestErrHTTPZeroStatus(t *testing.T) {
+	e := &ErrHTTP{}
+	want := "http 0: "
+	if got := e.Error(); got != want {
+		t.Errorf("ErrHTTP{}.Error() = %q, want %q", got, want)
+	}
+}
+
+// --- ID tests (from id_test.go) ---
+
+func TestNewID(t *testing.T) {
+	id1 := NewID()
+	id2 := NewID()
+	if len(id1) != 36 {
+		t.Errorf("expected 36 chars (UUIDv7), got %d: %s", len(id1), id1)
+	}
+	if id1 == id2 {
+		t.Error("two IDs should be unique")
+	}
+	if id1 >= id2 {
+		t.Error("sequential UUIDv7s should be time-ordered")
+	}
+}
+
+// --- Tool registry tests (from tool_test.go) ---
+
+func TestToolRegistry(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.Add(mockTool{})
+
+	defs := reg.AllDefinitions()
+	if len(defs) != 1 || defs[0].Name != "greet" {
+		t.Fatalf("expected 1 definition 'greet', got %v", defs)
+	}
+
+	res, err := reg.Execute(context.Background(), "greet", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content != "hello from greet" {
+		t.Errorf("expected 'hello from greet', got %q", res.Content)
+	}
+
+	res, _ = reg.Execute(context.Background(), "nonexistent", nil)
+	if res.Error == "" {
+		t.Error("expected error for unknown tool")
+	}
+}
+
+func TestToolRegistryEmpty(t *testing.T) {
+	reg := NewToolRegistry()
+
+	defs := reg.AllDefinitions()
+	if len(defs) != 0 {
+		t.Errorf("expected 0 definitions, got %d", len(defs))
+	}
+
+	res, _ := reg.Execute(context.Background(), "anything", nil)
+	if res.Error == "" {
+		t.Error("expected error for empty registry")
+	}
+}
+
+func TestToolRegistryMultipleTools(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.Add(mockTool{})
+	reg.Add(mockToolCalc{})
+
+	defs := reg.AllDefinitions()
+	if len(defs) != 2 {
+		t.Fatalf("expected 2 definitions, got %d", len(defs))
+	}
+
+	res, err := reg.Execute(context.Background(), "greet", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content != "hello from greet" {
+		t.Errorf("greet: got %q", res.Content)
+	}
+
+	res, err = reg.Execute(context.Background(), "calc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content != "result from calc" {
+		t.Errorf("calc: got %q", res.Content)
+	}
+}
+
+func TestToolRegistryExecuteError(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.Add(errTool{})
+
+	_, err := reg.Execute(context.Background(), "fail", nil)
+	if err == nil {
+		t.Fatal("expected error from failing tool")
+	}
+	if err.Error() != "tool broken" {
+		t.Errorf("error = %q, want %q", err.Error(), "tool broken")
+	}
+}
+
+func TestToolRegistryMultiDefinitionTool(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.Add(multiTool{})
+
+	defs := reg.AllDefinitions()
+	if len(defs) != 2 {
+		t.Fatalf("expected 2 definitions, got %d", len(defs))
+	}
+
+	res, err := reg.Execute(context.Background(), "read", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content != "did read" {
+		t.Errorf("read: got %q", res.Content)
+	}
+
+	res, err = reg.Execute(context.Background(), "write", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content != "did write" {
+		t.Errorf("write: got %q", res.Content)
 	}
 }

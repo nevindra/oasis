@@ -295,6 +295,112 @@ outer, _ := oasis.NewWorkflow("outer", "Main pipeline",
 | `WithOnError(fn)` | Callback when a step fails |
 | `WithDefaultRetry(n, delay)` | Default retry for all steps |
 
+## Runtime Workflow Definitions
+
+Workflows can be defined from JSON at runtime using `WorkflowDefinition` and `FromDefinition`. This bridges the gap between compile-time Go workflows and visual workflow builders (like Dify, n8n, Langflow). A JSON definition is parsed and converted into the same `*Workflow` that `NewWorkflow` produces — same DAG engine, same execution semantics.
+
+```text
+JSON → WorkflowDefinition (parsed)
+     → FromDefinition(def, registry)
+     → NewWorkflow(name, desc, ...generatedOptions)
+     → *Workflow (identical to compile-time)
+```
+
+### Node Types
+
+| Node Type | Purpose | Output Key |
+|-----------|---------|------------|
+| `llm` | Delegates to a registered Agent | `{id}.output` |
+| `tool` | Calls a registered Tool function | `{id}.result` |
+| `condition` | Evaluates an expression, routes to branches | `{id}.result` (`"true"` or `"false"`) |
+| `template` | Performs string interpolation | `{id}.output` |
+
+### Example
+
+```go
+def := oasis.WorkflowDefinition{
+    Name:        "research-pipeline",
+    Description: "Search then summarize",
+    Nodes: []oasis.NodeDefinition{
+        {ID: "search", Type: oasis.NodeTool, Tool: "searcher", ToolName: "web_search",
+            Args: map[string]any{"query": "{{input}}"}},
+        {ID: "summarize", Type: oasis.NodeLLM, Agent: "writer",
+            Input: "Summarize these results: {{search.result}}"},
+    },
+    Edges: [][2]string{{"search", "summarize"}},
+}
+
+reg := oasis.DefinitionRegistry{
+    Agents: map[string]oasis.Agent{"writer": writerAgent},
+    Tools:  map[string]oasis.Tool{"searcher": searchTool},
+}
+
+wf, err := oasis.FromDefinition(def, reg)
+// wf is a normal *Workflow — Execute, compose, nest as usual.
+result, err := wf.Execute(ctx, oasis.AgentTask{Input: "Go concurrency patterns"})
+```
+
+### Template Resolution
+
+Node inputs and tool args support `{{key}}` placeholders that resolve against `WorkflowContext` at runtime:
+
+```text
+"Summarize: {{search.result}}"  → "Summarize: <actual search output>"
+"{{input}}"                     → the original AgentTask.Input
+"{{missing}}"                   → "" (empty string, no error)
+```
+
+`Resolve` and `ResolveJSON` are also available on `WorkflowContext` for compile-time workflows:
+
+```go
+oasis.Step("format", func(_ context.Context, wCtx *oasis.WorkflowContext) error {
+    text := wCtx.Resolve("Hello, {{user.name}}! Your order: {{order.id}}")
+    wCtx.Set("format.output", text)
+    return nil
+}, oasis.After("fetch"))
+```
+
+### Condition Branching
+
+Condition nodes evaluate a simple expression and route to `true_branch` or `false_branch` targets:
+
+```go
+{ID: "check", Type: oasis.NodeCondition,
+    Expression:  "{{score.result}} >= 0.8",
+    TrueBranch:  []string{"approve"},
+    FalseBranch: []string{"reject"},
+},
+```
+
+Supported operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`. Numeric comparison is attempted first; falls back to string. The `contains` operator is always string-based (`strings.Contains`).
+
+For complex logic, register a Go function as an escape hatch:
+
+```go
+reg := oasis.DefinitionRegistry{
+    Conditions: map[string]func(*oasis.WorkflowContext) bool{
+        "is_premium": func(wCtx *oasis.WorkflowContext) bool {
+            tier, _ := wCtx.Get("user.tier")
+            return tier == "premium" || tier == "enterprise"
+        },
+    },
+}
+// Then reference by name: Expression: "is_premium"
+```
+
+### Validation
+
+`FromDefinition` validates at construction time:
+
+- All node IDs are unique
+- Edge targets reference existing nodes
+- Condition branch targets exist in the node list
+- LLM nodes reference agents that exist in the registry
+- Tool nodes reference tools that exist in the registry
+- Cycle detection (delegated to `NewWorkflow`)
+
+Runtime errors (expression eval failure, agent/tool errors) follow the same retry + fail-fast behavior as compile-time workflows.
+
 ## See Also
 
 - [Agent](agent.md) — the interface Workflow implements

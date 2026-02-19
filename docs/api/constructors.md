@@ -57,6 +57,43 @@ oasis.DoUntil(name string, fn StepFunc, opts ...StepOption)
 oasis.DoWhile(name string, fn StepFunc, opts ...StepOption)
 ```
 
+## FromDefinition
+
+**File:** `workflow.go`
+
+```go
+wf, err := oasis.FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, error)
+```
+
+Converts a JSON-serializable `WorkflowDefinition` into an executable `*Workflow`. The resulting workflow is identical to one built with `NewWorkflow` — same DAG engine, same step types.
+
+The `DefinitionRegistry` maps string names in the definition to concrete Go objects:
+
+```go
+reg := oasis.DefinitionRegistry{
+    Agents:     map[string]oasis.Agent{ ... },      // for "llm" nodes
+    Tools:      map[string]oasis.Tool{ ... },       // for "tool" nodes
+    Conditions: map[string]func(*oasis.WorkflowContext) bool{ ... }, // escape hatch for complex conditions
+}
+```
+
+Validates at construction time: unique node IDs, valid edge targets, branch targets exist, agents/tools exist in registry, cycle detection.
+
+## WorkflowContext Template Methods
+
+**File:** `workflow.go`
+
+```go
+wCtx.Resolve(template string) string                  // {{key}} → string value
+wCtx.ResolveJSON(template string) json.RawMessage      // {{key}} → JSON value (preserves structure)
+```
+
+`Resolve` replaces `{{key}}` placeholders with values from the context. Unknown keys resolve to empty strings. All values are formatted via `fmt.Sprintf("%v", v)`.
+
+`ResolveJSON` is like `Resolve` but returns `json.RawMessage`. When the template is a single placeholder (e.g. `"{{key}}"`) and the value is not a string, the value is marshalled to JSON directly (preserving maps, slices, numbers). Mixed templates resolve as a JSON string.
+
+The `"input"` key is pre-populated with `AgentTask.Input`, so `{{input}}` resolves to the original task input in any workflow.
+
 ## Scheduler
 
 **File:** `scheduler.go`

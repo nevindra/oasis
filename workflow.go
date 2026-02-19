@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,8 +26,12 @@ type WorkflowContext struct {
 
 // newWorkflowContext creates a WorkflowContext initialized with the original task.
 func newWorkflowContext(task AgentTask) *WorkflowContext {
+	v := make(map[string]any)
+	if task.Input != "" {
+		v["input"] = task.Input
+	}
 	return &WorkflowContext{
-		values: make(map[string]any),
+		values: v,
 		input:  task.Input,
 		task:   task,
 	}
@@ -65,6 +71,75 @@ func (c *WorkflowContext) addUsage(u Usage) {
 		}
 	}
 	c.values["_usage"] = u
+}
+
+// Resolve replaces {{key}} placeholders in template with values from the
+// context's values map. Unknown keys resolve to empty strings. Values are
+// converted via fmt.Sprintf("%v", v). If the template contains no placeholders,
+// it is returned as-is.
+func (c *WorkflowContext) Resolve(template string) string {
+	if !strings.Contains(template, "{{") {
+		return template
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var b strings.Builder
+	s := template
+	for {
+		start := strings.Index(s, "{{")
+		if start == -1 {
+			b.WriteString(s)
+			break
+		}
+		end := strings.Index(s[start:], "}}")
+		if end == -1 {
+			b.WriteString(s)
+			break
+		}
+		end += start // adjust to absolute index
+
+		b.WriteString(s[:start])
+		key := strings.TrimSpace(s[start+2 : end])
+		if v, ok := c.values[key]; ok {
+			b.WriteString(fmt.Sprintf("%v", v))
+		}
+		s = s[end+2:]
+	}
+	return b.String()
+}
+
+// ResolveJSON is like Resolve but returns json.RawMessage. If the template is
+// a single placeholder (e.g. "{{key}}") and the value is not a string, the
+// value is marshalled to JSON directly (preserving structure). Otherwise it
+// behaves like Resolve and wraps the result as a JSON string.
+func (c *WorkflowContext) ResolveJSON(template string) json.RawMessage {
+	trimmed := strings.TrimSpace(template)
+
+	// Fast path: single placeholder — return value as JSON directly.
+	if strings.HasPrefix(trimmed, "{{") && strings.HasSuffix(trimmed, "}}") &&
+		strings.Count(trimmed, "{{") == 1 {
+		key := strings.TrimSpace(trimmed[2 : len(trimmed)-2])
+		c.mu.RLock()
+		v, ok := c.values[key]
+		c.mu.RUnlock()
+		if ok {
+			b, err := json.Marshal(v)
+			if err == nil {
+				return b
+			}
+		}
+		return json.RawMessage(`null`)
+	}
+
+	// Multi-placeholder or mixed text: resolve as string.
+	resolved := c.Resolve(template)
+	b, err := json.Marshal(resolved)
+	if err != nil {
+		return json.RawMessage(`""`)
+	}
+	return b
 }
 
 // --- Step status ---
@@ -1260,4 +1335,412 @@ func (w *Workflow) safeCallback(fn func()) {
 		}
 	}()
 	fn()
+}
+
+// --- Runtime workflow definitions ---
+
+// FromDefinition creates an executable *Workflow from a WorkflowDefinition and
+// a registry of named agents, tools, and condition functions. The definition is
+// validated at construction time: unknown agent/tool names, missing edge targets,
+// condition nodes without branches, and cycles all produce errors.
+//
+// The returned Workflow uses the same DAG execution engine as compile-time
+// workflows built with NewWorkflow.
+func FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, error) {
+	if len(def.Nodes) == 0 {
+		return nil, fmt.Errorf("workflow definition %q: no nodes", def.Name)
+	}
+
+	// Index nodes by ID for lookups.
+	nodeByID := make(map[string]*NodeDefinition, len(def.Nodes))
+	for i := range def.Nodes {
+		n := &def.Nodes[i]
+		if _, dup := nodeByID[n.ID]; dup {
+			return nil, fmt.Errorf("workflow definition %q: duplicate node ID %q", def.Name, n.ID)
+		}
+		nodeByID[n.ID] = n
+	}
+
+	// Build edge index: target -> list of sources (dependencies).
+	// Also validate that all edge targets exist.
+	deps := make(map[string][]string) // nodeID -> its After() dependencies
+	for _, e := range def.Edges {
+		from, to := e[0], e[1]
+		if _, ok := nodeByID[from]; !ok {
+			return nil, fmt.Errorf("workflow definition %q: edge references unknown node %q", def.Name, from)
+		}
+		if _, ok := nodeByID[to]; !ok {
+			return nil, fmt.Errorf("workflow definition %q: edge references unknown node %q", def.Name, to)
+		}
+		deps[to] = append(deps[to], from)
+	}
+
+	// Build When() conditions for condition branch targets.
+	// Branch targets get a When that checks the condition result before executing.
+	branchWhen := make(map[string]func(*WorkflowContext) bool)
+	for _, n := range def.Nodes {
+		if n.Type != NodeCondition {
+			continue
+		}
+		resultKey := n.ID + ".result"
+		for _, target := range n.TrueBranch {
+			rk := resultKey
+			branchWhen[target] = func(wCtx *WorkflowContext) bool {
+				v, ok := wCtx.Get(rk)
+				return ok && v == "true"
+			}
+		}
+		for _, target := range n.FalseBranch {
+			rk := resultKey
+			branchWhen[target] = func(wCtx *WorkflowContext) bool {
+				v, ok := wCtx.Get(rk)
+				return ok && v == "false"
+			}
+		}
+	}
+
+	// Validate and generate WorkflowOptions.
+	var opts []WorkflowOption
+	for _, n := range def.Nodes {
+		generated, err := nodeToWorkflowOptions(n, nodeByID, deps[n.ID], reg, branchWhen[n.ID])
+		if err != nil {
+			return nil, fmt.Errorf("workflow definition %q: %w", def.Name, err)
+		}
+		opts = append(opts, generated...)
+	}
+
+	return NewWorkflow(def.Name, def.Description, opts...)
+}
+
+// nodeToWorkflowOptions converts a single NodeDefinition into one or more
+// WorkflowOption values. A tool node with template args generates two steps
+// (arg resolver + tool call). All other node types generate one step.
+func nodeToWorkflowOptions(n NodeDefinition, nodes map[string]*NodeDefinition, after []string, reg DefinitionRegistry, when func(*WorkflowContext) bool) ([]WorkflowOption, error) {
+	switch n.Type {
+	case NodeLLM:
+		return buildLLMNode(n, after, reg, when)
+	case NodeTool:
+		return buildToolNode(n, after, reg, when)
+	case NodeCondition:
+		return buildConditionNode(n, nodes, after, reg)
+	case NodeTemplate:
+		return buildTemplateNode(n, after, when)
+	default:
+		return nil, fmt.Errorf("node %q: unknown type %q", n.ID, n.Type)
+	}
+}
+
+// buildLLMNode generates an AgentStep for an LLM node.
+func buildLLMNode(n NodeDefinition, after []string, reg DefinitionRegistry, when func(*WorkflowContext) bool) ([]WorkflowOption, error) {
+	agent, ok := reg.Agents[n.Agent]
+	if !ok {
+		return nil, fmt.Errorf("node %q: agent %q not found in registry", n.ID, n.Agent)
+	}
+
+	var stepOpts []StepOption
+	if len(after) > 0 {
+		stepOpts = append(stepOpts, After(after...))
+	}
+	if n.OutputTo != "" {
+		stepOpts = append(stepOpts, OutputTo(n.OutputTo))
+	}
+	if n.Retry > 0 {
+		stepOpts = append(stepOpts, Retry(n.Retry, time.Second))
+	}
+	if when != nil {
+		stepOpts = append(stepOpts, When(when))
+	}
+
+	// If input has templates, use a custom Step that resolves them.
+	if n.Input != "" && strings.Contains(n.Input, "{{") {
+		return []WorkflowOption{
+			Step(n.ID, func(ctx context.Context, wCtx *WorkflowContext) error {
+				resolved := wCtx.Resolve(n.Input)
+				result, err := agent.Execute(ctx, AgentTask{Input: resolved})
+				if err != nil {
+					return err
+				}
+				outputKey := n.ID + ".output"
+				if n.OutputTo != "" {
+					outputKey = n.OutputTo
+				}
+				wCtx.Set(outputKey, result.Output)
+				wCtx.addUsage(result.Usage)
+				return nil
+			}, stepOpts...),
+		}, nil
+	}
+
+	// No templates — use standard AgentStep with InputFrom if set.
+	if n.Input != "" {
+		stepOpts = append(stepOpts, InputFrom(n.Input))
+	}
+	return []WorkflowOption{AgentStep(n.ID, agent, stepOpts...)}, nil
+}
+
+// buildToolNode generates step(s) for a Tool node. If args contain templates,
+// a preceding resolver step is generated.
+func buildToolNode(n NodeDefinition, after []string, reg DefinitionRegistry, when func(*WorkflowContext) bool) ([]WorkflowOption, error) {
+	tool, ok := reg.Tools[n.Tool]
+	if !ok {
+		return nil, fmt.Errorf("node %q: tool %q not found in registry", n.ID, n.Tool)
+	}
+
+	toolName := n.ToolName
+	if toolName == "" {
+		toolName = n.Tool
+	}
+
+	hasTemplates := false
+	for _, v := range n.Args {
+		if s, ok := v.(string); ok && strings.Contains(s, "{{") {
+			hasTemplates = true
+			break
+		}
+	}
+
+	var stepOpts []StepOption
+	if n.OutputTo != "" {
+		stepOpts = append(stepOpts, OutputTo(n.OutputTo))
+	}
+	if n.Retry > 0 {
+		stepOpts = append(stepOpts, Retry(n.Retry, time.Second))
+	}
+	if when != nil {
+		stepOpts = append(stepOpts, When(when))
+	}
+
+	if hasTemplates {
+		// Two steps: resolver + tool call.
+		resolverID := n.ID + "._args"
+		var resolverAfter []StepOption
+		if len(after) > 0 {
+			resolverAfter = append(resolverAfter, After(after...))
+		}
+		if when != nil {
+			resolverAfter = append(resolverAfter, When(when))
+		}
+
+		resolver := Step(resolverID, func(_ context.Context, wCtx *WorkflowContext) error {
+			resolved := make(map[string]any, len(n.Args))
+			for k, v := range n.Args {
+				if s, ok := v.(string); ok && strings.Contains(s, "{{") {
+					resolved[k] = wCtx.Resolve(s)
+				} else {
+					resolved[k] = v
+				}
+			}
+			b, err := json.Marshal(resolved)
+			if err != nil {
+				return fmt.Errorf("node %s: marshal resolved args: %w", n.ID, err)
+			}
+			wCtx.Set(resolverID, json.RawMessage(b))
+			return nil
+		}, resolverAfter...)
+
+		toolStepOpts := append(stepOpts, After(resolverID), ArgsFrom(resolverID))
+		toolStep := ToolStep(n.ID, tool, toolName, toolStepOpts...)
+
+		return []WorkflowOption{resolver, toolStep}, nil
+	}
+
+	// No templates — static args.
+	if len(after) > 0 {
+		stepOpts = append(stepOpts, After(after...))
+	}
+	if len(n.Args) > 0 {
+		// Store static args in a key and use ArgsFrom.
+		argsKey := n.ID + "._args"
+		staticArgs := Step(argsKey, func(_ context.Context, wCtx *WorkflowContext) error {
+			b, err := json.Marshal(n.Args)
+			if err != nil {
+				return fmt.Errorf("node %s: marshal args: %w", n.ID, err)
+			}
+			wCtx.Set(argsKey, json.RawMessage(b))
+			return nil
+		}, stepOpts...)
+
+		toolStepOpts := []StepOption{After(argsKey), ArgsFrom(argsKey)}
+		if n.OutputTo != "" {
+			toolStepOpts = append(toolStepOpts, OutputTo(n.OutputTo))
+		}
+		if n.Retry > 0 {
+			toolStepOpts = append(toolStepOpts, Retry(n.Retry, time.Second))
+		}
+		return []WorkflowOption{staticArgs, ToolStep(n.ID, tool, toolName, toolStepOpts...)}, nil
+	}
+
+	return []WorkflowOption{ToolStep(n.ID, tool, toolName, stepOpts...)}, nil
+}
+
+// buildConditionNode generates a Step that evaluates the condition expression
+// and writes "true" or "false" to context. Branch targets receive When()
+// conditions via the branchWhen map built in FromDefinition.
+func buildConditionNode(n NodeDefinition, nodes map[string]*NodeDefinition, after []string, reg DefinitionRegistry) ([]WorkflowOption, error) {
+	if len(n.TrueBranch) == 0 && len(n.FalseBranch) == 0 {
+		return nil, fmt.Errorf("node %q: condition has no true_branch or false_branch", n.ID)
+	}
+
+	// Validate branch targets exist.
+	for _, target := range n.TrueBranch {
+		if _, ok := nodes[target]; !ok {
+			return nil, fmt.Errorf("node %q: true_branch references unknown node %q", n.ID, target)
+		}
+	}
+	for _, target := range n.FalseBranch {
+		if _, ok := nodes[target]; !ok {
+			return nil, fmt.Errorf("node %q: false_branch references unknown node %q", n.ID, target)
+		}
+	}
+
+	// Build the condition step.
+	var stepOpts []StepOption
+	if len(after) > 0 {
+		stepOpts = append(stepOpts, After(after...))
+	}
+
+	resultKey := n.ID + ".result"
+	expr := n.Expression
+
+	condStep := Step(n.ID, func(_ context.Context, wCtx *WorkflowContext) error {
+		// Check registered condition functions first.
+		if fn, ok := reg.Conditions[expr]; ok {
+			if fn(wCtx) {
+				wCtx.Set(resultKey, "true")
+			} else {
+				wCtx.Set(resultKey, "false")
+			}
+			return nil
+		}
+
+		result, err := evalExpression(expr, wCtx)
+		if err != nil {
+			return fmt.Errorf("node %s: %w", n.ID, err)
+		}
+		if result {
+			wCtx.Set(resultKey, "true")
+		} else {
+			wCtx.Set(resultKey, "false")
+		}
+		return nil
+	}, stepOpts...)
+
+	return []WorkflowOption{condStep}, nil
+}
+
+// buildTemplateNode generates a Step that resolves a template string.
+func buildTemplateNode(n NodeDefinition, after []string, when func(*WorkflowContext) bool) ([]WorkflowOption, error) {
+	if n.Template == "" {
+		return nil, fmt.Errorf("node %q: template node has empty template", n.ID)
+	}
+
+	var stepOpts []StepOption
+	if len(after) > 0 {
+		stepOpts = append(stepOpts, After(after...))
+	}
+	if when != nil {
+		stepOpts = append(stepOpts, When(when))
+	}
+
+	outputKey := n.ID + ".output"
+	if n.OutputTo != "" {
+		outputKey = n.OutputTo
+		stepOpts = append(stepOpts, OutputTo(n.OutputTo))
+	}
+	tmpl := n.Template
+
+	return []WorkflowOption{
+		Step(n.ID, func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set(outputKey, wCtx.Resolve(tmpl))
+			return nil
+		}, stepOpts...),
+	}, nil
+}
+
+// --- Expression evaluator ---
+
+// expressionOperators lists comparison operators in parsing precedence order.
+// Longer operators (>=, <=, !=, ==) are checked before shorter ones (>, <).
+var expressionOperators = []string{"!=", "==", ">=", "<=", ">", "<", "contains"}
+
+// evalExpression evaluates a simple comparison expression against resolved values
+// from the WorkflowContext. Template placeholders ({{key}}) are resolved before
+// evaluation.
+//
+// Supported operators: ==, !=, >, <, >=, <=, contains.
+// Numeric comparison is attempted first; falls back to string comparison.
+// The "contains" operator is always string-based.
+func evalExpression(expr string, wCtx *WorkflowContext) (bool, error) {
+	resolved := wCtx.Resolve(expr)
+
+	for _, op := range expressionOperators {
+		idx := strings.Index(resolved, op)
+		if idx == -1 {
+			continue
+		}
+
+		left := strings.TrimSpace(resolved[:idx])
+		right := strings.TrimSpace(resolved[idx+len(op):])
+		left = stripQuotes(left)
+		right = stripQuotes(right)
+
+		return evalCompare(left, right, op)
+	}
+
+	return false, fmt.Errorf("expression: no operator found in %q", expr)
+}
+
+// evalCompare performs the comparison between left and right using the given operator.
+func evalCompare(left, right, op string) (bool, error) {
+	if op == "contains" {
+		return strings.Contains(left, right), nil
+	}
+
+	// Try numeric comparison.
+	lf, lErr := strconv.ParseFloat(left, 64)
+	rf, rErr := strconv.ParseFloat(right, 64)
+	if lErr == nil && rErr == nil {
+		switch op {
+		case "==":
+			return lf == rf, nil
+		case "!=":
+			return lf != rf, nil
+		case ">":
+			return lf > rf, nil
+		case "<":
+			return lf < rf, nil
+		case ">=":
+			return lf >= rf, nil
+		case "<=":
+			return lf <= rf, nil
+		}
+	}
+
+	// Fall back to string comparison.
+	switch op {
+	case "==":
+		return left == right, nil
+	case "!=":
+		return left != right, nil
+	case ">":
+		return left > right, nil
+	case "<":
+		return left < right, nil
+	case ">=":
+		return left >= right, nil
+	case "<=":
+		return left <= right, nil
+	default:
+		return false, nil
+	}
+}
+
+// stripQuotes removes surrounding single or double quotes from a string literal.
+func stripQuotes(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '\'' && s[len(s)-1] == '\'') || (s[0] == '"' && s[len(s)-1] == '"') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }
