@@ -757,6 +757,11 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 	return results, nil
 }
 
+// DB returns the underlying *sql.DB for sharing with MemoryStore.
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	return s.db.Close()

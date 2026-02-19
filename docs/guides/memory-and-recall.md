@@ -51,7 +51,9 @@ oasis.CrossThreadSearch(embedding, oasis.MinScore(0.50))
 Learn and remember things about the user:
 
 ```go
-memoryStore := memsqlite.New("oasis.db")
+store := sqlite.New("oasis.db")
+store.Init(ctx)
+memoryStore := sqlite.NewMemoryStore(store.DB())
 memoryStore.Init(ctx)
 
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,

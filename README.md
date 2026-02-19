@@ -211,8 +211,7 @@ h.Cancel()
 | Component | Packages |
 | --------- | -------- |
 | **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Anthropic, Ollama) |
-| **Storage** | `store/sqlite` (local), `store/libsql` (Turso/remote) |
-| **Memory** | `memory/sqlite` |
+| **Storage** | `store/sqlite` (local), `store/libsql` (Turso/remote), `store/postgres` (PostgreSQL + pgvector) |
 | **Frontend** | `frontend/telegram` |
 | **Tools** | `tools/knowledge`, `tools/remember`, `tools/search`, `tools/schedule`, `tools/shell`, `tools/file`, `tools/http` |
 | **Observability** | `observer` (OpenTelemetry wrappers with cost tracking) |
@@ -240,9 +239,9 @@ oasis/
 |-- provider/gemini/                    # Google Gemini provider
 |-- provider/openaicompat/              # OpenAI-compatible provider
 |-- frontend/telegram/                  # Telegram frontend
-|-- store/sqlite/                       # Local SQLite store
+|-- store/sqlite/                       # Local SQLite store + MemoryStore
 |-- store/libsql/                       # Remote Turso store
-|-- memory/sqlite/                      # SQLite memory store
+|-- store/postgres/                     # PostgreSQL + pgvector store + MemoryStore
 |-- observer/                           # OTEL observability wrappers
 |-- ingest/                             # Document chunking pipeline
 |-- tools/                              # Built-in tools

@@ -10,7 +10,6 @@ import (
 	"github.com/nevindra/oasis/ingest"
 	ingestpdf "github.com/nevindra/oasis/ingest/pdf"
 	"github.com/nevindra/oasis/internal/config"
-	memsqlite "github.com/nevindra/oasis/memory/sqlite"
 	"github.com/nevindra/oasis/observer"
 	"github.com/nevindra/oasis/provider/gemini"
 	"github.com/nevindra/oasis/store/sqlite"
@@ -59,7 +58,7 @@ func main() {
 
 	// 4. Create store + memory
 	store := sqlite.New(cfg.Database.Path)
-	memStore := memsqlite.New(cfg.Database.Path)
+	memStore := sqlite.NewMemoryStore(store.DB())
 
 	// 5. Create frontend + input handler
 	frontend := telegram.New(cfg.Telegram.Token)

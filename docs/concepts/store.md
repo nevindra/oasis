@@ -91,6 +91,8 @@ Close() error    // clean up connections
 | `store/libsql` | `libsql.New(url, token)` | Remote Turso/libSQL |
 | `store/postgres` | `postgres.New(pool)` | PostgreSQL + pgvector (HNSW indexes) |
 
+All three packages also ship a `MemoryStore` implementation in the same package — see [Memory](memory.md).
+
 **SQLite / libSQL:**
 - Store embeddings as JSON-serialized `[]float32`
 - Perform brute-force cosine similarity in-process (SQLite) or DiskANN (libSQL)

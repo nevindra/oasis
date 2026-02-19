@@ -93,7 +93,7 @@ type MemoryStore interface {
 }
 ```
 
-**Shipped implementation:** `memory/sqlite`
+**Shipped implementations:** `store/sqlite` (`sqlite.NewMemoryStore(store.DB())`), `store/postgres` (`postgres.NewMemoryStore(pool)`)
 
 ## Confidence System
 

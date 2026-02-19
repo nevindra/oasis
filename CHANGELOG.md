@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+
+- **SQLite MemoryStore consolidated** — `memory/sqlite` package removed; use `sqlite.NewMemoryStore(store.DB())` from `store/sqlite` instead (matches `store/postgres` pattern). Shares the same `*sql.DB` connection, fixing the open-close-per-call anti-pattern.
+
 ## [0.3.1] - 2026-02-19
 
 ### Added

@@ -118,7 +118,8 @@ type MemoryStore interface {
 
 | Implementation | Constructor |
 |----------------|------------|
-| `memory/sqlite` | `memsqlite.New(path string)` |
+| `store/sqlite` | `sqlite.NewMemoryStore(db *sql.DB)` |
+| `store/postgres` | `postgres.NewMemoryStore(pool *pgxpool.Pool)` |
 
 ---
 
