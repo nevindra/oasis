@@ -6,6 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **Batch API support** — framework-level `BatchProvider` and `BatchEmbeddingProvider` interfaces for asynchronous batch processing at reduced cost
+  - `BatchProvider` interface — `BatchChat`, `BatchStatus`, `BatchChatResults`, `BatchCancel` for offline batch chat generation
+  - `BatchEmbeddingProvider` interface — `BatchEmbed`, `BatchEmbedStatus`, `BatchEmbedResults` for batch embedding
+  - `BatchJob`, `BatchState`, `BatchStats` types — provider-agnostic job lifecycle tracking
+  - Gemini implementation (`provider/gemini`) — inline batch requests via `batchGenerateContent` and `batchEmbedContent` endpoints; 50% cost reduction vs standard API
+
 ### Changed
 
 - **SQLite MemoryStore consolidated** — `memory/sqlite` package removed; use `sqlite.NewMemoryStore(store.DB())` from `store/sqlite` instead (matches `store/postgres` pattern). Shares the same `*sql.DB` connection, fixing the open-close-per-call anti-pattern.

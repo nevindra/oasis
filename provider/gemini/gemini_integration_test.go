@@ -192,4 +192,37 @@ func TestIntegration(t *testing.T) {
 		}
 		t.Logf("tool call: %s(%s)", tc.Name, string(tc.Args))
 	})
+
+	time.Sleep(rateLimitDelay)
+
+	t.Run("BatchChat", func(t *testing.T) {
+		g := New(key, "gemini-2.0-flash")
+
+		requests := []oasis.ChatRequest{
+			{Messages: []oasis.ChatMessage{{Role: "user", Content: "Reply with exactly: batch1"}}},
+			{Messages: []oasis.ChatMessage{{Role: "user", Content: "Reply with exactly: batch2"}}},
+		}
+
+		job, err := g.BatchChat(context.Background(), requests)
+		if err != nil {
+			t.Fatalf("BatchChat failed: %v", err)
+		}
+		t.Logf("batch job created: id=%s state=%s", job.ID, job.State)
+
+		if job.ID == "" {
+			t.Fatal("expected non-empty job ID")
+		}
+
+		// Verify we can poll status (don't wait for completion — batch jobs take minutes to hours).
+		status, err := g.BatchStatus(context.Background(), job.ID)
+		if err != nil {
+			t.Fatalf("BatchStatus failed: %v", err)
+		}
+		t.Logf("status: state=%s stats=%+v", status.State, status.Stats)
+
+		// Cancel the job so it doesn't run to completion.
+		if err := g.BatchCancel(context.Background(), job.ID); err != nil {
+			t.Logf("BatchCancel (best-effort): %v", err)
+		}
+	})
 }

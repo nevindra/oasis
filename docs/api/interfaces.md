@@ -42,6 +42,47 @@ type EmbeddingProvider interface {
 
 ---
 
+## BatchProvider
+
+**File:** `batch.go`
+
+Optional capability for asynchronous batch chat processing. Discovered via type assertion.
+
+```go
+type BatchProvider interface {
+    BatchChat(ctx context.Context, requests []ChatRequest) (BatchJob, error)
+    BatchStatus(ctx context.Context, jobID string) (BatchJob, error)
+    BatchChatResults(ctx context.Context, jobID string) ([]ChatResponse, error)
+    BatchCancel(ctx context.Context, jobID string) error
+}
+```
+
+| Implementation    | Constructor                 |
+|-------------------|-----------------------------|
+| `provider/gemini` | `gemini.New(apiKey, model)` |
+
+---
+
+## BatchEmbeddingProvider
+
+**File:** `batch.go`
+
+Optional capability for asynchronous batch embedding. Discovered via type assertion.
+
+```go
+type BatchEmbeddingProvider interface {
+    BatchEmbed(ctx context.Context, texts [][]string) (BatchJob, error)
+    BatchEmbedStatus(ctx context.Context, jobID string) (BatchJob, error)
+    BatchEmbedResults(ctx context.Context, jobID string) ([][]float32, error)
+}
+```
+
+| Implementation    | Constructor                                           |
+|-------------------|-------------------------------------------------------|
+| `provider/gemini` | `gemini.NewEmbedding(apiKey, model string, dims int)` |
+
+---
+
 ## Store
 
 **File:** `store.go`

@@ -13,7 +13,7 @@ import (
 	"github.com/nevindra/oasis"
 )
 
-const baseURL = "https://generativelanguage.googleapis.com/v1beta"
+var baseURL = "https://generativelanguage.googleapis.com/v1beta"
 
 // Gemini implements oasis.Provider for Google Gemini models.
 type Gemini struct {

@@ -121,6 +121,45 @@ oasis.AssistantMessage("Hi there!")
 oasis.ToolResultMessage(callID, "result content")
 ```
 
+## Batch Interfaces
+
+**File:** `batch.go`
+
+Optional capabilities for asynchronous batch processing at reduced cost. Discovered via type assertion.
+
+```go
+type BatchProvider interface {
+    BatchChat(ctx context.Context, requests []ChatRequest) (BatchJob, error)
+    BatchStatus(ctx context.Context, jobID string) (BatchJob, error)
+    BatchChatResults(ctx context.Context, jobID string) ([]ChatResponse, error)
+    BatchCancel(ctx context.Context, jobID string) error
+}
+
+type BatchEmbeddingProvider interface {
+    BatchEmbed(ctx context.Context, texts [][]string) (BatchJob, error)
+    BatchEmbedStatus(ctx context.Context, jobID string) (BatchJob, error)
+    BatchEmbedResults(ctx context.Context, jobID string) ([][]float32, error)
+}
+```
+
+Batch jobs are processed offline — create with `BatchChat`/`BatchEmbed`, poll with `BatchStatus`, retrieve results when `BatchSucceeded`. Trade-off: higher latency (minutes to hours) for lower cost (50% for Gemini).
+
+```go
+// Check if provider supports batching
+if bp, ok := provider.(oasis.BatchProvider); ok {
+    job, _ := bp.BatchChat(ctx, requests)
+    // Poll status...
+    status, _ := bp.BatchStatus(ctx, job.ID)
+    if status.State == oasis.BatchSucceeded {
+        results, _ := bp.BatchChatResults(ctx, job.ID)
+    }
+}
+```
+
+| Package           | BatchProvider              | BatchEmbeddingProvider                     |
+|-------------------|----------------------------|--------------------------------------------|
+| `provider/gemini` | `gemini.New(apiKey, model)` | `gemini.NewEmbedding(apiKey, model, dims)` |
+
 ## Key Behaviors
 
 - `ChatStream` **must close `ch`** when done — callers rely on this for cleanup

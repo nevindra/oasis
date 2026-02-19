@@ -256,6 +256,40 @@ type WorkflowError struct {
 type AgentState int32  // StatePending, StateRunning, StateCompleted, StateFailed, StateCancelled
 ```
 
+## Batch Types
+
+**File:** `batch.go`
+
+```go
+type BatchState string
+
+const (
+    BatchPending   BatchState = "pending"
+    BatchRunning   BatchState = "running"
+    BatchSucceeded BatchState = "succeeded"
+    BatchFailed    BatchState = "failed"
+    BatchCancelled BatchState = "cancelled"
+    BatchExpired   BatchState = "expired"
+)
+
+type BatchStats struct {
+    TotalCount     int `json:"total_count"`
+    SucceededCount int `json:"succeeded_count"`
+    FailedCount    int `json:"failed_count"`
+}
+
+type BatchJob struct {
+    ID          string     `json:"id"`
+    State       BatchState `json:"state"`
+    DisplayName string     `json:"display_name,omitempty"`
+    Stats       BatchStats `json:"stats"`
+    CreateTime  time.Time  `json:"create_time"`
+    UpdateTime  time.Time  `json:"update_time"`
+}
+```
+
+`BatchJob` is provider-agnostic — each provider maps its native state to `BatchState` constants.
+
 ## Memory Types
 
 **File:** `memory.go`
