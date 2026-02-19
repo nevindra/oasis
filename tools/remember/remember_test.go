@@ -41,7 +41,7 @@ func (s *mockStore) GetMessages(context.Context, string, int) ([]oasis.Message, 
 func (s *mockStore) SearchMessages(context.Context, []float32, int) ([]oasis.ScoredMessage, error) {
 	return nil, nil
 }
-func (s *mockStore) SearchChunks(context.Context, []float32, int) ([]oasis.ScoredChunk, error) {
+func (s *mockStore) SearchChunks(context.Context, []float32, int, ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
 	return nil, nil
 }
 func (s *mockStore) GetChunksByIDs(context.Context, []string) ([]oasis.Chunk, error) {

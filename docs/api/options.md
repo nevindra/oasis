@@ -91,6 +91,7 @@ Configures `NewHybridRetriever`.
 | `WithMinRetrievalScore(s float32)` | 0 | Drop results below this score |
 | `WithKeywordWeight(w float32)` | 0.3 | Keyword weight in RRF (vector gets 1-w) |
 | `WithOverfetchMultiplier(n int)` | 3 | Fetch topK*n candidates before trim |
+| `WithFilters(f ...ChunkFilter)` | none | Metadata filters passed to both search paths |
 
 ## Ingest Options
 
@@ -113,3 +114,4 @@ Chunker options:
 |--------|---------|-------------|
 | `WithMaxTokens(n int)` | 512 | Max tokens per chunk |
 | `WithOverlapTokens(n int)` | 50 | Overlap between consecutive chunks |
+| `WithBreakpointPercentile(p int)` | 25 | Similarity percentile for semantic split detection (SemanticChunker) |

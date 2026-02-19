@@ -89,7 +89,13 @@ Metadata is stored as JSON in the `metadata` column and flows through the retrie
 
 ## Chunkers
 
-Split text into chunks suitable for embedding:
+Split text into chunks suitable for embedding. All chunkers implement the `Chunker` interface:
+
+```go
+type Chunker interface {
+    Chunk(text string) []string
+}
+```
 
 ### RecursiveChunker (default)
 
@@ -109,6 +115,34 @@ Splits at heading boundaries, preserves headings in chunks for LLM context. Fall
 ```go
 ingest.NewMarkdownChunker(ingest.WithMaxTokens(1024))
 ```
+
+### SemanticChunker
+
+Splits text at semantic boundaries detected by embedding similarity drops between consecutive sentences. Uses percentile-based breakpoint detection: when cosine similarity between two consecutive sentences falls below the Nth percentile of all consecutive similarities, the chunker inserts a boundary.
+
+```go
+ingest.NewSemanticChunker(embedding.Embed,
+    ingest.WithMaxTokens(512),
+    ingest.WithBreakpointPercentile(25), // default: split at 25th percentile
+)
+```
+
+The first argument is an `EmbedFunc` — a function with signature `func(context.Context, []string) ([][]float32, error)`. This matches `EmbeddingProvider.Embed`, so you can pass `embedding.Embed` directly.
+
+`SemanticChunker` implements `ContextChunker` (see below), which means the `Ingestor` will automatically pass context through to the embedding call. On embedding errors, it falls back to `RecursiveChunker` — no error is returned.
+
+### ContextChunker
+
+`ContextChunker` extends `Chunker` with a context-aware method for chunkers that call external services (embedding APIs, databases):
+
+```go
+type ContextChunker interface {
+    Chunker
+    ChunkContext(ctx context.Context, text string) ([]string, error)
+}
+```
+
+The `Ingestor` auto-detects this capability via type assertion. When the chunker implements `ContextChunker`, the ingestor calls `ChunkContext` (passing request context for cancellation and tracing). Otherwise it falls back to `Chunk`.
 
 ## Chunking Strategies
 
@@ -157,6 +191,14 @@ ingestor := ingest.NewIngestor(store, embedding,
 | `WithChildTokens(n)` | 256 | Child chunk size |
 | `WithBatchSize(n)` | 64 | Chunks per `Embed()` call |
 | `WithExtractor(ct, e)` | — | Register custom extractor for content type |
+
+Chunker options (shared by all chunker constructors):
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `WithMaxTokens(n)` | 512 | Max tokens per chunk (approximated as n*4 chars) |
+| `WithOverlapTokens(n)` | 50 | Overlap between consecutive chunks |
+| `WithBreakpointPercentile(p)` | 25 | Similarity percentile for semantic split detection (SemanticChunker only) |
 
 ## Batched Embedding
 

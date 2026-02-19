@@ -118,6 +118,23 @@ chunker := ingest.NewMarkdownChunker(ingest.WithMaxTokens(1024))
 
 Auto-selected for markdown content when no explicit chunker is set.
 
+#### SemanticChunker
+
+Splits text at semantic boundaries by computing cosine similarity between consecutive sentence embeddings. When similarity drops below a percentile threshold, a chunk boundary is inserted. Produces topic-coherent chunks that respect natural content transitions.
+
+```go
+chunker := ingest.NewSemanticChunker(embedding.Embed,
+    ingest.WithMaxTokens(512),
+    ingest.WithBreakpointPercentile(25), // split at 25th percentile of similarity drops
+)
+
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithChunker(chunker),
+)
+```
+
+The first argument is an `EmbedFunc` — pass `embedding.Embed` directly (the signatures match). On embedding errors, falls back to `RecursiveChunker` automatically.
+
 ### Step 3: Chunking Strategy
 
 #### Flat (default)
@@ -287,6 +304,32 @@ When documents are ingested with `StrategyParentChild`, the retriever automatica
 
 This gives you the best of both worlds: precise matching via small chunks, rich context via large chunks.
 
+### Filtering by Metadata
+
+`WithFilters` scopes retrieval to specific documents, sources, metadata, or time ranges. Filters are applied at the store level — both vector and keyword search paths respect them.
+
+```go
+// Retrieve only from a specific document
+retriever := oasis.NewHybridRetriever(store, embedding,
+    oasis.WithFilters(oasis.ByDocument("doc-abc")),
+)
+
+// Retrieve from a specific source, created recently
+retriever := oasis.NewHybridRetriever(store, embedding,
+    oasis.WithFilters(
+        oasis.BySource("https://docs.example.com"),
+        oasis.CreatedAfter(1700000000),
+    ),
+)
+
+// Retrieve chunks with specific metadata
+retriever := oasis.NewHybridRetriever(store, embedding,
+    oasis.WithFilters(oasis.ByMeta("section_heading", "API Reference")),
+)
+```
+
+Available filter constructors: `ByDocument(ids...)`, `BySource(source)`, `ByMeta(key, value)`, `CreatedAfter(unix)`, `CreatedBefore(unix)`. Multiple filters are AND-combined.
+
 ### Retrieval Options Summary
 
 | Option | Default | Description |
@@ -295,6 +338,7 @@ This gives you the best of both worlds: precise matching via small chunks, rich 
 | `WithMinRetrievalScore(s)` | 0 | Drop results below this score |
 | `WithKeywordWeight(w)` | 0.3 | Keyword weight in RRF merge |
 | `WithOverfetchMultiplier(n)` | 3 | Fetch topK*n candidates before trim |
+| `WithFilters(f...)` | none | Metadata filters passed to both search paths |
 
 ---
 

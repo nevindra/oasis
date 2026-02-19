@@ -334,18 +334,95 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	return tx.Commit(ctx)
 }
 
+// buildChunkFiltersPg translates ChunkFilter values into Postgres WHERE clauses.
+// startParam is the next $N placeholder number.
+func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, []any, bool) {
+	if len(filters) == 0 {
+		return "", nil, false
+	}
+	var clauses []string
+	var args []any
+	needsDocJoin := false
+	p := startParam
+
+	for _, f := range filters {
+		switch {
+		case f.Field == "document_id":
+			if f.Op == oasis.OpIn {
+				ids, ok := f.Value.([]string)
+				if !ok || len(ids) == 0 {
+					continue
+				}
+				placeholders := make([]string, len(ids))
+				for i, id := range ids {
+					placeholders[i] = fmt.Sprintf("$%d", p)
+					p++
+					args = append(args, id)
+				}
+				clauses = append(clauses, "c.document_id IN ("+strings.Join(placeholders, ",")+")")
+			} else if f.Op == oasis.OpEq {
+				clauses = append(clauses, fmt.Sprintf("c.document_id = $%d", p))
+				p++
+				args = append(args, f.Value)
+			}
+
+		case f.Field == "source":
+			needsDocJoin = true
+			clauses = append(clauses, fmt.Sprintf("d.source = $%d", p))
+			p++
+			args = append(args, f.Value)
+
+		case f.Field == "created_at":
+			needsDocJoin = true
+			if f.Op == oasis.OpGt {
+				clauses = append(clauses, fmt.Sprintf("d.created_at > $%d", p))
+			} else if f.Op == oasis.OpLt {
+				clauses = append(clauses, fmt.Sprintf("d.created_at < $%d", p))
+			}
+			p++
+			args = append(args, f.Value)
+
+		case strings.HasPrefix(f.Field, "meta."):
+			key := strings.TrimPrefix(f.Field, "meta.")
+			clauses = append(clauses, fmt.Sprintf("c.metadata->>'%s' = $%d", key, p))
+			p++
+			args = append(args, f.Value)
+		}
+	}
+
+	if len(clauses) == 0 {
+		return "", nil, false
+	}
+	return " AND " + strings.Join(clauses, " AND "), args, needsDocJoin
+}
+
 // SearchChunks performs vector similarity search over document chunks
 // using pgvector's cosine distance operator with HNSW index.
-func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredChunk, error) {
+func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
 	embStr := serializeEmbedding(embedding)
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, document_id, parent_id, content, chunk_index, metadata,
-		        1 - (embedding <=> $1::vector) AS score
-		 FROM chunks
-		 WHERE embedding IS NOT NULL
-		 ORDER BY embedding <=> $1::vector
-		 LIMIT $2`,
-		embStr, topK)
+	whereExtra, filterArgs, needsDocJoin := buildChunkFiltersPg(filters, 3) // $1=embedding, $2=topK
+
+	var q string
+	if needsDocJoin {
+		q = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata,
+		        1 - (c.embedding <=> $1::vector) AS score
+		 FROM chunks c JOIN documents d ON d.id = c.document_id
+		 WHERE c.embedding IS NOT NULL` + whereExtra + `
+		 ORDER BY c.embedding <=> $1::vector
+		 LIMIT $2`
+	} else {
+		q = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata,
+		        1 - (c.embedding <=> $1::vector) AS score
+		 FROM chunks c
+		 WHERE c.embedding IS NOT NULL` + whereExtra + `
+		 ORDER BY c.embedding <=> $1::vector
+		 LIMIT $2`
+	}
+
+	allArgs := []any{embStr, topK}
+	allArgs = append(allArgs, filterArgs...)
+
+	rows, err := s.pool.Query(ctx, q, allArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: search chunks: %w", err)
 	}
@@ -374,15 +451,30 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 
 // SearchChunksKeyword performs full-text keyword search over document chunks
 // using PostgreSQL tsvector/tsquery with a GIN index.
-func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int) ([]oasis.ScoredChunk, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, document_id, parent_id, content, chunk_index, metadata,
-		        ts_rank(to_tsvector('english', content), plainto_tsquery('english', $1)) AS score
-		 FROM chunks
-		 WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $1)
+func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
+	whereExtra, filterArgs, needsDocJoin := buildChunkFiltersPg(filters, 3) // $1=query, $2=topK
+
+	var q string
+	if needsDocJoin {
+		q = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata,
+		        ts_rank(to_tsvector('english', c.content), plainto_tsquery('english', $1)) AS score
+		 FROM chunks c JOIN documents d ON d.id = c.document_id
+		 WHERE to_tsvector('english', c.content) @@ plainto_tsquery('english', $1)` + whereExtra + `
 		 ORDER BY score DESC
-		 LIMIT $2`,
-		query, topK)
+		 LIMIT $2`
+	} else {
+		q = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata,
+		        ts_rank(to_tsvector('english', c.content), plainto_tsquery('english', $1)) AS score
+		 FROM chunks c
+		 WHERE to_tsvector('english', c.content) @@ plainto_tsquery('english', $1)` + whereExtra + `
+		 ORDER BY score DESC
+		 LIMIT $2`
+	}
+
+	allArgs := []any{query, topK}
+	allArgs = append(allArgs, filterArgs...)
+
+	rows, err := s.pool.Query(ctx, q, allArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: keyword search: %w", err)
 	}

@@ -335,12 +335,78 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
+// buildChunkFilters translates ChunkFilter values into SQL WHERE clauses.
+// Returns (whereClause, args, needsDocJoin). The whereClause includes a leading " AND ..."
+// for each filter. needsDocJoin is true when any filter references document-level fields.
+func buildChunkFilters(filters []oasis.ChunkFilter) (string, []any, bool) {
+	if len(filters) == 0 {
+		return "", nil, false
+	}
+	var clauses []string
+	var args []any
+	needsDocJoin := false
+
+	for _, f := range filters {
+		switch {
+		case f.Field == "document_id":
+			if f.Op == oasis.OpIn {
+				ids, ok := f.Value.([]string)
+				if !ok || len(ids) == 0 {
+					continue
+				}
+				placeholders := make([]string, len(ids))
+				for i, id := range ids {
+					placeholders[i] = "?"
+					args = append(args, id)
+				}
+				clauses = append(clauses, "c.document_id IN ("+strings.Join(placeholders, ",")+")") //nolint:gocritic
+			} else if f.Op == oasis.OpEq {
+				clauses = append(clauses, "c.document_id = ?")
+				args = append(args, f.Value)
+			}
+
+		case f.Field == "source":
+			needsDocJoin = true
+			clauses = append(clauses, "d.source = ?")
+			args = append(args, f.Value)
+
+		case f.Field == "created_at":
+			needsDocJoin = true
+			if f.Op == oasis.OpGt {
+				clauses = append(clauses, "d.created_at > ?")
+			} else if f.Op == oasis.OpLt {
+				clauses = append(clauses, "d.created_at < ?")
+			}
+			args = append(args, f.Value)
+
+		case strings.HasPrefix(f.Field, "meta."):
+			key := strings.TrimPrefix(f.Field, "meta.")
+			clauses = append(clauses, "json_extract(c.metadata, '$."+key+"') = ?")
+			args = append(args, f.Value)
+		}
+	}
+
+	if len(clauses) == 0 {
+		return "", nil, false
+	}
+	return " AND " + strings.Join(clauses, " AND "), args, needsDocJoin
+}
+
 // SearchChunks performs brute-force cosine similarity search over chunks.
-func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredChunk, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, document_id, parent_id, content, chunk_index, embedding, metadata
-		 FROM chunks WHERE embedding IS NOT NULL`,
-	)
+func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
+	whereExtra, filterArgs, needsDocJoin := buildChunkFilters(filters)
+
+	var query string
+	if needsDocJoin {
+		query = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.embedding, c.metadata
+			FROM chunks c JOIN documents d ON d.id = c.document_id
+			WHERE c.embedding IS NOT NULL` + whereExtra
+	} else {
+		query = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.embedding, c.metadata
+			FROM chunks c WHERE c.embedding IS NOT NULL` + whereExtra
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, filterArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("search chunks: %w", err)
 	}
@@ -385,16 +451,29 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 
 // SearchChunksKeyword performs full-text keyword search over document chunks
 // using SQLite FTS5. Results are sorted by relevance (FTS5 rank).
-func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int) ([]oasis.ScoredChunk, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata, f.rank
-		 FROM chunks_fts f
-		 JOIN chunks c ON c.id = f.chunk_id
-		 WHERE chunks_fts MATCH ?
-		 ORDER BY f.rank
-		 LIMIT ?`,
-		query, topK,
-	)
+func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
+	whereExtra, filterArgs, needsDocJoin := buildChunkFilters(filters)
+
+	var q string
+	baseArgs := []any{query}
+	if needsDocJoin {
+		q = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata, f.rank
+			FROM chunks_fts f
+			JOIN chunks c ON c.id = f.chunk_id
+			JOIN documents d ON d.id = c.document_id
+			WHERE chunks_fts MATCH ?` + whereExtra + `
+			ORDER BY f.rank LIMIT ?`
+	} else {
+		q = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata, f.rank
+			FROM chunks_fts f
+			JOIN chunks c ON c.id = f.chunk_id
+			WHERE chunks_fts MATCH ?` + whereExtra + `
+			ORDER BY f.rank LIMIT ?`
+	}
+	allArgs := append(baseArgs, filterArgs...)
+	allArgs = append(allArgs, topK)
+
+	rows, err := s.db.QueryContext(ctx, q, allArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("keyword search: %w", err)
 	}

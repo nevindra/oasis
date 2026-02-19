@@ -150,6 +150,15 @@ func (ing *Ingestor) IngestReader(ctx context.Context, r io.Reader, filename str
 	return ing.IngestFile(ctx, data, filename)
 }
 
+// chunkWith calls ChunkContext if the chunker implements ContextChunker,
+// otherwise falls back to Chunk.
+func chunkWith(ctx context.Context, chunker Chunker, text string) ([]string, error) {
+	if cc, ok := chunker.(ContextChunker); ok {
+		return cc.ChunkContext(ctx, text)
+	}
+	return chunker.Chunk(text), nil
+}
+
 // chunkAndEmbed handles chunking (flat or parent-child) and batched embedding.
 func (ing *Ingestor) chunkAndEmbed(ctx context.Context, text, docID string, ct ContentType, source string, pageMeta []PageMeta) ([]oasis.Chunk, error) {
 	if ing.strategy == StrategyParentChild {
@@ -161,7 +170,10 @@ func (ing *Ingestor) chunkAndEmbed(ctx context.Context, text, docID string, ct C
 // chunkFlat performs single-level chunking with batched embedding.
 func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct ContentType, source string, pageMeta []PageMeta) ([]oasis.Chunk, error) {
 	chunker := ing.selectChunker(ct)
-	chunkTexts := chunker.Chunk(text)
+	chunkTexts, err := chunkWith(ctx, chunker, text)
+	if err != nil {
+		return nil, fmt.Errorf("chunk: %w", err)
+	}
 	if len(chunkTexts) == 0 {
 		return nil, nil
 	}
@@ -204,7 +216,10 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 		parentChunker = NewMarkdownChunker(WithMaxTokens(1024))
 	}
 
-	parentTexts := parentChunker.Chunk(text)
+	parentTexts, err := chunkWith(ctx, parentChunker, text)
+	if err != nil {
+		return nil, fmt.Errorf("chunk parent: %w", err)
+	}
 	if len(parentTexts) == 0 {
 		return nil, nil
 	}
@@ -238,7 +253,10 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 		chunkIdx++
 
 		// Split parent into children.
-		childTexts := ing.childChunker.Chunk(pt)
+		childTexts, err := chunkWith(ctx, ing.childChunker, pt)
+		if err != nil {
+			return nil, fmt.Errorf("chunk child: %w", err)
+		}
 		childOffset := 0
 		for _, childText := range childTexts {
 			cidx := strings.Index(pt[childOffset:], childText)

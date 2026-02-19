@@ -404,21 +404,137 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
+// matchesFilters checks if a scored chunk matches all filters.
+// docMap is lazily populated when document-level filters are encountered.
+func matchesFilters(chunk oasis.ScoredChunk, filters []oasis.ChunkFilter, docMap map[string]oasis.Document) bool {
+	for _, f := range filters {
+		switch {
+		case f.Field == "document_id":
+			if f.Op == oasis.OpIn {
+				ids, _ := f.Value.([]string)
+				found := false
+				for _, id := range ids {
+					if chunk.DocumentID == id {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return false
+				}
+			} else if f.Op == oasis.OpEq {
+				if chunk.DocumentID != f.Value {
+					return false
+				}
+			}
+
+		case f.Field == "source":
+			doc, ok := docMap[chunk.DocumentID]
+			if !ok || doc.Source != f.Value {
+				return false
+			}
+
+		case f.Field == "created_at":
+			doc, ok := docMap[chunk.DocumentID]
+			if !ok {
+				return false
+			}
+			ts, _ := f.Value.(int64)
+			if f.Op == oasis.OpGt && doc.CreatedAt <= ts {
+				return false
+			}
+			if f.Op == oasis.OpLt && doc.CreatedAt >= ts {
+				return false
+			}
+
+		case strings.HasPrefix(f.Field, "meta."):
+			if chunk.Metadata == nil {
+				return false
+			}
+			key := strings.TrimPrefix(f.Field, "meta.")
+			val, _ := f.Value.(string)
+			switch key {
+			case "section_heading":
+				if chunk.Metadata.SectionHeading != val {
+					return false
+				}
+			case "source_url":
+				if chunk.Metadata.SourceURL != val {
+					return false
+				}
+			case "page_number":
+				if fmt.Sprint(chunk.Metadata.PageNumber) != val {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// needsDocLookup returns true if any filter references document-level fields.
+func needsDocLookup(filters []oasis.ChunkFilter) bool {
+	for _, f := range filters {
+		if f.Field == "source" || f.Field == "created_at" {
+			return true
+		}
+	}
+	return false
+}
+
+// loadDocMap fetches documents for the given IDs and returns a map.
+func loadDocMap(ctx context.Context, db *sql.DB, ids []string) map[string]oasis.Document {
+	if len(ids) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := db.QueryContext(ctx,
+		"SELECT id, title, source, created_at FROM documents WHERE id IN ("+strings.Join(placeholders, ",")+")", args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	m := make(map[string]oasis.Document)
+	for rows.Next() {
+		var d oasis.Document
+		if err := rows.Scan(&d.ID, &d.Title, &d.Source, &d.CreatedAt); err != nil {
+			continue
+		}
+		m[d.ID] = d
+	}
+	return m
+}
+
 // SearchChunks performs vector similarity search over document chunks
 // using the libsql vector_top_k function. Score is always 0 (see SearchMessages).
-func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredChunk, error) {
+// When filters are present, overfetches topK*3 and filters in-memory since
+// vector_top_k does not support WHERE clauses.
+func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
 	db, err := s.openDB()
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 
+	fetchK := topK
+	if len(filters) > 0 {
+		fetchK = topK * 3
+	}
+
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
 		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata
 		 FROM vector_top_k('chunks_vector_idx', vector(?), ?) AS v
 		 JOIN chunks AS c ON c.rowid = v.id`,
-		embJSON, topK,
+		embJSON, fetchK,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("search chunks: %w", err)
@@ -442,27 +558,84 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 		}
 		chunks = append(chunks, oasis.ScoredChunk{Chunk: c})
 	}
-	return chunks, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(filters) == 0 {
+		return chunks, nil
+	}
+
+	// Load document map if needed for doc-level filters.
+	var docMap map[string]oasis.Document
+	if needsDocLookup(filters) {
+		docIDs := make([]string, 0, len(chunks))
+		seen := make(map[string]bool)
+		for _, sc := range chunks {
+			if !seen[sc.DocumentID] {
+				seen[sc.DocumentID] = true
+				docIDs = append(docIDs, sc.DocumentID)
+			}
+		}
+		docMap = loadDocMap(ctx, db, docIDs)
+	}
+
+	var filtered []oasis.ScoredChunk
+	for _, sc := range chunks {
+		if matchesFilters(sc, filters, docMap) {
+			filtered = append(filtered, sc)
+			if len(filtered) >= topK {
+				break
+			}
+		}
+	}
+	return filtered, nil
 }
 
 // SearchChunksKeyword performs full-text keyword search over document chunks
 // using FTS5. Results are sorted by relevance.
-func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int) ([]oasis.ScoredChunk, error) {
+func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
 	db, err := s.openDB()
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 
-	rows, err := db.QueryContext(ctx,
-		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata, f.rank
+	// Build optional WHERE clauses for chunk-level filters (document_id).
+	// Doc-level filters are applied post-query.
+	var extraWhere string
+	var extraArgs []any
+	for _, f := range filters {
+		if f.Field == "document_id" && f.Op == oasis.OpIn {
+			ids, ok := f.Value.([]string)
+			if !ok || len(ids) == 0 {
+				continue
+			}
+			placeholders := make([]string, len(ids))
+			for i, id := range ids {
+				placeholders[i] = "?"
+				extraArgs = append(extraArgs, id)
+			}
+			extraWhere += " AND c.document_id IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+
+	fetchK := topK
+	if needsDocLookup(filters) {
+		fetchK = topK * 3
+	}
+
+	q := `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata, f.rank
 		 FROM chunks_fts f
 		 JOIN chunks c ON c.id = f.chunk_id
-		 WHERE chunks_fts MATCH ?
+		 WHERE chunks_fts MATCH ?` + extraWhere + `
 		 ORDER BY f.rank
-		 LIMIT ?`,
-		query, topK,
-	)
+		 LIMIT ?`
+	allArgs := []any{query}
+	allArgs = append(allArgs, extraArgs...)
+	allArgs = append(allArgs, fetchK)
+
+	rows, err := db.QueryContext(ctx, q, allArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("keyword search: %w", err)
 	}
@@ -491,7 +664,35 @@ func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int)
 		}
 		results = append(results, oasis.ScoredChunk{Chunk: c, Score: score})
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Apply remaining doc-level filters post-query.
+	if !needsDocLookup(filters) {
+		return results, nil
+	}
+
+	docIDs := make([]string, 0, len(results))
+	seen := make(map[string]bool)
+	for _, sc := range results {
+		if !seen[sc.DocumentID] {
+			seen[sc.DocumentID] = true
+			docIDs = append(docIDs, sc.DocumentID)
+		}
+	}
+	docMap := loadDocMap(ctx, db, docIDs)
+
+	var filtered []oasis.ScoredChunk
+	for _, sc := range results {
+		if matchesFilters(sc, filters, docMap) {
+			filtered = append(filtered, sc)
+			if len(filtered) >= topK {
+				break
+			}
+		}
+	}
+	return filtered, nil
 }
 
 // GetChunksByIDs returns chunks matching the given IDs.

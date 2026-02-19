@@ -77,6 +77,39 @@ type Skill struct {
 }
 ```
 
+## Chunk Filter Types
+
+**File:** `types.go`
+
+```go
+type FilterOp int
+
+const (
+    OpEq FilterOp = iota // exact match
+    OpIn                  // value in set
+    OpGt                  // greater than
+    OpLt                  // less than
+)
+
+type ChunkFilter struct {
+    Field string
+    Op    FilterOp
+    Value any
+}
+```
+
+`ChunkFilter` restricts which chunks are considered during vector and keyword search. Pass to `Store.SearchChunks`, `KeywordSearcher.SearchChunksKeyword`, or `HybridRetriever` via `WithFilters`. See [Store: Chunk Filtering](../concepts/store.md#chunk-filtering) for usage examples and backend details.
+
+## Ingest Types
+
+**Package:** `github.com/nevindra/oasis/ingest`
+
+```go
+type EmbedFunc func(ctx context.Context, texts []string) ([][]float32, error)
+```
+
+`EmbedFunc` matches the `EmbeddingProvider.Embed` method signature, so `embedding.Embed` can be passed directly to `NewSemanticChunker`.
+
 ## Retrieval Types
 
 **File:** `retriever.go`

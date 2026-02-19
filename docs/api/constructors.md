@@ -159,6 +159,20 @@ oasis.NewID() string      // time-sortable 20-char xid (base32)
 oasis.NowUnix() int64     // current Unix timestamp (seconds)
 ```
 
+## Chunk Filter Constructors
+
+**File:** `types.go`
+
+```go
+oasis.ByDocument(ids ...string) ChunkFilter      // match chunks by document ID(s)
+oasis.BySource(source string) ChunkFilter         // match by document source
+oasis.ByMeta(key, value string) ChunkFilter       // match by chunk metadata JSON key
+oasis.CreatedAfter(unix int64) ChunkFilter         // documents created after timestamp
+oasis.CreatedBefore(unix int64) ChunkFilter        // documents created before timestamp
+```
+
+Pass to `Store.SearchChunks`, `KeywordSearcher.SearchChunksKeyword`, or `HybridRetriever` via `WithFilters`. See [Store: Chunk Filtering](../concepts/store.md#chunk-filtering) for details.
+
 ## Retrieval
 
 **File:** `retriever.go`
@@ -190,7 +204,10 @@ Chunkers:
 ```go
 ingest.NewRecursiveChunker(opts ...ChunkerOption)
 ingest.NewMarkdownChunker(opts ...ChunkerOption)
+ingest.NewSemanticChunker(embed EmbedFunc, opts ...ChunkerOption)
 ```
+
+`NewSemanticChunker` takes an `EmbedFunc` as its first argument — pass `embedding.Embed` directly (the signatures match). Implements both `Chunker` and `ContextChunker`.
 
 ## Observer
 

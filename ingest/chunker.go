@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -11,18 +12,32 @@ type Chunker interface {
 	Chunk(text string) []string
 }
 
+// EmbedFunc embeds texts into vectors. Matches the EmbeddingProvider.Embed
+// method signature so provider.Embed can be passed directly.
+type EmbedFunc func(ctx context.Context, texts []string) ([][]float32, error)
+
+// ContextChunker extends Chunker with context-aware chunking.
+// Implementations that call external services (embedding APIs, databases)
+// should implement this interface. The Ingestor uses ChunkContext when
+// available, falling back to Chunk otherwise.
+type ContextChunker interface {
+	Chunker
+	ChunkContext(ctx context.Context, text string) ([]string, error)
+}
+
 // --- ChunkerOption for configuring chunkers ---
 
 // ChunkerOption configures a chunker implementation.
 type ChunkerOption func(*chunkerConfig)
 
 type chunkerConfig struct {
-	maxTokens     int
-	overlapTokens int
+	maxTokens            int
+	overlapTokens        int
+	breakpointPercentile int
 }
 
 func defaultChunkerConfig() chunkerConfig {
-	return chunkerConfig{maxTokens: 512, overlapTokens: 50}
+	return chunkerConfig{maxTokens: 512, overlapTokens: 50, breakpointPercentile: 25}
 }
 
 // WithMaxTokens sets the maximum tokens per chunk (approximated as tokens*4 chars).
@@ -33,6 +48,14 @@ func WithMaxTokens(n int) ChunkerOption {
 // WithOverlapTokens sets the overlap between chunks in tokens.
 func WithOverlapTokens(n int) ChunkerOption {
 	return func(c *chunkerConfig) { c.overlapTokens = n }
+}
+
+// WithBreakpointPercentile sets the similarity percentile for semantic split
+// detection. Sentences where consecutive cosine similarity falls below this
+// percentile become chunk boundaries. Default: 25 (split at the biggest 25%
+// of similarity drops). Lower = fewer splits. Higher = more splits.
+func WithBreakpointPercentile(p int) ChunkerOption {
+	return func(c *chunkerConfig) { c.breakpointPercentile = p }
 }
 
 // --- RecursiveChunker ---

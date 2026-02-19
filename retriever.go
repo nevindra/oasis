@@ -37,7 +37,7 @@ type Reranker interface {
 // Store implementations that support FTS can implement this interface;
 // callers discover it via type assertion.
 type KeywordSearcher interface {
-	SearchChunksKeyword(ctx context.Context, query string, topK int) ([]ScoredChunk, error)
+	SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...ChunkFilter) ([]ScoredChunk, error)
 }
 
 // RetrieverOption configures a HybridRetriever.
@@ -48,6 +48,7 @@ type retrieverConfig struct {
 	minScore            float32
 	keywordWeight       float32
 	overfetchMultiplier int
+	filters             []ChunkFilter
 }
 
 // WithReranker sets an optional re-ranking stage that runs after hybrid merge.
@@ -72,6 +73,11 @@ func WithKeywordWeight(w float32) RetrieverOption {
 // re-ranks and trims to topK. Default is 3.
 func WithOverfetchMultiplier(n int) RetrieverOption {
 	return func(c *retrieverConfig) { c.overfetchMultiplier = n }
+}
+
+// WithFilters sets metadata filters passed to SearchChunks and SearchChunksKeyword.
+func WithFilters(filters ...ChunkFilter) RetrieverOption {
+	return func(c *retrieverConfig) { c.filters = filters }
 }
 
 // --- ScoreReranker ---
@@ -197,14 +203,14 @@ func (h *HybridRetriever) Retrieve(ctx context.Context, query string, topK int) 
 
 	fetchK := max(topK*h.cfg.overfetchMultiplier, topK)
 
-	vectorResults, err := h.store.SearchChunks(ctx, embs[0], fetchK)
+	vectorResults, err := h.store.SearchChunks(ctx, embs[0], fetchK, h.cfg.filters...)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
 	var keywordResults []ScoredChunk
 	if ks, ok := h.store.(KeywordSearcher); ok {
-		keywordResults, _ = ks.SearchChunksKeyword(ctx, query, fetchK)
+		keywordResults, _ = ks.SearchChunksKeyword(ctx, query, fetchK, h.cfg.filters...)
 	}
 
 	var results []RetrievalResult

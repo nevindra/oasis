@@ -54,6 +54,7 @@ retriever := oasis.NewHybridRetriever(store, embedding,
     oasis.WithOverfetchMultiplier(3),
     oasis.WithReranker(oasis.NewScoreReranker(0.1)),
     oasis.WithMinRetrievalScore(0.05),
+    oasis.WithFilters(oasis.ByDocument("doc-abc")), // optional: scope to specific documents
 )
 ```
 
@@ -87,11 +88,13 @@ Keyword search is an optional Store capability discovered via type assertion:
 
 ```go
 type KeywordSearcher interface {
-    SearchChunksKeyword(ctx context.Context, query string, topK int) ([]ScoredChunk, error)
+    SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...ChunkFilter) ([]ScoredChunk, error)
 }
 ```
 
 Both `store/sqlite` and `store/libsql` implement this interface using SQLite FTS5. The FTS index is populated automatically when documents are stored via `StoreDocument()`.
+
+`SearchChunksKeyword` accepts optional `ChunkFilter` arguments with the same semantics as `Store.SearchChunks` — see [Store: Chunk Filtering](store.md#chunk-filtering).
 
 If a Store doesn't implement `KeywordSearcher`, `HybridRetriever` falls back to vector-only search — no error, no configuration needed.
 
@@ -144,6 +147,28 @@ graph TB
 | `WithMinRetrievalScore(s)` | 0 | Drop results below this score |
 | `WithKeywordWeight(w)` | 0.3 | Keyword weight in RRF (vector gets 1-w) |
 | `WithOverfetchMultiplier(n)` | 3 | Fetch topK*n candidates before trim |
+| `WithFilters(f...)` | none | Metadata filters passed to both search paths |
+
+## Filtering
+
+`WithFilters` passes `ChunkFilter` arguments through to both `Store.SearchChunks` and `KeywordSearcher.SearchChunksKeyword`, scoping the search to matching chunks. Filters are combined with AND logic.
+
+```go
+// Retrieve only from a specific document
+retriever := oasis.NewHybridRetriever(store, embedding,
+    oasis.WithFilters(oasis.ByDocument("doc-abc")),
+)
+
+// Combine filters: source + time range
+retriever := oasis.NewHybridRetriever(store, embedding,
+    oasis.WithFilters(
+        oasis.BySource("https://docs.example.com"),
+        oasis.CreatedAfter(1700000000),
+    ),
+)
+```
+
+See [Store: Chunk Filtering](store.md#chunk-filtering) for the full list of filter constructors and backend implementation details.
 
 ## See Also
 

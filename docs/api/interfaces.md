@@ -103,7 +103,7 @@ type Store interface {
 
     // Documents + Chunks
     StoreDocument(ctx context.Context, doc Document, chunks []Chunk) error
-    SearchChunks(ctx context.Context, embedding []float32, topK int) ([]ScoredChunk, error)
+    SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...ChunkFilter) ([]ScoredChunk, error)
     GetChunksByIDs(ctx context.Context, ids []string) ([]Chunk, error)
 
     // Config
@@ -295,11 +295,11 @@ Optional Store capability for full-text keyword search. Discovered via type asse
 
 ```go
 type KeywordSearcher interface {
-    SearchChunksKeyword(ctx context.Context, query string, topK int) ([]ScoredChunk, error)
+    SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...ChunkFilter) ([]ScoredChunk, error)
 }
 ```
 
-Implemented by `store/sqlite` and `store/libsql` (FTS5).
+Implemented by `store/sqlite`, `store/libsql` (FTS5), and `store/postgres` (GIN/tsvector).
 
 ---
 
@@ -315,4 +315,17 @@ type Extractor interface {
 type Chunker interface {
     Chunk(text string) []string
 }
+
+type ContextChunker interface {
+    Chunker
+    ChunkContext(ctx context.Context, text string) ([]string, error)
+}
 ```
+
+`ContextChunker` extends `Chunker` for implementations that call external services (e.g., embedding APIs). The `Ingestor` discovers this via type assertion and calls `ChunkContext` when available. `SemanticChunker` implements both interfaces.
+
+| Implementation | Constructor |
+| --- | --- |
+| `RecursiveChunker` | `ingest.NewRecursiveChunker(opts ...ChunkerOption)` |
+| `MarkdownChunker` | `ingest.NewMarkdownChunker(opts ...ChunkerOption)` |
+| `SemanticChunker` | `ingest.NewSemanticChunker(embed EmbedFunc, opts ...ChunkerOption)` |

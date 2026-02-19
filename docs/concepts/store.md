@@ -99,11 +99,13 @@ store.DeleteThread(ctx, threadID)
 StoreDocument(ctx, doc, chunks) error
 ListDocuments(ctx, limit) ([]Document, error)
 DeleteDocument(ctx, id) error  // cascade deletes chunks + FTS
-SearchChunks(ctx, embedding, topK) ([]ScoredChunk, error)
+SearchChunks(ctx, embedding, topK, filters ...ChunkFilter) ([]ScoredChunk, error)
 GetChunksByIDs(ctx, ids) ([]Chunk, error)
 ```
 
 Used by the [ingest pipeline](ingest.md) and knowledge search tool. `ListDocuments` returns documents ordered by creation time (newest first). `DeleteDocument` removes a document and all its chunks in a single transaction.
+
+`SearchChunks` accepts optional `ChunkFilter` arguments to scope results by document, source, metadata, or time range. When no filters are passed, behavior is unchanged (search all chunks). See [Chunk Filtering](#chunk-filtering) below.
 
 ### Scheduled Actions
 
@@ -176,15 +178,56 @@ type ScoredChunk struct {
 
 A score of 0 means the store doesn't compute similarity (e.g., ANN indexes). Callers should treat `score == 0` as "relevance unknown" and skip threshold filtering.
 
+## Chunk Filtering
+
+`SearchChunks` accepts variadic `ChunkFilter` arguments to narrow results without post-filtering. Filters are combined with AND logic — a chunk must match all filters.
+
+```go
+// Search only within specific documents
+results, _ := store.SearchChunks(ctx, queryEmb, 10,
+    oasis.ByDocument("doc-abc", "doc-def"),
+)
+
+// Search by source and time range
+results, _ := store.SearchChunks(ctx, queryEmb, 10,
+    oasis.BySource("https://example.com/guide"),
+    oasis.CreatedAfter(1700000000),
+)
+
+// Search by chunk metadata
+results, _ := store.SearchChunks(ctx, queryEmb, 10,
+    oasis.ByMeta("section_heading", "Introduction"),
+)
+```
+
+Five convenience constructors cover common patterns:
+
+| Constructor | Field | Op | Description |
+| --- | --- | --- | --- |
+| `ByDocument(ids...)` | `document_id` | `OpIn` | Chunks belonging to specific documents |
+| `BySource(source)` | `source` | `OpEq` | Chunks from documents with a given source |
+| `ByMeta(key, value)` | `meta.<key>` | `OpEq` | Chunks where JSON metadata key equals value |
+| `CreatedAfter(unix)` | `created_at` | `OpGt` | Chunks from documents created after timestamp |
+| `CreatedBefore(unix)` | `created_at` | `OpLt` | Chunks from documents created before timestamp |
+
+### Backend Implementation Notes
+
+- **SQLite / PostgreSQL** — filters are translated to SQL WHERE clauses with conditional JOINs to the `documents` table when filtering on source or time. Metadata filters use `json_extract` (SQLite) or `->>'key'` (Postgres).
+- **LibSQL** — `vector_top_k()` doesn't support WHERE clauses, so the store overfetches `topK * 3` candidates and applies filters in-memory after retrieval.
+
+When no filters are passed, all backends behave exactly as before (search all chunks).
+
 ## Full-Text Search
 
 All shipped Store implementations implement the `KeywordSearcher` interface for full-text keyword search:
 
 ```go
 type KeywordSearcher interface {
-    SearchChunksKeyword(ctx context.Context, query string, topK int) ([]ScoredChunk, error)
+    SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...ChunkFilter) ([]ScoredChunk, error)
 }
 ```
+
+`SearchChunksKeyword` also accepts `...ChunkFilter` with the same semantics as `SearchChunks`.
 
 SQLite/libSQL use an FTS5 virtual table (`chunks_fts`) synchronized in `StoreDocument()`. PostgreSQL uses a GIN expression index on `to_tsvector('english', content)` — no manual sync needed. The [HybridRetriever](retrieval.md) discovers this capability via type assertion and uses it for hybrid vector + keyword search.
 

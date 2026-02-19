@@ -31,6 +31,21 @@ ingestor := ingest.NewIngestor(store, embedding,
 )
 ```
 
+## Semantic Chunking
+
+For content with mixed topics, use SemanticChunker to split at natural topic boundaries. It embeds consecutive sentences and splits where cosine similarity drops sharply.
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithChunker(ingest.NewSemanticChunker(embedding.Embed,
+        ingest.WithMaxTokens(512),
+        ingest.WithBreakpointPercentile(25),
+    )),
+)
+```
+
+The first argument (`embedding.Embed`) provides the embedding function — the signature matches `EmbedFunc` directly. A lower percentile means fewer splits (only the most significant topic shifts). On embedding failures, falls back to `RecursiveChunker` automatically.
+
 ## Parent-Child Strategy
 
 For large documents, use two-level chunking. Small chunks for precise matching, large chunks for full context:

@@ -162,7 +162,7 @@ type retrieverStore struct {
 	keywords []ScoredChunk
 }
 
-func (s *retrieverStore) SearchChunks(_ context.Context, _ []float32, _ int) ([]ScoredChunk, error) {
+func (s *retrieverStore) SearchChunks(_ context.Context, _ []float32, _ int, _ ...ChunkFilter) ([]ScoredChunk, error) {
 	return s.chunks, nil
 }
 
@@ -186,7 +186,7 @@ func (s *retrieverStore) GetChunksByIDs(_ context.Context, ids []string) ([]Chun
 	return out, nil
 }
 
-func (s *retrieverStore) SearchChunksKeyword(_ context.Context, _ string, _ int) ([]ScoredChunk, error) {
+func (s *retrieverStore) SearchChunksKeyword(_ context.Context, _ string, _ int, _ ...ChunkFilter) ([]ScoredChunk, error) {
 	return s.keywords, nil
 }
 
