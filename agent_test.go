@@ -965,3 +965,222 @@ func TestNetworkParallelAgentExecution(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "both agents done")
 	}
 }
+
+// --- Plan execution tests ---
+
+func TestLLMAgentPlanExecution(t *testing.T) {
+	// Provider calls execute_plan with 3 steps, then synthesizes final response
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "execute_plan",
+				Args: json.RawMessage(`{"steps":[
+					{"tool":"greet","args":{}},
+					{"tool":"greet","args":{}},
+					{"tool":"greet","args":{}}
+				]}`),
+			}}},
+			{Content: "all 3 greetings done"},
+		},
+	}
+
+	agent := NewLLMAgent("planner", "Plans tool calls", provider,
+		WithTools(mockTool{}),
+		WithPlanExecution(),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "greet 3 times"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "all 3 greetings done" {
+		t.Errorf("Output = %q, want %q", result.Output, "all 3 greetings done")
+	}
+}
+
+func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
+	// Verify the structured per-step result format
+	var capturedResult string
+	captureProvider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "execute_plan",
+				Args: json.RawMessage(`{"steps":[
+					{"tool":"greet","args":{}},
+					{"tool":"calc","args":{}}
+				]}`),
+			}}},
+			{Content: "done"},
+		},
+	}
+
+	agent := NewLLMAgent("planner", "Plans", captureProvider,
+		WithTools(mockTool{}, mockToolCalc{}),
+		WithPlanExecution(),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = result
+
+	// The plan result was fed back as a tool result message.
+	// We can verify the format by calling executePlan directly.
+	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
+		return "result_" + tc.Name, Usage{InputTokens: 10}
+	}
+	content, usage := executePlan(context.Background(), json.RawMessage(`{"steps":[
+		{"tool":"greet","args":{}},
+		{"tool":"calc","args":{}}
+	]}`), dispatch)
+	capturedResult = content
+
+	var steps []planStepResult
+	if err := json.Unmarshal([]byte(capturedResult), &steps); err != nil {
+		t.Fatalf("result is not valid JSON: %v", err)
+	}
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(steps))
+	}
+	if steps[0].Tool != "greet" || steps[0].Status != "ok" || steps[0].Result != "result_greet" {
+		t.Errorf("step 0 = %+v, want tool=greet status=ok result=result_greet", steps[0])
+	}
+	if steps[1].Tool != "calc" || steps[1].Status != "ok" || steps[1].Result != "result_calc" {
+		t.Errorf("step 1 = %+v, want tool=calc status=ok result=result_calc", steps[1])
+	}
+	if usage.InputTokens != 20 {
+		t.Errorf("usage.InputTokens = %d, want 20", usage.InputTokens)
+	}
+}
+
+func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
+	// Verify that a failed step reports error without aborting other steps
+	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
+		if tc.Name == "fail" {
+			return "error: tool broken", Usage{}
+		}
+		return "ok_" + tc.Name, Usage{}
+	}
+
+	content, _ := executePlan(context.Background(), json.RawMessage(`{"steps":[
+		{"tool":"greet","args":{}},
+		{"tool":"fail","args":{}},
+		{"tool":"calc","args":{}}
+	]}`), dispatch)
+
+	var steps []planStepResult
+	if err := json.Unmarshal([]byte(content), &steps); err != nil {
+		t.Fatalf("result is not valid JSON: %v", err)
+	}
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(steps))
+	}
+	if steps[0].Status != "ok" {
+		t.Errorf("step 0 status = %q, want ok", steps[0].Status)
+	}
+	if steps[1].Status != "error" || steps[1].Error != "tool broken" {
+		t.Errorf("step 1 = %+v, want status=error error='tool broken'", steps[1])
+	}
+	if steps[2].Status != "ok" {
+		t.Errorf("step 2 status = %q, want ok", steps[2].Status)
+	}
+}
+
+func TestLLMAgentPlanExecutionRecursionPrevented(t *testing.T) {
+	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
+		return "should not reach", Usage{}
+	}
+
+	content, _ := executePlan(context.Background(), json.RawMessage(`{"steps":[
+		{"tool":"execute_plan","args":{"steps":[]}}
+	]}`), dispatch)
+
+	if content != "error: execute_plan steps cannot call execute_plan" {
+		t.Errorf("expected recursion error, got %q", content)
+	}
+}
+
+func TestLLMAgentPlanExecutionEmptySteps(t *testing.T) {
+	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
+		return "should not reach", Usage{}
+	}
+
+	content, _ := executePlan(context.Background(), json.RawMessage(`{"steps":[]}`), dispatch)
+	if content != "error: execute_plan requires at least one step" {
+		t.Errorf("expected empty steps error, got %q", content)
+	}
+}
+
+func TestLLMAgentPlanExecutionInvalidArgs(t *testing.T) {
+	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
+		return "should not reach", Usage{}
+	}
+
+	content, _ := executePlan(context.Background(), json.RawMessage(`not json`), dispatch)
+	if len(content) < 7 || content[:7] != "error: " {
+		t.Errorf("expected error for invalid args, got %q", content)
+	}
+}
+
+func TestLLMAgentPlanExecutionNotEnabledIgnored(t *testing.T) {
+	// When WithPlanExecution is NOT set, execute_plan is treated as unknown tool
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "execute_plan",
+				Args: json.RawMessage(`{"steps":[{"tool":"greet","args":{}}]}`),
+			}}},
+			{Content: "recovered"},
+		},
+	}
+
+	agent := NewLLMAgent("nope", "No plan", provider,
+		WithTools(mockTool{}),
+		// Note: WithPlanExecution() NOT set
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "recovered" {
+		t.Errorf("Output = %q, want %q", result.Output, "recovered")
+	}
+}
+
+func TestNetworkPlanExecution(t *testing.T) {
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "execute_plan",
+				Args: json.RawMessage(`{"steps":[
+					{"tool":"greet","args":{}},
+					{"tool":"greet","args":{}}
+				]}`),
+			}}},
+			{Content: "network plan done"},
+		},
+	}
+
+	network := NewNetwork("net", "Plans", router,
+		WithTools(mockTool{}),
+		WithPlanExecution(),
+	)
+
+	result, err := network.Execute(context.Background(), AgentTask{Input: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "network plan done" {
+		t.Errorf("Output = %q, want %q", result.Output, "network plan done")
+	}
+}

@@ -3,6 +3,7 @@ package oasis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 const defaultMaxIter = 10
@@ -11,15 +12,16 @@ const defaultMaxIter = 10
 // Optionally supports conversation memory, user memory, and cross-thread search
 // when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
 type LLMAgent struct {
-	name         string
-	description  string
-	provider     Provider
-	tools        *ToolRegistry
-	processors   *ProcessorChain
-	systemPrompt string
-	maxIter      int
-	inputHandler InputHandler
-	mem          agentMemory
+	name          string
+	description   string
+	provider      Provider
+	tools         *ToolRegistry
+	processors    *ProcessorChain
+	systemPrompt  string
+	maxIter       int
+	inputHandler  InputHandler
+	planExecution bool
+	mem           agentMemory
 }
 
 // NewLLMAgent creates an LLMAgent with the given provider and options.
@@ -53,6 +55,7 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 		a.processors.Add(p)
 	}
 	a.inputHandler = cfg.inputHandler
+	a.planExecution = cfg.planExecution
 	return a
 }
 
@@ -78,6 +81,9 @@ func (a *LLMAgent) buildLoopConfig() loopConfig {
 	if a.inputHandler != nil {
 		toolDefs = append(toolDefs, askUserToolDef)
 	}
+	if a.planExecution {
+		toolDefs = append(toolDefs, executePlanToolDef)
+	}
 	return loopConfig{
 		name:         "agent:" + a.name,
 		provider:     a.provider,
@@ -92,9 +98,10 @@ func (a *LLMAgent) buildLoopConfig() loopConfig {
 }
 
 // makeDispatch returns a dispatchFunc that executes tools via ToolRegistry
-// and handles the ask_user special case.
+// and handles the ask_user and execute_plan special cases.
 func (a *LLMAgent) makeDispatch() dispatchFunc {
-	return func(ctx context.Context, tc ToolCall) (string, Usage) {
+	var dispatch dispatchFunc
+	dispatch = func(ctx context.Context, tc ToolCall) (string, Usage) {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && a.inputHandler != nil {
 			content, err := executeAskUser(ctx, a.inputHandler, a.name, tc)
@@ -102,6 +109,11 @@ func (a *LLMAgent) makeDispatch() dispatchFunc {
 				return "error: " + err.Error(), Usage{}
 			}
 			return content, Usage{}
+		}
+
+		// Special case: execute_plan tool
+		if tc.Name == "execute_plan" && a.planExecution {
+			return executePlan(ctx, tc.Args, dispatch)
 		}
 
 		result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
@@ -113,6 +125,7 @@ func (a *LLMAgent) makeDispatch() dispatchFunc {
 		}
 		return content, Usage{}
 	}
+	return dispatch
 }
 
 // compile-time checks
@@ -120,6 +133,100 @@ var (
 	_ Agent          = (*LLMAgent)(nil)
 	_ StreamingAgent = (*LLMAgent)(nil)
 )
+
+// --- execute_plan tool ---
+
+// executePlanToolDef is the tool definition for the built-in execute_plan tool.
+var executePlanToolDef = ToolDefinition{
+	Name:        "execute_plan",
+	Description: "Execute multiple tool calls in a single batch without intermediate reasoning. Use when you need to call tools multiple times with known inputs upfront. All steps run in parallel. Returns structured results per step.",
+	Parameters: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"steps": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"tool": {"type": "string", "description": "Name of the tool to call"},
+						"args": {"type": "object", "description": "Arguments for the tool"}
+					},
+					"required": ["tool", "args"]
+				},
+				"description": "Array of tool calls to execute in parallel"
+			}
+		},
+		"required": ["steps"]
+	}`),
+}
+
+// planArgs is the parsed arguments for the execute_plan tool call.
+type planArgs struct {
+	Steps []planStep `json:"steps"`
+}
+
+// planStep is a single step in an execute_plan call.
+type planStep struct {
+	Tool string          `json:"tool"`
+	Args json.RawMessage `json:"args"`
+}
+
+// planStepResult is one entry in the execute_plan result array.
+type planStepResult struct {
+	Step   int    `json:"step"`
+	Tool   string `json:"tool"`
+	Status string `json:"status"`
+	Result string `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// executePlan handles the execute_plan tool call by parsing steps,
+// executing them in parallel via the given dispatch function, and
+// returning aggregated results as JSON. Shared by LLMAgent and Network.
+func executePlan(ctx context.Context, args json.RawMessage, dispatch dispatchFunc) (string, Usage) {
+	var params planArgs
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "error: invalid execute_plan args: " + err.Error(), Usage{}
+	}
+	if len(params.Steps) == 0 {
+		return "error: execute_plan requires at least one step", Usage{}
+	}
+
+	// Build tool calls, preventing recursion.
+	calls := make([]ToolCall, len(params.Steps))
+	for i, step := range params.Steps {
+		if step.Tool == "execute_plan" {
+			return "error: execute_plan steps cannot call execute_plan", Usage{}
+		}
+		calls[i] = ToolCall{
+			ID:   fmt.Sprintf("plan_step_%d", i),
+			Name: step.Tool,
+			Args: step.Args,
+		}
+	}
+
+	// Execute all steps in parallel.
+	results := dispatchParallel(ctx, calls, dispatch)
+
+	// Aggregate results.
+	var totalUsage Usage
+	stepResults := make([]planStepResult, len(params.Steps))
+	for i, step := range params.Steps {
+		totalUsage.InputTokens += results[i].usage.InputTokens
+		totalUsage.OutputTokens += results[i].usage.OutputTokens
+
+		sr := planStepResult{Step: i, Tool: step.Tool, Status: "ok", Result: results[i].content}
+		if len(results[i].content) > 7 && results[i].content[:7] == "error: " {
+			sr.Status = "error"
+			sr.Error = results[i].content[7:]
+			sr.Result = ""
+		}
+		stepResults[i] = sr
+	}
+
+	out, _ := json.Marshal(stepResults)
+	return string(out), totalUsage
+}
 
 // --- ask_user tool ---
 

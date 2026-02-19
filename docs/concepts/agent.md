@@ -113,6 +113,7 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithAgents(agents ...Agent)` | Add subagents (Network only) |
 | `WithProcessors(processors ...any)` | Add processor middleware |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
+| `WithPlanExecution()` | Enable batched tool calls via `execute_plan` tool |
 | `WithConversationMemory(s Store, opts...)` | Enable history load/persist per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact injection + auto-extraction |
 

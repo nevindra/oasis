@@ -12,6 +12,7 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithAgents(agents ...Agent)` | Add subagents (Network only, ignored by LLMAgent) |
 | `WithProcessors(processors ...any)` | Add processor middleware |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
+| `WithPlanExecution()` | Enable batched tool calls via built-in `execute_plan` tool |
 | `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable history per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact read/write |
 

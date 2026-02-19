@@ -13,16 +13,17 @@ import (
 // Optionally supports conversation memory, user memory, and cross-thread search
 // when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
 type Network struct {
-	name         string
-	description  string
-	router       Provider
-	agents       map[string]Agent // keyed by name
-	tools        *ToolRegistry
-	processors   *ProcessorChain
-	systemPrompt string
-	maxIter      int
-	inputHandler InputHandler
-	mem          agentMemory
+	name          string
+	description   string
+	router        Provider
+	agents        map[string]Agent // keyed by name
+	tools         *ToolRegistry
+	processors    *ProcessorChain
+	systemPrompt  string
+	maxIter       int
+	inputHandler  InputHandler
+	planExecution bool
+	mem           agentMemory
 }
 
 // NewNetwork creates a Network with the given router provider and options.
@@ -60,6 +61,7 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 		n.processors.Add(p)
 	}
 	n.inputHandler = cfg.inputHandler
+	n.planExecution = cfg.planExecution
 	return n
 }
 
@@ -86,6 +88,9 @@ func (n *Network) buildLoopConfig(task AgentTask, ch chan<- StreamEvent) loopCon
 	if n.inputHandler != nil {
 		toolDefs = append(toolDefs, askUserToolDef)
 	}
+	if n.planExecution {
+		toolDefs = append(toolDefs, executePlanToolDef)
+	}
 	return loopConfig{
 		name:         "network:" + n.name,
 		provider:     n.router,
@@ -103,7 +108,8 @@ func (n *Network) buildLoopConfig(task AgentTask, ch chan<- StreamEvent) loopCon
 // the ask_user handler, or direct tools. When ch is non-nil, agent-start
 // and agent-finish events are emitted for subagent delegation.
 func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent) dispatchFunc {
-	return func(ctx context.Context, tc ToolCall) (string, Usage) {
+	var dispatch dispatchFunc
+	dispatch = func(ctx context.Context, tc ToolCall) (string, Usage) {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && n.inputHandler != nil {
 			content, err := executeAskUser(ctx, n.inputHandler, n.name, tc)
@@ -111,6 +117,11 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent) disp
 				return "error: " + err.Error(), Usage{}
 			}
 			return content, Usage{}
+		}
+
+		// Special case: execute_plan tool
+		if tc.Name == "execute_plan" && n.planExecution {
+			return executePlan(ctx, tc.Args, dispatch)
 		}
 
 		// Check if it's an agent call (prefixed with "agent_")
@@ -164,6 +175,7 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent) disp
 		}
 		return result.Content, Usage{}
 	}
+	return dispatch
 }
 
 // buildToolDefs builds tool definitions from subagents and direct tools.

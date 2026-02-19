@@ -124,6 +124,80 @@ sequenceDiagram
     Note over Agent: Append all results, call LLM again
 ```
 
+## Plan Execution
+
+When the LLM knows all the tool calls it needs upfront, re-sampling between each one wastes latency and tokens. Plan execution eliminates this by batching multiple calls in a single LLM turn.
+
+Enable with `WithPlanExecution()`:
+
+```go
+agent := oasis.NewLLMAgent("researcher", "Researches topics", provider,
+    oasis.WithTools(searchTool, knowledgeTool),
+    oasis.WithPlanExecution(), // injects execute_plan tool
+)
+```
+
+The framework auto-injects an `execute_plan` tool. The LLM can call it with an array of steps:
+
+```json
+{
+    "name": "execute_plan",
+    "input": {
+        "steps": [
+            {"tool": "web_search", "args": {"query": "Go error handling"}},
+            {"tool": "web_search", "args": {"query": "Go concurrency patterns"}},
+            {"tool": "web_search", "args": {"query": "Go testing best practices"}}
+        ]
+    }
+}
+```
+
+All steps execute in parallel. The result is a structured JSON array:
+
+```json
+[
+    {"step": 0, "tool": "web_search", "status": "ok", "result": "..."},
+    {"step": 1, "tool": "web_search", "status": "ok", "result": "..."},
+    {"step": 2, "tool": "web_search", "status": "error", "error": "timeout"}
+]
+```
+
+### Traditional vs Plan Execution
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant LLM
+    participant Tools
+
+    Note over App,Tools: Traditional: 4 samplings, 8 round-trips
+    App->>LLM: user message
+    LLM->>Tools: web_search("Go errors")
+    Tools-->>LLM: result 1
+    LLM->>Tools: web_search("Go concurrency")
+    Tools-->>LLM: result 2
+    LLM->>Tools: web_search("Go testing")
+    Tools-->>LLM: result 3
+    LLM-->>App: final answer
+
+    Note over App,Tools: Plan execution: 2 samplings, 4 round-trips
+    App->>LLM: user message
+    LLM->>Tools: execute_plan([search1, search2, search3])
+    Note over Tools: all 3 run in parallel
+    Tools-->>LLM: [{result1}, {result2}, {result3}]
+    LLM-->>App: final answer
+```
+
+### Constraints
+
+- **Parallel only** — all steps run concurrently, no sequential ordering
+- **No data flow** — step 2 cannot reference step 1's result
+- **No recursion** — steps cannot call `execute_plan` itself
+- **Partial failures** — a failed step reports its error without aborting the others
+- **Opt-in** — the tool is only available when `WithPlanExecution()` is set
+
+Works with both `LLMAgent` and `Network`. Provider-agnostic — any LLM can use it.
+
 ## See Also
 
 - [Custom Tool Guide](../guides/custom-tool.md) — build your own tool step by step

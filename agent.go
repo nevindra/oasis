@@ -104,6 +104,7 @@ type agentConfig struct {
 	crossThreadSearch bool    // enabled by CrossThreadSearch option
 	semanticMinScore  float32 // set by MinScore inside CrossThreadSearch
 	maxHistory        int     // set by MaxHistory inside WithConversationMemory
+	planExecution     bool    // enabled by WithPlanExecution option
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -127,6 +128,18 @@ func WithMaxIter(n int) AgentOption {
 // WithAgents adds subagents to a Network. Ignored by LLMAgent.
 func WithAgents(agents ...Agent) AgentOption {
 	return func(c *agentConfig) { c.agents = append(c.agents, agents...) }
+}
+
+// WithPlanExecution enables the built-in "execute_plan" tool that batches
+// multiple tool calls in a single LLM turn. The LLM can call execute_plan
+// with an array of steps (each specifying a tool name and arguments), and
+// the framework executes all steps in parallel without re-sampling the LLM
+// between each call. Returns structured per-step results.
+//
+// This reduces latency and token usage for fan-out patterns where the LLM
+// needs to call the same or different tools multiple times with known inputs.
+func WithPlanExecution() AgentOption {
+	return func(c *agentConfig) { c.planExecution = true }
 }
 
 // WithProcessors adds processors to the agent's execution pipeline.
