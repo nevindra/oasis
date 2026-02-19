@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-19
+
 ### Added
 
 - **PostgreSQL + pgvector storage** (`store/postgres`) — full `Store`, `KeywordSearcher`, and `MemoryStore` implementation backed by PostgreSQL with pgvector
@@ -195,7 +197,8 @@ Initial release of the Oasis AI agent framework.
 - Channel-based token streaming with edit batching
 - Reference app in cmd/bot_example/
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nevindra/oasis/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/nevindra/oasis/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/nevindra/oasis/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/nevindra/oasis/compare/v0.1.1...v0.1.2
