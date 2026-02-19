@@ -80,6 +80,32 @@ Every box is a Go interface (except Scheduler, which is a concrete struct wrappi
 | [Workflow](workflow.md) | `Workflow` | Deterministic DAG-based orchestration |
 | [Scheduler](scheduler.md) | `Scheduler` | Time-based proactive execution |
 
+#### Network vs Workflow — Which One?
+
+Both Network and Workflow orchestrate multiple steps, but the routing decision happens at different times:
+
+- **Network** — **runtime routing.** An LLM router decides which agents to call, in what order, based on the input. The execution path varies per request. Use when the task is open-ended and the LLM needs to improvise.
+- **Workflow** — **compile-time routing.** You declare a DAG of steps and dependencies at construction time. The execution path is fixed. Use when you know the exact pipeline in advance.
+
+```mermaid
+flowchart TD
+    Q{Do you know the execution steps in advance?}
+    Q -->|Yes — fixed pipeline| WF["Use **Workflow**<br/>Compile-time DAG, deterministic"]
+    Q -->|No — depends on input| NET["Use **Network**<br/>Runtime LLM routing, dynamic"]
+    Q -->|Single agent is enough| AGENT["Use **LLMAgent**<br/>One provider, tool-calling loop"]
+```
+
+|   | Network | Workflow |
+|---|---------|----------|
+| **Routing** | Runtime (LLM decides) | Compile-time (you declare) |
+| **Execution path** | Varies per request | Same DAG every time |
+| **Cost** | Extra LLM calls for routing | No routing overhead |
+| **Best for** | Open-ended tasks, ambiguous input | Pipelines, ETL, multi-step processing |
+| **Parallelism** | LLM can call multiple agents at once | Steps without dependencies run concurrently |
+| **Composition** | Contains Agents and Networks | Contains Steps, Agents, Tools, and Workflows |
+
+Both implement `Agent`, so they compose with each other — a Network can contain a Workflow as a subagent, and a Workflow can orchestrate a Network via `AgentStep`.
+
 ### Memory & Processing
 
 | Page | Interface | What it does |

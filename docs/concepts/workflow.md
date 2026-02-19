@@ -6,13 +6,22 @@ Workflow implements `Agent`, so it composes with everything: Networks can contai
 
 ## When to Use Workflow vs Network
 
+The key distinction is **when the routing decision happens**:
+
+- **Workflow = compile-time routing.** You declare steps and dependencies at construction time. The execution path is fixed — same DAG every time, regardless of input.
+- **Network = runtime routing.** An LLM router reads the input and decides which agents to call. Different inputs produce different execution paths.
+
 | Workflow | Network |
 |----------|---------|
-| You know the execution order | LLM decides the execution order |
+| You declare routing at construction time | LLM decides routing at runtime |
 | Deterministic — same DAG every time | Dynamic — different paths per request |
 | Good for pipelines, ETL, orchestration | Good for open-ended tasks |
 | Steps run in declared order | Router can improvise |
-| Cheaper — no routing LLM calls | More flexible — handles ambiguity |
+| No routing overhead | Extra LLM calls for routing decisions |
+
+**Use Workflow when** you already know the steps: "Extract text → chunk → embed → store" — a fixed pipeline that runs the same way every time.
+
+**Use Network when** the agent needs to figure out what to do: "Research this topic and write a summary" — the router decides whether to search first, which subagents to invoke, and how to combine results.
 
 ## Quick Start
 
