@@ -142,9 +142,10 @@ type ResponseSchema struct {
 }
 
 type ChatResponse struct {
-    Content   string     `json:"content"`
-    ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-    Usage     Usage      `json:"usage"`
+    Content     string       `json:"content"`
+    Attachments []Attachment `json:"attachments,omitempty"`
+    ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
+    Usage       Usage        `json:"usage"`
 }
 
 type Usage struct {
@@ -192,8 +193,9 @@ type AgentTask struct {
 }
 
 type AgentResult struct {
-    Output string
-    Usage  Usage
+    Output      string
+    Attachments []Attachment
+    Usage       Usage
 }
 ```
 

@@ -171,9 +171,10 @@ type ChatRequest struct {
 }
 
 type ChatResponse struct {
-	Content   string     `json:"content"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Usage     Usage      `json:"usage"`
+	Content     string       `json:"content"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
+	Usage       Usage        `json:"usage"`
 }
 
 type Usage struct {

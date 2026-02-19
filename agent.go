@@ -83,6 +83,9 @@ func (t AgentTask) TaskChatID() string {
 type AgentResult struct {
 	// Output is the agent's final response text.
 	Output string
+	// Attachments carries optional multimodal content (images, audio, etc.) from the LLM response.
+	// Populated when the provider returns media alongside or instead of text.
+	Attachments []Attachment
 	// Usage tracks aggregate token usage across all LLM calls.
 	Usage Usage
 }
@@ -306,7 +309,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 			totalUsage.InputTokens += resp.Usage.InputTokens
 			totalUsage.OutputTokens += resp.Usage.OutputTokens
 			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
-			return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+			return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage}, nil
 		} else {
 			resp, err = cfg.provider.Chat(ctx, req)
 		}
@@ -342,7 +345,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 				close(ch)
 			}
 			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, content)
-			return AgentResult{Output: content, Usage: totalUsage}, nil
+			return AgentResult{Output: content, Attachments: resp.Attachments, Usage: totalUsage}, nil
 		}
 
 		// Append assistant message with tool calls.
@@ -398,7 +401,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 	totalUsage.OutputTokens += resp.Usage.OutputTokens
 
 	cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
-	return AgentResult{Output: resp.Content, Usage: totalUsage}, nil
+	return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage}, nil
 }
 
 // handleProcessorError converts a processor error into an AgentResult.
