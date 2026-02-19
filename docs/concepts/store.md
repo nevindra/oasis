@@ -143,22 +143,25 @@ Close() error    // clean up connections
 | Package | Constructor | Notes |
 |---------|------------|-------|
 | `store/sqlite` | `sqlite.New(path)` | Local pure-Go SQLite (`modernc.org/sqlite`) |
-| `store/libsql` | `libsql.New(url, token)` | Remote Turso/libSQL |
-| `store/postgres` | `postgres.New(pool)` | PostgreSQL + pgvector (HNSW indexes) |
+| `store/libsql` | `libsql.New(path, opts...)` | Local/remote Turso/libSQL with DiskANN |
+| `store/postgres` | `postgres.New(pool, opts...)` | PostgreSQL + pgvector (HNSW indexes) |
 
 All three packages also ship a `MemoryStore` implementation in the same package — see [Memory](memory.md).
 
 **SQLite / libSQL:**
-- Store embeddings as JSON-serialized `[]float32`
+
+- Store embeddings as JSON-serialized `[]float32` (SQLite) or `F32_BLOB(N)` (libSQL)
 - Perform brute-force cosine similarity in-process (SQLite) or DiskANN (libSQL)
 - Create tables via `CREATE TABLE IF NOT EXISTS` in `Init()`
+- libSQL options: `WithEmbeddingDimension(dim)` — default 1536
 
 **PostgreSQL (pgvector):**
 - Uses native `vector` columns with HNSW indexes for cosine distance search
 - Full-text search via `tsvector`/`tsquery` with GIN index (no FTS5 virtual table)
 - Accepts an externally-owned `*pgxpool.Pool` — share one pool across Store, MemoryStore, and your app
-- Also implements `MemoryStore` in the same package (`postgres.NewMemoryStore(pool)`)
+- Also implements `MemoryStore` in the same package (`postgres.NewMemoryStore(pool, opts...)`)
 - Requires PostgreSQL with the `pgvector` extension installed
+- Options: `WithEmbeddingDimension(dim)`, `WithHNSWM(m)`, `WithEFConstruction(ef)`, `WithEFSearch(ef)`
 
 ## Vector Search
 
@@ -167,7 +170,7 @@ Search methods return scored results sorted by cosine similarity descending:
 ```go
 type ScoredMessage struct {
     Message
-    Score float32  // 0 = unknown, (0,1] = similarity
+    Score float32  // cosine similarity in [0, 1]
 }
 
 type ScoredChunk struct {
@@ -176,7 +179,7 @@ type ScoredChunk struct {
 }
 ```
 
-A score of 0 means the store doesn't compute similarity (e.g., ANN indexes). Callers should treat `score == 0` as "relevance unknown" and skip threshold filtering.
+All store backends compute cosine similarity scores. Higher scores mean more relevant results.
 
 ## Chunk Filtering
 

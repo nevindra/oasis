@@ -139,8 +139,8 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 						if r.ThreadID == threadID {
 							continue
 						}
-						// Skip low-relevance results (Score==0 means store didn't compute it).
-						if r.Score > 0 && r.Score < minScore {
+						// Skip low-relevance results.
+						if r.Score < minScore {
 							continue
 						}
 						fmt.Fprintf(&recall, "[%s]: %s\n", r.Role, r.Content)

@@ -23,6 +23,48 @@ import (
 // Vector search uses HNSW indexes with cosine distance.
 type Store struct {
 	pool *pgxpool.Pool
+	cfg  pgConfig
+}
+
+// pgConfig holds store configuration set via Option functions.
+type pgConfig struct {
+	embeddingDimension int // 0 = untyped vector (current behavior)
+	hnswM              int // 0 = pgvector default (16)
+	hnswEFConstruction int // 0 = pgvector default (64)
+	hnswEFSearch       int // 0 = pgvector default (40)
+}
+
+// Option configures a PostgreSQL Store or MemoryStore.
+type Option func(*pgConfig)
+
+// WithEmbeddingDimension sets the vector column dimension (e.g. 1536, 768).
+// When set, CREATE TABLE uses vector(N) instead of untyped vector, enabling
+// better index optimization and catching dimension mismatches at insert time.
+// Only affects new table creation (no ALTER on existing tables).
+func WithEmbeddingDimension(dim int) Option {
+	return func(c *pgConfig) { c.embeddingDimension = dim }
+}
+
+// WithHNSWM sets the HNSW m parameter (max connections per node).
+// Higher values improve recall at the cost of memory. Default: pgvector's 16.
+// Only affects index creation (CREATE INDEX IF NOT EXISTS).
+func WithHNSWM(m int) Option {
+	return func(c *pgConfig) { c.hnswM = m }
+}
+
+// WithEFConstruction sets the HNSW ef_construction parameter (build-time
+// candidate list size). Higher values improve index quality at the cost of
+// slower builds. Default: pgvector's 64.
+// Only affects index creation (CREATE INDEX IF NOT EXISTS).
+func WithEFConstruction(ef int) Option {
+	return func(c *pgConfig) { c.hnswEFConstruction = ef }
+}
+
+// WithEFSearch sets the HNSW ef_search parameter (query-time candidate list
+// size). Higher values improve recall at the cost of latency. Default:
+// pgvector's 40. Applied via SET LOCAL during Init().
+func WithEFSearch(ef int) Option {
+	return func(c *pgConfig) { c.hnswEFSearch = ef }
 }
 
 var _ oasis.Store = (*Store)(nil)
@@ -30,13 +72,44 @@ var _ oasis.KeywordSearcher = (*Store)(nil)
 
 // New creates a Store using an existing pgxpool.Pool.
 // The caller owns the pool and is responsible for closing it.
-func New(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func New(pool *pgxpool.Pool, opts ...Option) *Store {
+	var cfg pgConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &Store{pool: pool, cfg: cfg}
+}
+
+// vectorType returns "vector" or "vector(N)" depending on config.
+func (s *Store) vectorType() string {
+	if s.cfg.embeddingDimension > 0 {
+		return fmt.Sprintf("vector(%d)", s.cfg.embeddingDimension)
+	}
+	return "vector"
+}
+
+// hnswWithClause returns the WITH (...) clause for HNSW index creation,
+// or an empty string if no tuning params are set.
+func (s *Store) hnswWithClause() string {
+	var parts []string
+	if s.cfg.hnswM > 0 {
+		parts = append(parts, fmt.Sprintf("m = %d", s.cfg.hnswM))
+	}
+	if s.cfg.hnswEFConstruction > 0 {
+		parts = append(parts, fmt.Sprintf("ef_construction = %d", s.cfg.hnswEFConstruction))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " WITH (" + strings.Join(parts, ", ") + ")"
 }
 
 // Init creates the pgvector extension, all required tables, and indexes.
 // Safe to call multiple times (all statements are idempotent).
 func (s *Store) Init(ctx context.Context) error {
+	vtype := s.vectorType()
+	hnswWith := s.hnswWithClause()
+
 	stmts := []string{
 		`CREATE EXTENSION IF NOT EXISTS vector`,
 
@@ -49,16 +122,16 @@ func (s *Store) Init(ctx context.Context) error {
 			updated_at BIGINT NOT NULL
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS messages (
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS messages (
 			id TEXT PRIMARY KEY,
 			thread_id TEXT NOT NULL,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
-			embedding vector,
+			embedding %s,
 			created_at BIGINT NOT NULL
-		)`,
+		)`, vtype),
 		`CREATE INDEX IF NOT EXISTS messages_thread_idx ON messages(thread_id)`,
-		`CREATE INDEX IF NOT EXISTS messages_embedding_idx ON messages USING hnsw (embedding vector_cosine_ops)`,
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS messages_embedding_idx ON messages USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
 
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
@@ -68,17 +141,17 @@ func (s *Store) Init(ctx context.Context) error {
 			created_at BIGINT NOT NULL
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS chunks (
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS chunks (
 			id TEXT PRIMARY KEY,
 			document_id TEXT NOT NULL,
 			content TEXT NOT NULL,
 			chunk_index INTEGER NOT NULL,
-			embedding vector,
+			embedding %s,
 			parent_id TEXT,
 			metadata JSONB
-		)`,
+		)`, vtype),
 		`CREATE INDEX IF NOT EXISTS chunks_document_idx ON chunks(document_id)`,
-		`CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops)`,
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
 		`CREATE INDEX IF NOT EXISTS chunks_fts_idx ON chunks USING gin(to_tsvector('english', content))`,
 
 		`CREATE TABLE IF NOT EXISTS config (
@@ -98,18 +171,18 @@ func (s *Store) Init(ctx context.Context) error {
 			created_at BIGINT NOT NULL DEFAULT 0
 		)`,
 
-		`CREATE TABLE IF NOT EXISTS skills (
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS skills (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			description TEXT NOT NULL,
 			instructions TEXT NOT NULL,
 			tools TEXT NOT NULL DEFAULT '',
 			model TEXT NOT NULL DEFAULT '',
-			embedding vector,
+			embedding %s,
 			created_at BIGINT NOT NULL,
 			updated_at BIGINT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS skills_embedding_idx ON skills USING hnsw (embedding vector_cosine_ops)`,
+		)`, vtype),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS skills_embedding_idx ON skills USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
 	}
 
 	for _, stmt := range stmts {
@@ -117,6 +190,13 @@ func (s *Store) Init(ctx context.Context) error {
 			return fmt.Errorf("postgres: init: %w", err)
 		}
 	}
+
+	if s.cfg.hnswEFSearch > 0 {
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf("SET hnsw.ef_search = %d", s.cfg.hnswEFSearch)); err != nil {
+			return fmt.Errorf("postgres: set ef_search: %w", err)
+		}
+	}
+
 	return nil
 }
 

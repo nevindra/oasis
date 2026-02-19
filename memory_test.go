@@ -294,8 +294,8 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 	store := &recordingStore{
 		history: []Message{{Role: "user", Content: "recent msg"}},
 		related: []ScoredMessage{
-			{Message: Message{Role: "user", Content: "old relevant msg"}},
-			{Message: Message{Role: "assistant", Content: "old relevant answer"}},
+			{Message: Message{Role: "user", Content: "old relevant msg"}, Score: 0.9},
+			{Message: Message{Role: "assistant", Content: "old relevant answer"}, Score: 0.85},
 		},
 	}
 	emb := &stubEmbedding{}
@@ -334,7 +334,7 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 func TestLLMAgentAllMemoryTypes(t *testing.T) {
 	store := &recordingStore{
 		history: []Message{{Role: "user", Content: "previous"}},
-		related: []ScoredMessage{{Message: Message{Role: "assistant", Content: "related context"}}},
+		related: []ScoredMessage{{Message: Message{Role: "assistant", Content: "related context"}, Score: 0.9}},
 	}
 	mem := &stubMemoryStore{context: "## User facts\n- Name: Test"}
 	emb := &stubEmbedding{}

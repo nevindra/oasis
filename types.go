@@ -106,9 +106,7 @@ type Store interface {
 	StoreMessage(ctx context.Context, msg Message) error
 	GetMessages(ctx context.Context, threadID string, limit int) ([]Message, error)
 	// SearchMessages performs semantic similarity search across all messages.
-	// Results are sorted by Score descending. Score is 0 when the store does
-	// not compute similarity (e.g. libsql ANN index) — callers should treat
-	// score == 0 as "relevance unknown" and apply no threshold filtering.
+	// Results are sorted by Score descending (cosine similarity in [0, 1]).
 	SearchMessages(ctx context.Context, embedding []float32, topK int) ([]ScoredMessage, error)
 
 	// --- Documents + Chunks ---
@@ -154,7 +152,6 @@ type Store interface {
 
 // ScoredMessage is a Message paired with its cosine similarity score from a
 // semantic search. Score is in [0, 1]; higher means more relevant.
-// Score is 0 when the store does not compute similarity (e.g. libsql ANN index).
 type ScoredMessage struct {
 	Message
 	Score float32

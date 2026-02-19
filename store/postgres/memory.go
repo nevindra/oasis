@@ -14,38 +14,78 @@ import (
 // Semantic deduplication uses pgvector cosine distance instead of brute-force.
 type MemoryStore struct {
 	pool *pgxpool.Pool
+	cfg  pgConfig
 }
 
 var _ oasis.MemoryStore = (*MemoryStore)(nil)
 
 // NewMemoryStore creates a MemoryStore using an existing pgxpool.Pool.
 // The caller owns the pool and is responsible for closing it.
-func NewMemoryStore(pool *pgxpool.Pool) *MemoryStore {
-	return &MemoryStore{pool: pool}
+// Accepts the same Option functions as New (e.g. WithEmbeddingDimension,
+// WithHNSWM, WithEFConstruction).
+func NewMemoryStore(pool *pgxpool.Pool, opts ...Option) *MemoryStore {
+	var cfg pgConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &MemoryStore{pool: pool, cfg: cfg}
+}
+
+// vectorType returns "vector" or "vector(N)" depending on config.
+func (s *MemoryStore) vectorType() string {
+	if s.cfg.embeddingDimension > 0 {
+		return fmt.Sprintf("vector(%d)", s.cfg.embeddingDimension)
+	}
+	return "vector"
+}
+
+// hnswWithClause returns the WITH (...) clause for HNSW index creation.
+func (s *MemoryStore) hnswWithClause() string {
+	var parts []string
+	if s.cfg.hnswM > 0 {
+		parts = append(parts, fmt.Sprintf("m = %d", s.cfg.hnswM))
+	}
+	if s.cfg.hnswEFConstruction > 0 {
+		parts = append(parts, fmt.Sprintf("ef_construction = %d", s.cfg.hnswEFConstruction))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " WITH (" + strings.Join(parts, ", ") + ")"
 }
 
 // Init creates the pgvector extension, user_facts table, and HNSW index.
 // Safe to call multiple times (all statements are idempotent).
 func (s *MemoryStore) Init(ctx context.Context) error {
+	vtype := s.vectorType()
+	hnswWith := s.hnswWithClause()
+
 	stmts := []string{
 		`CREATE EXTENSION IF NOT EXISTS vector`,
-		`CREATE TABLE IF NOT EXISTS user_facts (
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS user_facts (
 			id TEXT PRIMARY KEY,
 			fact TEXT NOT NULL,
 			category TEXT NOT NULL,
 			confidence REAL DEFAULT 1.0,
-			embedding vector,
+			embedding %s,
 			source_message_id TEXT,
 			created_at BIGINT NOT NULL,
 			updated_at BIGINT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (embedding vector_cosine_ops)`,
+		)`, vtype),
+		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
 	}
 	for _, stmt := range stmts {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("postgres: memory init: %w", err)
 		}
 	}
+
+	if s.cfg.hnswEFSearch > 0 {
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf("SET hnsw.ef_search = %d", s.cfg.hnswEFSearch)); err != nil {
+			return fmt.Errorf("postgres: set ef_search: %w", err)
+		}
+	}
+
 	return nil
 }
 

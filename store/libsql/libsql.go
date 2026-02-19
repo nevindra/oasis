@@ -23,6 +23,20 @@ type Store struct {
 	dbPath string
 	dbURL  string // for Turso remote
 	token  string // for Turso auth
+	cfg    config
+}
+
+type config struct {
+	embeddingDimension int // default: 1536
+}
+
+// Option configures a libSQL Store.
+type Option func(*config)
+
+// WithEmbeddingDimension sets the vector dimension for F32_BLOB columns.
+// Default is 1536. Only affects new table creation (no ALTER on existing tables).
+func WithEmbeddingDimension(dim int) Option {
+	return func(c *config) { c.embeddingDimension = dim }
 }
 
 // compile-time checks
@@ -30,13 +44,21 @@ var _ oasis.Store = (*Store)(nil)
 var _ oasis.KeywordSearcher = (*Store)(nil)
 
 // New creates a Store that uses a local SQLite file at dbPath.
-func New(dbPath string) *Store {
-	return &Store{dbPath: dbPath}
+func New(dbPath string, opts ...Option) *Store {
+	cfg := config{embeddingDimension: 1536}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &Store{dbPath: dbPath, cfg: cfg}
 }
 
 // NewRemote creates a Store that connects to a remote Turso database.
-func NewRemote(url, token string) *Store {
-	return &Store{dbURL: url, token: token}
+func NewRemote(url, token string, opts ...Option) *Store {
+	cfg := config{embeddingDimension: 1536}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &Store{dbURL: url, token: token, cfg: cfg}
 }
 
 // openDB opens a fresh database connection.
@@ -68,6 +90,7 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 	defer db.Close()
 
+	dim := s.cfg.embeddingDimension
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
@@ -76,13 +99,13 @@ func (s *Store) Init(ctx context.Context) error {
 			content TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
-		`CREATE TABLE IF NOT EXISTS chunks (
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS chunks (
 			id TEXT PRIMARY KEY,
 			document_id TEXT NOT NULL,
 			content TEXT NOT NULL,
 			chunk_index INTEGER NOT NULL,
-			embedding F32_BLOB(1536)
-		)`,
+			embedding F32_BLOB(%d)
+		)`, dim),
 		`CREATE TABLE IF NOT EXISTS threads (
 			id TEXT PRIMARY KEY,
 			chat_id TEXT NOT NULL,
@@ -91,14 +114,14 @@ func (s *Store) Init(ctx context.Context) error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
-		`CREATE TABLE IF NOT EXISTS messages (
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS messages (
 			id TEXT PRIMARY KEY,
 			thread_id TEXT NOT NULL,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
-			embedding F32_BLOB(1536),
+			embedding F32_BLOB(%d),
 			created_at INTEGER NOT NULL
-		)`,
+		)`, dim),
 		`CREATE TABLE IF NOT EXISTS config (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
@@ -128,17 +151,17 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 
 	// Skills
-	_, err = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS skills (
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`CREATE TABLE IF NOT EXISTS skills (
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
 		description TEXT NOT NULL,
 		instructions TEXT NOT NULL,
 		tools TEXT,
 		model TEXT,
-		embedding F32_BLOB(1536),
+		embedding F32_BLOB(%d),
 		created_at INTEGER NOT NULL,
 		updated_at INTEGER NOT NULL
-	)`)
+	)`, dim))
 	if err != nil {
 		return fmt.Errorf("create table: %w", err)
 	}
@@ -244,9 +267,8 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 }
 
 // SearchMessages performs vector similarity search over messages using
-// the libsql vector_top_k function. Score is always 0 because libsql's ANN
-// index does not expose similarity scores; callers treat Score==0 as
-// "relevance unknown" and skip threshold filtering.
+// the libsql vector_top_k function. Cosine similarity scores are computed
+// via vector_distance_cos on the topK results.
 func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
 	db, err := s.openDB()
 	if err != nil {
@@ -256,10 +278,11 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
-		`SELECT m.id, m.thread_id, m.role, m.content, m.created_at
+		`SELECT m.id, m.thread_id, m.role, m.content, m.created_at,
+		        1.0 - vector_distance_cos(m.embedding, vector(?)) AS score
 		 FROM vector_top_k('messages_vector_idx', vector(?), ?) AS v
 		 JOIN messages AS m ON m.rowid = v.id`,
-		embJSON, topK,
+		embJSON, embJSON, topK,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("search messages: %w", err)
@@ -269,10 +292,14 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 	var messages []oasis.ScoredMessage
 	for rows.Next() {
 		var m oasis.Message
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		var score float32
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt, &score); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
-		messages = append(messages, oasis.ScoredMessage{Message: m})
+		if score < 0 {
+			score = 0
+		}
+		messages = append(messages, oasis.ScoredMessage{Message: m, Score: score})
 	}
 	return messages, rows.Err()
 }
@@ -514,7 +541,8 @@ func loadDocMap(ctx context.Context, db *sql.DB, ids []string) map[string]oasis.
 }
 
 // SearchChunks performs vector similarity search over document chunks
-// using the libsql vector_top_k function. Score is always 0 (see SearchMessages).
+// using the libsql vector_top_k function. Cosine similarity scores are
+// computed via vector_distance_cos on the topK results.
 // When filters are present, overfetches topK*3 and filters in-memory since
 // vector_top_k does not support WHERE clauses.
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
@@ -531,10 +559,11 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
-		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata
+		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata,
+		        1.0 - vector_distance_cos(c.embedding, vector(?)) AS score
 		 FROM vector_top_k('chunks_vector_idx', vector(?), ?) AS v
 		 JOIN chunks AS c ON c.rowid = v.id`,
-		embJSON, fetchK,
+		embJSON, embJSON, fetchK,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("search chunks: %w", err)
@@ -546,7 +575,8 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 		var c oasis.Chunk
 		var parentID sql.NullString
 		var metaJSON sql.NullString
-		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &metaJSON); err != nil {
+		var score float32
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &metaJSON, &score); err != nil {
 			return nil, fmt.Errorf("scan chunk: %w", err)
 		}
 		if parentID.Valid {
@@ -556,7 +586,10 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 			c.Metadata = &oasis.ChunkMeta{}
 			_ = json.Unmarshal([]byte(metaJSON.String), c.Metadata)
 		}
-		chunks = append(chunks, oasis.ScoredChunk{Chunk: c})
+		if score < 0 {
+			score = 0
+		}
+		chunks = append(chunks, oasis.ScoredChunk{Chunk: c, Score: score})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1160,7 +1193,8 @@ func (s *Store) DeleteSkill(ctx context.Context, id string) error {
 }
 
 // SearchSkills performs vector similarity search over skills using the libsql
-// vector_top_k function. Score is always 0 (see SearchMessages).
+// vector_top_k function. Cosine similarity scores are computed via
+// vector_distance_cos on the topK results.
 func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredSkill, error) {
 	db, err := s.openDB()
 	if err != nil {
@@ -1170,10 +1204,11 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
-		`SELECT sk.id, sk.name, sk.description, sk.instructions, sk.tools, sk.model, sk.created_at, sk.updated_at
+		`SELECT sk.id, sk.name, sk.description, sk.instructions, sk.tools, sk.model, sk.created_at, sk.updated_at,
+		        1.0 - vector_distance_cos(sk.embedding, vector(?)) AS score
 		 FROM vector_top_k('skills_vector_idx', vector(?), ?) AS v
 		 JOIN skills AS sk ON sk.rowid = v.id`,
-		embJSON, topK,
+		embJSON, embJSON, topK,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("search skills: %w", err)
@@ -1185,7 +1220,8 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		var sk oasis.Skill
 		var tools sql.NullString
 		var model sql.NullString
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		var score float32
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt, &score); err != nil {
 			return nil, fmt.Errorf("scan skill: %w", err)
 		}
 		if tools.Valid {
@@ -1194,7 +1230,10 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		if model.Valid {
 			sk.Model = model.String
 		}
-		skills = append(skills, oasis.ScoredSkill{Skill: sk})
+		if score < 0 {
+			score = 0
+		}
+		skills = append(skills, oasis.ScoredSkill{Skill: sk, Score: score})
 	}
 	return skills, rows.Err()
 }
