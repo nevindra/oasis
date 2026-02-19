@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -530,16 +531,16 @@ func (s *Store) SetConfig(ctx context.Context, key, value string) error {
 
 func (s *Store) CreateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		`INSERT INTO scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		action.ID, action.Description, action.Schedule, action.ToolCalls,
-		action.SynthesisPrompt, action.NextRun, action.Enabled, action.CreatedAt)
+		action.SynthesisPrompt, action.NextRun, action.Enabled, action.SkillID, action.CreatedAt)
 	return err
 }
 
 func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledAction, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at
+		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at
 		 FROM scheduled_actions ORDER BY next_run`)
 	if err != nil {
 		return nil, err
@@ -550,7 +551,7 @@ func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledActi
 
 func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.ScheduledAction, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at
+		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at
 		 FROM scheduled_actions WHERE enabled = TRUE AND next_run <= $1`, now)
 	if err != nil {
 		return nil, err
@@ -561,8 +562,8 @@ func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.
 
 func (s *Store) UpdateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE scheduled_actions SET description=$1, schedule=$2, tool_calls=$3, synthesis_prompt=$4, next_run=$5, enabled=$6 WHERE id=$7`,
-		action.Description, action.Schedule, action.ToolCalls, action.SynthesisPrompt, action.NextRun, action.Enabled, action.ID)
+		`UPDATE scheduled_actions SET description=$1, schedule=$2, tool_calls=$3, synthesis_prompt=$4, next_run=$5, enabled=$6, skill_id=$7 WHERE id=$8`,
+		action.Description, action.Schedule, action.ToolCalls, action.SynthesisPrompt, action.NextRun, action.Enabled, action.SkillID, action.ID)
 	return err
 }
 
@@ -586,7 +587,7 @@ func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
 
 func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at
+		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at
 		 FROM scheduled_actions WHERE description LIKE $1`,
 		"%"+pattern+"%")
 	if err != nil {
@@ -681,7 +682,7 @@ func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
 	}
 
 	_, err := s.pool.Exec(ctx,
-		`UPDATE skills SET name=$1, description=$2, instructions=$3, tools=$4, model=$5, updated_at=$6 WHERE id=$7`,
+		`UPDATE skills SET name=$1, description=$2, instructions=$3, tools=$4, model=$5, embedding=NULL, updated_at=$6 WHERE id=$7`,
 		skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, skill.UpdatedAt, skill.ID)
 	return err
 }
@@ -736,7 +737,7 @@ func scanScheduledActions(rows pgx.Rows) ([]oasis.ScheduledAction, error) {
 	var actions []oasis.ScheduledAction
 	for rows.Next() {
 		var a oasis.ScheduledAction
-		if err := rows.Scan(&a.ID, &a.Description, &a.Schedule, &a.ToolCalls, &a.SynthesisPrompt, &a.NextRun, &a.Enabled, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Description, &a.Schedule, &a.ToolCalls, &a.SynthesisPrompt, &a.NextRun, &a.Enabled, &a.SkillID, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		actions = append(actions, a)
@@ -749,7 +750,7 @@ func scanScheduledActions(rows pgx.Rows) ([]oasis.ScheduledAction, error) {
 func serializeEmbedding(embedding []float32) string {
 	parts := make([]string, len(embedding))
 	for i, v := range embedding {
-		parts[i] = fmt.Sprintf("%g", v)
+		parts[i] = strconv.FormatFloat(float64(v), 'f', -1, 32)
 	}
 	return "[" + strings.Join(parts, ",") + "]"
 }

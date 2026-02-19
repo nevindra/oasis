@@ -203,7 +203,9 @@ func (s *MemoryStore) DecayOldFacts(ctx context.Context) error {
 	now := oasis.NowUnix()
 
 	sevenDaysAgo := now - (7 * 86400)
-	_, _ = s.db.ExecContext(ctx, `UPDATE user_facts SET confidence = confidence * 0.95 WHERE updated_at < ? AND confidence > 0.3`, sevenDaysAgo)
+	if _, err := s.db.ExecContext(ctx, `UPDATE user_facts SET confidence = confidence * 0.95 WHERE updated_at < ? AND confidence > 0.3`, sevenDaysAgo); err != nil {
+		return fmt.Errorf("decay facts: %w", err)
+	}
 
 	thirtyDaysAgo := now - (30 * 86400)
 	_, err := s.db.ExecContext(ctx, `DELETE FROM user_facts WHERE confidence < 0.3 AND updated_at < ?`, thirtyDaysAgo)

@@ -203,9 +203,11 @@ func (s *MemoryStore) DecayOldFacts(ctx context.Context) error {
 	now := oasis.NowUnix()
 
 	sevenDaysAgo := now - (7 * 86400)
-	_, _ = s.pool.Exec(ctx,
+	if _, err := s.pool.Exec(ctx,
 		`UPDATE user_facts SET confidence = confidence * 0.95 WHERE updated_at < $1 AND confidence > 0.3`,
-		sevenDaysAgo)
+		sevenDaysAgo); err != nil {
+		return fmt.Errorf("postgres: decay facts: %w", err)
+	}
 
 	thirtyDaysAgo := now - (30 * 86400)
 	_, err := s.pool.Exec(ctx,

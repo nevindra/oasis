@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/nevindra/oasis"
@@ -670,10 +671,10 @@ func (s *Store) CreateScheduledAction(ctx context.Context, action oasis.Schedule
 	}
 	defer db.Close()
 	_, err = db.ExecContext(ctx,
-		`INSERT INTO scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		action.ID, action.Description, action.Schedule, action.ToolCalls,
-		action.SynthesisPrompt, action.NextRun, boolToInt(action.Enabled), action.CreatedAt)
+		action.SynthesisPrompt, action.NextRun, boolToInt(action.Enabled), action.SkillID, action.CreatedAt)
 	return err
 }
 
@@ -683,7 +684,7 @@ func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledActi
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions ORDER BY next_run`)
+	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at FROM scheduled_actions ORDER BY next_run`)
 	if err != nil {
 		return nil, err
 	}
@@ -697,7 +698,7 @@ func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions WHERE enabled = 1 AND next_run <= ?`, now)
+	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at FROM scheduled_actions WHERE enabled = 1 AND next_run <= ?`, now)
 	if err != nil {
 		return nil, err
 	}
@@ -712,8 +713,8 @@ func (s *Store) UpdateScheduledAction(ctx context.Context, action oasis.Schedule
 	}
 	defer db.Close()
 	_, err = db.ExecContext(ctx,
-		`UPDATE scheduled_actions SET description=?, schedule=?, tool_calls=?, synthesis_prompt=?, next_run=?, enabled=? WHERE id=?`,
-		action.Description, action.Schedule, action.ToolCalls, action.SynthesisPrompt, action.NextRun, boolToInt(action.Enabled), action.ID)
+		`UPDATE scheduled_actions SET description=?, schedule=?, tool_calls=?, synthesis_prompt=?, next_run=?, enabled=?, skill_id=? WHERE id=?`,
+		action.Description, action.Schedule, action.ToolCalls, action.SynthesisPrompt, action.NextRun, boolToInt(action.Enabled), action.SkillID, action.ID)
 	return err
 }
 
@@ -757,7 +758,7 @@ func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern s
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, created_at FROM scheduled_actions WHERE description LIKE ?`, "%"+pattern+"%")
+	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at FROM scheduled_actions WHERE description LIKE ?`, "%"+pattern+"%")
 	if err != nil {
 		return nil, err
 	}
@@ -879,7 +880,7 @@ func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
 			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, embJSON, skill.UpdatedAt, skill.ID)
 	} else {
 		_, err = db.ExecContext(ctx,
-			`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, updated_at=? WHERE id=?`,
+			`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, embedding=NULL, updated_at=? WHERE id=?`,
 			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, skill.UpdatedAt, skill.ID)
 	}
 	return err
@@ -952,7 +953,7 @@ func scanScheduledActions(rows *sql.Rows) ([]oasis.ScheduledAction, error) {
 	for rows.Next() {
 		var a oasis.ScheduledAction
 		var enabled int
-		if err := rows.Scan(&a.ID, &a.Description, &a.Schedule, &a.ToolCalls, &a.SynthesisPrompt, &a.NextRun, &enabled, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Description, &a.Schedule, &a.ToolCalls, &a.SynthesisPrompt, &a.NextRun, &enabled, &a.SkillID, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.Enabled = enabled != 0
@@ -966,7 +967,7 @@ func scanScheduledActions(rows *sql.Rows) ([]oasis.ScheduledAction, error) {
 func serializeEmbedding(embedding []float32) string {
 	parts := make([]string, len(embedding))
 	for i, v := range embedding {
-		parts[i] = fmt.Sprintf("%g", v)
+		parts[i] = strconv.FormatFloat(float64(v), 'f', -1, 32)
 	}
 	return "[" + strings.Join(parts, ",") + "]"
 }
