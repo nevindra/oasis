@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-02-19
+
+### Added
+
+- **MCP docs server** (`mcp/`, `cmd/mcp-docs`) — stdio-based MCP server exposing all framework documentation as resources (`oasis://` URIs) with `search_docs` tool; docs embedded at build time via `//go:embed`
+
 ## [0.3.0] - 2026-02-19
 
 ### Added
@@ -197,7 +203,8 @@ Initial release of the Oasis AI agent framework.
 - Channel-based token streaming with edit batching
 - Reference app in cmd/bot_example/
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/nevindra/oasis/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nevindra/oasis/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/nevindra/oasis/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/nevindra/oasis/compare/v0.1.2...v0.2.0

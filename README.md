@@ -266,6 +266,62 @@ See [docs/configuration/reference.md](docs/configuration/reference.md) for the f
 - [Contributing](docs/contributing.md) -- engineering principles and coding conventions
 - [Deployment](cmd/bot_example/DEPLOYMENT.md) -- Docker, cloud deployment for the reference bot
 
+## MCP Docs Server
+
+Oasis ships an MCP (Model Context Protocol) server that exposes framework documentation to AI assistants. Connect it to Claude Code, Cursor, Windsurf, or any MCP-compatible tool so the assistant can look up Oasis APIs, search docs, and write correct code without guessing.
+
+### Setup
+
+Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "oasis": {
+      "type": "stdio",
+      "command": "go",
+      "args": ["run", "github.com/nevindra/oasis/cmd/mcp-docs@latest"]
+    }
+  }
+}
+```
+
+Or install the binary first:
+
+```bash
+go install github.com/nevindra/oasis/cmd/mcp-docs@latest
+```
+
+```json
+{
+  "mcpServers": {
+    "oasis": {
+      "type": "stdio",
+      "command": "mcp-docs"
+    }
+  }
+}
+```
+
+### What It Provides
+
+**Resources** -- all framework documentation exposed as MCP resources with `oasis://` URIs:
+
+| URI Pattern | Content |
+| ----------- | ------- |
+| `oasis://concepts/*` | Architecture, agents, tools, workflows, memory, etc. |
+| `oasis://guides/*` | How-to guides for custom tools, providers, RAG, streaming, etc. |
+| `oasis://api/*` | Interfaces, types, constructors, options, errors |
+| `oasis://configuration/*` | Config reference |
+| `oasis://getting-started/*` | Installation, quick start |
+| `oasis://contributing` | Engineering principles and conventions |
+
+**Tools** -- `search_docs` for keyword search across all documentation. Returns matching snippets with resource URIs.
+
+### How It Works
+
+The server embeds all documentation at build time via `//go:embed` and communicates over stdio using JSON-RPC 2.0 (MCP protocol revision 2025-03-26). No network access, no API keys, no deployment -- it runs as a local subprocess managed by your AI tool.
+
 ## License
 
 [Apache-2.0](LICENSE)
