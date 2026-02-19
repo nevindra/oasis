@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-02-19
+
 ### Added
 
 - **Multimodal output plumbing** — `ChatResponse` and `AgentResult` now carry `Attachments []Attachment`, enabling providers to return images, audio, and other media through the agent pipeline to application code
@@ -21,6 +23,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 - **Breaking:** `Provider.ChatStream` signature changed from `chan<- string` to `chan<- StreamEvent` — providers now emit typed events instead of raw strings
 - **Breaking:** `StreamingAgent.ExecuteStream` signature changed from `chan<- string` to `chan<- StreamEvent` — consumers receive structured events with tool call and agent delegation visibility
+
+### Removed
+
+- **Breaking:** `Frontend` interface, `IncomingMessage`, and `FileInfo` types removed from root package — no framework core code depended on them; messaging platform abstraction is now an application-level concern
+- **Breaking:** `frontend/telegram` package removed — Telegram bot implementation moved to reference app
 
 ## [0.3.2] - 2026-02-19
 
