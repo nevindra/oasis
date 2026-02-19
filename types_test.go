@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -215,6 +216,73 @@ func TestNewID(t *testing.T) {
 }
 
 // --- Tool registry tests (from tool_test.go) ---
+
+func TestNewResponseSchema(t *testing.T) {
+	s := NewResponseSchema("plan", &SchemaObject{
+		Type: "object",
+		Properties: map[string]*SchemaObject{
+			"steps": {
+				Type: "array",
+				Items: &SchemaObject{
+					Type: "object",
+					Properties: map[string]*SchemaObject{
+						"id":   {Type: "string", Description: "step identifier"},
+						"tool": {Type: "string", Enum: []string{"search", "read", "write"}},
+					},
+					Required: []string{"id", "tool"},
+				},
+			},
+		},
+		Required: []string{"steps"},
+	})
+
+	if s.Name != "plan" {
+		t.Errorf("Name = %q, want %q", s.Name, "plan")
+	}
+	if len(s.Schema) == 0 {
+		t.Fatal("Schema is empty")
+	}
+
+	// Roundtrip: unmarshal back and verify structure.
+	var got map[string]any
+	if err := json.Unmarshal(s.Schema, &got); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	if got["type"] != "object" {
+		t.Errorf("type = %v, want %q", got["type"], "object")
+	}
+	props, ok := got["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("properties is not an object")
+	}
+	if _, ok := props["steps"]; !ok {
+		t.Error("missing 'steps' in properties")
+	}
+}
+
+func TestNewResponseSchemaMinimal(t *testing.T) {
+	s := NewResponseSchema("out", &SchemaObject{
+		Type: "object",
+		Properties: map[string]*SchemaObject{
+			"name": {Type: "string"},
+		},
+	})
+
+	var got map[string]any
+	if err := json.Unmarshal(s.Schema, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Omitempty fields should not appear.
+	if _, ok := got["description"]; ok {
+		t.Error("empty description should be omitted")
+	}
+	if _, ok := got["enum"]; ok {
+		t.Error("nil enum should be omitted")
+	}
+	if _, ok := got["required"]; ok {
+		t.Error("nil required should be omitted")
+	}
+}
 
 func TestToolRegistry(t *testing.T) {
 	reg := NewToolRegistry()

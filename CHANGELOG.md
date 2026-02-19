@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **`SchemaObject` typed builder** — type-safe alternative to raw JSON for `ResponseSchema`. `NewResponseSchema(name, schema)` marshals a `SchemaObject` into `ResponseSchema.Schema`. Covers common JSON Schema keywords: `type`, `description`, `properties`, `items`, `enum`, `required`. Raw `json.RawMessage` remains available for advanced schemas
+
 ## [0.5.0] - 2026-02-19
 
 ### Added

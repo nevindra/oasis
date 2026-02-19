@@ -54,24 +54,26 @@ When the LLM decides what steps to run. Use a planner agent to generate a struct
 
 ```go
 planner := oasis.NewLLMAgent("planner", "You are a task planner.", llm,
-    oasis.WithResponseSchema(&oasis.ResponseSchema{
+    oasis.WithResponseSchema(oasis.NewResponseSchema("plan", &oasis.SchemaObject{
         Type: "object",
-        Properties: map[string]*oasis.ResponseSchema{
+        Properties: map[string]*oasis.SchemaObject{
             "steps": {
                 Type: "array",
-                Items: &oasis.ResponseSchema{
+                Items: &oasis.SchemaObject{
                     Type: "object",
-                    Properties: map[string]*oasis.ResponseSchema{
+                    Properties: map[string]*oasis.SchemaObject{
                         "id":    {Type: "string"},
                         "tool":  {Type: "string"},
                         "func":  {Type: "string"},
                         "args":  {Type: "object"},
-                        "after": {Type: "array", Items: &oasis.ResponseSchema{Type: "string"}},
+                        "after": {Type: "array", Items: &oasis.SchemaObject{Type: "string"}},
                     },
+                    Required: []string{"id", "tool"},
                 },
             },
         },
-    }),
+        Required: []string{"steps"},
+    })),
 )
 ```
 

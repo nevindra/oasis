@@ -174,6 +174,17 @@ type ResponseSchema struct {
     Schema json.RawMessage `json:"schema"`
 }
 
+type SchemaObject struct {
+    Type        string                   `json:"type"`
+    Description string                   `json:"description,omitempty"`
+    Properties  map[string]*SchemaObject `json:"properties,omitempty"`
+    Items       *SchemaObject            `json:"items,omitempty"`
+    Enum        []string                 `json:"enum,omitempty"`
+    Required    []string                 `json:"required,omitempty"`
+}
+
+func NewResponseSchema(name string, s *SchemaObject) *ResponseSchema
+
 type ChatResponse struct {
     Content     string       `json:"content"`
     Attachments []Attachment `json:"attachments,omitempty"`

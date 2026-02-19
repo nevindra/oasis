@@ -361,6 +361,35 @@ type ResponseSchema struct {
 	Schema json.RawMessage `json:"schema"` // JSON Schema object
 }
 
+// SchemaObject is a typed builder for common JSON Schema constructs.
+// Use with NewResponseSchema for a type-safe alternative to raw JSON:
+//
+//	oasis.NewResponseSchema("plan", &oasis.SchemaObject{
+//	    Type: "object",
+//	    Properties: map[string]*oasis.SchemaObject{
+//	        "steps": {Type: "array", Items: &oasis.SchemaObject{Type: "string"}},
+//	    },
+//	    Required: []string{"steps"},
+//	})
+//
+// For schemas that need keywords beyond this subset, use ResponseSchema
+// directly with json.RawMessage.
+type SchemaObject struct {
+	Type        string                   `json:"type"`
+	Description string                   `json:"description,omitempty"`
+	Properties  map[string]*SchemaObject `json:"properties,omitempty"`
+	Items       *SchemaObject            `json:"items,omitempty"`
+	Enum        []string                 `json:"enum,omitempty"`
+	Required    []string                 `json:"required,omitempty"`
+}
+
+// NewResponseSchema creates a ResponseSchema by marshalling a SchemaObject.
+// This provides a type-safe way to build JSON Schemas without raw JSON strings.
+func NewResponseSchema(name string, s *SchemaObject) *ResponseSchema {
+	b, _ := json.Marshal(s)
+	return &ResponseSchema{Name: name, Schema: b}
+}
+
 type ChatRequest struct {
 	Messages       []ChatMessage   `json:"messages"`
 	ResponseSchema *ResponseSchema `json:"response_schema,omitempty"`
