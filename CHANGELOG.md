@@ -18,6 +18,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 - **SQLite MemoryStore consolidated** — `memory/sqlite` package removed; use `sqlite.NewMemoryStore(store.DB())` from `store/sqlite` instead (matches `store/postgres` pattern). Shares the same `*sql.DB` connection, fixing the open-close-per-call anti-pattern.
 
+## [0.3.2] - 2026-02-19
+
+### Fixed
+
+- **ScheduledAction `skill_id` never persisted** — `CreateScheduledAction`, `UpdateScheduledAction`, and all read queries now include `skill_id` across postgres, sqlite, and libsql stores
+- **`UpdateSkill` keeps stale embedding** — postgres and libsql now set `embedding=NULL` when no new embedding is provided, matching sqlite behavior
+- **`DecayOldFacts` silently discards UPDATE error** — postgres and sqlite `MemoryStore` now propagate the decay UPDATE error instead of ignoring it
+- **Embedding serialization precision loss** — postgres and libsql `serializeEmbedding` now uses `strconv.FormatFloat` for full float32 precision instead of `fmt.Sprintf("%g")`
+
 ## [0.3.1] - 2026-02-19
 
 ### Added
