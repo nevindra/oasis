@@ -233,6 +233,55 @@ type PostToolProcessor interface {
 
 ---
 
+## Retriever
+
+**File:** `retriever.go`
+
+```go
+type Retriever interface {
+    Retrieve(ctx context.Context, query string, topK int) ([]RetrievalResult, error)
+}
+```
+
+| Implementation | Constructor |
+|----------------|------------|
+| `HybridRetriever` | `oasis.NewHybridRetriever(store, embedding, opts ...RetrieverOption)` |
+
+---
+
+## Reranker
+
+**File:** `retriever.go`
+
+```go
+type Reranker interface {
+    Rerank(ctx context.Context, query string, results []RetrievalResult, topK int) ([]RetrievalResult, error)
+}
+```
+
+| Implementation | Constructor |
+|----------------|------------|
+| `ScoreReranker` | `oasis.NewScoreReranker(minScore float32)` |
+| `LLMReranker` | `oasis.NewLLMReranker(provider Provider)` |
+
+---
+
+## KeywordSearcher
+
+**File:** `retriever.go`
+
+Optional Store capability for full-text keyword search. Discovered via type assertion.
+
+```go
+type KeywordSearcher interface {
+    SearchChunksKeyword(ctx context.Context, query string, topK int) ([]ScoredChunk, error)
+}
+```
+
+Implemented by `store/sqlite` and `store/libsql` (FTS5).
+
+---
+
 ## Ingest Interfaces
 
 **Package:** `github.com/nevindra/oasis/ingest`

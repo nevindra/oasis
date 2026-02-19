@@ -8,6 +8,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Retrieval pipeline overhaul** — composable hybrid search with re-ranking for RAG
+  - `Retriever` interface — search a knowledge base and return ranked `RetrievalResult`s
+  - `Reranker` interface — re-score retrieval results for improved precision
+  - `KeywordSearcher` interface — optional `Store` capability for full-text keyword search (discovered via type assertion)
+  - `HybridRetriever` — default implementation combining vector search + FTS5 keyword search with Reciprocal Rank Fusion, parent-child chunk resolution, and optional re-ranking
+  - `ScoreReranker` — score-based filtering and re-sorting (zero-dependency baseline)
+  - `LLMReranker` — LLM-powered relevance scoring via `Provider`
+  - FTS5 keyword search in both SQLite and libsql stores (implements `KeywordSearcher`)
+  - `RetrieverOption` functional options: `WithReranker`, `WithMinRetrievalScore`, `WithKeywordWeight`, `WithOverfetchMultiplier`
+
+### Changed
+
+- `KnowledgeTool` now delegates to `Retriever` interface — backward-compatible constructor; existing `New(store, emb)` calls auto-create a `HybridRetriever`. New options: `WithRetriever(r)`, `WithTopK(n)`
+
+### Fixed
+
+- Parent-child chunk resolution — `StrategyParentChild` now works end-to-end; matched child chunks are resolved to their parent's richer context during retrieval
+
+### Added
+
 - `MaxHistory(n int) ConversationOption` — control how many recent messages are loaded into LLM context per thread; pass to `WithConversationMemory(store, MaxHistory(30))`
 - **Suspend/Resume** — pause agent or workflow execution to await external input, then continue from where it left off
   - `Suspend(payload json.RawMessage) error` — call from any step function or processor to signal the engine to pause

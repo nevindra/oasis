@@ -122,6 +122,21 @@ oasis.NewID() string      // time-sortable 20-char xid (base32)
 oasis.NowUnix() int64     // current Unix timestamp (seconds)
 ```
 
+## Retrieval
+
+**File:** `retriever.go`
+
+```go
+retriever := oasis.NewHybridRetriever(store Store, emb EmbeddingProvider, opts ...RetrieverOption)
+```
+
+Rerankers:
+
+```go
+oasis.NewScoreReranker(minScore float32)
+oasis.NewLLMReranker(provider Provider)
+```
+
 ## Ingest
 
 **Package:** `github.com/nevindra/oasis/ingest`

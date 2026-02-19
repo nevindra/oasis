@@ -132,5 +132,7 @@ Large documents are embedded in configurable batches (default 64 chunks per `Emb
 
 ## See Also
 
+- [Retrieval](retrieval.md) — the search pipeline that reads ingested chunks
 - [Store](store.md) — where documents and chunks are stored
+- [RAG Pipeline Guide](../guides/rag-pipeline.md) — end-to-end walkthrough
 - [Ingesting Documents Guide](../guides/ingesting-documents.md)

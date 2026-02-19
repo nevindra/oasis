@@ -96,11 +96,17 @@ Every box is a Go interface (except Scheduler, which is a concrete struct wrappi
 | [Processor](processor.md) | `PreProcessor`, `PostProcessor`, `PostToolProcessor` | Middleware hooks in the agent loop |
 | [InputHandler](input-handler.md) | `InputHandler` | Human-in-the-loop interactions |
 
+### RAG Pipeline
+
+| Page | Interface/Package | What it does |
+|------|-------------------|-------------|
+| [Ingest](ingest.md) | `ingest` | Document chunking and embedding pipeline |
+| [Retrieval](retrieval.md) | `Retriever`, `Reranker` | Hybrid search, RRF, re-ranking |
+
 ### Infrastructure
 
 | Page | Package | What it does |
 |------|---------|-------------|
-| [Ingest](ingest.md) | `ingest` | Document chunking and embedding pipeline |
 | [Observability](observability.md) | `observer` | OpenTelemetry wrappers with cost tracking |
 
 ## Key Design Decisions

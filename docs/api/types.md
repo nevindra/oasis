@@ -77,6 +77,23 @@ type Skill struct {
 }
 ```
 
+## Retrieval Types
+
+**File:** `retriever.go`
+
+```go
+type RetrievalResult struct {
+    Content        string  `json:"content"`
+    Score          float32 `json:"score"`
+    ChunkID        string  `json:"chunk_id"`
+    DocumentID     string  `json:"document_id"`
+    DocumentTitle  string  `json:"document_title"`
+    DocumentSource string  `json:"document_source"`
+}
+```
+
+Score is in [0, 1]; higher means more relevant. Exact range depends on scoring method (cosine similarity, RRF, or reranker output).
+
 ## Scored Types (search results)
 
 ```go

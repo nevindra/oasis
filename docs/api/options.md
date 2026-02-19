@@ -79,6 +79,17 @@ Configures `WithRetry`.
 | `RetryMaxAttempts(n int)` | 3 | Maximum total attempts |
 | `RetryBaseDelay(d time.Duration)` | 1s | Initial backoff delay (doubles each attempt + jitter) |
 
+## RetrieverOption
+
+Configures `NewHybridRetriever`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithReranker(r Reranker)` | nil | Re-ranking stage after hybrid merge |
+| `WithMinRetrievalScore(s float32)` | 0 | Drop results below this score |
+| `WithKeywordWeight(w float32)` | 0.3 | Keyword weight in RRF (vector gets 1-w) |
+| `WithOverfetchMultiplier(n int)` | 3 | Fetch topK*n candidates before trim |
+
 ## Ingest Options
 
 **Package:** `github.com/nevindra/oasis/ingest`

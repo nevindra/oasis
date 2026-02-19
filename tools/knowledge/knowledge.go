@@ -11,14 +11,37 @@ import (
 
 // KnowledgeTool searches the knowledge base and past conversations.
 type KnowledgeTool struct {
+	retriever oasis.Retriever
 	store     oasis.Store
 	embedding oasis.EmbeddingProvider
 	topK      int
 }
 
-// New creates a KnowledgeTool with default topK of 5.
-func New(store oasis.Store, emb oasis.EmbeddingProvider) *KnowledgeTool {
-	return &KnowledgeTool{store: store, embedding: emb, topK: 5}
+// Option configures a KnowledgeTool.
+type Option func(*KnowledgeTool)
+
+// WithRetriever injects a custom Retriever. When not set, New creates a
+// default HybridRetriever from the provided store and embedding provider.
+func WithRetriever(r oasis.Retriever) Option {
+	return func(k *KnowledgeTool) { k.retriever = r }
+}
+
+// WithTopK sets the number of results to retrieve. Default is 5.
+func WithTopK(n int) Option {
+	return func(k *KnowledgeTool) { k.topK = n }
+}
+
+// New creates a KnowledgeTool. If no Retriever is provided via WithRetriever,
+// a default HybridRetriever is created from store and embedding.
+func New(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option) *KnowledgeTool {
+	k := &KnowledgeTool{store: store, embedding: emb, topK: 5}
+	for _, o := range opts {
+		o(k)
+	}
+	if k.retriever == nil {
+		k.retriever = oasis.NewHybridRetriever(store, emb)
+	}
+	return k
 }
 
 func (k *KnowledgeTool) Definitions() []oasis.ToolDefinition {
@@ -37,31 +60,30 @@ func (k *KnowledgeTool) Execute(ctx context.Context, _ string, args json.RawMess
 		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
 
+	// Retrieve from knowledge base via Retriever
+	chunks, err := k.retriever.Retrieve(ctx, params.Query, k.topK)
+	if err != nil {
+		return oasis.ToolResult{Error: "retrieval error: " + err.Error()}, nil
+	}
+
+	// Search past conversations
 	embs, err := k.embedding.Embed(ctx, []string{params.Query})
 	if err != nil {
 		return oasis.ToolResult{Error: "embedding error: " + err.Error()}, nil
 	}
-	if len(embs) == 0 {
-		return oasis.ToolResult{Error: "no embedding returned"}, nil
-	}
-
-	embedding := embs[0]
-
-	chunks, err := k.store.SearchChunks(ctx, embedding, k.topK)
-	if err != nil {
-		return oasis.ToolResult{Error: "chunk search error: " + err.Error()}, nil
-	}
-
-	messages, err := k.store.SearchMessages(ctx, embedding, 5)
-	if err != nil {
-		return oasis.ToolResult{Error: "message search error: " + err.Error()}, nil
+	var messages []oasis.ScoredMessage
+	if len(embs) > 0 {
+		messages, err = k.store.SearchMessages(ctx, embs[0], 5)
+		if err != nil {
+			return oasis.ToolResult{Error: "message search error: " + err.Error()}, nil
+		}
 	}
 
 	var out strings.Builder
 	if len(chunks) > 0 {
 		out.WriteString("From knowledge base:\n")
-		for i, sc := range chunks {
-			fmt.Fprintf(&out, "%d. %s\n\n", i+1, sc.Content)
+		for i, r := range chunks {
+			fmt.Fprintf(&out, "%d. %s\n\n", i+1, r.Content)
 		}
 	}
 	if len(messages) > 0 {

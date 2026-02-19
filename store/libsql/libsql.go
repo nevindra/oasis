@@ -24,8 +24,9 @@ type Store struct {
 	token  string // for Turso auth
 }
 
-// compile-time check
+// compile-time checks
 var _ oasis.Store = (*Store)(nil)
+var _ oasis.KeywordSearcher = (*Store)(nil)
 
 // New creates a Store that uses a local SQLite file at dbPath.
 func New(dbPath string) *Store {
@@ -150,6 +151,9 @@ func (s *Store) Init(ctx context.Context) error {
 	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN updated_at INTEGER")
 	_, _ = db.ExecContext(ctx, "UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE messages RENAME COLUMN conversation_id TO thread_id")
+
+	// FTS5 full-text index for keyword search over chunks.
+	_, _ = db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, content)`)
 
 	// Vector indexes -- these only work on real libsql, not standard SQLite.
 	// We attempt creation but ignore errors.
@@ -316,6 +320,12 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 		if err != nil {
 			return fmt.Errorf("insert chunk: %w", err)
 		}
+
+		// Keep FTS index in sync.
+		_, _ = tx.ExecContext(ctx, `DELETE FROM chunks_fts WHERE chunk_id = ?`, chunk.ID)
+		if _, err2 := tx.ExecContext(ctx, `INSERT INTO chunks_fts(chunk_id, content) VALUES (?, ?)`, chunk.ID, chunk.Content); err2 != nil {
+			return fmt.Errorf("insert chunk fts: %w", err2)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -358,6 +368,50 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 		chunks = append(chunks, oasis.ScoredChunk{Chunk: c})
 	}
 	return chunks, rows.Err()
+}
+
+// SearchChunksKeyword performs full-text keyword search over document chunks
+// using FTS5. Results are sorted by relevance.
+func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int) ([]oasis.ScoredChunk, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, f.rank
+		 FROM chunks_fts f
+		 JOIN chunks c ON c.id = f.chunk_id
+		 WHERE chunks_fts MATCH ?
+		 ORDER BY f.rank
+		 LIMIT ?`,
+		query, topK,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("keyword search: %w", err)
+	}
+	defer rows.Close()
+
+	var results []oasis.ScoredChunk
+	for rows.Next() {
+		var c oasis.Chunk
+		var parentID sql.NullString
+		var rank float64
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &rank); err != nil {
+			return nil, fmt.Errorf("scan chunk: %w", err)
+		}
+		if parentID.Valid {
+			c.ParentID = parentID.String
+		}
+		// FTS5 rank is negative (closer to 0 = better). Use -rank as score.
+		score := float32(-rank)
+		if score < 0 {
+			score = 0
+		}
+		results = append(results, oasis.ScoredChunk{Chunk: c, Score: score})
+	}
+	return results, rows.Err()
 }
 
 // GetChunksByIDs returns chunks matching the given IDs.

@@ -114,6 +114,18 @@ type ScoredChunk struct {
 
 A score of 0 means the store doesn't compute similarity (e.g., ANN indexes). Callers should treat `score == 0` as "relevance unknown" and skip threshold filtering.
 
+## Full-Text Search (FTS5)
+
+Both shipped Store implementations also implement the `KeywordSearcher` interface for full-text keyword search using SQLite FTS5:
+
+```go
+type KeywordSearcher interface {
+    SearchChunksKeyword(ctx context.Context, query string, topK int) ([]ScoredChunk, error)
+}
+```
+
+The FTS5 index (`chunks_fts`) is automatically created in `Init()` and synchronized when documents are stored via `StoreDocument()`. The [HybridRetriever](retrieval.md) discovers this capability via type assertion and uses it for hybrid vector + keyword search.
+
 ## Database Schema
 
 ```sql
@@ -124,6 +136,7 @@ messages (id, thread_id, role, content, embedding, created_at)
 -- Knowledge base
 documents (id, title, source, content, created_at)
 chunks    (id, document_id, parent_id, content, chunk_index, embedding)
+chunks_fts USING fts5(chunk_id UNINDEXED, content)  -- FTS5 keyword search
 
 -- Config
 config (key PRIMARY KEY, value)
@@ -141,4 +154,5 @@ skills (id, name, description, instructions, tools, model, embedding,
 
 - [Memory](memory.md) — MemoryStore for user facts (separate interface)
 - [Ingest](ingest.md) — document chunking pipeline that writes to Store
+- [Retrieval](retrieval.md) — search pipeline that reads from Store
 - [Custom Store Guide](../guides/custom-store.md)
