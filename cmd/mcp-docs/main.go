@@ -18,7 +18,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -60,23 +59,38 @@ func main() {
 		})
 	}
 
+	// Build full-text search index.
+	idx := newSearchIndex(allDocs)
+
 	// Register search_docs tool.
 	srv.AddTool(mcp.ToolHandler{
 		Definition: mcp.ToolDefinition{
 			Name:        "search_docs",
-			Description: "Search Oasis framework documentation by keyword. Returns matching sections with their resource URIs.",
+			Description: "Search Oasis framework documentation. Supports multi-word queries — results are ranked by relevance using BM25 scoring.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query": map[string]any{
 						"type":        "string",
-						"description": "Search query (case-insensitive keyword or phrase)",
+						"description": "Search query (e.g. \"network multi-agent\", \"streaming memory\", \"tool\")",
 					},
 				},
 				"required": []string{"query"},
 			},
 		},
-		Execute: searchDocsHandler(allDocs),
+		Execute: func(_ context.Context, args json.RawMessage) mcp.ToolCallResult {
+			var params struct {
+				Query string `json:"query"`
+			}
+			if err := json.Unmarshal(args, &params); err != nil {
+				return mcp.ErrorResult("invalid args: " + err.Error())
+			}
+			if params.Query == "" {
+				return mcp.ErrorResult("query is required")
+			}
+			results := idx.search(params.Query)
+			return mcp.TextResult(formatResults(params.Query, results))
+		},
 	})
 
 	if err := srv.Serve(ctx); err != nil && ctx.Err() == nil {
@@ -137,56 +151,6 @@ func loadDocs() []docEntry {
 	}
 
 	return entries
-}
-
-// searchDocsHandler returns a tool handler that searches across all docs.
-func searchDocsHandler(allDocs []docEntry) func(context.Context, json.RawMessage) mcp.ToolCallResult {
-	return func(_ context.Context, args json.RawMessage) mcp.ToolCallResult {
-		var params struct {
-			Query string `json:"query"`
-		}
-		if err := json.Unmarshal(args, &params); err != nil {
-			return mcp.ErrorResult("invalid args: " + err.Error())
-		}
-		if params.Query == "" {
-			return mcp.ErrorResult("query is required")
-		}
-
-		query := strings.ToLower(params.Query)
-		var matches []string
-
-		for _, d := range allDocs {
-			lower := strings.ToLower(d.content)
-			if !strings.Contains(lower, query) {
-				continue
-			}
-
-			// Find matching lines for context.
-			lines := strings.Split(d.content, "\n")
-			var snippets []string
-			for i, line := range lines {
-				if strings.Contains(strings.ToLower(line), query) {
-					start := max(i-1, 0)
-					end := min(i+2, len(lines))
-					snippet := strings.Join(lines[start:end], "\n")
-					snippets = append(snippets, strings.TrimSpace(snippet))
-					if len(snippets) >= 3 {
-						break
-					}
-				}
-			}
-
-			entry := fmt.Sprintf("## %s (%s)\n\n%s", d.name, d.uri, strings.Join(snippets, "\n\n---\n\n"))
-			matches = append(matches, entry)
-		}
-
-		if len(matches) == 0 {
-			return mcp.TextResult(fmt.Sprintf("No results found for %q. Try a different keyword.", params.Query))
-		}
-
-		result := fmt.Sprintf("Found %d matching document(s):\n\n%s", len(matches), strings.Join(matches, "\n\n===\n\n"))
-		return mcp.TextResult(result)
-	}
 }
 
 // toTitle converts a slug like "input-handler" to "Input Handler".
