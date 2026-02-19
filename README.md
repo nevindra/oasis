@@ -201,7 +201,6 @@ h.Cancel()
 | `Store` | Persistence with vector search |
 | `MemoryStore` | Long-term semantic memory (facts, confidence, decay) |
 | `Tool` | Pluggable capability for LLM function calling |
-| `Frontend` | Messaging platform -- `Poll`, `Send`, `Edit` |
 | `Agent` | Composable work unit -- `LLMAgent`, `Network`, `Workflow`, or custom |
 | `StreamingAgent` | Optional `Agent` capability -- `ExecuteStream` with channel-based token streaming |
 | `InputHandler` | Human-in-the-loop -- pause agent and request human input |
@@ -212,7 +211,6 @@ h.Cancel()
 | --------- | -------- |
 | **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Anthropic, Ollama) |
 | **Storage** | `store/sqlite` (local), `store/libsql` (Turso/remote), `store/postgres` (PostgreSQL + pgvector) |
-| **Frontend** | `frontend/telegram` |
 | **Tools** | `tools/knowledge`, `tools/remember`, `tools/search`, `tools/schedule`, `tools/shell`, `tools/file`, `tools/http` |
 | **Observability** | `observer` (OpenTelemetry wrappers with cost tracking) |
 | **Ingestion** | `ingest` (HTML, Markdown, plain text chunking pipeline) |
@@ -230,7 +228,7 @@ Requires Go 1.24+.
 ```text
 oasis/
 |-- types.go, provider.go, tool.go     # Core interfaces and domain types
-|-- store.go, frontend.go, memory.go
+|-- store.go, memory.go
 |-- agent.go, llmagent.go, network.go   # Agent primitives
 |-- workflow.go                        # Workflow primitive (DAG orchestration)
 |-- processor.go                        # Processor pipeline
@@ -238,7 +236,6 @@ oasis/
 |
 |-- provider/gemini/                    # Google Gemini provider
 |-- provider/openaicompat/              # OpenAI-compatible provider
-|-- frontend/telegram/                  # Telegram frontend
 |-- store/sqlite/                       # Local SQLite store + MemoryStore
 |-- store/libsql/                       # Remote Turso store
 |-- store/postgres/                     # PostgreSQL + pgvector store + MemoryStore

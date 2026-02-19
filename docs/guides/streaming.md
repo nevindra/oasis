@@ -85,31 +85,6 @@ sequenceDiagram
     Agent-->>Caller: AgentResult
 ```
 
-## Frontend Streaming Pattern
-
-For messaging platforms (Telegram, Discord), filter for text-delta events:
-
-```go
-msgID, _ := frontend.Send(ctx, chatID, "...")  // placeholder
-
-ch := make(chan oasis.StreamEvent, 64)
-go func() {
-    var buf strings.Builder
-    for ev := range ch {
-        if ev.Type != oasis.EventTextDelta {
-            continue
-        }
-        buf.WriteString(ev.Content)
-        // Throttle edits to max 1/sec
-        frontend.Edit(ctx, chatID, msgID, buf.String())
-    }
-    frontend.EditFormatted(ctx, chatID, msgID, formatHTML(buf.String()))
-}()
-
-sa := agent.(oasis.StreamingAgent)
-result, _ := sa.ExecuteStream(ctx, task, ch)
-```
-
 ## Channel Buffering
 
 Use a buffered channel to avoid blocking the LLM stream:
@@ -124,4 +99,3 @@ The channel is always closed by the agent when streaming completes.
 ## See Also
 
 - [Agent Concept](../concepts/agent.md) — StreamingAgent interface
-- [Frontend Concept](../concepts/frontend.md) — poll-send-edit cycle

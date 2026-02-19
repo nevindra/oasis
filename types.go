@@ -188,26 +188,6 @@ type ToolDefinition struct {
 	Parameters  json.RawMessage `json:"parameters"` // JSON Schema
 }
 
-// --- Incoming message from frontend ---
-
-type IncomingMessage struct {
-	ID           string
-	ChatID       string
-	UserID       string
-	Text         string
-	ReplyToMsgID string
-	Document     *FileInfo
-	Photos       []FileInfo
-	Caption      string
-}
-
-type FileInfo struct {
-	FileID   string
-	FileName string
-	MimeType string
-	FileSize int64
-}
-
 // --- ChatMessage constructors ---
 
 func UserMessage(text string) ChatMessage {

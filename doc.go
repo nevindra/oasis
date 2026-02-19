@@ -34,7 +34,6 @@
 //   - [Agent] — composable work unit (LLMAgent, Network, Workflow, or custom)
 //   - [Provider] — LLM backend (chat, tool calling, streaming)
 //   - [EmbeddingProvider] — text-to-vector embedding
-//   - [Frontend] — messaging platform (Telegram, Discord, CLI, etc.)
 //   - [Store] — persistence with vector search
 //   - [MemoryStore] — long-term semantic memory
 //   - [Tool] — pluggable capability for LLM function calling
@@ -44,7 +43,6 @@
 //
 // Providers: provider/gemini (Google Gemini), provider/openaicompat (OpenAI-compatible APIs).
 // Storage: store/sqlite (local), store/libsql (Turso/remote).
-// Frontends: frontend/telegram.
 // Tools: tools/knowledge, tools/remember, tools/search, tools/schedule, tools/shell, tools/file, tools/http.
 //
 // See the cmd/bot_example directory for a complete reference application.

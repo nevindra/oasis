@@ -6,11 +6,6 @@ This section explains how Oasis works — one page per primitive. Each page cove
 
 ```mermaid
 graph TB
-    subgraph Frontends
-        TG[Telegram]
-        CUSTOM_FE[Custom Frontend]
-    end
-
     subgraph "Your Application"
         APP[Wiring & Routing]
     end
@@ -40,8 +35,6 @@ graph TB
         MORE[...]
     end
 
-    TG --> APP
-    CUSTOM_FE --> APP
     APP --> AGENT
     APP --> NET
     APP --> WF
@@ -76,7 +69,6 @@ Every box is a Go interface (except Scheduler, which is a concrete struct wrappi
 |------|-----------|-------------|
 | [Provider](provider.md) | `Provider`, `EmbeddingProvider` | LLM chat, tool calling, streaming, text embedding |
 | [Store](store.md) | `Store` | Persistence with vector search |
-| [Frontend](frontend.md) | `Frontend` | Messaging platform abstraction |
 | [Tool](tool.md) | `Tool` | Pluggable agent capabilities |
 
 ### Agent Primitives

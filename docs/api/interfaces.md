@@ -164,27 +164,6 @@ type MemoryStore interface {
 
 ---
 
-## Frontend
-
-**File:** `frontend.go`
-
-```go
-type Frontend interface {
-    Poll(ctx context.Context) (<-chan IncomingMessage, error)
-    Send(ctx context.Context, chatID string, text string) (string, error)
-    Edit(ctx context.Context, chatID string, msgID string, text string) error
-    EditFormatted(ctx context.Context, chatID string, msgID string, text string) error
-    SendTyping(ctx context.Context, chatID string) error
-    DownloadFile(ctx context.Context, fileID string) ([]byte, string, error)
-}
-```
-
-| Implementation | Constructor |
-|----------------|------------|
-| `frontend/telegram` | `telegram.New(token string)` |
-
----
-
 ## Tool
 
 **File:** `tool.go`

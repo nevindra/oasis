@@ -165,22 +165,6 @@ type ToolResult struct {
 }
 ```
 
-## Frontend Types
-
-```go
-type IncomingMessage struct {
-    ID, ChatID, UserID, Text, ReplyToMsgID string
-    Document *FileInfo
-    Photos   []FileInfo
-    Caption  string
-}
-
-type FileInfo struct {
-    FileID, FileName, MimeType string
-    FileSize int64
-}
-```
-
 ## Agent Types
 
 **File:** `agent.go`

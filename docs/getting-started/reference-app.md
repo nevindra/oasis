@@ -96,7 +96,7 @@ The reference app in `internal/bot/` demonstrates:
 
 ```mermaid
 graph TD
-    TG[Telegram Frontend] -->|Poll| APP[Application Layer]
+    TG[Telegram Bot] -->|Poll| APP[Application Layer]
     APP -->|Intent classification| INTENT[Intent LLM]
     APP -->|Chat| CHAT[Chat LLM + Streaming]
     APP -->|Action| ACTION[Action Agent + Tools]
