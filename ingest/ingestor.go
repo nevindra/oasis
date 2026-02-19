@@ -66,7 +66,7 @@ func (ing *Ingestor) IngestText(ctx context.Context, text, source, title string)
 		CreatedAt: now,
 	}
 
-	chunks, err := ing.chunkAndEmbed(ctx, text, docID, TypePlainText)
+	chunks, err := ing.chunkAndEmbed(ctx, text, docID, TypePlainText, source, nil)
 	if err != nil {
 		return IngestResult{}, err
 	}
@@ -92,9 +92,23 @@ func (ing *Ingestor) IngestFile(ctx context.Context, content []byte, filename st
 		extractor = PlainTextExtractor{}
 	}
 
-	text, err := extractor.Extract(content)
-	if err != nil {
-		return IngestResult{}, fmt.Errorf("extract %s: %w", ct, err)
+	var text string
+	var pageMeta []PageMeta
+
+	// Use MetadataExtractor if available.
+	if me, ok := extractor.(MetadataExtractor); ok {
+		result, err := me.ExtractWithMeta(content)
+		if err != nil {
+			return IngestResult{}, fmt.Errorf("extract %s: %w", ct, err)
+		}
+		text = result.Text
+		pageMeta = result.Meta
+	} else {
+		var err error
+		text, err = extractor.Extract(content)
+		if err != nil {
+			return IngestResult{}, fmt.Errorf("extract %s: %w", ct, err)
+		}
 	}
 
 	now := oasis.NowUnix()
@@ -108,7 +122,7 @@ func (ing *Ingestor) IngestFile(ctx context.Context, content []byte, filename st
 		CreatedAt: now,
 	}
 
-	chunks, err := ing.chunkAndEmbed(ctx, text, docID, ct)
+	chunks, err := ing.chunkAndEmbed(ctx, text, docID, ct, filename, pageMeta)
 	if err != nil {
 		return IngestResult{}, err
 	}
@@ -134,15 +148,15 @@ func (ing *Ingestor) IngestReader(ctx context.Context, r io.Reader, filename str
 }
 
 // chunkAndEmbed handles chunking (flat or parent-child) and batched embedding.
-func (ing *Ingestor) chunkAndEmbed(ctx context.Context, text, docID string, ct ContentType) ([]oasis.Chunk, error) {
+func (ing *Ingestor) chunkAndEmbed(ctx context.Context, text, docID string, ct ContentType, source string, pageMeta []PageMeta) ([]oasis.Chunk, error) {
 	if ing.strategy == StrategyParentChild {
-		return ing.chunkParentChild(ctx, text, docID, ct)
+		return ing.chunkParentChild(ctx, text, docID, ct, source, pageMeta)
 	}
-	return ing.chunkFlat(ctx, text, docID, ct)
+	return ing.chunkFlat(ctx, text, docID, ct, source, pageMeta)
 }
 
 // chunkFlat performs single-level chunking with batched embedding.
-func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct ContentType) ([]oasis.Chunk, error) {
+func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct ContentType, source string, pageMeta []PageMeta) ([]oasis.Chunk, error) {
 	chunker := ing.selectChunker(ct)
 	chunkTexts := chunker.Chunk(text)
 	if len(chunkTexts) == 0 {
@@ -150,12 +164,23 @@ func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct Conte
 	}
 
 	chunks := make([]oasis.Chunk, len(chunkTexts))
+	offset := 0
 	for i, t := range chunkTexts {
+		// Find byte offset of this chunk in the original text.
+		idx := strings.Index(text[offset:], t)
+		startByte := offset
+		if idx >= 0 {
+			startByte = offset + idx
+		}
+		endByte := startByte + len(t)
+		offset = endByte
+
 		chunks[i] = oasis.Chunk{
 			ID:         oasis.NewID(),
 			DocumentID: docID,
 			Content:    t,
 			ChunkIndex: i,
+			Metadata:   assignMeta(startByte, endByte, source, pageMeta),
 		}
 	}
 
@@ -169,7 +194,7 @@ func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct Conte
 // chunkParentChild performs two-level hierarchical chunking.
 // Parent chunks are stored without embeddings; child chunks get embeddings
 // and link back to their parent via ParentID.
-func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, ct ContentType) ([]oasis.Chunk, error) {
+func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, ct ContentType, source string, pageMeta []PageMeta) ([]oasis.Chunk, error) {
 	parentChunker := ing.parentChunker
 	if ct == TypeMarkdown {
 		// Use MarkdownChunker for parent level on markdown content.
@@ -184,9 +209,19 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 	var allChunks []oasis.Chunk
 	var childChunks []oasis.Chunk
 	chunkIdx := 0
+	offset := 0
 
 	for _, pt := range parentTexts {
 		parentID := oasis.NewID()
+
+		// Find byte offset of parent chunk.
+		idx := strings.Index(text[offset:], pt)
+		parentStart := offset
+		if idx >= 0 {
+			parentStart = offset + idx
+		}
+		parentEnd := parentStart + len(pt)
+		offset = parentEnd
 
 		// Store parent chunk (no embedding).
 		parent := oasis.Chunk{
@@ -194,19 +229,30 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 			DocumentID: docID,
 			Content:    pt,
 			ChunkIndex: chunkIdx,
+			Metadata:   assignMeta(parentStart, parentEnd, source, pageMeta),
 		}
 		allChunks = append(allChunks, parent)
 		chunkIdx++
 
 		// Split parent into children.
 		childTexts := ing.childChunker.Chunk(pt)
-		for _, ct := range childTexts {
+		childOffset := 0
+		for _, childText := range childTexts {
+			cidx := strings.Index(pt[childOffset:], childText)
+			childStart := parentStart + childOffset
+			if cidx >= 0 {
+				childStart = parentStart + childOffset + cidx
+			}
+			childEnd := childStart + len(childText)
+			childOffset = childStart - parentStart + len(childText)
+
 			child := oasis.Chunk{
 				ID:         oasis.NewID(),
 				DocumentID: docID,
 				ParentID:   parentID,
-				Content:    ct,
+				Content:    childText,
 				ChunkIndex: chunkIdx,
+				Metadata:   assignMeta(childStart, childEnd, source, pageMeta),
 			}
 			childChunks = append(childChunks, child)
 			chunkIdx++
@@ -220,6 +266,50 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 
 	allChunks = append(allChunks, childChunks...)
 	return allChunks, nil
+}
+
+// assignMeta finds the best-matching PageMeta for a chunk's byte range
+// and builds a ChunkMeta.
+func assignMeta(startByte, endByte int, source string, pageMeta []PageMeta) *oasis.ChunkMeta {
+	meta := &oasis.ChunkMeta{}
+	if source != "" {
+		meta.SourceURL = source
+	}
+
+	if len(pageMeta) == 0 {
+		if meta.SourceURL == "" {
+			return nil
+		}
+		return meta
+	}
+
+	// Find the PageMeta with the most overlap with this chunk.
+	var best *PageMeta
+	bestOverlap := 0
+	for i := range pageMeta {
+		pm := &pageMeta[i]
+		overlapStart := max(startByte, pm.StartByte)
+		overlapEnd := min(endByte, pm.EndByte)
+		overlap := overlapEnd - overlapStart
+		if overlap > bestOverlap {
+			bestOverlap = overlap
+			best = pm
+		}
+	}
+
+	if best != nil {
+		if best.PageNumber > 0 {
+			meta.PageNumber = best.PageNumber
+		}
+		if best.Heading != "" {
+			meta.SectionHeading = best.Heading
+		}
+		if len(best.Images) > 0 {
+			meta.Images = best.Images
+		}
+	}
+
+	return meta
 }
 
 // selectChunker returns the appropriate chunker based on content type.
@@ -243,10 +333,7 @@ func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk) error
 	}
 
 	for i := 0; i < len(chunks); i += ing.batchSize {
-		end := i + ing.batchSize
-		if end > len(chunks) {
-			end = len(chunks)
-		}
+		end := min(i+ing.batchSize, len(chunks))
 
 		batch := chunks[i:end]
 		texts := make([]string, len(batch))

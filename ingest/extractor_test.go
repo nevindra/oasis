@@ -97,6 +97,24 @@ func TestContentTypeFromExtension(t *testing.T) {
 	}
 }
 
+func TestContentTypeFromExtensionNew(t *testing.T) {
+	tests := []struct {
+		ext  string
+		want ContentType
+	}{
+		{"csv", TypeCSV},
+		{"json", TypeJSON},
+		{"docx", TypeDOCX},
+		{"CSV", TypeCSV},
+		{"JSON", TypeJSON},
+	}
+	for _, tt := range tests {
+		if got := ContentTypeFromExtension(tt.ext); got != tt.want {
+			t.Errorf("ContentTypeFromExtension(%q) = %q, want %q", tt.ext, got, tt.want)
+		}
+	}
+}
+
 func TestHTMLExtractor(t *testing.T) {
 	e := HTMLExtractor{}
 	out, err := e.Extract([]byte("<p>Hello <b>world</b></p>"))

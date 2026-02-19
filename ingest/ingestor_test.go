@@ -245,3 +245,87 @@ func TestIngestorWithChunker(t *testing.T) {
 		t.Errorf("expected 1 chunk, got %d", r.ChunkCount)
 	}
 }
+
+// --- integration tests: metadata flow ---
+
+// metadataExtractorMock implements both Extractor and MetadataExtractor.
+type metadataExtractorMock struct {
+	result ExtractResult
+}
+
+func (m *metadataExtractorMock) Extract(content []byte) (string, error) {
+	return m.result.Text, nil
+}
+
+func (m *metadataExtractorMock) ExtractWithMeta(content []byte) (ExtractResult, error) {
+	return m.result, nil
+}
+
+func TestIngestorMetadataExtractor(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+
+	ext := &metadataExtractorMock{
+		result: ExtractResult{
+			Text: "Page one content.\n\nPage two content.",
+			Meta: []PageMeta{
+				{PageNumber: 1, Heading: "Intro", StartByte: 0, EndByte: 17},
+				{PageNumber: 2, Heading: "Details", StartByte: 19, EndByte: 36},
+			},
+		},
+	}
+
+	// Register under TypeCSV so IngestFile finds it via extension mapping.
+	ing := NewIngestor(store, emb, WithExtractor(TypeCSV, ext))
+
+	r, err := ing.IngestFile(context.Background(), []byte("dummy"), "doc.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ChunkCount == 0 {
+		t.Fatal("expected chunks")
+	}
+
+	// Verify metadata was assigned to chunks.
+	for _, c := range store.chunks {
+		if c.Metadata == nil {
+			t.Fatal("expected metadata on chunk")
+		}
+		if c.Metadata.SourceURL != "doc.csv" {
+			t.Errorf("expected source URL doc.csv, got %q", c.Metadata.SourceURL)
+		}
+		// At least one chunk should have page metadata.
+		if c.Metadata.PageNumber > 0 || c.Metadata.SectionHeading != "" {
+			return // success — at least one chunk got page-level metadata
+		}
+	}
+	t.Error("no chunk received page-level metadata")
+}
+
+func TestIngestorCSVEndToEnd(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+
+	// Register plain text extractor for CSV type (CSV extractor is in a
+	// sub-package we can't import due to cycle, but the metadata wiring
+	// is the same regardless of extractor).
+	ing := NewIngestor(store, emb,
+		WithExtractor(TypeCSV, PlainTextExtractor{}),
+	)
+
+	csvData := []byte("Name,Age\nJohn,30\nJane,25\n")
+	r, err := ing.IngestFile(context.Background(), csvData, "data.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ChunkCount == 0 {
+		t.Fatal("expected chunks")
+	}
+
+	// Verify source URL is set on chunks via metadata.
+	for _, c := range store.chunks {
+		if c.Metadata == nil || c.Metadata.SourceURL != "data.csv" {
+			t.Errorf("expected source URL data.csv on chunk metadata, got %+v", c.Metadata)
+		}
+	}
+}

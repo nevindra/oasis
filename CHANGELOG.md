@@ -22,6 +22,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 - `KnowledgeTool` now delegates to `Retriever` interface — backward-compatible constructor; existing `New(store, emb)` calls auto-create a `HybridRetriever`. New options: `WithRetriever(r)`, `WithTopK(n)`
 
+- **Ingest extractors and chunk metadata** — new content types with structured metadata flowing through the pipeline
+  - `ChunkMeta` type — per-chunk metadata (page number, section heading, source URL, images) stored as JSON in the `metadata` column
+  - `Image` type — extracted image representation (MIME type, base64 data, alt text, page)
+  - `MetadataExtractor` interface — optional capability for extractors to return `ExtractResult` with `PageMeta` alongside text; ingestor auto-detects via type assertion
+  - `csv.Extractor` (`ingest/csv`) — first row as headers, subsequent rows as labeled paragraphs
+  - `json.Extractor` (`ingest/json`) — recursive flattening with dotted key paths
+  - `docx.Extractor` (`ingest/docx`) — paragraphs, headings, tables, images via `archive/zip` + `encoding/xml` (pure Go, no CGO); implements `MetadataExtractor`
+  - PDF extractor upgraded to `MetadataExtractor` — page-by-page extraction with `PageMeta` per page
+  - Content type detection for `.csv`, `.json`, `.docx` extensions
+  - SQLite and libSQL stores: `metadata TEXT` column on `chunks` table with JSON serialization/deserialization
+  - Ingestor metadata wiring: byte-range overlap matching assigns `PageMeta` to chunks via `assignMeta()`
+
 ### Fixed
 
 - Parent-child chunk resolution — `StrategyParentChild` now works end-to-end; matched child chunks are resolved to their parent's richer context during retrieval

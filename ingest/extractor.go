@@ -3,11 +3,37 @@ package ingest
 import (
 	"strings"
 	"unicode"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 // Extractor converts raw content to plain text.
 type Extractor interface {
 	Extract(content []byte) (string, error)
+}
+
+// ExtractResult holds extracted text and optional per-page/section metadata.
+type ExtractResult struct {
+	Text string
+	Meta []PageMeta
+}
+
+// PageMeta holds metadata for a single page or section of extracted content.
+// StartByte and EndByte mark the byte range in ExtractResult.Text that this
+// metadata applies to, enabling the ingestor to assign metadata to chunks.
+type PageMeta struct {
+	PageNumber int
+	Heading    string
+	Images     []oasis.Image
+	StartByte  int
+	EndByte    int
+}
+
+// MetadataExtractor is an optional capability for extractors that produce
+// structured metadata alongside text. If an Extractor also implements
+// MetadataExtractor, the ingestor uses ExtractWithMeta instead of Extract.
+type MetadataExtractor interface {
+	ExtractWithMeta(content []byte) (ExtractResult, error)
 }
 
 // ContentType identifies the MIME type of content for extraction.
@@ -17,6 +43,9 @@ const (
 	TypePlainText ContentType = "text/plain"
 	TypeHTML      ContentType = "text/html"
 	TypeMarkdown  ContentType = "text/markdown"
+	TypeCSV       ContentType = "text/csv"
+	TypeJSON      ContentType = "application/json"
+	TypeDOCX      ContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
 
 // ContentTypeFromExtension maps file extensions to content types.
@@ -26,6 +55,12 @@ func ContentTypeFromExtension(ext string) ContentType {
 		return TypeMarkdown
 	case "html", "htm":
 		return TypeHTML
+	case "csv":
+		return TypeCSV
+	case "json":
+		return TypeJSON
+	case "docx":
+		return TypeDOCX
 	default:
 		return TypePlainText
 	}

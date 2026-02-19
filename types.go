@@ -39,12 +39,30 @@ type Document struct {
 }
 
 type Chunk struct {
-	ID         string    `json:"id"`
-	DocumentID string    `json:"document_id"`
-	ParentID   string    `json:"parent_id,omitempty"`
-	Content    string    `json:"content"`
-	ChunkIndex int       `json:"chunk_index"`
-	Embedding  []float32 `json:"-"`
+	ID         string     `json:"id"`
+	DocumentID string     `json:"document_id"`
+	ParentID   string     `json:"parent_id,omitempty"`
+	Content    string     `json:"content"`
+	ChunkIndex int        `json:"chunk_index"`
+	Embedding  []float32  `json:"-"`
+	Metadata   *ChunkMeta `json:"metadata,omitempty"`
+}
+
+// ChunkMeta holds optional chunk-level metadata produced during extraction.
+// Stored as JSON in the database. Zero values are omitted.
+type ChunkMeta struct {
+	PageNumber     int     `json:"page_number,omitempty"`
+	SectionHeading string  `json:"section_heading,omitempty"`
+	SourceURL      string  `json:"source_url,omitempty"`
+	Images         []Image `json:"images,omitempty"`
+}
+
+// Image represents an extracted image from a document.
+type Image struct {
+	MimeType string `json:"mime_type"`
+	Base64   string `json:"base64"`
+	AltText  string `json:"alt_text,omitempty"`
+	Page     int    `json:"page,omitempty"`
 }
 
 type Thread struct {

@@ -121,6 +121,7 @@ func (s *Store) Init(ctx context.Context) error {
 	// Migrations (best-effort, silent fail if already applied)
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN metadata TEXT")
 
 	// Migrate conversations → threads
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE conversations RENAME TO threads")
@@ -257,10 +258,16 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 		if chunk.ParentID != "" {
 			parentID = &chunk.ParentID
 		}
+		var metaJSON *string
+		if chunk.Metadata != nil {
+			data, _ := json.Marshal(chunk.Metadata)
+			v := string(data)
+			metaJSON = &v
+		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO chunks (id, document_id, parent_id, content, chunk_index, embedding)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, embJSON,
+			`INSERT OR REPLACE INTO chunks (id, document_id, parent_id, content, chunk_index, embedding, metadata)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, embJSON, metaJSON,
 		)
 		if err != nil {
 			return fmt.Errorf("insert chunk: %w", err)
@@ -282,7 +289,7 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 // SearchChunks performs brute-force cosine similarity search over chunks.
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredChunk, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, document_id, parent_id, content, chunk_index, embedding
+		`SELECT id, document_id, parent_id, content, chunk_index, embedding, metadata
 		 FROM chunks WHERE embedding IS NOT NULL`,
 	)
 	if err != nil {
@@ -296,11 +303,16 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 		var c oasis.Chunk
 		var parentID sql.NullString
 		var embJSON string
-		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &embJSON); err != nil {
+		var metaJSON sql.NullString
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &embJSON, &metaJSON); err != nil {
 			return nil, fmt.Errorf("scan chunk: %w", err)
 		}
 		if parentID.Valid {
 			c.ParentID = parentID.String
+		}
+		if metaJSON.Valid {
+			c.Metadata = &oasis.ChunkMeta{}
+			_ = json.Unmarshal([]byte(metaJSON.String), c.Metadata)
 		}
 		stored, err := deserializeEmbedding(embJSON)
 		if err != nil {
@@ -326,7 +338,7 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int)
 // using SQLite FTS5. Results are sorted by relevance (FTS5 rank).
 func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int) ([]oasis.ScoredChunk, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, f.rank
+		`SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.metadata, f.rank
 		 FROM chunks_fts f
 		 JOIN chunks c ON c.id = f.chunk_id
 		 WHERE chunks_fts MATCH ?
@@ -343,12 +355,17 @@ func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int)
 	for rows.Next() {
 		var c oasis.Chunk
 		var parentID sql.NullString
+		var metaJSON sql.NullString
 		var rank float64
-		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &rank); err != nil {
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &metaJSON, &rank); err != nil {
 			return nil, fmt.Errorf("scan chunk: %w", err)
 		}
 		if parentID.Valid {
 			c.ParentID = parentID.String
+		}
+		if metaJSON.Valid {
+			c.Metadata = &oasis.ChunkMeta{}
+			_ = json.Unmarshal([]byte(metaJSON.String), c.Metadata)
 		}
 		// FTS5 rank is negative (closer to 0 = better). Use -rank as score.
 		score := float32(-rank)
@@ -372,7 +389,7 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := fmt.Sprintf(`SELECT id, document_id, parent_id, content, chunk_index FROM chunks WHERE id IN (%s)`,
+	query := fmt.Sprintf(`SELECT id, document_id, parent_id, content, chunk_index, metadata FROM chunks WHERE id IN (%s)`,
 		strings.Join(placeholders, ","))
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -385,11 +402,16 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 	for rows.Next() {
 		var c oasis.Chunk
 		var parentID sql.NullString
-		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex); err != nil {
+		var metaJSON sql.NullString
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &metaJSON); err != nil {
 			return nil, fmt.Errorf("scan chunk: %w", err)
 		}
 		if parentID.Valid {
 			c.ParentID = parentID.String
+		}
+		if metaJSON.Valid {
+			c.Metadata = &oasis.ChunkMeta{}
+			_ = json.Unmarshal([]byte(metaJSON.String), c.Metadata)
 		}
 		chunks = append(chunks, c)
 	}

@@ -10,9 +10,21 @@ func TestExtractorImplementsInterface(t *testing.T) {
 	var _ ingest.Extractor = (*Extractor)(nil)
 }
 
+func TestExtractorImplementsMetadataExtractor(t *testing.T) {
+	var _ ingest.MetadataExtractor = (*Extractor)(nil)
+}
+
 func TestExtractEmptyContent(t *testing.T) {
 	e := NewExtractor()
 	_, err := e.Extract(nil)
+	if err == nil {
+		t.Error("expected error for empty content")
+	}
+}
+
+func TestExtractWithMetaEmptyContent(t *testing.T) {
+	e := NewExtractor()
+	_, err := e.ExtractWithMeta(nil)
 	if err == nil {
 		t.Error("expected error for empty content")
 	}

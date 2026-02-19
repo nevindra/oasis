@@ -6,8 +6,8 @@ The ingest pipeline handles the full journey from raw content to searchable vect
 
 ```mermaid
 flowchart LR
-    RAW["Raw content<br>(text, HTML, MD, PDF)"] --> EXTRACT[Extractor]
-    EXTRACT --> PLAIN[Plain text]
+    RAW["Raw content<br>(text, HTML, MD, PDF,<br>CSV, JSON, DOCX)"] --> EXTRACT[Extractor]
+    EXTRACT --> PLAIN["Plain text<br>+ metadata"]
     PLAIN --> CHUNK[Chunker]
     CHUNK --> CHUNKS["Chunks []string"]
     CHUNKS --> EMBED["EmbeddingProvider<br>(batched)"]
@@ -52,8 +52,28 @@ Convert raw bytes to plain text:
 | `HTMLExtractor` | `text/html` — strips tags, scripts, styles |
 | `MarkdownExtractor` | `text/markdown` |
 | `pdf.NewExtractor()` | PDF (opt-in, `ingest/pdf` subpackage) |
+| `csv.NewExtractor()` | CSV (opt-in, `ingest/csv` subpackage) |
+| `json.NewExtractor()` | JSON (opt-in, `ingest/json` subpackage) |
+| `docx.NewExtractor()` | DOCX (opt-in, `ingest/docx` subpackage) |
 
 Content type is detected from file extension via `ContentTypeFromExtension()`.
+
+### MetadataExtractor
+
+Extractors may optionally implement `MetadataExtractor` to return structured metadata alongside text. When an extractor provides `ExtractWithMeta()`, the ingestor uses it instead of `Extract()` and assigns page-level metadata (page number, section heading, images) to each chunk via byte-range overlap matching.
+
+Built-in metadata extractors: `pdf.Extractor`, `docx.Extractor`.
+
+## Chunk Metadata
+
+Each chunk can carry a `ChunkMeta` with:
+
+- **PageNumber** — source page (from PDF or DOCX)
+- **SectionHeading** — nearest heading
+- **SourceURL** — file path or URL
+- **Images** — extracted images (base64-encoded)
+
+Metadata is stored as JSON in the `metadata` column and flows through the retrieval pipeline.
 
 ## Chunkers
 
