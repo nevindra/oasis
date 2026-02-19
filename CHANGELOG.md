@@ -9,6 +9,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ### Added
 
 - **Multimodal output plumbing** — `ChatResponse` and `AgentResult` now carry `Attachments []Attachment`, enabling providers to return images, audio, and other media through the agent pipeline to application code
+- **Structured streaming events** — `StreamEvent` type with 5 typed event types for rich UI support
+  - `EventTextDelta` — LLM text token (emitted by providers)
+  - `EventToolCallStart` — tool invocation begins (emitted by runLoop before dispatch)
+  - `EventToolCallResult` — tool invocation completes (emitted by runLoop after dispatch)
+  - `EventAgentStart` — sub-agent begins execution (emitted by Network dispatch)
+  - `EventAgentFinish` — sub-agent completes execution (emitted by Network dispatch)
+  - `StreamEvent` struct carries `Type`, `Name`, `Content`, and `Args` (JSON) with serialization tags for SSE/WebSocket consumers
+
+### Changed
+
+- **Breaking:** `Provider.ChatStream` signature changed from `chan<- string` to `chan<- StreamEvent` — providers now emit typed events instead of raw strings
+- **Breaking:** `StreamingAgent.ExecuteStream` signature changed from `chan<- string` to `chan<- StreamEvent` — consumers receive structured events with tool call and agent delegation visibility
 
 ## [0.3.2] - 2026-02-19
 

@@ -70,9 +70,9 @@ func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools
 	return g.doGenerate(ctx, body)
 }
 
-// ChatStream streams text tokens into ch, then returns the final accumulated response.
-// The channel is closed by the caller; this method sends deltas until the stream ends.
-func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- string) (oasis.ChatResponse, error) {
+// ChatStream streams text-delta events into ch, then returns the final accumulated response.
+// The channel is closed when streaming completes.
+func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	defer close(ch)
 
 	body, err := g.buildBody(req.Messages, nil, nil)
@@ -156,7 +156,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 
 // processStreamChunk parses a single JSON chunk from the SSE stream,
 // extracts text deltas and usage, and sends text to the channel.
-func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, ch chan<- string) {
+func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, ch chan<- oasis.StreamEvent) {
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		return
@@ -166,7 +166,7 @@ func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder
 	text := extractTextFromParsed(parsed)
 	if text != "" {
 		fullContent.WriteString(text)
-		ch <- text
+		ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: text}
 	}
 
 	// Extract usage metadata (overwrite each time; last chunk wins).

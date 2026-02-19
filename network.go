@@ -68,19 +68,20 @@ func (n *Network) Description() string { return n.description }
 
 // Execute runs the network's routing loop.
 func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
-	return runLoop(ctx, n.buildLoopConfig(task), task, nil)
+	return runLoop(ctx, n.buildLoopConfig(task, nil), task, nil)
 }
 
-// ExecuteStream runs the network's routing loop like Execute, but streams the
-// final text response into ch. Tool-calling/routing iterations use blocking
-// ChatWithTools; only the final response (no tool calls) is streamed.
+// ExecuteStream runs the network's routing loop like Execute, but emits
+// StreamEvent values into ch throughout execution. Events include text deltas,
+// tool call start/result, and agent start/finish for subagent delegation.
 // The channel is closed when streaming completes.
-func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error) {
-	return runLoop(ctx, n.buildLoopConfig(task), task, ch)
+func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
+	return runLoop(ctx, n.buildLoopConfig(task, ch), task, ch)
 }
 
 // buildLoopConfig wires Network fields into a loopConfig for runLoop.
-func (n *Network) buildLoopConfig(task AgentTask) loopConfig {
+// ch is passed through so makeDispatch can emit agent-start/finish events.
+func (n *Network) buildLoopConfig(task AgentTask, ch chan<- StreamEvent) loopConfig {
 	toolDefs := n.buildToolDefs()
 	if n.inputHandler != nil {
 		toolDefs = append(toolDefs, askUserToolDef)
@@ -93,14 +94,15 @@ func (n *Network) buildLoopConfig(task AgentTask) loopConfig {
 		maxIter:      n.maxIter,
 		mem:          &n.mem,
 		inputHandler: n.inputHandler,
-		dispatch:     n.makeDispatch(task),
+		dispatch:     n.makeDispatch(task, ch),
 		systemPrompt: n.systemPrompt,
 	}
 }
 
 // makeDispatch returns a dispatchFunc that routes tool calls to subagents,
-// the ask_user handler, or direct tools.
-func (n *Network) makeDispatch(parentTask AgentTask) dispatchFunc {
+// the ask_user handler, or direct tools. When ch is non-nil, agent-start
+// and agent-finish events are emitted for subagent delegation.
+func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent) dispatchFunc {
 	return func(ctx context.Context, tc ToolCall) (string, Usage) {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && n.inputHandler != nil {
@@ -128,11 +130,24 @@ func (n *Network) makeDispatch(parentTask AgentTask) dispatchFunc {
 
 			log.Printf("[network:%s] -> agent_%s: %s", n.name, agentName, truncateStr(params.Task, 80))
 
+			if ch != nil {
+				ch <- StreamEvent{Type: EventAgentStart, Name: agentName, Content: params.Task}
+			}
+
 			result, err := agent.Execute(ctx, AgentTask{
 				Input:       params.Task,
 				Attachments: parentTask.Attachments,
 				Context:     parentTask.Context,
 			})
+
+			if ch != nil {
+				output := ""
+				if err == nil {
+					output = result.Output
+				}
+				ch <- StreamEvent{Type: EventAgentFinish, Name: agentName, Content: output}
+			}
+
 			if err != nil {
 				return "error: " + err.Error(), Usage{}
 			}

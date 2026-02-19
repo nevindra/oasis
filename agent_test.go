@@ -67,10 +67,10 @@ func (m *mockProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse,
 func (m *mockProvider) ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error) {
 	return m.next(), nil
 }
-func (m *mockProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- string) (ChatResponse, error) {
+func (m *mockProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	resp := m.next()
-	ch <- resp.Content
+	ch <- StreamEvent{Type: EventTextDelta, Content: resp.Content}
 	return resp, nil
 }
 func (m *mockProvider) next() ChatResponse {
@@ -268,7 +268,7 @@ func (p *errProvider) Chat(_ context.Context, _ ChatRequest) (ChatResponse, erro
 func (p *errProvider) ChatWithTools(_ context.Context, _ ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
 	return ChatResponse{}, p.err
 }
-func (p *errProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- string) (ChatResponse, error) {
+func (p *errProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	return ChatResponse{}, p.err
 }
@@ -283,7 +283,7 @@ func (p *ctxProvider) Chat(ctx context.Context, _ ChatRequest) (ChatResponse, er
 func (p *ctxProvider) ChatWithTools(ctx context.Context, _ ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
 	return ChatResponse{}, ctx.Err()
 }
-func (p *ctxProvider) ChatStream(ctx context.Context, _ ChatRequest, ch chan<- string) (ChatResponse, error) {
+func (p *ctxProvider) ChatStream(ctx context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	return ChatResponse{}, ctx.Err()
 }
@@ -541,7 +541,7 @@ func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
 
 	agent := NewLLMAgent("streamer", "Streams output", provider)
 
-	ch := make(chan string, 10)
+	ch := make(chan StreamEvent, 10)
 	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "hi"}, ch)
 	if err != nil {
 		t.Fatal(err)
@@ -550,13 +550,13 @@ func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "streamed hello")
 	}
 
-	// Verify tokens were sent to channel
-	var tokens []string
-	for tok := range ch {
-		tokens = append(tokens, tok)
+	// Verify events were sent to channel
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
 	}
-	if len(tokens) == 0 {
-		t.Error("expected at least one token on channel")
+	if len(events) == 0 {
+		t.Error("expected at least one event on channel")
 	}
 }
 
@@ -575,7 +575,7 @@ func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 		WithTools(mockTool{}),
 	)
 
-	ch := make(chan string, 10)
+	ch := make(chan StreamEvent, 10)
 	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "greet"}, ch)
 	if err != nil {
 		t.Fatal(err)
@@ -584,13 +584,34 @@ func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "after tool call")
 	}
 
-	// Channel should be closed and contain the final content
-	var tokens []string
-	for tok := range ch {
-		tokens = append(tokens, tok)
+	// Channel should be closed and contain tool + text events
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
 	}
-	if len(tokens) == 0 {
-		t.Error("expected at least one token on channel")
+	if len(events) == 0 {
+		t.Error("expected at least one event on channel")
+	}
+	// Should have tool-call-start, tool-call-result, and text-delta events
+	var hasToolStart, hasToolResult, hasTextDelta bool
+	for _, ev := range events {
+		switch ev.Type {
+		case EventToolCallStart:
+			hasToolStart = true
+		case EventToolCallResult:
+			hasToolResult = true
+		case EventTextDelta:
+			hasTextDelta = true
+		}
+	}
+	if !hasToolStart {
+		t.Error("expected tool-call-start event")
+	}
+	if !hasToolResult {
+		t.Error("expected tool-call-result event")
+	}
+	if !hasTextDelta {
+		t.Error("expected text-delta event")
 	}
 }
 
@@ -624,7 +645,7 @@ func TestNetworkExecuteStream(t *testing.T) {
 
 	network := NewNetwork("net", "Streams", router, WithAgents(echoAgent))
 
-	ch := make(chan string, 10)
+	ch := make(chan StreamEvent, 10)
 	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
 	if err != nil {
 		t.Fatal(err)
@@ -633,12 +654,28 @@ func TestNetworkExecuteStream(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "network streamed response")
 	}
 
-	var tokens []string
-	for tok := range ch {
-		tokens = append(tokens, tok)
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
 	}
-	if len(tokens) == 0 {
-		t.Error("expected at least one token on channel")
+	if len(events) == 0 {
+		t.Error("expected at least one event on channel")
+	}
+	// Should have tool-call-start, tool-call-result, agent-start, agent-finish, and text-delta
+	var hasAgentStart, hasAgentFinish bool
+	for _, ev := range events {
+		switch ev.Type {
+		case EventAgentStart:
+			hasAgentStart = true
+		case EventAgentFinish:
+			hasAgentFinish = true
+		}
+	}
+	if !hasAgentStart {
+		t.Error("expected agent-start event")
+	}
+	if !hasAgentFinish {
+		t.Error("expected agent-finish event")
 	}
 }
 
@@ -653,7 +690,7 @@ func TestLLMAgentExecuteStreamProviderError(t *testing.T) {
 		err:  errors.New("stream error"),
 	})
 
-	ch := make(chan string, 10)
+	ch := make(chan StreamEvent, 10)
 	_, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "hi"}, ch)
 	if err == nil {
 		t.Fatal("expected error")

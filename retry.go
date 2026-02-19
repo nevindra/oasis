@@ -68,10 +68,10 @@ func (r *retryProvider) ChatWithTools(ctx context.Context, req ChatRequest, tool
 // tokens have been written to ch yet — once streaming has started, errors pass
 // through immediately to avoid sending duplicate content.
 // ch is always closed before returning.
-func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- string) (ChatResponse, error) {
+func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	var lastErr error
 	for i := 0; i < r.maxAttempts; i++ {
-		mid := make(chan string, 64)
+		mid := make(chan StreamEvent, 64)
 		var (
 			resp      ChatResponse
 			streamErr error
@@ -83,9 +83,9 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 		}()
 
 		var tokensSent bool
-		for tok := range mid {
+		for ev := range mid {
 			tokensSent = true
-			ch <- tok
+			ch <- ev
 		}
 		<-done
 

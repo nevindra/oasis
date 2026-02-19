@@ -730,10 +730,10 @@ func (p *capturingProvider) ChatWithTools(_ context.Context, req ChatRequest, _ 
 	p.record(req)
 	return p.resp, nil
 }
-func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- string) (ChatResponse, error) {
+func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	p.record(req)
-	ch <- p.resp.Content
+	ch <- StreamEvent{Type: EventTextDelta, Content: p.resp.Content}
 	return p.resp, nil
 }
 

@@ -27,9 +27,9 @@ func (m *mockProvider) Chat(_ context.Context, _ oasis.ChatRequest) (oasis.ChatR
 func (m *mockProvider) ChatWithTools(_ context.Context, _ oasis.ChatRequest, _ []oasis.ToolDefinition) (oasis.ChatResponse, error) {
 	return m.chatResp, m.chatErr
 }
-func (m *mockProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- string) (oasis.ChatResponse, error) {
-	ch <- "hello"
-	ch <- " world"
+func (m *mockProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+	ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: "hello"}
+	ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: " world"}
 	close(ch)
 	return m.chatResp, m.chatErr
 }
@@ -155,24 +155,24 @@ func TestObservedProviderChatStream(t *testing.T) {
 	inner := &mockProvider{name: "p", chatResp: want}
 	op := WrapProvider(inner, "m", testInstruments(t))
 
-	ch := make(chan string, 10)
+	ch := make(chan oasis.StreamEvent, 10)
 	got, err := op.ChatStream(context.Background(), oasis.ChatRequest{}, ch)
 	if err != nil {
 		t.Fatalf("ChatStream returned unexpected error: %v", err)
 	}
 
-	// The wrapper's goroutine forwards tokens from the inner wrappedCh to our ch
-	// and closes our ch when done. Collect all tokens.
-	var tokens []string
-	for tok := range ch {
-		tokens = append(tokens, tok)
+	// The wrapper's goroutine forwards events from the inner wrappedCh to our ch
+	// and closes our ch when done. Collect all events.
+	var events []oasis.StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
 	}
 
-	if len(tokens) != 2 {
-		t.Fatalf("received %d tokens, want 2", len(tokens))
+	if len(events) != 2 {
+		t.Fatalf("received %d events, want 2", len(events))
 	}
-	if tokens[0] != "hello" || tokens[1] != " world" {
-		t.Errorf("tokens = %v, want [hello, ' world']", tokens)
+	if events[0].Content != "hello" || events[1].Content != " world" {
+		t.Errorf("events = %v, want [hello, ' world']", events)
 	}
 	if got.Content != want.Content {
 		t.Errorf("Content = %q, want %q", got.Content, want.Content)

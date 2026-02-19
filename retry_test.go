@@ -39,11 +39,11 @@ func (s *stubProvider) ChatWithTools(_ context.Context, _ ChatRequest, _ []ToolD
 	return r.resp, r.err
 }
 
-func (s *stubProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- string) (ChatResponse, error) {
+func (s *stubProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	r := s.next()
 	for _, tok := range r.tokens {
-		ch <- tok
+		ch <- StreamEvent{Type: EventTextDelta, Content: tok}
 	}
 	return r.resp, r.err
 }
@@ -161,7 +161,7 @@ func TestWithRetry_ChatStream_RetriesOn503(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	ch := make(chan string, 8)
+	ch := make(chan StreamEvent, 8)
 	resp, err := p.ChatStream(context.Background(), ChatRequest{}, ch)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -170,8 +170,8 @@ func TestWithRetry_ChatStream_RetriesOn503(t *testing.T) {
 		t.Errorf("got content %q, want %q", resp.Content, "hello")
 	}
 	var got string
-	for tok := range ch {
-		got += tok
+	for ev := range ch {
+		got += ev.Content
 	}
 	if got != "hello" {
 		t.Errorf("got tokens %q, want %q", got, "hello")
@@ -188,7 +188,7 @@ func TestWithRetry_ChatStream_NoRetryAfterTokensSent(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	ch := make(chan string, 8)
+	ch := make(chan StreamEvent, 8)
 	_, err := p.ChatStream(context.Background(), ChatRequest{}, ch)
 	if err == nil {
 		t.Fatal("expected error, got nil")

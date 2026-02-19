@@ -131,14 +131,14 @@ func TestIntegration(t *testing.T) {
 	t.Run("ChatStream", func(t *testing.T) {
 		g := New(key, "gemini-2.0-flash")
 
-		ch := make(chan string, 100)
-		var chunks []string
+		ch := make(chan oasis.StreamEvent, 100)
+		var chunks []oasis.StreamEvent
 
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			for chunk := range ch {
-				chunks = append(chunks, chunk)
+			for ev := range ch {
+				chunks = append(chunks, ev)
 			}
 		}()
 

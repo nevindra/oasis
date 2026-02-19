@@ -240,9 +240,9 @@ func (a *App) getOrCreateThread(ctx context.Context, chatID string) (oasis.Threa
 	return thread, nil
 }
 
-// streamResponse runs ExecuteStream and pipes tokens to a Telegram message with periodic edits.
+// streamResponse runs ExecuteStream and pipes events to a Telegram message with periodic edits.
 func (a *App) streamResponse(ctx context.Context, chatID, placeholderID string, task oasis.AgentTask) {
-	ch := make(chan string, 64)
+	ch := make(chan oasis.StreamEvent, 64)
 
 	type execResult struct {
 		result oasis.AgentResult

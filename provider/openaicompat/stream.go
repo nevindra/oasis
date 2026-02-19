@@ -10,8 +10,8 @@ import (
 	"github.com/nevindra/oasis"
 )
 
-// StreamSSE reads an SSE stream from body, sends text deltas to ch, and returns
-// the fully accumulated response (content + tool calls + usage).
+// StreamSSE reads an SSE stream from body, sends text-delta events to ch, and
+// returns the fully accumulated response (content + tool calls + usage).
 //
 // The channel is closed when streaming completes. Callers should read from ch
 // in a separate goroutine. The context is used to cancel channel sends if the
@@ -21,7 +21,7 @@ import (
 //
 //	data: {"id":"...","choices":[...]}\n
 //	data: [DONE]\n
-func StreamSSE(ctx context.Context, body io.Reader, ch chan<- string) (oasis.ChatResponse, error) {
+func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	defer close(ch)
 
 	scanner := bufio.NewScanner(body)
@@ -79,7 +79,7 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- string) (oasis.Cha
 		if delta.Content != "" {
 			fullContent.WriteString(delta.Content)
 			select {
-			case ch <- delta.Content:
+			case ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: delta.Content}:
 			case <-ctx.Done():
 				return oasis.ChatResponse{}, ctx.Err()
 			}

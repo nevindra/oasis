@@ -21,15 +21,15 @@ type Agent interface {
 	Execute(ctx context.Context, task AgentTask) (AgentResult, error)
 }
 
-// StreamingAgent is an optional capability for agents that support token streaming.
+// StreamingAgent is an optional capability for agents that support event streaming.
 // Check via type assertion: if sa, ok := agent.(StreamingAgent); ok { ... }
 type StreamingAgent interface {
 	Agent
-	// ExecuteStream runs the agent like Execute, but streams the final response
-	// tokens into ch. The channel is closed when streaming completes.
-	// Tool-calling iterations run in blocking mode; only the final text
-	// response is streamed.
-	ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error)
+	// ExecuteStream runs the agent like Execute, but emits StreamEvent values
+	// into ch throughout execution. Events include text deltas, tool call
+	// start/result, and agent start/finish (for Networks). The channel is
+	// closed when streaming completes.
+	ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
 }
 
 // AgentTask is the input to an Agent.
@@ -257,8 +257,8 @@ type loopConfig struct {
 
 // runLoop is the shared tool-calling loop used by both LLMAgent and Network.
 // When ch is nil, it operates in blocking mode (Execute). When ch is non-nil,
-// it streams the final response into ch and closes it (ExecuteStream).
-func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- string) (AgentResult, error) {
+// it emits StreamEvent values and closes ch when done (ExecuteStream).
+func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	var totalUsage Usage
 
 	// Inject InputHandler into context for processors.
@@ -341,7 +341,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 				content = lastAgentOutput
 			}
 			if ch != nil {
-				ch <- content
+				ch <- StreamEvent{Type: EventTextDelta, Content: content}
 				close(ch)
 			}
 			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, content)
@@ -355,6 +355,13 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 			ToolCalls: resp.ToolCalls,
 		})
 
+		// Emit tool-call-start events before dispatch.
+		if ch != nil {
+			for _, tc := range resp.ToolCalls {
+				ch <- StreamEvent{Type: EventToolCallStart, Name: tc.Name, Args: tc.Args}
+			}
+		}
+
 		// Execute tool calls in parallel.
 		results := dispatchParallel(ctx, resp.ToolCalls, cfg.dispatch)
 
@@ -362,6 +369,11 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- stri
 		for j, tc := range resp.ToolCalls {
 			totalUsage.InputTokens += results[j].usage.InputTokens
 			totalUsage.OutputTokens += results[j].usage.OutputTokens
+
+			// Emit tool-call-result event.
+			if ch != nil {
+				ch <- StreamEvent{Type: EventToolCallResult, Name: tc.Name, Content: results[j].content}
+			}
 
 			result := ToolResult{Content: results[j].content}
 			if err := cfg.processors.RunPostTool(ctx, tc, &result); err != nil {

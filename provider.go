@@ -8,8 +8,8 @@ type Provider interface {
 	Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
 	// ChatWithTools sends a request with tool definitions, returns response (may contain tool calls).
 	ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error)
-	// ChatStream streams tokens into ch, then returns the final response with usage stats.
-	ChatStream(ctx context.Context, req ChatRequest, ch chan<- string) (ChatResponse, error)
+	// ChatStream streams text-delta events into ch, then returns the final response with usage stats.
+	ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error)
 	// Name returns the provider name (e.g. "gemini", "anthropic").
 	Name() string
 }

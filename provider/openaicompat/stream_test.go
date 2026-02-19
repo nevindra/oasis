@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/nevindra/oasis"
 )
 
 // buildSSE constructs a mock SSE stream from data lines.
@@ -29,7 +31,7 @@ func TestStreamSSE_TextChunks(t *testing.T) {
 	)
 
 	reader := strings.NewReader(sse)
-	ch := make(chan string, 10)
+	ch := make(chan oasis.StreamEvent, 10)
 
 	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
@@ -37,7 +39,7 @@ func TestStreamSSE_TextChunks(t *testing.T) {
 	}
 
 	// Collect deltas from channel.
-	var deltas []string
+	var deltas []oasis.StreamEvent
 	for d := range ch {
 		deltas = append(deltas, d)
 	}
@@ -46,9 +48,14 @@ func TestStreamSSE_TextChunks(t *testing.T) {
 		t.Errorf("expected content 'Hello world!', got %q", resp.Content)
 	}
 
-	// Should have received 3 non-empty deltas.
+	// Should have received 3 non-empty text-delta events.
 	if len(deltas) != 3 {
-		t.Errorf("expected 3 deltas, got %d: %v", len(deltas), deltas)
+		t.Errorf("expected 3 deltas, got %d", len(deltas))
+	}
+	for _, d := range deltas {
+		if d.Type != oasis.EventTextDelta {
+			t.Errorf("expected event type %q, got %q", oasis.EventTextDelta, d.Type)
+		}
 	}
 
 	if resp.Usage.InputTokens != 5 {
@@ -73,7 +80,7 @@ func TestStreamSSE_ToolCallChunks(t *testing.T) {
 	)
 
 	reader := strings.NewReader(sse)
-	ch := make(chan string, 10)
+	ch := make(chan oasis.StreamEvent, 10)
 
 	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
@@ -81,7 +88,7 @@ func TestStreamSSE_ToolCallChunks(t *testing.T) {
 	}
 
 	// Drain channel (should be empty since tool calls don't produce text deltas).
-	var deltas []string
+	var deltas []oasis.StreamEvent
 	for d := range ch {
 		deltas = append(deltas, d)
 	}
@@ -132,7 +139,7 @@ func TestStreamSSE_MultipleToolCalls(t *testing.T) {
 	)
 
 	reader := strings.NewReader(sse)
-	ch := make(chan string, 10)
+	ch := make(chan oasis.StreamEvent, 10)
 
 	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
@@ -166,7 +173,7 @@ func TestStreamSSE_EmptyStream(t *testing.T) {
 	sse := buildSSE("[DONE]")
 
 	reader := strings.NewReader(sse)
-	ch := make(chan string, 10)
+	ch := make(chan oasis.StreamEvent, 10)
 
 	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
@@ -195,7 +202,7 @@ func TestStreamSSE_UsageOnlyChunk(t *testing.T) {
 	)
 
 	reader := strings.NewReader(sse)
-	ch := make(chan string, 10)
+	ch := make(chan oasis.StreamEvent, 10)
 
 	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
@@ -226,7 +233,7 @@ func TestStreamSSE_SkipsMalformedChunks(t *testing.T) {
 	)
 
 	reader := strings.NewReader(sse)
-	ch := make(chan string, 10)
+	ch := make(chan oasis.StreamEvent, 10)
 
 	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {
@@ -252,7 +259,7 @@ func TestStreamSSE_NonDataLinesIgnored(t *testing.T) {
 		"data: [DONE]\n\n"
 
 	reader := strings.NewReader(raw)
-	ch := make(chan string, 10)
+	ch := make(chan oasis.StreamEvent, 10)
 
 	resp, err := StreamSSE(context.Background(), reader, ch)
 	if err != nil {

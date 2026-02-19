@@ -143,7 +143,7 @@ func TestRunLoopSuspendClosesStreamChannel(t *testing.T) {
 		dispatch:   func(_ context.Context, tc ToolCall) (string, Usage) { return "ok", Usage{} },
 	}
 
-	ch := make(chan string, 10)
+	ch := make(chan StreamEvent, 10)
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, ch)
 
 	var suspended *ErrSuspended

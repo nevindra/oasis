@@ -78,7 +78,7 @@ func (o *ObservedProvider) ChatWithTools(ctx context.Context, req oasis.ChatRequ
 	return resp, err
 }
 
-func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- string) (oasis.ChatResponse, error) {
+func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	ctx, span := o.inst.Tracer.Start(ctx, "llm.chat_stream", trace.WithAttributes(
 		AttrLLMModel.String(o.model),
 		AttrLLMProvider.String(o.inner.Name()),
@@ -88,15 +88,15 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 
 	// Wrap channel to count chunks.
 	// Use a done channel to wait for the goroutine before reading chunks.
-	wrappedCh := make(chan string, cap(ch))
+	wrappedCh := make(chan oasis.StreamEvent, cap(ch))
 	chunks := 0
 	done := make(chan struct{})
 	go func() {
 		defer close(ch)
 		defer close(done)
-		for token := range wrappedCh {
+		for ev := range wrappedCh {
 			chunks++
-			ch <- token
+			ch <- ev
 		}
 	}()
 

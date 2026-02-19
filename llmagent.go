@@ -64,11 +64,11 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 	return runLoop(ctx, a.buildLoopConfig(), task, nil)
 }
 
-// ExecuteStream runs the tool-calling loop like Execute, but streams the final
-// text response into ch. Tool-calling iterations use blocking ChatWithTools;
-// only the final response (no tool calls) uses ChatStream. The channel is
-// closed when streaming completes.
-func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error) {
+// ExecuteStream runs the tool-calling loop like Execute, but emits StreamEvent
+// values into ch throughout execution. Events include text deltas during the
+// final LLM response and tool call start/result during tool iterations.
+// The channel is closed when streaming completes.
+func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	return runLoop(ctx, a.buildLoopConfig(), task, ch)
 }
 

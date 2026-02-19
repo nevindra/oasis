@@ -59,7 +59,7 @@ flowchart TD
 
 - **Parallel tool execution** — when the LLM returns multiple tool calls in one response, they run concurrently via goroutines
 - **Max iterations** — defaults to 10. When reached, the agent appends a synthesis prompt and makes one final LLM call
-- **Streaming** — LLMAgent implements `StreamingAgent`. Tool-calling iterations use blocking `ChatWithTools`; only the final response streams
+- **Streaming** — LLMAgent implements `StreamingAgent`. Emits `StreamEvent` values throughout execution: tool call start/result events during tool iterations, text-delta events during the final response
 - **Memory** — stateless by default. Enable with `WithConversationMemory` and `WithUserMemory`
 
 ## AgentTask
@@ -118,23 +118,30 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 
 ## StreamingAgent
 
-Optional capability for agents that support token streaming:
+Optional capability for agents that support event streaming:
 
 ```go
 type StreamingAgent interface {
     Agent
-    ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error)
+    ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
 }
 ```
 
-Both `LLMAgent` and `Network` implement it. Check at runtime via type assertion:
+Both `LLMAgent` and `Network` implement it. The channel carries typed `StreamEvent` values — text deltas, tool call start/result, and agent start/finish (Network only). Check at runtime via type assertion:
 
 ```go
 if sa, ok := agent.(oasis.StreamingAgent); ok {
-    ch := make(chan string, 64)
+    ch := make(chan oasis.StreamEvent, 64)
     go func() {
-        for token := range ch {
-            fmt.Print(token)
+        for ev := range ch {
+            switch ev.Type {
+            case oasis.EventTextDelta:
+                fmt.Print(ev.Content)
+            case oasis.EventToolCallStart:
+                fmt.Printf("[calling %s...]\n", ev.Name)
+            case oasis.EventToolCallResult:
+                fmt.Printf("[%s done]\n", ev.Name)
+            }
         }
     }()
     result, err := sa.ExecuteStream(ctx, task, ch)

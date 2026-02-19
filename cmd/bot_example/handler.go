@@ -4,23 +4,29 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 const telegramMaxLen = 4096
 
-// streamToTelegram consumes token chunks from ch and edits a Telegram message
-// with accumulated content every editInterval. Performs a final formatted edit
-// when the channel closes. If the final response exceeds Telegram's 4096-char
-// limit, the placeholder is filled with the first chunk and the remainder is
-// sent as a new message (Send handles further splitting automatically).
-func (a *App) streamToTelegram(ctx context.Context, chatID, msgID string, ch <-chan string) {
+// streamToTelegram consumes stream events from ch and edits a Telegram message
+// with accumulated text content every editInterval. Only text-delta events
+// contribute to the displayed message; other events are silently consumed.
+// Performs a final formatted edit when the channel closes. If the final response
+// exceeds Telegram's 4096-char limit, the placeholder is filled with the first
+// chunk and the remainder is sent as a new message.
+func (a *App) streamToTelegram(ctx context.Context, chatID, msgID string, ch <-chan oasis.StreamEvent) {
 	const editInterval = time.Second
 
 	var accumulated strings.Builder
 	lastEdit := time.Now()
 
-	for chunk := range ch {
-		accumulated.WriteString(chunk)
+	for ev := range ch {
+		if ev.Type != oasis.EventTextDelta {
+			continue
+		}
+		accumulated.WriteString(ev.Content)
 		if time.Since(lastEdit) >= editInterval {
 			preview := accumulated.String()
 			if len(preview) > telegramMaxLen {
