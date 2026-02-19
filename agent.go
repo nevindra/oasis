@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -578,4 +580,276 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return string(r[:n])
+}
+
+// --- Input handler (human-in-the-loop) ---
+
+// InputRequest describes what the agent needs from the human.
+type InputRequest struct {
+	// Question is the natural language prompt shown to the human.
+	Question string
+	// Options provides suggested choices. Empty = free-form input.
+	Options []string
+	// Metadata carries context for the handler (agent name, tool being approved, etc).
+	Metadata map[string]string
+}
+
+// InputResponse is the human's reply.
+type InputResponse struct {
+	// Value is the human's text response.
+	Value string
+}
+
+// InputHandler delivers questions to a human and returns their response.
+// Implementations bridge to the actual communication channel (Telegram, CLI, HTTP, etc).
+// Must block until a response is received or ctx is cancelled.
+type InputHandler interface {
+	RequestInput(ctx context.Context, req InputRequest) (InputResponse, error)
+}
+
+// inputHandlerCtxKey is the context key for InputHandler.
+type inputHandlerCtxKey struct{}
+
+// WithInputHandlerContext returns a child context carrying the InputHandler.
+func WithInputHandlerContext(ctx context.Context, h InputHandler) context.Context {
+	return context.WithValue(ctx, inputHandlerCtxKey{}, h)
+}
+
+// InputHandlerFromContext retrieves the InputHandler from ctx.
+// Returns nil, false if no handler is set.
+func InputHandlerFromContext(ctx context.Context) (InputHandler, bool) {
+	h, ok := ctx.Value(inputHandlerCtxKey{}).(InputHandler)
+	return h, ok
+}
+
+// --- Suspend / Resume ---
+
+// errSuspend is the internal sentinel returned by step functions to signal
+// that execution should pause for external input. The workflow/network engine
+// catches it and converts to ErrSuspended with resume capabilities.
+type errSuspend struct {
+	payload json.RawMessage
+}
+
+func (e *errSuspend) Error() string { return "suspend" }
+
+// Suspend returns an error that signals the workflow or network engine to
+// pause execution. The payload provides context for the human (what they
+// need to decide, what data to show).
+func Suspend(payload json.RawMessage) error {
+	return &errSuspend{payload: payload}
+}
+
+// ErrSuspended is returned by Execute() when a workflow step or network
+// processor suspends execution to await external input.
+// Inspect Payload for context, then call Resume() with the human's response.
+type ErrSuspended struct {
+	// Step is the name of the step or processor hook that suspended.
+	Step string
+	// Payload carries context for the human (what to show, what to decide).
+	Payload json.RawMessage
+	// resume is the closure that continues execution with human input.
+	resume func(ctx context.Context, data json.RawMessage) (AgentResult, error)
+}
+
+func (e *ErrSuspended) Error() string {
+	return fmt.Sprintf("suspended at step %q", e.Step)
+}
+
+// Resume continues execution with the human's response data.
+// The data is made available to the step via ResumeData().
+// Resume is single-use: calling it more than once is undefined behavior.
+// Returns an error if called on an ErrSuspended not produced by the engine.
+func (e *ErrSuspended) Resume(ctx context.Context, data json.RawMessage) (AgentResult, error) {
+	if e.resume == nil {
+		return AgentResult{}, fmt.Errorf("ErrSuspended: resume closure is nil (constructed outside engine)")
+	}
+	return e.resume(ctx, data)
+}
+
+// StepSuspended indicates a step that paused execution to await external input.
+const StepSuspended StepStatus = "suspended"
+
+// resumeDataKey is the reserved WorkflowContext key for resume data.
+const resumeDataKey = "_resume_data"
+
+// ResumeData retrieves resume data from the WorkflowContext.
+// Returns the data and true if this step is being resumed, or nil and false
+// on first execution. Safe to call with a nil WorkflowContext (returns nil, false).
+func ResumeData(wCtx *WorkflowContext) (json.RawMessage, bool) {
+	if wCtx == nil {
+		return nil, false
+	}
+	v, ok := wCtx.Get(resumeDataKey)
+	if !ok {
+		return nil, false
+	}
+	data, ok := v.(json.RawMessage)
+	return data, ok
+}
+
+// --- Batch execution ---
+
+// BatchState represents the lifecycle state of a batch job.
+type BatchState string
+
+const (
+	BatchPending   BatchState = "pending"
+	BatchRunning   BatchState = "running"
+	BatchSucceeded BatchState = "succeeded"
+	BatchFailed    BatchState = "failed"
+	BatchCancelled BatchState = "cancelled"
+	BatchExpired   BatchState = "expired"
+)
+
+// BatchStats holds aggregate counts for a batch job's requests.
+type BatchStats struct {
+	TotalCount     int `json:"total_count"`
+	SucceededCount int `json:"succeeded_count"`
+	FailedCount    int `json:"failed_count"`
+}
+
+// BatchJob represents an asynchronous batch processing job.
+// Use BatchStatus to poll for state changes and BatchChatResults or
+// BatchEmbedResults to retrieve completed output.
+type BatchJob struct {
+	ID          string     `json:"id"`
+	State       BatchState `json:"state"`
+	DisplayName string     `json:"display_name,omitempty"`
+	Stats       BatchStats `json:"stats"`
+	CreateTime  time.Time  `json:"create_time"`
+	UpdateTime  time.Time  `json:"update_time"`
+}
+
+// BatchProvider extends Provider with asynchronous batch chat capabilities.
+// Batch requests are processed offline at reduced cost. Use BatchStatus to poll
+// job progress and BatchChatResults to retrieve completed responses.
+type BatchProvider interface {
+	// BatchChat submits multiple chat requests as a single batch job.
+	// Returns the created job with its ID for status tracking.
+	BatchChat(ctx context.Context, requests []ChatRequest) (BatchJob, error)
+
+	// BatchStatus returns the current state of a batch job.
+	BatchStatus(ctx context.Context, jobID string) (BatchJob, error)
+
+	// BatchChatResults retrieves chat responses for a completed batch job.
+	// Returns error if the job has not yet succeeded.
+	BatchChatResults(ctx context.Context, jobID string) ([]ChatResponse, error)
+
+	// BatchCancel requests cancellation of a running or pending batch job.
+	BatchCancel(ctx context.Context, jobID string) error
+}
+
+// BatchEmbeddingProvider extends EmbeddingProvider with batch embedding capabilities.
+// Each element in the texts slice passed to BatchEmbed is a group of strings to embed.
+type BatchEmbeddingProvider interface {
+	// BatchEmbed submits multiple embedding requests as a single batch job.
+	BatchEmbed(ctx context.Context, texts [][]string) (BatchJob, error)
+
+	// BatchEmbedStatus returns the current state of a batch embedding job.
+	BatchEmbedStatus(ctx context.Context, jobID string) (BatchJob, error)
+
+	// BatchEmbedResults retrieves embedding vectors for a completed batch job.
+	// Returns one vector per input text group.
+	BatchEmbedResults(ctx context.Context, jobID string) ([][]float32, error)
+}
+
+// --- Streaming ---
+
+// StreamEventType identifies the kind of streaming event.
+type StreamEventType string
+
+const (
+	// EventTextDelta carries an incremental text chunk from the LLM.
+	EventTextDelta StreamEventType = "text-delta"
+	// EventToolCallStart signals a tool is about to be invoked.
+	EventToolCallStart StreamEventType = "tool-call-start"
+	// EventToolCallResult carries the result of a completed tool call.
+	EventToolCallResult StreamEventType = "tool-call-result"
+	// EventAgentStart signals a subagent has been delegated to (Network only).
+	EventAgentStart StreamEventType = "agent-start"
+	// EventAgentFinish signals a subagent has completed (Network only).
+	EventAgentFinish StreamEventType = "agent-finish"
+)
+
+// StreamEvent is a typed event emitted during agent streaming.
+// Consumers receive these on the channel passed to ExecuteStream.
+type StreamEvent struct {
+	// Type identifies the event kind.
+	Type StreamEventType `json:"type"`
+	// Name is the tool or agent name (set for tool/agent events, empty for text-delta).
+	Name string `json:"name,omitempty"`
+	// Content carries the text delta (text-delta), tool result (tool-call-result),
+	// or agent task/output (agent-start/agent-finish).
+	Content string `json:"content,omitempty"`
+	// Args carries the tool call arguments (tool-call-start only).
+	Args json.RawMessage `json:"args,omitempty"`
+	// Usage carries token counts for the completed step.
+	// Set on agent-finish and tool-call-result events. Zero value otherwise.
+	Usage Usage `json:"usage,omitempty"`
+	// Duration is the wall-clock time for the completed step.
+	// Set on agent-finish and tool-call-result events. Zero value otherwise.
+	Duration time.Duration `json:"duration,omitempty"`
+}
+
+// ServeSSE streams an agent's response as Server-Sent Events over HTTP.
+//
+// It validates that w implements [http.Flusher], sets SSE headers, creates a
+// buffered [StreamEvent] channel, runs the agent in a background goroutine,
+// and writes each event as:
+//
+//	event: <event-type>
+//	data: <json-encoded StreamEvent>
+//
+// On completion it sends a final "done" event. If the agent returns an error,
+// it is sent as an "error" event before returning.
+//
+// Client disconnection propagates via ctx cancellation to the agent.
+// Callers typically pass r.Context() as ctx.
+func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, task AgentTask) (AgentResult, error) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return AgentResult{}, fmt.Errorf("ResponseWriter does not implement http.Flusher")
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch := make(chan StreamEvent, 64)
+
+	type execResult struct {
+		result AgentResult
+		err    error
+	}
+	resultCh := make(chan execResult, 1)
+
+	go func() {
+		r, err := agent.ExecuteStream(ctx, task, ch)
+		resultCh <- execResult{r, err}
+	}()
+
+	for ev := range ch {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
+		flusher.Flush()
+	}
+
+	res := <-resultCh
+
+	if res.err != nil {
+		errData, _ := json.Marshal(map[string]string{"error": res.err.Error()})
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
+		flusher.Flush()
+		return res.result, res.err
+	}
+
+	fmt.Fprintf(w, "event: done\ndata: [DONE]\n\n")
+	flusher.Flush()
+
+	return res.result, nil
 }

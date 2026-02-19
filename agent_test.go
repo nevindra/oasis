@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1182,5 +1185,837 @@ func TestNetworkPlanExecution(t *testing.T) {
 	}
 	if result.Output != "network plan done" {
 		t.Errorf("Output = %q, want %q", result.Output, "network plan done")
+	}
+}
+
+// --- InputHandler tests (from input_test.go) ---
+
+// mockInputHandler is a test InputHandler that returns canned responses.
+type mockInputHandler struct {
+	response InputResponse
+	err      error
+	received []InputRequest // records all requests for assertions
+}
+
+func (m *mockInputHandler) RequestInput(_ context.Context, req InputRequest) (InputResponse, error) {
+	m.received = append(m.received, req)
+	return m.response, m.err
+}
+
+func TestInputHandlerFromContextMissing(t *testing.T) {
+	ctx := context.Background()
+	handler, ok := InputHandlerFromContext(ctx)
+	if ok {
+		t.Error("expected ok=false for empty context")
+	}
+	if handler != nil {
+		t.Error("expected nil handler for empty context")
+	}
+}
+
+func TestInputHandlerContextRoundTrip(t *testing.T) {
+	h := &mockInputHandler{response: InputResponse{Value: "yes"}}
+	ctx := WithInputHandlerContext(context.Background(), h)
+
+	got, ok := InputHandlerFromContext(ctx)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got != h {
+		t.Error("expected same handler instance")
+	}
+}
+
+func TestLLMAgentAskUserToolAppearsWithHandler(t *testing.T) {
+	// When InputHandler is set, ask_user tool should appear in tool defs
+	handler := &mockInputHandler{response: InputResponse{Value: "42"}}
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			// LLM calls ask_user
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "ask_user",
+				Args: json.RawMessage(`{"question":"What is the answer?"}`),
+			}}},
+			// LLM uses the answer
+			{Content: "The answer is 42"},
+		},
+	}
+
+	agent := NewLLMAgent("asker", "Asks questions", provider,
+		WithInputHandler(handler),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "Find the answer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "The answer is 42" {
+		t.Errorf("Output = %q, want %q", result.Output, "The answer is 42")
+	}
+
+	// Verify handler received the question
+	if len(handler.received) != 1 {
+		t.Fatalf("handler received %d requests, want 1", len(handler.received))
+	}
+	if handler.received[0].Question != "What is the answer?" {
+		t.Errorf("question = %q, want %q", handler.received[0].Question, "What is the answer?")
+	}
+}
+
+func TestLLMAgentAskUserWithOptions(t *testing.T) {
+	handler := &mockInputHandler{response: InputResponse{Value: "Yes"}}
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "ask_user",
+				Args: json.RawMessage(`{"question":"Proceed?","options":["Yes","No"]}`),
+			}}},
+			{Content: "Proceeding"},
+		},
+	}
+
+	agent := NewLLMAgent("confirmer", "Confirms", provider,
+		WithInputHandler(handler),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "Do the thing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "Proceeding" {
+		t.Errorf("Output = %q, want %q", result.Output, "Proceeding")
+	}
+
+	// Verify options were passed through
+	if len(handler.received[0].Options) != 2 {
+		t.Fatalf("options = %v, want [Yes No]", handler.received[0].Options)
+	}
+}
+
+func TestLLMAgentAskUserHandlerError(t *testing.T) {
+	// When ask_user handler fails, the error is converted to a tool result
+	// string (consistent with Network.dispatch behavior). The LLM sees the
+	// error and can respond accordingly.
+	handler := &mockInputHandler{err: errors.New("timeout")}
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "ask_user",
+				Args: json.RawMessage(`{"question":"hello?"}`),
+			}}},
+			{Content: "could not reach user"},
+		},
+	}
+
+	agent := NewLLMAgent("asker", "Asks", provider,
+		WithInputHandler(handler),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "ask"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Output != "could not reach user" {
+		t.Errorf("Output = %q, want %q", result.Output, "could not reach user")
+	}
+}
+
+func TestLLMAgentNoHandlerNoAskUser(t *testing.T) {
+	// Without InputHandler, ask_user should NOT be available.
+	// LLM somehow calls ask_user anyway — should be treated as unknown tool.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "ask_user",
+				Args: json.RawMessage(`{"question":"hello?"}`),
+			}}},
+			{Content: "handled gracefully"},
+		},
+	}
+
+	agent := NewLLMAgent("no-handler", "No handler", provider,
+		WithTools(mockTool{}),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should continue past the unrecognized tool call
+	if result.Output != "handled gracefully" {
+		t.Errorf("Output = %q, want %q", result.Output, "handled gracefully")
+	}
+}
+
+func TestLLMAgentAskUserMetadata(t *testing.T) {
+	handler := &mockInputHandler{response: InputResponse{Value: "ok"}}
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "ask_user",
+				Args: json.RawMessage(`{"question":"confirm?"}`),
+			}}},
+			{Content: "done"},
+		},
+	}
+
+	agent := NewLLMAgent("meta-agent", "Tests metadata", provider,
+		WithInputHandler(handler),
+	)
+
+	agent.Execute(context.Background(), AgentTask{Input: "go"})
+
+	// Verify metadata is auto-populated
+	if len(handler.received) != 1 {
+		t.Fatal("expected 1 request")
+	}
+	meta := handler.received[0].Metadata
+	if meta["agent"] != "meta-agent" {
+		t.Errorf("metadata[agent] = %q, want %q", meta["agent"], "meta-agent")
+	}
+	if meta["source"] != "llm" {
+		t.Errorf("metadata[source] = %q, want %q", meta["source"], "llm")
+	}
+}
+
+func TestNetworkPropagatesHandlerToSubagent(t *testing.T) {
+	handler := &mockInputHandler{response: InputResponse{Value: "approved"}}
+
+	// Inner agent uses ask_user — needs handler from Network context
+	innerProvider := &mockProvider{
+		name: "inner",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "ask_user",
+				Args: json.RawMessage(`{"question":"May I?"}`),
+			}}},
+			{Content: "User said: approved"},
+		},
+	}
+	inner := NewLLMAgent("inner", "Inner agent that asks", innerProvider,
+		WithInputHandler(handler),
+	)
+
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "agent_inner",
+				Args: json.RawMessage(`{"task":"ask permission"}`),
+			}}},
+			{Content: "inner said: User said: approved"},
+		},
+	}
+
+	network := NewNetwork("net", "Network with handler", router,
+		WithAgents(inner),
+		WithInputHandler(handler),
+	)
+
+	result, err := network.Execute(context.Background(), AgentTask{Input: "do work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "inner said: User said: approved" {
+		t.Errorf("Output = %q, want %q", result.Output, "inner said: User said: approved")
+	}
+
+	// Handler should have been called by the inner agent
+	if len(handler.received) != 1 {
+		t.Fatalf("handler received %d requests, want 1", len(handler.received))
+	}
+	if handler.received[0].Question != "May I?" {
+		t.Errorf("question = %q, want %q", handler.received[0].Question, "May I?")
+	}
+}
+
+func TestNetworkAskUserDirectly(t *testing.T) {
+	// Network router itself calls ask_user (not via subagent)
+	handler := &mockInputHandler{response: InputResponse{Value: "go ahead"}}
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "ask_user",
+				Args: json.RawMessage(`{"question":"Should I proceed?"}`),
+			}}},
+			{Content: "User confirmed, proceeding"},
+		},
+	}
+
+	network := NewNetwork("net", "Network asks directly", router,
+		WithInputHandler(handler),
+	)
+
+	result, err := network.Execute(context.Background(), AgentTask{Input: "check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "User confirmed, proceeding" {
+		t.Errorf("Output = %q, want %q", result.Output, "User confirmed, proceeding")
+	}
+	if len(handler.received) != 1 {
+		t.Fatalf("handler received %d requests, want 1", len(handler.received))
+	}
+}
+
+func TestProcessorAccessesInputHandler(t *testing.T) {
+	handler := &mockInputHandler{response: InputResponse{Value: "approved"}}
+
+	// Processor that uses InputHandlerFromContext to gate tool calls
+	gateHit := false
+	gate := &funcPostProcessor{fn: func(ctx context.Context, resp *ChatResponse) error {
+		h, ok := InputHandlerFromContext(ctx)
+		if !ok {
+			return nil
+		}
+		for _, tc := range resp.ToolCalls {
+			if tc.Name == "greet" {
+				res, err := h.RequestInput(ctx, InputRequest{
+					Question: "Allow greet?",
+					Options:  []string{"Yes", "No"},
+					Metadata: map[string]string{"source": "gate", "tool": tc.Name},
+				})
+				if err != nil {
+					return err
+				}
+				gateHit = true
+				if res.Value != "approved" {
+					// Strip the tool call
+					resp.ToolCalls = nil
+				}
+			}
+		}
+		return nil
+	}}
+
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{Content: "greeted successfully"},
+		},
+	}
+
+	agent := NewLLMAgent("gated", "Gated agent", provider,
+		WithTools(mockTool{}),
+		WithInputHandler(handler),
+		WithProcessors(gate),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "greet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gateHit {
+		t.Error("expected gate processor to be called")
+	}
+	if result.Output != "greeted successfully" {
+		t.Errorf("Output = %q, want %q", result.Output, "greeted successfully")
+	}
+}
+
+// funcPostProcessor is a test helper implementing PostProcessor via a function.
+type funcPostProcessor struct {
+	fn func(context.Context, *ChatResponse) error
+}
+
+func (f *funcPostProcessor) PostLLM(ctx context.Context, resp *ChatResponse) error {
+	return f.fn(ctx, resp)
+}
+
+// --- Suspend tests (from suspend_test.go) ---
+
+func TestSuspendReturnsErrSuspend(t *testing.T) {
+	payload := json.RawMessage(`{"action": "approve"}`)
+	err := Suspend(payload)
+	if err == nil {
+		t.Fatal("Suspend should return non-nil error")
+	}
+
+	var s *errSuspend
+	if !errors.As(err, &s) {
+		t.Fatalf("expected errSuspend, got %T", err)
+	}
+	if string(s.payload) != `{"action": "approve"}` {
+		t.Errorf("payload = %s, want %s", s.payload, `{"action": "approve"}`)
+	}
+}
+
+func TestErrSuspendedError(t *testing.T) {
+	e := &ErrSuspended{Step: "approval"}
+	if e.Error() != `suspended at step "approval"` {
+		t.Errorf("Error() = %q", e.Error())
+	}
+}
+
+func TestErrSuspendedResume(t *testing.T) {
+	called := false
+	e := &ErrSuspended{
+		Step:    "test",
+		Payload: json.RawMessage(`{}`),
+		resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
+			called = true
+			return AgentResult{Output: string(data)}, nil
+		},
+	}
+
+	result, err := e.Resume(context.Background(), json.RawMessage(`{"ok":true}`))
+	if err != nil {
+		t.Fatalf("Resume returned error: %v", err)
+	}
+	if !called {
+		t.Error("resume func was not called")
+	}
+	if result.Output != `{"ok":true}` {
+		t.Errorf("Output = %q", result.Output)
+	}
+}
+
+func TestResumeDataNotPresent(t *testing.T) {
+	wCtx := newWorkflowContext(AgentTask{Input: "test"})
+	data, ok := ResumeData(wCtx)
+	if ok {
+		t.Error("ResumeData should return false when no resume data")
+	}
+	if data != nil {
+		t.Error("ResumeData should return nil when no resume data")
+	}
+}
+
+func TestResumeDataPresent(t *testing.T) {
+	wCtx := newWorkflowContext(AgentTask{Input: "test"})
+	wCtx.Set("_resume_data", json.RawMessage(`{"approved": true}`))
+
+	data, ok := ResumeData(wCtx)
+	if !ok {
+		t.Error("ResumeData should return true when resume data is set")
+	}
+	if string(data) != `{"approved": true}` {
+		t.Errorf("ResumeData = %s", data)
+	}
+}
+
+func TestStepSuspendedStatus(t *testing.T) {
+	if StepSuspended != "suspended" {
+		t.Errorf("StepSuspended = %q, want %q", StepSuspended, "suspended")
+	}
+}
+
+func TestWorkflowSuspendPayload(t *testing.T) {
+	wf, _ := NewWorkflow("test", "test",
+		Step("gate", func(_ context.Context, _ *WorkflowContext) error {
+			return Suspend(json.RawMessage(`{"key": "value", "num": 42}`))
+		}),
+	)
+
+	_, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	var suspended *ErrSuspended
+	if !errors.As(err, &suspended) {
+		t.Fatalf("expected ErrSuspended, got %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(suspended.Payload, &payload); err != nil {
+		t.Fatalf("failed to parse payload: %v", err)
+	}
+	if payload["key"] != "value" {
+		t.Errorf("payload[key] = %v", payload["key"])
+	}
+	if payload["num"] != float64(42) {
+		t.Errorf("payload[num] = %v", payload["num"])
+	}
+}
+
+func TestWorkflowSuspendPreservesCompletedSteps(t *testing.T) {
+	prepareCount := 0
+	wf, _ := NewWorkflow("test", "test",
+		Step("prepare", func(_ context.Context, wCtx *WorkflowContext) error {
+			prepareCount++
+			wCtx.Set("prepare.output", "done")
+			return nil
+		}),
+		Step("gate", func(_ context.Context, wCtx *WorkflowContext) error {
+			if _, ok := ResumeData(wCtx); ok {
+				return nil
+			}
+			return Suspend(json.RawMessage(`{}`))
+		}, After("prepare")),
+	)
+
+	_, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	var suspended *ErrSuspended
+	if !errors.As(err, &suspended) {
+		t.Fatalf("expected ErrSuspended, got %v", err)
+	}
+
+	_, err = suspended.Resume(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Resume error: %v", err)
+	}
+
+	// "prepare" should only have run once (not re-executed on resume).
+	if prepareCount != 1 {
+		t.Errorf("prepare ran %d times, want 1", prepareCount)
+	}
+}
+
+func TestWorkflowMultiSuspend(t *testing.T) {
+	// Each gate uses a call counter to distinguish first execution (suspend)
+	// from resume, because ResumeData is workflow-global and gate2 would
+	// otherwise see gate1's resume data.
+	gate1Calls := 0
+	gate2Calls := 0
+
+	wf, _ := NewWorkflow("test", "test",
+		Step("gate1", func(_ context.Context, wCtx *WorkflowContext) error {
+			gate1Calls++
+			if gate1Calls > 1 {
+				wCtx.Set("gate1.output", "passed")
+				return nil
+			}
+			return Suspend(json.RawMessage(`{"gate": 1}`))
+		}),
+		Step("gate2", func(_ context.Context, wCtx *WorkflowContext) error {
+			gate2Calls++
+			if gate2Calls > 1 {
+				wCtx.Set("gate2.output", "passed")
+				return nil
+			}
+			return Suspend(json.RawMessage(`{"gate": 2}`))
+		}, After("gate1")),
+	)
+
+	// First suspend at gate1.
+	_, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	var s1 *ErrSuspended
+	if !errors.As(err, &s1) {
+		t.Fatalf("expected first ErrSuspended, got %v", err)
+	}
+	if s1.Step != "gate1" {
+		t.Errorf("first suspend step = %q, want gate1", s1.Step)
+	}
+
+	// Resume gate1 → gate2 suspends.
+	_, err = s1.Resume(context.Background(), json.RawMessage(`{}`))
+	var s2 *ErrSuspended
+	if !errors.As(err, &s2) {
+		t.Fatalf("expected second ErrSuspended, got %v", err)
+	}
+	if s2.Step != "gate2" {
+		t.Errorf("second suspend step = %q, want gate2", s2.Step)
+	}
+
+	// Resume gate2 → workflow completes.
+	result, err := s2.Resume(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("final Resume error: %v", err)
+	}
+	if result.Output != "passed" {
+		t.Errorf("Output = %q, want %q", result.Output, "passed")
+	}
+}
+
+func TestWorkflowSuspendResumeRejection(t *testing.T) {
+	wf, _ := NewWorkflow("test", "test",
+		Step("gate", func(_ context.Context, wCtx *WorkflowContext) error {
+			if data, ok := ResumeData(wCtx); ok {
+				var d struct {
+					Approved bool `json:"approved"`
+				}
+				json.Unmarshal(data, &d)
+				if !d.Approved {
+					return fmt.Errorf("rejected")
+				}
+				return nil
+			}
+			return Suspend(json.RawMessage(`{}`))
+		}),
+	)
+
+	_, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	var suspended *ErrSuspended
+	errors.As(err, &suspended)
+
+	_, err = suspended.Resume(context.Background(), json.RawMessage(`{"approved": false}`))
+	if err == nil {
+		t.Fatal("expected error on rejection")
+	}
+
+	var wfErr *WorkflowError
+	if !errors.As(err, &wfErr) {
+		t.Fatalf("expected WorkflowError, got %T: %v", err, err)
+	}
+}
+
+func TestWorkflowSuspendNoCallbacks(t *testing.T) {
+	onFinishCalled := false
+	onErrorCalled := false
+
+	wf, _ := NewWorkflow("test", "test",
+		Step("gate", func(_ context.Context, _ *WorkflowContext) error {
+			return Suspend(json.RawMessage(`{}`))
+		}),
+		WithOnFinish(func(_ WorkflowResult) { onFinishCalled = true }),
+		WithOnError(func(_ string, _ error) { onErrorCalled = true }),
+	)
+
+	wf.Execute(context.Background(), AgentTask{Input: "go"})
+
+	if onFinishCalled {
+		t.Error("onFinish should not be called on suspend")
+	}
+	if onErrorCalled {
+		t.Error("onError should not be called on suspend")
+	}
+}
+
+func TestWorkflowSuspendContextCancellation(t *testing.T) {
+	gateCalled := false
+
+	wf, _ := NewWorkflow("test", "test",
+		Step("gate", func(ctx context.Context, _ *WorkflowContext) error {
+			// On resume, check the context first — a cancelled context
+			// should prevent meaningful work.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			gateCalled = true
+			return Suspend(json.RawMessage(`{}`))
+		}),
+	)
+
+	_, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	var suspended *ErrSuspended
+	errors.As(err, &suspended)
+
+	// Reset to track the resume call.
+	gateCalled = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	// When the context is already cancelled, executeStep skips the step
+	// before calling the step function (ctx.Err() check in executeStep).
+	// The step is marked StepSkipped, which is not a failure, so err is nil.
+	result, err := suspended.Resume(ctx, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The gate step function should NOT have been called.
+	if gateCalled {
+		t.Error("gate step should not execute with cancelled context")
+	}
+
+	// No output since the step was skipped.
+	if result.Output != "" {
+		t.Errorf("Output = %q, want empty", result.Output)
+	}
+}
+
+func TestWorkflowSuspendAndResume(t *testing.T) {
+	callCount := 0
+	wf, err := NewWorkflow("test", "test workflow",
+		Step("prepare", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("data", "prepared")
+			return nil
+		}),
+		Step("gate", func(_ context.Context, wCtx *WorkflowContext) error {
+			callCount++
+			if data, ok := ResumeData(wCtx); ok {
+				wCtx.Set("gate.output", "approved:"+string(data))
+				return nil
+			}
+			return Suspend(json.RawMessage(`{"needs": "approval"}`))
+		}, After("prepare")),
+		Step("finish", func(_ context.Context, wCtx *WorkflowContext) error {
+			v, _ := wCtx.Get("gate.output")
+			wCtx.Set("finish.output", "done:"+v.(string))
+			return nil
+		}, After("gate")),
+	)
+	if err != nil {
+		t.Fatalf("NewWorkflow: %v", err)
+	}
+
+	// First execution — should suspend at "gate".
+	result, execErr := wf.Execute(context.Background(), AgentTask{Input: "go"})
+
+	var suspended *ErrSuspended
+	if !errors.As(execErr, &suspended) {
+		t.Fatalf("expected ErrSuspended, got %v", execErr)
+	}
+	if suspended.Step != "gate" {
+		t.Errorf("Step = %q, want %q", suspended.Step, "gate")
+	}
+	if string(suspended.Payload) != `{"needs": "approval"}` {
+		t.Errorf("Payload = %s", suspended.Payload)
+	}
+
+	// Resume with approval data.
+	result, execErr = suspended.Resume(context.Background(), json.RawMessage(`"yes"`))
+	if execErr != nil {
+		t.Fatalf("Resume returned error: %v", execErr)
+	}
+
+	// "finish" step should have run.
+	if result.Output != `done:approved:"yes"` {
+		t.Errorf("Output = %q", result.Output)
+	}
+
+	// "gate" should have been called twice: once for suspend, once for resume.
+	if callCount != 2 {
+		t.Errorf("gate called %d times, want 2", callCount)
+	}
+}
+
+// --- SSE streaming tests (from stream_test.go) ---
+
+// stubStreamingAgent implements StreamingAgent for testing.
+type stubStreamingAgent struct {
+	name   string
+	desc   string
+	events []StreamEvent
+	result AgentResult
+	err    error
+}
+
+func (s *stubStreamingAgent) Name() string        { return s.name }
+func (s *stubStreamingAgent) Description() string { return s.desc }
+func (s *stubStreamingAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+	return s.result, s.err
+}
+func (s *stubStreamingAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
+	defer close(ch)
+	for _, ev := range s.events {
+		select {
+		case ch <- ev:
+		case <-ctx.Done():
+			return AgentResult{}, ctx.Err()
+		}
+	}
+	return s.result, s.err
+}
+
+func TestServeSSE(t *testing.T) {
+	agent := &stubStreamingAgent{
+		name: "test",
+		desc: "test agent",
+		events: []StreamEvent{
+			{Type: EventTextDelta, Content: "Hello"},
+			{Type: EventTextDelta, Content: " world"},
+			{Type: EventToolCallStart, Name: "search", Args: json.RawMessage(`{"q":"test"}`)},
+			{Type: EventToolCallResult, Name: "search", Content: "found it"},
+		},
+		result: AgentResult{Output: "Hello world"},
+	}
+
+	rec := httptest.NewRecorder()
+	task := AgentTask{Input: "say hello"}
+
+	result, err := ServeSSE(context.Background(), rec, agent, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "Hello world" {
+		t.Errorf("result.Output = %q, want %q", result.Output, "Hello world")
+	}
+
+	// Check headers.
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want %q", ct, "text/event-stream")
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Errorf("Cache-Control = %q, want %q", cc, "no-cache")
+	}
+
+	body := rec.Body.String()
+
+	// Verify all 4 events are present.
+	if strings.Count(body, "event: ") != 5 { // 4 stream events + 1 done
+		t.Errorf("expected 5 event lines, got %d in:\n%s", strings.Count(body, "event: "), body)
+	}
+
+	// Verify event types appear in order.
+	events := []string{"event: text-delta", "event: tool-call-start", "event: tool-call-result", "event: done"}
+	pos := 0
+	for _, ev := range events {
+		idx := strings.Index(body[pos:], ev)
+		if idx < 0 {
+			t.Errorf("missing %q after position %d in body:\n%s", ev, pos, body)
+			break
+		}
+		pos += idx + len(ev)
+	}
+
+	// Verify done event.
+	if !strings.Contains(body, "event: done\ndata: [DONE]") {
+		t.Errorf("missing done event in body:\n%s", body)
+	}
+}
+
+func TestServeSSE_AgentError(t *testing.T) {
+	agent := &stubStreamingAgent{
+		name: "fail",
+		desc: "fails",
+		events: []StreamEvent{
+			{Type: EventTextDelta, Content: "partial"},
+		},
+		err: errors.New("provider timeout"),
+	}
+
+	rec := httptest.NewRecorder()
+	task := AgentTask{Input: "fail"}
+
+	_, err := ServeSSE(context.Background(), rec, agent, task)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if err.Error() != "provider timeout" {
+		t.Errorf("err = %q, want %q", err.Error(), "provider timeout")
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: error") {
+		t.Errorf("missing error event in body:\n%s", body)
+	}
+	if !strings.Contains(body, "provider timeout") {
+		t.Errorf("missing error message in body:\n%s", body)
+	}
+}
+
+// nonFlusher is a ResponseWriter that does not implement http.Flusher.
+type nonFlusher struct {
+	header http.Header
+}
+
+func (n *nonFlusher) Header() http.Header        { return n.header }
+func (n *nonFlusher) Write(b []byte) (int, error) { return len(b), nil }
+func (n *nonFlusher) WriteHeader(int)             {}
+
+func TestServeSSE_NoFlusher(t *testing.T) {
+	agent := &stubStreamingAgent{name: "test", desc: "test"}
+	w := &nonFlusher{header: http.Header{}}
+
+	_, err := ServeSSE(context.Background(), w, agent, AgentTask{})
+	if err == nil {
+		t.Fatal("expected error for non-flusher ResponseWriter")
+	}
+	if !strings.Contains(err.Error(), "Flusher") {
+		t.Errorf("err = %q, want mention of Flusher", err.Error())
 	}
 }
