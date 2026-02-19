@@ -39,6 +39,16 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithConversationMemory(store, oasis.MaxHistory(30)),
 )
+
+// Token budget — trim history oldest-first to fit within N estimated tokens
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store, oasis.MaxTokens(4000)),
+)
+
+// Both limits compose — whichever triggers first wins
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store, oasis.MaxHistory(50), oasis.MaxTokens(4000)),
+)
 ```
 
 Activated when `task.TaskThreadID()` returns a non-empty value. Without a thread ID, the agent runs stateless.

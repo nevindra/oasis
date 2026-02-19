@@ -120,7 +120,13 @@ For post-execution analysis without a processor, use `result.Steps` — see [Exe
 
 ## Token Budget (PreProcessor)
 
-Enforce a per-request token limit by trimming older messages:
+For most cases, use the built-in `MaxTokens` conversation option instead of a processor — it trims history by estimated token count before the LLM call:
+
+```go
+oasis.WithConversationMemory(store, oasis.MaxTokens(4000))
+```
+
+For custom trimming logic (e.g. per-request limits, priority-based retention), use a PreProcessor:
 
 ```go
 type TokenBudget struct {

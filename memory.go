@@ -41,6 +41,13 @@ const defaultSemanticRecallMinScore float32 = 0.60
 // history when MaxHistory is not passed to WithConversationMemory.
 const defaultMaxHistory = 10
 
+// estimateTokens returns a rough token count for a chat message.
+// Uses the ~4 characters per token heuristic, plus a small overhead
+// for role markers and message framing.
+func estimateTokens(msg ChatMessage) int {
+	return len(msg.Content)/4 + 4
+}
+
 // agentMemory provides shared memory wiring for LLMAgent and Network.
 // All fields are optional — nil means the feature is disabled.
 type agentMemory struct {
@@ -50,6 +57,7 @@ type agentMemory struct {
 	crossThreadSearch bool              // enabled by CrossThreadSearch option
 	semanticMinScore  float32           // 0 = use defaultSemanticRecallMinScore
 	maxHistory        int               // 0 = use defaultMaxHistory
+	maxTokens         int               // 0 = disabled (no token-based trimming)
 	provider          Provider          // for auto-extraction when memory != nil
 }
 
@@ -76,6 +84,40 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 		}
 		for _, msg := range history {
 			messages = append(messages, ChatMessage{Role: msg.Role, Content: msg.Content})
+		}
+
+		// Token-based trimming: drop oldest history messages until budget is met.
+		if m.maxTokens > 0 && len(messages) > 0 {
+			// Find the boundary between non-history and history messages.
+			// History starts after the system prompt (index historyStart) and
+			// ends before we append cross-thread recall and user input.
+			historyStart := 0
+			if messages[0].Role == "system" {
+				historyStart = 1
+			}
+			historyEnd := len(messages) // history is everything from historyStart to end (so far)
+
+			// Sum tokens in history portion.
+			total := 0
+			for i := historyStart; i < historyEnd; i++ {
+				total += estimateTokens(messages[i])
+			}
+
+			// Drop oldest (lowest index in history) until we fit.
+			for total > m.maxTokens && historyStart < historyEnd {
+				total -= estimateTokens(messages[historyStart])
+				historyStart++
+			}
+
+			// Rebuild: keep pre-history messages + trimmed history.
+			if historyStart > 0 {
+				trimmed := make([]ChatMessage, 0, len(messages))
+				if messages[0].Role == "system" {
+					trimmed = append(trimmed, messages[0])
+				}
+				trimmed = append(trimmed, messages[historyStart:historyEnd]...)
+				messages = trimmed
+			}
 		}
 
 		// Cross-thread recall: search relevant messages across all threads,

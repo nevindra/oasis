@@ -24,6 +24,7 @@ Passed to `WithConversationMemory`.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `MaxHistory(n int)` | 10 | Max recent messages loaded into LLM context |
+| `MaxTokens(n int)` | 0 (disabled) | Token budget for history — trim oldest-first until total fits within n |
 | `CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption)` | — | Enable cross-thread semantic recall |
 
 ## SemanticOption
@@ -71,6 +72,15 @@ Configures a Scheduler.
 | `WithSchedulerInterval(d time.Duration)` | 1 minute | Polling interval |
 | `WithSchedulerTZOffset(hours int)` | 0 (UTC) | UTC offset for schedules |
 | `WithOnRun(hook RunHook)` | nil | Hook after each action execution |
+
+## RateLimitOption
+
+Configures `WithRateLimit`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `RPM(n int)` | 0 (disabled) | Max requests per minute (sliding window) |
+| `TPM(n int)` | 0 (disabled) | Max tokens per minute — soft limit (input + output combined) |
 
 ## RetryOption
 

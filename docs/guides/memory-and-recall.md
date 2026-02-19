@@ -22,6 +22,27 @@ result, _ := agent.Execute(ctx, oasis.AgentTask{
 
 Without `thread_id`, the agent runs stateless — no history loaded or persisted.
 
+## Token Budget for History
+
+Limit conversation history by estimated token count instead of (or in addition to) message count:
+
+```go
+// Trim oldest messages until history fits within 4000 estimated tokens
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store, oasis.MaxTokens(4000)),
+)
+
+// Compose with MaxHistory — both limits apply, whichever triggers first
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store,
+        oasis.MaxHistory(50),
+        oasis.MaxTokens(4000),
+    ),
+)
+```
+
+Token estimation uses a ~4 characters per token heuristic with a small overhead for message framing. This is a rough estimate suitable for budget control — not exact tokenizer output.
+
 ## Cross-Thread Recall
 
 Search past conversations for relevant context:

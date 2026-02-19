@@ -53,7 +53,10 @@ type recordingStore struct {
 	stored   []Message         // recorded by StoreMessage
 }
 
-func (s *recordingStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error) {
+func (s *recordingStore) GetMessages(_ context.Context, _ string, limit int) ([]Message, error) {
+	if limit > 0 && limit < len(s.history) {
+		return s.history[len(s.history)-limit:], nil
+	}
 	return s.history, nil
 }
 
@@ -683,6 +686,180 @@ func TestParseExtractedFactsMarkdownFence(t *testing.T) {
 	}
 	if facts[0].Fact != "User likes Go" {
 		t.Errorf("fact = %q, want %q", facts[0].Fact, "User likes Go")
+	}
+}
+
+func TestMaxTokensOption(t *testing.T) {
+	// Create a store that returns history with known content lengths.
+	// Oldest messages first — oldest-first trimming drops the big ones to fit budget.
+	store := &recordingStore{
+		history: []Message{
+			{Role: "user", Content: string(make([]byte, 400))},                 // oldest, ~104 tokens
+			{Role: "assistant", Content: string(make([]byte, 400))},            // ~104 tokens
+			{Role: "user", Content: "short"},                                    // ~5 tokens
+			{Role: "assistant", Content: "also short"},                          // ~6 tokens (most recent)
+		},
+	}
+
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store, MaxTokens(30)),
+		WithPrompt("system"),
+	)
+
+	task := AgentTask{
+		Input:   "hi",
+		Context: map[string]any{ContextThreadID: "t1"},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// With budget of 30 tokens, only the two short messages (~11 tokens) should fit.
+	// The two 400-byte messages (~104 tokens each) should be trimmed.
+	msgs := provider.firstCall().Messages
+	// Expected: system + 2 short history msgs + user input = 4 messages
+	historyCount := 0
+	for _, m := range msgs {
+		if m.Role == "user" && m.Content != "hi" && m.Content != "" {
+			historyCount++
+		}
+		if m.Role == "assistant" && m.Content != "ok" {
+			historyCount++
+		}
+	}
+	if historyCount != 2 {
+		t.Errorf("expected 2 history messages after token trim, got %d (total msgs: %d)", historyCount, len(msgs))
+	}
+}
+
+func TestMaxTokensComposesWithMaxHistory(t *testing.T) {
+	// MaxHistory(2) limits to 2 messages, MaxTokens(10000) is permissive.
+	// MaxHistory should win.
+	store := &recordingStore{
+		history: []Message{
+			{Role: "user", Content: "msg1"},
+			{Role: "assistant", Content: "msg2"},
+			{Role: "user", Content: "msg3"},
+			{Role: "assistant", Content: "msg4"},
+		},
+	}
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store, MaxHistory(2), MaxTokens(10000)),
+	)
+
+	_, err := agent.Execute(context.Background(), AgentTask{
+		Input:   "hi",
+		Context: map[string]any{ContextThreadID: "t1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// MaxHistory(2) limits store to return 2 messages.
+	// With limit=2, store returns only 2 messages. Token budget is permissive.
+	msgs := provider.firstCall().Messages
+	// user input "hi" is last, so history = msgs minus last
+	historyCount := 0
+	for _, m := range msgs {
+		if (m.Role == "user" || m.Role == "assistant") && m.Content != "hi" {
+			historyCount++
+		}
+	}
+	if historyCount != 2 {
+		t.Errorf("expected 2 history messages (MaxHistory wins), got %d", historyCount)
+	}
+}
+
+func TestMaxTokensZeroDisabled(t *testing.T) {
+	// MaxTokens(0) or not set = no token trimming. All messages pass through.
+	store := &recordingStore{
+		history: []Message{
+			{Role: "user", Content: string(make([]byte, 1000))},
+			{Role: "assistant", Content: string(make([]byte, 1000))},
+		},
+	}
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+	)
+
+	_, err := agent.Execute(context.Background(), AgentTask{
+		Input:   "hi",
+		Context: map[string]any{ContextThreadID: "t1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := provider.firstCall().Messages
+	historyCount := 0
+	for _, m := range msgs {
+		if (m.Role == "user" || m.Role == "assistant") && m.Content != "hi" {
+			historyCount++
+		}
+	}
+	if historyCount != 2 {
+		t.Errorf("expected 2 history messages (no trimming), got %d", historyCount)
+	}
+}
+
+func TestNetworkMaxTokens(t *testing.T) {
+	store := &recordingStore{
+		history: []Message{
+			{Role: "user", Content: string(make([]byte, 400))},     // ~104 tokens
+			{Role: "assistant", Content: string(make([]byte, 400))}, // ~104 tokens
+			{Role: "user", Content: "recent"},                      // ~5 tokens
+		},
+	}
+
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	network := NewNetwork("net", "test", provider,
+		WithConversationMemory(store, MaxTokens(20)),
+	)
+
+	_, err := network.Execute(context.Background(), AgentTask{
+		Input:   "hi",
+		Context: map[string]any{ContextThreadID: "t1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Only "recent" (~5 tokens) should survive the 20-token budget.
+	msgs := provider.firstCall().Messages
+	historyCount := 0
+	for _, m := range msgs {
+		if (m.Role == "user" || m.Role == "assistant") && m.Content != "hi" {
+			historyCount++
+		}
+	}
+	if historyCount != 1 {
+		t.Errorf("expected 1 history message after token trim, got %d", historyCount)
+	}
+}
+
+func TestEstimateTokens(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  ChatMessage
+		want int
+	}{
+		{"empty", ChatMessage{}, 4},
+		{"short", ChatMessage{Content: "hello"}, 5}, // 5/4=1 + 4 = 5
+		{"medium", ChatMessage{Content: "hello world, this is a test message"}, 12}, // 35/4=8 + 4 = 12
+		{"long", ChatMessage{Content: string(make([]byte, 400))}, 104}, // 400/4 + 4 = 104
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := estimateTokens(tt.msg)
+			if got != tt.want {
+				t.Errorf("estimateTokens() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 

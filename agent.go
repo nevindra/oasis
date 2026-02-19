@@ -129,6 +129,7 @@ type agentConfig struct {
 	crossThreadSearch bool    // enabled by CrossThreadSearch option
 	semanticMinScore  float32 // set by MinScore inside CrossThreadSearch
 	maxHistory        int     // set by MaxHistory inside WithConversationMemory
+	maxTokens         int     // set by MaxTokens inside WithConversationMemory
 	planExecution     bool            // enabled by WithPlanExecution option
 	responseSchema    *ResponseSchema // set by WithResponseSchema option
 }
@@ -231,6 +232,14 @@ func MinScore(score float32) SemanticOption {
 // a built-in default of 10.
 func MaxHistory(n int) ConversationOption {
 	return func(c *agentConfig) { c.maxHistory = n }
+}
+
+// MaxTokens sets a token budget for conversation history loaded before the LLM call.
+// Messages are trimmed oldest-first until the total estimated tokens fit within n.
+// Composes with MaxHistory — both limits apply, whichever triggers first.
+// The zero value (or omitting this option) disables token-based trimming.
+func MaxTokens(n int) ConversationOption {
+	return func(c *agentConfig) { c.maxTokens = n }
 }
 
 // WithConversationMemory enables conversation history on the agent.

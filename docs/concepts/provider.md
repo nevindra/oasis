@@ -84,6 +84,29 @@ llm := oasis.WithRetry(gemini.New(apiKey, model),
 
 Uses exponential backoff with jitter. `ChatStream` only retries if no tokens have been forwarded yet.
 
+## WithRateLimit Middleware
+
+Wraps any Provider with proactive rate limiting. Requests block until the sliding-window budget allows them to proceed:
+
+```go
+// RPM only
+llm := oasis.WithRateLimit(gemini.New(apiKey, model), oasis.RPM(60))
+
+// RPM + TPM
+llm := oasis.WithRateLimit(gemini.New(apiKey, model),
+    oasis.RPM(60),
+    oasis.TPM(100000),
+)
+
+// Compose with retry — rate limit first, retry inside
+llm := oasis.WithRateLimit(
+    oasis.WithRetry(gemini.New(apiKey, model)),
+    oasis.RPM(60),
+)
+```
+
+`RPM(n)` uses a sliding window of request timestamps — when the window is full, the next request blocks until the oldest entry expires. `TPM(n)` is a soft limit — the request that exceeds the budget completes, but subsequent requests block until the token window slides. Both respect context cancellation.
+
 ## LLM Protocol Types
 
 ```go
@@ -173,3 +196,4 @@ if bp, ok := provider.(oasis.BatchProvider); ok {
 - [Custom Provider Guide](../guides/custom-provider.md) — implement your own
 - [Observability](observability.md) — OTEL wrappers for providers
 - [API Reference: Interfaces](../api/interfaces.md)
+- [API Reference: Options](../api/options.md#ratelimitoption) — rate limit configuration

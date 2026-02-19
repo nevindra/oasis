@@ -47,6 +47,7 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 			crossThreadSearch: cfg.crossThreadSearch,
 			semanticMinScore:  cfg.semanticMinScore,
 			maxHistory:        cfg.maxHistory,
+			maxTokens:         cfg.maxTokens,
 			provider:          router,
 		},
 	}

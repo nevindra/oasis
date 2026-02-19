@@ -132,6 +132,14 @@ chain.Len() int
 provider := oasis.WithRetry(p Provider, opts ...RetryOption) Provider
 ```
 
+## WithRateLimit
+
+**File:** `ratelimit.go`
+
+```go
+provider := oasis.WithRateLimit(p Provider, opts ...RateLimitOption) Provider
+```
+
 ## Context Helpers
 
 **File:** `input.go`

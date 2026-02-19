@@ -43,6 +43,7 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 			crossThreadSearch: cfg.crossThreadSearch,
 			semanticMinScore:  cfg.semanticMinScore,
 			maxHistory:        cfg.maxHistory,
+			maxTokens:         cfg.maxTokens,
 			provider:          provider,
 		},
 	}
