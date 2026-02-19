@@ -25,7 +25,7 @@ func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]Sco
 func (s *stubStore) StoreDocument(_ context.Context, _ Document, _ []Chunk) error { return nil }
 func (s *stubStore) ListDocuments(_ context.Context, _ int) ([]Document, error)   { return nil, nil }
 func (s *stubStore) DeleteDocument(_ context.Context, _ string) error             { return nil }
-func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int) ([]ScoredChunk, error) { return nil, nil }
+func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int, _ ...ChunkFilter) ([]ScoredChunk, error) { return nil, nil }
 func (s *stubStore) GetChunksByIDs(_ context.Context, _ []string) ([]Chunk, error) { return nil, nil }
 func (s *stubStore) GetConfig(_ context.Context, _ string) (string, error) { return "", nil }
 func (s *stubStore) SetConfig(_ context.Context, _, _ string) error { return nil }
