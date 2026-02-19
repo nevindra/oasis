@@ -42,6 +42,57 @@ SearchMessages(ctx, embedding, topK) ([]ScoredMessage, error)
 
 `SearchMessages` performs cosine similarity search across all messages. Returns `ScoredMessage` with a `Score` field in [0, 1].
 
+## Conversation Model
+
+Oasis organizes conversations in a three-level hierarchy:
+
+```text
+ChatID (room/channel)
+ └─ ThreadID (conversation)
+     └─ Messages (turns)
+```
+
+| Concept | Context Key | Struct Field | Meaning |
+|---------|-------------|--------------|---------|
+| **ChatID** | `ContextChatID` | `Thread.ChatID` | The room, channel, or DM scope. In Telegram this is the chat. In a SaaS app it could be a workspace or user account. |
+| **UserID** | `ContextUserID` | — | The individual person. Multiple users can share a ChatID (group chats). Not stored on Thread — it's request-scoped metadata. |
+| **ThreadID** | `ContextThreadID` | `Thread.ID` / `Message.ThreadID` | A single conversation. `ListThreads(ctx, chatID, limit)` returns all threads in a chat. `GetMessages(ctx, threadID, limit)` returns turns within a thread. |
+
+Pass all three via `AgentTask.Context` using the typed accessors:
+
+```go
+task := oasis.AgentTask{
+    Input: userMessage,
+    Context: map[string]any{
+        oasis.ContextThreadID: thread.ID,
+        oasis.ContextUserID:   userID,
+        oasis.ContextChatID:   chatID,
+    },
+}
+
+// Type-safe reads inside processors/tools:
+tid := task.TaskThreadID()
+uid := task.TaskUserID()
+cid := task.TaskChatID()
+```
+
+### Common Patterns
+
+**Single-user app** — ChatID and UserID are the same value. One thread per conversation.
+
+**Multi-user group** — Shared ChatID, each user identified by UserID. Threads can be per-user or shared.
+
+**Ownership checks** — `DeleteThread` takes only the thread ID (it's a data-access method, not an authorization layer). For user-facing APIs, verify ownership at the service layer:
+
+```go
+thread, err := store.GetThread(ctx, threadID)
+if err != nil { return err }
+if thread.ChatID != expectedChatID {
+    return fmt.Errorf("thread not found")
+}
+store.DeleteThread(ctx, threadID)
+```
+
 ### Documents + Chunks
 
 ```go

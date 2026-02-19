@@ -6,6 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **`ServeSSE` HTTP helper** — stream agent responses as Server-Sent Events with zero boilerplate; handles flusher validation, SSE headers, channel management, done/error events, and client disconnection via context cancellation
+- **Conversation model documentation** — new section in Store docs explaining the ChatID/UserID/ThreadID hierarchy, context key mapping, and common patterns (single-user, multi-user, ownership checks)
+
 ## [0.4.0] - 2026-02-19
 
 ### Added

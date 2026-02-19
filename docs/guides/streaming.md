@@ -96,6 +96,39 @@ ch := make(chan oasis.StreamEvent)       // unbuffered — may slow down the LLM
 
 The channel is always closed by the agent when streaming completes.
 
+## HTTP Server-Sent Events
+
+Use `ServeSSE` to stream agent responses over HTTP with zero boilerplate:
+
+```go
+http.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
+    task := oasis.AgentTask{Input: r.URL.Query().Get("q")}
+    result, err := oasis.ServeSSE(r.Context(), w, agent, task)
+    if err != nil {
+        log.Printf("stream error: %v", err)
+        return
+    }
+    log.Printf("completed: %s", result.Output)
+})
+```
+
+`ServeSSE` handles the full SSE lifecycle:
+
+1. Validates that the `ResponseWriter` supports flushing
+2. Sets `Content-Type: text/event-stream`, `Cache-Control`, and `Connection` headers
+3. Runs the agent in a goroutine, writes each `StreamEvent` as an SSE event
+4. Sends `event: done` on completion, or `event: error` on failure
+5. Propagates client disconnection via context cancellation
+
+Each SSE event is formatted as:
+
+```text
+event: text-delta
+data: {"type":"text-delta","content":"Hello"}
+```
+
+Works with any router (Echo, Chi, Gin) since they all expose `http.ResponseWriter`.
+
 ## See Also
 
 - [Agent Concept](../concepts/agent.md) — StreamingAgent interface
