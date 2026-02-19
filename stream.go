@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // StreamEventType identifies the kind of streaming event.
@@ -35,6 +36,12 @@ type StreamEvent struct {
 	Content string `json:"content,omitempty"`
 	// Args carries the tool call arguments (tool-call-start only).
 	Args json.RawMessage `json:"args,omitempty"`
+	// Usage carries token counts for the completed step.
+	// Set on agent-finish and tool-call-result events. Zero value otherwise.
+	Usage Usage `json:"usage,omitempty"`
+	// Duration is the wall-clock time for the completed step.
+	// Set on agent-finish and tool-call-result events. Zero value otherwise.
+	Duration time.Duration `json:"duration,omitempty"`
 }
 
 // ServeSSE streams an agent's response as Server-Sent Events over HTTP.

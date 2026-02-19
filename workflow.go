@@ -829,19 +829,45 @@ func (w *Workflow) buildResult(state *executionState, task AgentTask) (AgentResu
 		w.safeCallback(func() { w.onFinish(wfResult) })
 	}
 
+	// Convert workflow step results to StepTrace slice in execution order.
+	steps := workflowStepsToTraces(w.stepOrder, state.results)
+
 	if wfStatus == StepFailed {
 		var stepErr error
 		if sr, ok := state.results[state.failedStep]; ok {
 			stepErr = sr.Error
 		}
-		return AgentResult{Output: lastOutput, Usage: totalUsage}, &WorkflowError{
+		return AgentResult{Output: lastOutput, Usage: totalUsage, Steps: steps}, &WorkflowError{
 			StepName: state.failedStep,
 			Err:      stepErr,
 			Result:   wfResult,
 		}
 	}
 
-	return AgentResult{Output: lastOutput, Usage: totalUsage}, nil
+	return AgentResult{Output: lastOutput, Usage: totalUsage, Steps: steps}, nil
+}
+
+// workflowStepsToTraces converts workflow StepResults into StepTrace entries
+// in the order defined by stepOrder. Skipped and pending steps are omitted.
+func workflowStepsToTraces(order []string, results map[string]StepResult) []StepTrace {
+	var traces []StepTrace
+	for _, name := range order {
+		sr, ok := results[name]
+		if !ok || sr.Status == StepPending || sr.Status == StepSkipped {
+			continue
+		}
+		trace := StepTrace{
+			Name:     name,
+			Type:     "step",
+			Output:   truncateStr(sr.Output, 500),
+			Duration: sr.Duration,
+		}
+		if sr.Error != nil {
+			trace.Output = truncateStr(sr.Error.Error(), 500)
+		}
+		traces = append(traces, trace)
+	}
+	return traces
 }
 
 // runDAG executes the step graph using a wave-based approach. Each wave

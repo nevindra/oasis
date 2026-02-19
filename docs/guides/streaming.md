@@ -37,16 +37,18 @@ The channel carries typed `StreamEvent` values. Five event types:
 | --------------------- | ------------------------------ | ---------------------------------------- |
 | `EventTextDelta`      | Provider (ChatStream)          | `Content` = text chunk                   |
 | `EventToolCallStart`  | runLoop (before tool dispatch) | `Name` = tool name, `Args` = arguments   |
-| `EventToolCallResult` | runLoop (after tool completes) | `Name` = tool name, `Content` = result   |
+| `EventToolCallResult` | runLoop (after tool completes) | `Name` = tool name, `Content` = result, `Usage`, `Duration` |
 | `EventAgentStart`     | Network dispatch               | `Name` = agent name, `Content` = task    |
-| `EventAgentFinish`    | Network dispatch               | `Name` = agent name, `Content` = output  |
+| `EventAgentFinish`    | Network dispatch               | `Name` = agent name, `Content` = output, `Usage`, `Duration` |
 
 ```go
 type StreamEvent struct {
-    Type    StreamEventType  `json:"type"`
-    Name    string           `json:"name,omitempty"`
-    Content string           `json:"content,omitempty"`
-    Args    json.RawMessage  `json:"args,omitempty"`
+    Type     StreamEventType  `json:"type"`
+    Name     string           `json:"name,omitempty"`
+    Content  string           `json:"content,omitempty"`
+    Args     json.RawMessage  `json:"args,omitempty"`
+    Usage    Usage            `json:"usage,omitempty"`    // tool-call-result, agent-finish
+    Duration time.Duration    `json:"duration,omitempty"` // tool-call-result, agent-finish
 }
 ```
 

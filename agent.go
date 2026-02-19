@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"time"
 )
 
 // Agent is a unit of work that takes a task and returns a result.
@@ -88,6 +89,28 @@ type AgentResult struct {
 	Attachments []Attachment
 	// Usage tracks aggregate token usage across all LLM calls.
 	Usage Usage
+	// Steps records per-tool and per-agent execution traces in chronological order.
+	// Populated by LLMAgent (tool calls) and Network (tool + agent delegations).
+	// Nil when no tools were called.
+	Steps []StepTrace
+}
+
+// StepTrace records the execution of a single tool call or agent delegation.
+// Collected automatically during the agent's tool-calling loop.
+type StepTrace struct {
+	// Name is the tool or agent name (e.g. "web_search", "researcher").
+	// For agent delegations, the "agent_" prefix is stripped.
+	Name string `json:"name"`
+	// Type is "tool" or "agent".
+	Type string `json:"type"`
+	// Input is the tool arguments or agent task, truncated to 200 characters.
+	Input string `json:"input"`
+	// Output is the result content, truncated to 500 characters.
+	Output string `json:"output"`
+	// Usage is the token usage for this individual step.
+	Usage Usage `json:"usage"`
+	// Duration is the wall-clock time for this step.
+	Duration time.Duration `json:"duration"`
 }
 
 // agentConfig holds shared configuration for LLMAgent and Network.
@@ -283,6 +306,7 @@ type loopConfig struct {
 // it emits StreamEvent values and closes ch when done (ExecuteStream).
 func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	var totalUsage Usage
+	var steps []StepTrace
 
 	// Inject InputHandler into context for processors.
 	if cfg.inputHandler != nil {
@@ -313,9 +337,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				close(ch)
 			}
 			if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
-				return AgentResult{Usage: totalUsage}, s
+				return AgentResult{Usage: totalUsage, Steps: steps}, s
 			}
-			return handleProcessorError(err, totalUsage)
+			return handleProcessorErrorWithSteps(err, totalUsage, steps)
 		}
 
 		var resp ChatResponse
@@ -327,12 +351,12 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			// No tools, streaming — stream the response directly.
 			resp, err = cfg.provider.ChatStream(ctx, req, ch)
 			if err != nil {
-				return AgentResult{Usage: totalUsage}, err
+				return AgentResult{Usage: totalUsage, Steps: steps}, err
 			}
 			totalUsage.InputTokens += resp.Usage.InputTokens
 			totalUsage.OutputTokens += resp.Usage.OutputTokens
 			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
-			return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage}, nil
+			return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 		} else {
 			resp, err = cfg.provider.Chat(ctx, req)
 		}
@@ -341,7 +365,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			if ch != nil {
 				close(ch)
 			}
-			return AgentResult{Usage: totalUsage}, err
+			return AgentResult{Usage: totalUsage, Steps: steps}, err
 		}
 		totalUsage.InputTokens += resp.Usage.InputTokens
 		totalUsage.OutputTokens += resp.Usage.OutputTokens
@@ -352,9 +376,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				close(ch)
 			}
 			if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
-				return AgentResult{Usage: totalUsage}, s
+				return AgentResult{Usage: totalUsage, Steps: steps}, s
 			}
-			return handleProcessorError(err, totalUsage)
+			return handleProcessorErrorWithSteps(err, totalUsage, steps)
 		}
 
 		// No tool calls — final response.
@@ -368,7 +392,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				close(ch)
 			}
 			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, content)
-			return AgentResult{Output: content, Attachments: resp.Attachments, Usage: totalUsage}, nil
+			return AgentResult{Output: content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 		}
 
 		// Append assistant message with tool calls.
@@ -388,15 +412,25 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		// Execute tool calls in parallel.
 		results := dispatchParallel(ctx, resp.ToolCalls, cfg.dispatch)
 
-		// Process results sequentially (PostToolProcessor + message assembly).
+		// Process results sequentially (PostToolProcessor + message assembly + trace collection).
 		for j, tc := range resp.ToolCalls {
 			totalUsage.InputTokens += results[j].usage.InputTokens
 			totalUsage.OutputTokens += results[j].usage.OutputTokens
 
 			// Emit tool-call-result event.
 			if ch != nil {
-				ch <- StreamEvent{Type: EventToolCallResult, Name: tc.Name, Content: results[j].content}
+				ch <- StreamEvent{
+					Type:     EventToolCallResult,
+					Name:     tc.Name,
+					Content:  results[j].content,
+					Usage:    results[j].usage,
+					Duration: results[j].duration,
+				}
 			}
+
+			// Build step trace.
+			trace := buildStepTrace(tc, results[j])
+			steps = append(steps, trace)
 
 			result := ToolResult{Content: results[j].content}
 			if err := cfg.processors.RunPostTool(ctx, tc, &result); err != nil {
@@ -404,9 +438,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 					close(ch)
 				}
 				if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
-					return AgentResult{Usage: totalUsage}, s
+					return AgentResult{Usage: totalUsage, Steps: steps}, s
 				}
-				return handleProcessorError(err, totalUsage)
+				return handleProcessorErrorWithSteps(err, totalUsage, steps)
 			}
 			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
 
@@ -430,23 +464,54 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		resp, err = cfg.provider.Chat(ctx, ChatRequest{Messages: messages})
 	}
 	if err != nil {
-		return AgentResult{Usage: totalUsage}, err
+		return AgentResult{Usage: totalUsage, Steps: steps}, err
 	}
 	totalUsage.InputTokens += resp.Usage.InputTokens
 	totalUsage.OutputTokens += resp.Usage.OutputTokens
 
 	cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
-	return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage}, nil
+	return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 }
 
-// handleProcessorError converts a processor error into an AgentResult.
+// handleProcessorErrorWithSteps converts a processor error into an AgentResult.
 // ErrHalt produces a graceful result; other errors propagate as failures.
-func handleProcessorError(err error, usage Usage) (AgentResult, error) {
+// Any step traces collected before the error are preserved in the result.
+func handleProcessorErrorWithSteps(err error, usage Usage, steps []StepTrace) (AgentResult, error) {
 	var halt *ErrHalt
 	if errors.As(err, &halt) {
-		return AgentResult{Output: halt.Response, Usage: usage}, nil
+		return AgentResult{Output: halt.Response, Usage: usage, Steps: steps}, nil
 	}
-	return AgentResult{Usage: usage}, err
+	return AgentResult{Usage: usage, Steps: steps}, err
+}
+
+// buildStepTrace creates a StepTrace from a tool call and its execution result.
+// Agent delegations (tool calls prefixed with "agent_") get Type "agent" and
+// the prefix stripped from Name. All other calls get Type "tool".
+func buildStepTrace(tc ToolCall, res toolExecResult) StepTrace {
+	name := tc.Name
+	traceType := "tool"
+	input := string(tc.Args)
+
+	if len(name) > 6 && name[:6] == "agent_" {
+		name = name[6:]
+		traceType = "agent"
+		// Extract the task field from agent call args for a cleaner trace.
+		var params struct {
+			Task string `json:"task"`
+		}
+		if json.Unmarshal(tc.Args, &params) == nil && params.Task != "" {
+			input = params.Task
+		}
+	}
+
+	return StepTrace{
+		Name:     name,
+		Type:     traceType,
+		Input:    truncateStr(input, 200),
+		Output:   truncateStr(res.content, 500),
+		Usage:    res.usage,
+		Duration: res.duration,
+	}
 }
 
 // checkSuspendLoop checks if a processor error is a suspend signal.
@@ -481,8 +546,9 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 
 // toolExecResult holds the result of a single parallel tool call.
 type toolExecResult struct {
-	content string
-	usage   Usage
+	content  string
+	usage    Usage
+	duration time.Duration
 }
 
 // dispatchParallel runs all tool calls concurrently via the dispatch function
@@ -495,8 +561,9 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch dispatchFu
 		wg.Add(1)
 		go func(idx int, tc ToolCall) {
 			defer wg.Done()
+			start := time.Now()
 			content, usage := dispatch(ctx, tc)
-			results[idx] = toolExecResult{content: content, usage: usage}
+			results[idx] = toolExecResult{content: content, usage: usage, duration: time.Since(start)}
 		}(i, tc)
 	}
 

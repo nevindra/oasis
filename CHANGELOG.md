@@ -15,6 +15,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`ListDocuments` and `DeleteDocument`** on Store interface — list documents ordered by creation time, delete with cascade (chunks + FTS). Implemented in all three store backends (SQLite, libSQL, PostgreSQL)
 - **PDF extension mapping** — `.pdf` files now correctly map to `TypePDF` content type; `TypePDF` promoted from subpackage to core `ingest` constants
 - **Conversation model documentation** — new section in Store docs explaining the ChatID/UserID/ThreadID hierarchy, context key mapping, and common patterns (single-user, multi-user, ownership checks)
+- **Execution traces on `AgentResult`** — every `AgentResult` now includes a `Steps []StepTrace` field recording per-tool and per-agent execution metadata (name, type, input, output, token usage, wall-clock duration) in chronological order. Works out of the box with no OTEL setup required. Populated by `LLMAgent` (tool calls), `Network` (tool + agent delegations), and `Workflow` (step results). `StreamEvent` also gains `Usage` and `Duration` fields on `EventToolCallResult` and `EventAgentFinish` events for streaming consumers
 
 ### Fixed
 

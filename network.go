@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 )
 
 // Network is an Agent that coordinates subagents and tools via an LLM router.
@@ -148,18 +149,26 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent) disp
 				ch <- StreamEvent{Type: EventAgentStart, Name: agentName, Content: params.Task}
 			}
 
+			start := time.Now()
 			result, err := agent.Execute(ctx, AgentTask{
 				Input:       params.Task,
 				Attachments: parentTask.Attachments,
 				Context:     parentTask.Context,
 			})
+			elapsed := time.Since(start)
 
 			if ch != nil {
 				output := ""
 				if err == nil {
 					output = result.Output
 				}
-				ch <- StreamEvent{Type: EventAgentFinish, Name: agentName, Content: output}
+				ch <- StreamEvent{
+					Type:     EventAgentFinish,
+					Name:     agentName,
+					Content:  output,
+					Usage:    result.Usage,
+					Duration: elapsed,
+				}
 			}
 
 			if err != nil {

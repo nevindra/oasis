@@ -180,8 +180,20 @@ type AgentResult struct {
     Output      string
     Attachments []Attachment
     Usage       Usage
+    Steps       []StepTrace   // per-step execution trace, chronological order
+}
+
+type StepTrace struct {
+    Name     string        `json:"name"`     // tool or agent name
+    Type     string        `json:"type"`     // "tool", "agent", or "step" (workflow)
+    Input    string        `json:"input"`    // args/task, truncated to 200 chars
+    Output   string        `json:"output"`   // result, truncated to 500 chars
+    Usage    Usage         `json:"usage"`    // tokens for this step
+    Duration time.Duration `json:"duration"` // wall-clock time
 }
 ```
+
+`Steps` is populated by LLMAgent (tool calls), Network (tool + agent delegations), and Workflow (step results). Nil when no tools were called.
 
 Context key constants: `ContextThreadID`, `ContextUserID`, `ContextChatID`
 

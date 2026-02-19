@@ -135,7 +135,29 @@ enabled = true
 
 Or environment variable: `OASIS_OBSERVER_ENABLED=true`
 
+## Built-in Execution Traces (No OTEL Required)
+
+Every `AgentResult` includes a `Steps` field — a chronological `[]StepTrace` of every tool call and agent delegation that occurred during execution. This works out of the box with no observer setup:
+
+```go
+result, _ := network.Execute(ctx, task)
+
+for _, step := range result.Steps {
+    fmt.Printf("%-6s %-20s %5dms  in=%-4d out=%d\n",
+        step.Type, step.Name, step.Duration.Milliseconds(),
+        step.Usage.InputTokens, step.Usage.OutputTokens)
+}
+// agent  researcher           1234ms  in=500  out=200
+// tool   web_search            456ms  in=0    out=0
+// agent  writer               2100ms  in=800  out=400
+```
+
+`StepTrace.Type` is `"tool"` for direct tool calls, `"agent"` for Network subagent delegations, and `"step"` for Workflow steps.
+
+Streaming consumers get the same data via `Usage` and `Duration` fields on `EventToolCallResult` and `EventAgentFinish` events.
+
 ## See Also
 
 - [Configuration Reference](../configuration/reference.md) — observer config section
 - [Provider](provider.md) — what gets observed
+- [Streaming](../guides/streaming.md) — StreamEvent usage/duration fields
