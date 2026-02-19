@@ -22,8 +22,9 @@ type Network struct {
 	systemPrompt  string
 	maxIter       int
 	inputHandler  InputHandler
-	planExecution bool
-	mem           agentMemory
+	planExecution  bool
+	responseSchema *ResponseSchema
+	mem            agentMemory
 }
 
 // NewNetwork creates a Network with the given router provider and options.
@@ -62,6 +63,7 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	}
 	n.inputHandler = cfg.inputHandler
 	n.planExecution = cfg.planExecution
+	n.responseSchema = cfg.responseSchema
 	return n
 }
 
@@ -99,8 +101,9 @@ func (n *Network) buildLoopConfig(task AgentTask, ch chan<- StreamEvent) loopCon
 		maxIter:      n.maxIter,
 		mem:          &n.mem,
 		inputHandler: n.inputHandler,
-		dispatch:     n.makeDispatch(task, ch),
-		systemPrompt: n.systemPrompt,
+		dispatch:       n.makeDispatch(task, ch),
+		systemPrompt:   n.systemPrompt,
+		responseSchema: n.responseSchema,
 	}
 }
 

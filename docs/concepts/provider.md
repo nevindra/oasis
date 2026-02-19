@@ -93,9 +93,10 @@ type ChatRequest struct {
 }
 
 type ChatResponse struct {
-    Content   string
-    ToolCalls []ToolCall
-    Usage     Usage
+    Content     string
+    Attachments []Attachment    // multimodal content from LLM response
+    ToolCalls   []ToolCall
+    Usage       Usage
 }
 
 type ChatMessage struct {

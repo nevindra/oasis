@@ -20,8 +20,9 @@ type LLMAgent struct {
 	systemPrompt  string
 	maxIter       int
 	inputHandler  InputHandler
-	planExecution bool
-	mem           agentMemory
+	planExecution  bool
+	responseSchema *ResponseSchema
+	mem            agentMemory
 }
 
 // NewLLMAgent creates an LLMAgent with the given provider and options.
@@ -56,6 +57,7 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	}
 	a.inputHandler = cfg.inputHandler
 	a.planExecution = cfg.planExecution
+	a.responseSchema = cfg.responseSchema
 	return a
 }
 
@@ -92,8 +94,9 @@ func (a *LLMAgent) buildLoopConfig() loopConfig {
 		maxIter:      a.maxIter,
 		mem:          &a.mem,
 		inputHandler: a.inputHandler,
-		dispatch:     a.makeDispatch(),
-		systemPrompt: a.systemPrompt,
+		dispatch:       a.makeDispatch(),
+		systemPrompt:   a.systemPrompt,
+		responseSchema: a.responseSchema,
 	}
 }
 

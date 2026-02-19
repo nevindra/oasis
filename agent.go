@@ -104,7 +104,8 @@ type agentConfig struct {
 	crossThreadSearch bool    // enabled by CrossThreadSearch option
 	semanticMinScore  float32 // set by MinScore inside CrossThreadSearch
 	maxHistory        int     // set by MaxHistory inside WithConversationMemory
-	planExecution     bool    // enabled by WithPlanExecution option
+	planExecution     bool            // enabled by WithPlanExecution option
+	responseSchema    *ResponseSchema // set by WithResponseSchema option
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -140,6 +141,14 @@ func WithAgents(agents ...Agent) AgentOption {
 // needs to call the same or different tools multiple times with known inputs.
 func WithPlanExecution() AgentOption {
 	return func(c *agentConfig) { c.planExecution = true }
+}
+
+// WithResponseSchema sets the response schema for structured JSON output.
+// When set, the provider enforces structured output matching the schema.
+// Providers translate this to their native mechanism (e.g. Gemini responseSchema,
+// OpenAI response_format).
+func WithResponseSchema(s *ResponseSchema) AgentOption {
+	return func(c *agentConfig) { c.responseSchema = s }
 }
 
 // WithProcessors adds processors to the agent's execution pipeline.
@@ -265,7 +274,8 @@ type loopConfig struct {
 	inputHandler   InputHandler
 	dispatch       dispatchFunc
 	systemPrompt   string
-	resumeMessages []ChatMessage // if set, replaces buildMessages (used by suspend/resume)
+	resumeMessages []ChatMessage    // if set, replaces buildMessages (used by suspend/resume)
+	responseSchema *ResponseSchema  // if set, attached to every ChatRequest
 }
 
 // runLoop is the shared tool-calling loop used by both LLMAgent and Network.
@@ -295,7 +305,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	var lastAgentOutput string
 
 	for i := 0; i < cfg.maxIter; i++ {
-		req := ChatRequest{Messages: messages}
+		req := ChatRequest{Messages: messages, ResponseSchema: cfg.responseSchema}
 
 		// PreProcessor hook.
 		if err := cfg.processors.RunPreLLM(ctx, &req); err != nil {

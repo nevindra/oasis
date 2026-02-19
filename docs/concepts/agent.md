@@ -96,8 +96,9 @@ The output from any Agent:
 
 ```go
 type AgentResult struct {
-    Output string  // final response text
-    Usage  Usage   // aggregate token usage across all LLM calls
+    Output      string       // final response text
+    Attachments []Attachment // multimodal content from LLM response
+    Usage       Usage        // aggregate token usage across all LLM calls
 }
 ```
 
@@ -114,6 +115,7 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithProcessors(processors ...any)` | Add processor middleware |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
 | `WithPlanExecution()` | Enable batched tool calls via `execute_plan` tool |
+| `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output |
 | `WithConversationMemory(s Store, opts...)` | Enable history load/persist per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact injection + auto-extraction |
 

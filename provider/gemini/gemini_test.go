@@ -664,6 +664,125 @@ func TestNewWithOptions(t *testing.T) {
 	}
 }
 
+func TestExtractAttachmentsFromParsed(t *testing.T) {
+	raw := `{
+		"candidates": [{
+			"content": {
+				"parts": [
+					{"text": "here"},
+					{"inlineData": {"mimeType": "image/png", "data": "abc123"}}
+				]
+			}
+		}]
+	}`
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	atts := extractAttachmentsFromParsed(parsed)
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(atts))
+	}
+	if atts[0].MimeType != "image/png" {
+		t.Errorf("expected mimeType 'image/png', got %q", atts[0].MimeType)
+	}
+	if atts[0].Base64 != "abc123" {
+		t.Errorf("expected base64 'abc123', got %q", atts[0].Base64)
+	}
+}
+
+func TestExtractAttachmentsFromParsed_NoAttachments(t *testing.T) {
+	raw := `{
+		"candidates": [{
+			"content": {
+				"parts": [{"text": "just text"}]
+			}
+		}]
+	}`
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	atts := extractAttachmentsFromParsed(parsed)
+	if len(atts) != 0 {
+		t.Fatalf("expected 0 attachments, got %d", len(atts))
+	}
+}
+
+func TestDoGenerate_InlineDataAttachments(t *testing.T) {
+	// Test that geminiPart with inlineData is parsed into ChatResponse.Attachments.
+	respJSON := `{
+		"candidates": [{
+			"content": {
+				"parts": [
+					{"text": "Here is the image"},
+					{"inlineData": {"mimeType": "image/png", "data": "iVBOR..."}}
+				],
+				"role": "model"
+			}
+		}],
+		"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5}
+	}`
+
+	var parsed geminiResponse
+	if err := json.Unmarshal([]byte(respJSON), &parsed); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if len(parsed.Candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(parsed.Candidates))
+	}
+
+	parts := parsed.Candidates[0].Content.Parts
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(parts))
+	}
+
+	// First part: text
+	if parts[0].Text == nil || *parts[0].Text != "Here is the image" {
+		t.Errorf("expected text 'Here is the image', got %v", parts[0].Text)
+	}
+
+	// Second part: inlineData
+	if parts[1].InlineData == nil {
+		t.Fatal("expected InlineData in second part")
+	}
+	if parts[1].InlineData.MimeType != "image/png" {
+		t.Errorf("expected mimeType 'image/png', got %q", parts[1].InlineData.MimeType)
+	}
+	if parts[1].InlineData.Data != "iVBOR..." {
+		t.Errorf("expected data 'iVBOR...', got %q", parts[1].InlineData.Data)
+	}
+}
+
+func TestBuildBody_ResponseSchemaInBody(t *testing.T) {
+	g := testGemini()
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Return JSON"},
+	}
+	schema := &oasis.ResponseSchema{
+		Name:   "output",
+		Schema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`),
+	}
+
+	body, err := g.buildBody(messages, nil, schema)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	gc := body["generationConfig"].(map[string]any)
+	if gc["responseMimeType"] != "application/json" {
+		t.Errorf("expected responseMimeType 'application/json', got %v", gc["responseMimeType"])
+	}
+	if _, ok := gc["responseSchema"]; !ok {
+		t.Error("expected responseSchema in generationConfig")
+	}
+}
+
 // TestBuildBody_JSONRoundTrip verifies that the body can be marshaled to valid JSON.
 func TestBuildBody_JSONRoundTrip(t *testing.T) {
 	g := testGemini()

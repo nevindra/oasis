@@ -13,6 +13,7 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithProcessors(processors ...any)` | Add processor middleware |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
 | `WithPlanExecution()` | Enable batched tool calls via built-in `execute_plan` tool |
+| `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output matching the schema |
 | `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable history per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact read/write |
 

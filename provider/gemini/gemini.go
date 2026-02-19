@@ -75,7 +75,7 @@ func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools
 func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	defer close(ch)
 
-	body, err := g.buildBody(req.Messages, nil, nil)
+	body, err := g.buildBody(req.Messages, nil, req.ResponseSchema)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -106,6 +106,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 
 	var fullContent strings.Builder
 	var usage oasis.Usage
+	var attachments []oasis.Attachment
 
 	scanner := bufio.NewScanner(resp.Body)
 	// Increase buffer for large SSE payloads.
@@ -122,7 +123,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 			if jsonBuf.Len() > 0 {
 				jsonBuf.WriteString(line)
 				if isCompleteJSON(jsonBuf.String()) {
-					g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, ch)
+					g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, &attachments, ch)
 					jsonBuf.Reset()
 				}
 			}
@@ -136,7 +137,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 
 		// Check if JSON is complete in a single line.
 		if isCompleteJSON(data) {
-			g.processStreamChunk(data, &fullContent, &usage, ch)
+			g.processStreamChunk(data, &fullContent, &usage, &attachments, ch)
 		} else {
 			jsonBuf.Reset()
 			jsonBuf.WriteString(data)
@@ -145,18 +146,19 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 
 	// Process any remaining buffered JSON.
 	if jsonBuf.Len() > 0 && isCompleteJSON(jsonBuf.String()) {
-		g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, ch)
+		g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, &attachments, ch)
 	}
 
 	return oasis.ChatResponse{
-		Content: fullContent.String(),
-		Usage:   usage,
+		Content:     fullContent.String(),
+		Attachments: attachments,
+		Usage:       usage,
 	}, nil
 }
 
 // processStreamChunk parses a single JSON chunk from the SSE stream,
 // extracts text deltas and usage, and sends text to the channel.
-func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, ch chan<- oasis.StreamEvent) {
+func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, attachments *[]oasis.Attachment, ch chan<- oasis.StreamEvent) {
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		return
@@ -167,6 +169,11 @@ func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder
 	if text != "" {
 		fullContent.WriteString(text)
 		ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: text}
+	}
+
+	// Extract attachments from inlineData parts.
+	if atts := extractAttachmentsFromParsed(parsed); len(atts) > 0 {
+		*attachments = append(*attachments, atts...)
 	}
 
 	// Extract usage metadata (overwrite each time; last chunk wins).
@@ -210,6 +217,7 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 
 	var content strings.Builder
 	var toolCalls []oasis.ToolCall
+	var attachments []oasis.Attachment
 
 	if len(parsed.Candidates) > 0 {
 		for _, part := range parsed.Candidates[0].Content.Parts {
@@ -235,6 +243,12 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 				}
 				toolCalls = append(toolCalls, tc)
 			}
+			if part.InlineData != nil {
+				attachments = append(attachments, oasis.Attachment{
+					MimeType: part.InlineData.MimeType,
+					Base64:   part.InlineData.Data,
+				})
+			}
 		}
 	}
 
@@ -245,9 +259,10 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 	}
 
 	return oasis.ChatResponse{
-		Content:   content.String(),
-		ToolCalls: toolCalls,
-		Usage:     usage,
+		Content:     content.String(),
+		Attachments: attachments,
+		ToolCalls:   toolCalls,
+		Usage:       usage,
 	}, nil
 }
 
@@ -559,10 +574,16 @@ type geminiContent struct {
 }
 
 type geminiPart struct {
-	Text              *string          `json:"text,omitempty"`
-	FunctionCall      *geminiFuncCall  `json:"functionCall,omitempty"`
-	Thought           bool             `json:"thought,omitempty"`
-	ThoughtSignature  string           `json:"thoughtSignature,omitempty"`
+	Text             *string           `json:"text,omitempty"`
+	FunctionCall     *geminiFuncCall   `json:"functionCall,omitempty"`
+	InlineData       *geminiInlineData `json:"inlineData,omitempty"`
+	Thought          bool              `json:"thought,omitempty"`
+	ThoughtSignature string            `json:"thoughtSignature,omitempty"`
+}
+
+type geminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
 }
 
 type geminiFuncCall struct {
@@ -620,6 +641,45 @@ func extractTextFromParsed(parsed map[string]json.RawMessage) string {
 		}
 	}
 	return sb.String()
+}
+
+// extractAttachmentsFromParsed extracts inlineData parts from candidates[0].content.parts[]
+// in a raw parsed JSON map.
+func extractAttachmentsFromParsed(parsed map[string]json.RawMessage) []oasis.Attachment {
+	candidatesRaw, ok := parsed["candidates"]
+	if !ok {
+		return nil
+	}
+
+	var candidates []json.RawMessage
+	if err := json.Unmarshal(candidatesRaw, &candidates); err != nil || len(candidates) == 0 {
+		return nil
+	}
+
+	var candidate struct {
+		Content struct {
+			Parts []struct {
+				InlineData *struct {
+					MimeType string `json:"mimeType"`
+					Data     string `json:"data"`
+				} `json:"inlineData,omitempty"`
+			} `json:"parts"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(candidates[0], &candidate); err != nil {
+		return nil
+	}
+
+	var attachments []oasis.Attachment
+	for _, p := range candidate.Content.Parts {
+		if p.InlineData != nil {
+			attachments = append(attachments, oasis.Attachment{
+				MimeType: p.InlineData.MimeType,
+				Base64:   p.InlineData.Data,
+			})
+		}
+	}
+	return attachments
 }
 
 // extractUsageFromParsed extracts usage metadata from the parsed response.
