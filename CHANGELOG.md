@@ -8,6 +8,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **PostgreSQL + pgvector storage** (`store/postgres`) — full `Store`, `KeywordSearcher`, and `MemoryStore` implementation backed by PostgreSQL with pgvector
+  - Native `vector` columns with HNSW indexes for cosine distance search — no brute-force scanning
+  - Full-text keyword search via `tsvector`/`tsquery` with GIN expression index (automatic sync, no FTS5 virtual table)
+  - `MemoryStore` with pgvector-powered semantic deduplication (cosine similarity in SQL instead of in-process)
+  - Constructor injection: `postgres.New(pool)` and `postgres.NewMemoryStore(pool)` accept an externally-owned `*pgxpool.Pool` — share one pool across Store, MemoryStore, and application code
+  - Dependency: `github.com/jackc/pgx/v5` (pure Go, no CGO)
+
 - **Retrieval pipeline overhaul** — composable hybrid search with re-ranking for RAG
   - `Retriever` interface — search a knowledge base and return ranked `RetrievalResult`s
   - `Reranker` interface — re-score retrieval results for improved precision

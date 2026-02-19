@@ -1,6 +1,6 @@
 # Building a Custom Store
 
-Implement the `Store` interface to add a new storage backend — Postgres, DynamoDB, or any database with vector search capabilities.
+Implement the `Store` interface to add a new storage backend. For PostgreSQL with pgvector, use the shipped `store/postgres` package instead — see [Store Concept](../concepts/store.md). This guide is for building your own backend (DynamoDB, Qdrant, etc.).
 
 ## Implement Store
 

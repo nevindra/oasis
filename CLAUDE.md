@@ -46,7 +46,7 @@ oasis/                              # FRAMEWORK (root package)
 |
 |-- provider/{gemini,openaicompat}/ # LLM providers (raw HTTP, no SDKs)
 |-- frontend/telegram/              # Telegram bot (Frontend)
-|-- store/{sqlite,libsql}/         # Storage implementations
+|-- store/{sqlite,libsql,postgres}/ # Storage implementations
 |-- memory/sqlite/                  # SQLite MemoryStore
 |-- observer/                       # OTEL observability wrappers
 |-- retriever.go                    # Retrieval pipeline (Retriever, Reranker, HybridRetriever)

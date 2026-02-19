@@ -89,12 +89,19 @@ Close() error    // clean up connections
 |---------|------------|-------|
 | `store/sqlite` | `sqlite.New(path)` | Local pure-Go SQLite (`modernc.org/sqlite`) |
 | `store/libsql` | `libsql.New(url, token)` | Remote Turso/libSQL |
+| `store/postgres` | `postgres.New(pool)` | PostgreSQL + pgvector (HNSW indexes) |
 
-Both implementations:
+**SQLite / libSQL:**
 - Store embeddings as JSON-serialized `[]float32`
-- Perform brute-force cosine similarity in-process
-- Use fresh DB connections per operation (avoids Turso `STREAM_EXPIRED` errors)
+- Perform brute-force cosine similarity in-process (SQLite) or DiskANN (libSQL)
 - Create tables via `CREATE TABLE IF NOT EXISTS` in `Init()`
+
+**PostgreSQL (pgvector):**
+- Uses native `vector` columns with HNSW indexes for cosine distance search
+- Full-text search via `tsvector`/`tsquery` with GIN index (no FTS5 virtual table)
+- Accepts an externally-owned `*pgxpool.Pool` — share one pool across Store, MemoryStore, and your app
+- Also implements `MemoryStore` in the same package (`postgres.NewMemoryStore(pool)`)
+- Requires PostgreSQL with the `pgvector` extension installed
 
 ## Vector Search
 
@@ -114,9 +121,9 @@ type ScoredChunk struct {
 
 A score of 0 means the store doesn't compute similarity (e.g., ANN indexes). Callers should treat `score == 0` as "relevance unknown" and skip threshold filtering.
 
-## Full-Text Search (FTS5)
+## Full-Text Search
 
-Both shipped Store implementations also implement the `KeywordSearcher` interface for full-text keyword search using SQLite FTS5:
+All shipped Store implementations implement the `KeywordSearcher` interface for full-text keyword search:
 
 ```go
 type KeywordSearcher interface {
@@ -124,7 +131,7 @@ type KeywordSearcher interface {
 }
 ```
 
-The FTS5 index (`chunks_fts`) is automatically created in `Init()` and synchronized when documents are stored via `StoreDocument()`. The [HybridRetriever](retrieval.md) discovers this capability via type assertion and uses it for hybrid vector + keyword search.
+SQLite/libSQL use an FTS5 virtual table (`chunks_fts`) synchronized in `StoreDocument()`. PostgreSQL uses a GIN expression index on `to_tsvector('english', content)` — no manual sync needed. The [HybridRetriever](retrieval.md) discovers this capability via type assertion and uses it for hybrid vector + keyword search.
 
 ## Database Schema
 
