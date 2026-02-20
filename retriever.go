@@ -40,6 +40,16 @@ type KeywordSearcher interface {
 	SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...ChunkFilter) ([]ScoredChunk, error)
 }
 
+// GraphStore is an optional Store capability for chunk relationship graphs.
+// Store implementations that maintain a knowledge graph can implement this
+// interface; callers discover it via type assertion.
+type GraphStore interface {
+	StoreEdges(ctx context.Context, edges []ChunkEdge) error
+	GetEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
+	GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
+	PruneOrphanEdges(ctx context.Context) (int, error)
+}
+
 // RetrieverOption configures a HybridRetriever.
 type RetrieverOption func(*retrieverConfig)
 
@@ -393,5 +403,252 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Retrie
 	if len(results) > topK {
 		results = results[:topK]
 	}
+	return results, nil
+}
+
+// --- GraphRetriever ---
+
+// GraphRetrieverOption configures a GraphRetriever.
+type GraphRetrieverOption func(*graphRetrieverConfig)
+
+type graphRetrieverConfig struct {
+	maxHops           int
+	graphWeight       float32
+	vectorWeight      float32
+	hopDecay          []float32
+	bidirectional     bool
+	relationFilter    map[RelationType]bool
+	minTraversalScore float32
+	seedTopK          int
+	filters           []ChunkFilter
+}
+
+// WithMaxHops sets the maximum number of graph traversal hops (default 2).
+func WithMaxHops(n int) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.maxHops = n }
+}
+
+// WithGraphWeight sets the weight for graph-derived scores in the final blend (default 0.3).
+func WithGraphWeight(w float32) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.graphWeight = w }
+}
+
+// WithVectorWeight sets the weight for vector scores in the final blend (default 0.7).
+func WithVectorWeight(w float32) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.vectorWeight = w }
+}
+
+// WithHopDecay sets the score decay factor per hop level (default {1.0, 0.7, 0.5}).
+// Length implicitly caps max hops.
+func WithHopDecay(factors []float32) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.hopDecay = factors }
+}
+
+// WithBidirectional enables traversal of both outgoing and incoming edges (default false).
+func WithBidirectional(b bool) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.bidirectional = b }
+}
+
+// WithRelationFilter restricts graph traversal to the specified relationship types.
+func WithRelationFilter(types ...RelationType) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) {
+		c.relationFilter = make(map[RelationType]bool, len(types))
+		for _, t := range types {
+			c.relationFilter[t] = true
+		}
+	}
+}
+
+// WithMinTraversalScore sets the minimum edge weight to follow during traversal (default 0).
+func WithMinTraversalScore(s float32) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.minTraversalScore = s }
+}
+
+// WithSeedTopK sets the number of seed chunks from initial vector search (default 10).
+func WithSeedTopK(k int) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.seedTopK = k }
+}
+
+// WithGraphFilters sets metadata filters passed to the initial vector search.
+func WithGraphFilters(filters ...ChunkFilter) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.filters = filters }
+}
+
+// GraphRetriever combines vector search with knowledge graph traversal.
+// It performs an initial vector search to find seed chunks, then traverses
+// stored chunk edges to discover contextually related content.
+// If the Store does not implement GraphStore, it falls back to vector-only retrieval.
+type GraphRetriever struct {
+	store     Store
+	embedding EmbeddingProvider
+	cfg       graphRetrieverConfig
+}
+
+var _ Retriever = (*GraphRetriever)(nil)
+
+// NewGraphRetriever creates a Retriever that combines vector search with
+// graph traversal for multi-hop contextual retrieval.
+func NewGraphRetriever(store Store, embedding EmbeddingProvider, opts ...GraphRetrieverOption) *GraphRetriever {
+	cfg := graphRetrieverConfig{
+		maxHops:      2,
+		graphWeight:  0.3,
+		vectorWeight: 0.7,
+		hopDecay:     []float32{1.0, 0.7, 0.5},
+		seedTopK:     10,
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &GraphRetriever{store: store, embedding: embedding, cfg: cfg}
+}
+
+// Retrieve searches the knowledge base using vector search + graph traversal.
+func (g *GraphRetriever) Retrieve(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
+	embs, err := g.embedding.Embed(ctx, []string{query})
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+	if len(embs) == 0 {
+		return nil, fmt.Errorf("embed query: no embedding returned")
+	}
+
+	// 1. Vector search for seed chunks.
+	seeds, err := g.store.SearchChunks(ctx, embs[0], g.cfg.seedTopK, g.cfg.filters...)
+	if err != nil {
+		return nil, fmt.Errorf("vector search: %w", err)
+	}
+
+	// Track all discovered chunks with their best scores.
+	type scored struct {
+		chunkID string
+		score   float32
+	}
+	best := make(map[string]*scored)
+
+	for _, sc := range seeds {
+		s := g.cfg.vectorWeight*sc.Score + g.cfg.graphWeight*1.0
+		best[sc.ID] = &scored{chunkID: sc.ID, score: s}
+	}
+
+	// 2. Graph traversal (if store supports it).
+	gs, ok := g.store.(GraphStore)
+	if ok && len(seeds) > 0 {
+		currentIDs := make([]string, len(seeds))
+		for i, sc := range seeds {
+			currentIDs[i] = sc.ID
+		}
+
+		visited := make(map[string]bool)
+		for _, id := range currentIDs {
+			visited[id] = true
+		}
+
+		for hop := 1; hop <= g.cfg.maxHops; hop++ {
+			decay := float32(0.5)
+			if hop < len(g.cfg.hopDecay) {
+				decay = g.cfg.hopDecay[hop]
+			}
+
+			edges, err := gs.GetEdges(ctx, currentIDs)
+			if err != nil {
+				break // degrade gracefully
+			}
+
+			if g.cfg.bidirectional {
+				incoming, err := gs.GetIncomingEdges(ctx, currentIDs)
+				if err == nil {
+					edges = append(edges, incoming...)
+				}
+			}
+
+			var nextIDs []string
+			for _, edge := range edges {
+				if g.cfg.relationFilter != nil && !g.cfg.relationFilter[edge.Relation] {
+					continue
+				}
+				if edge.Weight < g.cfg.minTraversalScore {
+					continue
+				}
+
+				// Determine the neighbor (could be source or target depending on direction).
+				neighborID := edge.TargetID
+				if visited[neighborID] {
+					neighborID = edge.SourceID
+					if visited[neighborID] {
+						continue
+					}
+				}
+				visited[neighborID] = true
+
+				graphScore := g.cfg.graphWeight * edge.Weight * decay
+				if existing, ok := best[neighborID]; ok {
+					if graphScore > existing.score {
+						existing.score = graphScore
+					}
+				} else {
+					best[neighborID] = &scored{chunkID: neighborID, score: graphScore}
+				}
+				nextIDs = append(nextIDs, neighborID)
+			}
+
+			currentIDs = nextIDs
+			if len(currentIDs) == 0 {
+				break
+			}
+		}
+	}
+
+	// 3. Fetch chunk content for graph-discovered chunks.
+	var needFetch []string
+	for id := range best {
+		found := false
+		for _, sc := range seeds {
+			if sc.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			needFetch = append(needFetch, id)
+		}
+	}
+
+	chunkContent := make(map[string]Chunk)
+	for _, sc := range seeds {
+		chunkContent[sc.ID] = sc.Chunk
+	}
+
+	if len(needFetch) > 0 {
+		fetched, err := g.store.GetChunksByIDs(ctx, needFetch)
+		if err == nil {
+			for _, c := range fetched {
+				chunkContent[c.ID] = c
+			}
+		}
+	}
+
+	// 4. Build results.
+	results := make([]RetrievalResult, 0, len(best))
+	for id, s := range best {
+		c, ok := chunkContent[id]
+		if !ok {
+			continue
+		}
+		results = append(results, RetrievalResult{
+			Content:    c.Content,
+			Score:      s.score,
+			ChunkID:    c.ID,
+			DocumentID: c.DocumentID,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	if len(results) > topK {
+		results = results[:topK]
+	}
+
 	return results, nil
 }

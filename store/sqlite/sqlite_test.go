@@ -457,6 +457,84 @@ func TestConcurrentWrites_NoBusyError(t *testing.T) {
 	}
 }
 
+func TestGraphStore(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	// Store a document with chunks first.
+	doc := oasis.Document{ID: "d1", Title: "Test", Source: "test.txt", Content: "test", CreatedAt: 1}
+	chunks := []oasis.Chunk{
+		{ID: "c1", DocumentID: "d1", Content: "chunk one", ChunkIndex: 0},
+		{ID: "c2", DocumentID: "d1", Content: "chunk two", ChunkIndex: 1},
+		{ID: "c3", DocumentID: "d1", Content: "chunk three", ChunkIndex: 2},
+	}
+	if err := s.StoreDocument(ctx, doc, chunks); err != nil {
+		t.Fatalf("StoreDocument: %v", err)
+	}
+
+	// Store edges.
+	edges := []oasis.ChunkEdge{
+		{ID: "e1", SourceID: "c1", TargetID: "c2", Relation: oasis.RelReferences, Weight: 0.9},
+		{ID: "e2", SourceID: "c1", TargetID: "c3", Relation: oasis.RelElaborates, Weight: 0.7},
+		{ID: "e3", SourceID: "c2", TargetID: "c3", Relation: oasis.RelSequence, Weight: 0.5},
+	}
+	if err := s.StoreEdges(ctx, edges); err != nil {
+		t.Fatalf("StoreEdges: %v", err)
+	}
+
+	// GetEdges (outgoing from c1).
+	got, err := s.GetEdges(ctx, []string{"c1"})
+	if err != nil {
+		t.Fatalf("GetEdges: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("GetEdges(c1): got %d edges, want 2", len(got))
+	}
+
+	// GetIncomingEdges (incoming to c3).
+	got, err = s.GetIncomingEdges(ctx, []string{"c3"})
+	if err != nil {
+		t.Fatalf("GetIncomingEdges: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("GetIncomingEdges(c3): got %d edges, want 2", len(got))
+	}
+
+	// Delete document should cascade delete edges.
+	if err := s.DeleteDocument(ctx, "d1"); err != nil {
+		t.Fatalf("DeleteDocument: %v", err)
+	}
+
+	got, err = s.GetEdges(ctx, []string{"c1"})
+	if err != nil {
+		t.Fatalf("GetEdges after delete: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("GetEdges after delete: got %d edges, want 0", len(got))
+	}
+}
+
+func TestGraphStorePruneOrphan(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	// Insert orphan edges (no corresponding chunks).
+	edges := []oasis.ChunkEdge{
+		{ID: "e1", SourceID: "orphan1", TargetID: "orphan2", Relation: oasis.RelReferences, Weight: 0.9},
+	}
+	if err := s.StoreEdges(ctx, edges); err != nil {
+		t.Fatalf("StoreEdges: %v", err)
+	}
+
+	pruned, err := s.PruneOrphanEdges(ctx)
+	if err != nil {
+		t.Fatalf("PruneOrphanEdges: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("PruneOrphanEdges: pruned %d, want 1", pruned)
+	}
+}
+
 func TestCosineSimilarity(t *testing.T) {
 	// Identical vectors = 1.0
 	s := cosineSimilarity([]float32{1, 2, 3}, []float32{1, 2, 3})

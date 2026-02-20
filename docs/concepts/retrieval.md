@@ -124,6 +124,74 @@ Uses an LLM to score query-document relevance on a 0-10 scale, then normalizes a
 reranker := oasis.NewLLMReranker(llmProvider)
 ```
 
+## GraphRetriever (Graph RAG)
+
+`GraphRetriever` combines vector search with knowledge graph traversal. It performs an initial vector search to find seed chunks, then walks stored chunk edges to discover contextually related content that vector similarity alone would miss.
+
+```go
+retriever := oasis.NewGraphRetriever(store, embedding,
+    oasis.WithMaxHops(2),
+    oasis.WithGraphWeight(0.3),
+    oasis.WithVectorWeight(0.7),
+    oasis.WithBidirectional(true),
+)
+```
+
+### How It Works
+
+1. **Embed the query** — calls `EmbeddingProvider.Embed()` on the query string.
+2. **Vector search** — `Store.SearchChunks()` returns seed chunks scored by cosine similarity.
+3. **Graph traversal** — if the Store implements `GraphStore`, outgoing (and optionally incoming) edges are followed for up to `maxHops` hops. Each hop applies a decay factor to scores.
+4. **Fetch content** — graph-discovered chunks that weren't in the seed set are fetched via `Store.GetChunksByIDs()`.
+5. **Score blending** — final score = `vectorWeight * vectorScore + graphWeight * hopDecay * edgeWeight`.
+6. **Sort + trim** — results are sorted by blended score and trimmed to `topK`.
+
+If the Store doesn't implement `GraphStore`, `GraphRetriever` falls back to vector-only search — no error.
+
+### GraphStore Interface
+
+```go
+type GraphStore interface {
+    StoreEdges(ctx context.Context, edges []ChunkEdge) error
+    GetEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
+    GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
+    PruneOrphanEdges(ctx context.Context) (int, error)
+}
+```
+
+`GraphStore` is an optional Store capability discovered via type assertion. All three store implementations (`store/sqlite`, `store/postgres`, `store/libsql`) implement this interface.
+
+### Relationship Types
+
+```go
+type RelationType string
+
+const (
+    RelReferences  RelationType = "references"   // chunk A cites content from chunk B
+    RelElaborates  RelationType = "elaborates"    // chunk A provides more detail on chunk B
+    RelDependsOn   RelationType = "depends_on"    // chunk A assumes knowledge from chunk B
+    RelContradicts RelationType = "contradicts"   // chunk A conflicts with chunk B
+    RelPartOf      RelationType = "part_of"       // chunk A is a subset of chunk B
+    RelSimilarTo   RelationType = "similar_to"    // chunks cover overlapping topics
+    RelSequence    RelationType = "sequence"      // chunk A follows chunk B in order
+    RelCausedBy    RelationType = "caused_by"     // chunk A is a consequence of chunk B
+)
+```
+
+### GraphRetriever Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithMaxHops(n)` | 2 | Maximum graph traversal depth |
+| `WithGraphWeight(w)` | 0.3 | Weight for graph-derived scores |
+| `WithVectorWeight(w)` | 0.7 | Weight for vector similarity scores |
+| `WithHopDecay([]float32)` | {1.0, 0.7, 0.5} | Score decay per hop level |
+| `WithBidirectional(b)` | false | Traverse both outgoing and incoming edges |
+| `WithRelationFilter(types...)` | all | Restrict traversal to specific relation types |
+| `WithMinTraversalScore(s)` | 0 | Minimum edge weight to follow |
+| `WithSeedTopK(k)` | 10 | Seed chunks from initial vector search |
+| `WithGraphFilters(f...)` | none | Metadata filters for vector search |
+
 ## Parent-Child Resolution
 
 When using `StrategyParentChild` during [ingestion](ingest.md), child chunks are small and precisely embedded, while parent chunks are large and context-rich. The retriever resolves this automatically:

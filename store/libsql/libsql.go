@@ -42,6 +42,7 @@ func WithEmbeddingDimension(dim int) Option {
 // compile-time checks
 var _ oasis.Store = (*Store)(nil)
 var _ oasis.KeywordSearcher = (*Store)(nil)
+var _ oasis.GraphStore = (*Store)(nil)
 
 // New creates a Store that uses a local SQLite file at dbPath.
 func New(dbPath string, opts ...Option) *Store {
@@ -179,6 +180,18 @@ func (s *Store) Init(ctx context.Context) error {
 
 	// FTS5 full-text index for keyword search over chunks.
 	_, _ = db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, content)`)
+
+	// Graph RAG edge table.
+	_, _ = db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS chunk_edges (
+		id TEXT PRIMARY KEY,
+		source_id TEXT NOT NULL,
+		target_id TEXT NOT NULL,
+		relation TEXT NOT NULL,
+		weight REAL NOT NULL,
+		UNIQUE(source_id, target_id, relation)
+	)`)
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_chunk_edges_source ON chunk_edges(source_id)`)
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_chunk_edges_target ON chunk_edges(target_id)`)
 
 	// Vector indexes -- these only work on real libsql, not standard SQLite.
 	// We attempt creation but ignore errors.
@@ -419,6 +432,11 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	_, err = tx.ExecContext(ctx, `DELETE FROM chunks_fts WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)`, id)
 	if err != nil {
 		return fmt.Errorf("delete document fts: %w", err)
+	}
+	_, err = tx.ExecContext(ctx,
+		`DELETE FROM chunk_edges WHERE source_id IN (SELECT id FROM chunks WHERE document_id = ?) OR target_id IN (SELECT id FROM chunks WHERE document_id = ?)`, id, id)
+	if err != nil {
+		return fmt.Errorf("delete document edges: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `DELETE FROM chunks WHERE document_id = ?`, id)
 	if err != nil {
@@ -1236,6 +1254,119 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		skills = append(skills, oasis.ScoredSkill{Skill: sk, Score: score})
 	}
 	return skills, rows.Err()
+}
+
+// --- GraphStore ---
+
+func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
+	if len(edges) == 0 {
+		return nil
+	}
+	db, err := s.openDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	for _, e := range edges {
+		_, err := tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO chunk_edges (id, source_id, target_id, relation, weight)
+			 VALUES (?, ?, ?, ?, ?)`,
+			e.ID, e.SourceID, e.TargetID, string(e.Relation), e.Weight,
+		)
+		if err != nil {
+			return fmt.Errorf("store edge: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) GetEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkEdge, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	placeholders := make([]string, len(chunkIDs))
+	args := make([]any, len(chunkIDs))
+	for i, id := range chunkIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(
+		`SELECT id, source_id, target_id, relation, weight FROM chunk_edges WHERE source_id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+	return scanEdgesLibsql(ctx, db, query, args)
+}
+
+func (s *Store) GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkEdge, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	db, err := s.openDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	placeholders := make([]string, len(chunkIDs))
+	args := make([]any, len(chunkIDs))
+	for i, id := range chunkIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(
+		`SELECT id, source_id, target_id, relation, weight FROM chunk_edges WHERE target_id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+	return scanEdgesLibsql(ctx, db, query, args)
+}
+
+func (s *Store) PruneOrphanEdges(ctx context.Context) (int, error) {
+	db, err := s.openDB()
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	result, err := db.ExecContext(ctx,
+		`DELETE FROM chunk_edges WHERE source_id NOT IN (SELECT id FROM chunks) OR target_id NOT IN (SELECT id FROM chunks)`)
+	if err != nil {
+		return 0, fmt.Errorf("prune orphan edges: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
+}
+
+func scanEdgesLibsql(ctx context.Context, db *sql.DB, query string, args []any) ([]oasis.ChunkEdge, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query edges: %w", err)
+	}
+	defer rows.Close()
+
+	var edges []oasis.ChunkEdge
+	for rows.Next() {
+		var e oasis.ChunkEdge
+		var rel string
+		if err := rows.Scan(&e.ID, &e.SourceID, &e.TargetID, &rel, &e.Weight); err != nil {
+			return nil, fmt.Errorf("scan edge: %w", err)
+		}
+		e.Relation = oasis.RelationType(rel)
+		edges = append(edges, e)
+	}
+	return edges, rows.Err()
 }
 
 // Close is a no-op since we use fresh connections per call.

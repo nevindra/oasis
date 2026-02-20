@@ -210,6 +210,31 @@ type Image struct {
 	Page     int    `json:"page,omitempty"`
 }
 
+// --- Graph RAG ---
+
+// RelationType represents a named relationship between chunks in a knowledge graph.
+type RelationType string
+
+const (
+	RelReferences  RelationType = "references"
+	RelElaborates  RelationType = "elaborates"
+	RelDependsOn   RelationType = "depends_on"
+	RelContradicts RelationType = "contradicts"
+	RelPartOf      RelationType = "part_of"
+	RelSimilarTo   RelationType = "similar_to"
+	RelSequence    RelationType = "sequence"
+	RelCausedBy    RelationType = "caused_by"
+)
+
+// ChunkEdge represents a directed, weighted relationship between two chunks.
+type ChunkEdge struct {
+	ID       string       `json:"id"`
+	SourceID string       `json:"source_id"`
+	TargetID string       `json:"target_id"`
+	Relation RelationType `json:"relation"`
+	Weight   float32      `json:"weight"`
+}
+
 // --- Chunk filtering ---
 
 // FilterOp is a comparison operator for chunk filters.

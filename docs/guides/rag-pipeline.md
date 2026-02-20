@@ -342,6 +342,146 @@ Available filter constructors: `ByDocument(ids...)`, `BySource(source)`, `ByMeta
 
 ---
 
+## Graph RAG
+
+Graph RAG adds a knowledge graph layer on top of vector search. During ingestion, an LLM extracts relationships between chunks. During retrieval, `GraphRetriever` traverses these edges to discover contextually related content that vector similarity alone would miss — such as prerequisite concepts, contradictions, or causal chains.
+
+```mermaid
+flowchart TB
+    subgraph "Ingestion (graph extraction)"
+        CHUNKS["Stored chunks"] --> LLM["LLM extracts<br>relationships"]
+        LLM --> EDGES["GraphStore.StoreEdges()<br>→ chunk_edges table"]
+    end
+
+    subgraph "Retrieval (graph traversal)"
+        Q["Query"] --> SEED["Vector search<br>→ seed chunks"]
+        SEED --> TRAVERSE["BFS traversal<br>→ follow edges"]
+        TRAVERSE --> BLEND["Score blending<br>vectorWeight × vectorScore +<br>graphWeight × hopDecay × edgeWeight"]
+        BLEND --> OUT["[]RetrievalResult"]
+    end
+
+    EDGES -.->|"stored edges"| TRAVERSE
+```
+
+### Enabling Graph Extraction
+
+Pass an LLM provider to `WithGraphExtraction` during ingestion. The ingestor sends chunks to the LLM in batches after storage and stores discovered edges via `GraphStore.StoreEdges()`.
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithGraphExtraction(llm),      // enable graph extraction
+    ingest.WithMinEdgeWeight(0.3),         // drop low-confidence edges
+    ingest.WithMaxEdgesPerChunk(5),        // limit edges per chunk
+    ingest.WithGraphBatchSize(10),         // chunks per LLM call
+)
+result, _ := ingestor.IngestText(ctx, content, "source", "Title")
+```
+
+Graph extraction degrades gracefully — LLM errors are silently skipped, and stores that don't implement `GraphStore` skip the step entirely.
+
+#### Graph Ingestion Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithGraphExtraction(p)` | nil | Enable LLM-based graph extraction |
+| `WithMinEdgeWeight(w)` | 0 | Minimum edge weight to keep |
+| `WithMaxEdgesPerChunk(n)` | 0 (unlimited) | Cap edges per source chunk |
+| `WithGraphBatchSize(n)` | 5 | Chunks per LLM graph extraction call |
+| `WithCrossDocumentEdges(b)` | false | Enable cross-document edge discovery |
+
+### Relationship Types
+
+The LLM identifies 8 relationship types between chunks:
+
+| Type | Description |
+|------|-------------|
+| `references` | Chunk A cites or mentions content from chunk B |
+| `elaborates` | Chunk A provides more detail on chunk B's topic |
+| `depends_on` | Chunk A assumes knowledge from chunk B |
+| `contradicts` | Chunk A conflicts with chunk B |
+| `part_of` | Chunk A is a component or subset of chunk B |
+| `similar_to` | Chunks cover overlapping topics |
+| `sequence` | Chunk A follows chunk B in logical order |
+| `caused_by` | Chunk A is a consequence of chunk B |
+
+Each edge includes a confidence weight (0.0–1.0). Low-confidence edges can be pruned with `WithMinEdgeWeight`.
+
+### Using GraphRetriever
+
+`GraphRetriever` implements the `Retriever` interface, so it works everywhere `HybridRetriever` works — including `KnowledgeTool`.
+
+```go
+// Basic graph retrieval
+retriever := oasis.NewGraphRetriever(store, embedding)
+
+// Tuned graph retrieval
+retriever := oasis.NewGraphRetriever(store, embedding,
+    oasis.WithMaxHops(2),                              // traverse up to 2 hops
+    oasis.WithGraphWeight(0.3),                        // graph score contribution
+    oasis.WithVectorWeight(0.7),                       // vector score contribution
+    oasis.WithHopDecay([]float32{1.0, 0.7, 0.5}),     // decay per hop
+    oasis.WithBidirectional(true),                     // follow incoming edges too
+    oasis.WithRelationFilter(oasis.RelElaborates,      // only follow these types
+        oasis.RelDependsOn, oasis.RelReferences),
+    oasis.WithSeedTopK(10),                            // seed chunks from vector search
+)
+
+// Wire to agent via KnowledgeTool
+knowledgeTool := knowledge.New(store, embedding,
+    knowledge.WithRetriever(retriever),
+)
+```
+
+If the Store doesn't implement `GraphStore`, `GraphRetriever` falls back to vector-only search — no error, no configuration needed.
+
+#### GraphRetriever Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithMaxHops(n)` | 2 | Maximum graph traversal depth |
+| `WithGraphWeight(w)` | 0.3 | Weight for graph-derived scores |
+| `WithVectorWeight(w)` | 0.7 | Weight for vector similarity scores |
+| `WithHopDecay([]float32)` | {1.0, 0.7, 0.5} | Score decay per hop level |
+| `WithBidirectional(b)` | false | Traverse both outgoing and incoming edges |
+| `WithRelationFilter(types...)` | all | Restrict traversal to specific relation types |
+| `WithMinTraversalScore(s)` | 0 | Minimum edge weight to follow |
+| `WithSeedTopK(k)` | 10 | Seed chunks from initial vector search |
+| `WithGraphFilters(f...)` | none | Metadata filters for vector search |
+
+### When to Use Graph RAG
+
+Graph RAG adds value when your documents have **structured relationships** between concepts — technical documentation with dependencies, legal texts with cross-references, scientific papers with citation chains, or multi-part tutorials where concepts build on each other.
+
+For collections of independent documents with little inter-chunk context (e.g., FAQ lists, product descriptions), `HybridRetriever` is simpler and sufficient.
+
+### Full Graph RAG Example
+
+```go
+// 1. Ingest with graph extraction
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithGraphExtraction(llm),
+    ingest.WithMinEdgeWeight(0.3),
+)
+ingestor.IngestFile(ctx, docBytes, "architecture.md")
+
+// 2. Retrieve with graph traversal
+retriever := oasis.NewGraphRetriever(store, embedding,
+    oasis.WithMaxHops(2),
+    oasis.WithBidirectional(true),
+)
+results, _ := retriever.Retrieve(ctx, "what are the system dependencies?", 5)
+
+// 3. Wire to agent
+knowledgeTool := knowledge.New(store, embedding,
+    knowledge.WithRetriever(retriever),
+)
+agent := oasis.NewLLMAgent("assistant", "Answer using your knowledge base.", llm,
+    oasis.WithTools(knowledgeTool),
+)
+```
+
+---
+
 ## Wiring RAG to Agents
 
 ### Using KnowledgeTool

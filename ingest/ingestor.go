@@ -29,6 +29,13 @@ type Ingestor struct {
 	// parent-child config
 	parentChunker Chunker
 	childChunker  Chunker
+
+	// graph extraction config
+	graphProvider    oasis.Provider
+	minEdgeWeight    float32
+	maxEdgesPerChunk int
+	graphBatchSize   int
+	crossDocEdges    bool
 }
 
 // NewIngestor creates an Ingestor with sensible defaults.
@@ -44,8 +51,9 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 		},
 		strategy:      StrategyFlat,
 		batchSize:     64,
-		parentChunker: NewRecursiveChunker(WithMaxTokens(1024)),
-		childChunker:  NewRecursiveChunker(WithMaxTokens(256)),
+		parentChunker:  NewRecursiveChunker(WithMaxTokens(1024)),
+		childChunker:   NewRecursiveChunker(WithMaxTokens(256)),
+		graphBatchSize: 5,
 	}
 	for _, o := range opts {
 		o(ing)
@@ -73,6 +81,10 @@ func (ing *Ingestor) IngestText(ctx context.Context, text, source, title string)
 
 	if err := ing.store.StoreDocument(ctx, doc, chunks); err != nil {
 		return IngestResult{}, fmt.Errorf("store: %w", err)
+	}
+
+	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
+		return IngestResult{}, fmt.Errorf("graph extraction: %w", err)
 	}
 
 	return IngestResult{
@@ -134,6 +146,10 @@ func (ing *Ingestor) IngestFile(ctx context.Context, content []byte, filename st
 		return IngestResult{}, fmt.Errorf("store: %w", err)
 	}
 
+	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
+		return IngestResult{}, fmt.Errorf("graph extraction: %w", err)
+	}
+
 	return IngestResult{
 		DocumentID: docID,
 		Document:   doc,
@@ -148,6 +164,33 @@ func (ing *Ingestor) IngestReader(ctx context.Context, r io.Reader, filename str
 		return IngestResult{}, fmt.Errorf("read: %w", err)
 	}
 	return ing.IngestFile(ctx, data, filename)
+}
+
+// extractAndStoreEdges runs graph extraction if configured and stores edges.
+func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Chunk) error {
+	if ing.graphProvider == nil {
+		return nil
+	}
+
+	gs, ok := ing.store.(oasis.GraphStore)
+	if !ok {
+		return nil // store doesn't support graph, skip silently
+	}
+
+	edges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize)
+	if err != nil {
+		return nil // degrade gracefully
+	}
+
+	if ing.minEdgeWeight > 0 || ing.maxEdgesPerChunk > 0 {
+		edges = pruneEdges(edges, ing.minEdgeWeight, ing.maxEdgesPerChunk)
+	}
+
+	if len(edges) == 0 {
+		return nil
+	}
+
+	return gs.StoreEdges(ctx, edges)
 }
 
 // chunkWith calls ChunkContext if the chunker implements ContextChunker,

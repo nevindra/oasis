@@ -1,5 +1,7 @@
 package ingest
 
+import oasis "github.com/nevindra/oasis"
+
 // Option configures an Ingestor.
 type Option func(*Ingestor)
 
@@ -45,4 +47,29 @@ func WithBatchSize(n int) Option {
 // WithExtractor registers an Extractor for a given ContentType.
 func WithExtractor(ct ContentType, e Extractor) Option {
 	return func(ing *Ingestor) { ing.extractors[ct] = e }
+}
+
+// WithGraphExtraction enables LLM-based graph extraction during ingestion.
+func WithGraphExtraction(p oasis.Provider) Option {
+	return func(ing *Ingestor) { ing.graphProvider = p }
+}
+
+// WithMinEdgeWeight sets the minimum edge weight to keep (default 0, no filtering).
+func WithMinEdgeWeight(w float32) Option {
+	return func(ing *Ingestor) { ing.minEdgeWeight = w }
+}
+
+// WithMaxEdgesPerChunk caps the number of edges kept per source chunk (default 0, unlimited).
+func WithMaxEdgesPerChunk(n int) Option {
+	return func(ing *Ingestor) { ing.maxEdgesPerChunk = n }
+}
+
+// WithGraphBatchSize sets the number of chunks per LLM graph extraction call (default 5).
+func WithGraphBatchSize(n int) Option {
+	return func(ing *Ingestor) { ing.graphBatchSize = n }
+}
+
+// WithCrossDocumentEdges enables cross-document relationship discovery (default false).
+func WithCrossDocumentEdges(b bool) Option {
+	return func(ing *Ingestor) { ing.crossDocEdges = b }
 }

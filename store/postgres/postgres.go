@@ -69,6 +69,7 @@ func WithEFSearch(ef int) Option {
 
 var _ oasis.Store = (*Store)(nil)
 var _ oasis.KeywordSearcher = (*Store)(nil)
+var _ oasis.GraphStore = (*Store)(nil)
 
 // New creates a Store using an existing pgxpool.Pool.
 // The caller owns the pool and is responsible for closing it.
@@ -183,6 +184,17 @@ func (s *Store) Init(ctx context.Context) error {
 			updated_at BIGINT NOT NULL
 		)`, vtype),
 		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS skills_embedding_idx ON skills USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
+
+		`CREATE TABLE IF NOT EXISTS chunk_edges (
+			id TEXT PRIMARY KEY,
+			source_id TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			weight REAL NOT NULL,
+			UNIQUE(source_id, target_id, relation)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chunk_edges_source ON chunk_edges(source_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_chunk_edges_target ON chunk_edges(target_id)`,
 	}
 
 	for _, stmt := range stmts {
@@ -405,6 +417,9 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	if _, err := tx.Exec(ctx, `DELETE FROM chunk_edges WHERE source_id IN (SELECT id FROM chunks WHERE document_id = $1) OR target_id IN (SELECT id FROM chunks WHERE document_id = $1)`, id); err != nil {
+		return fmt.Errorf("postgres: delete document edges: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM chunks WHERE document_id = $1`, id); err != nil {
 		return fmt.Errorf("postgres: delete document chunks: %w", err)
 	}
@@ -942,6 +957,85 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 // Close is a no-op. The caller owns the pool and manages its lifecycle.
 func (s *Store) Close() error {
 	return nil
+}
+
+// --- GraphStore ---
+
+func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
+	if len(edges) == 0 {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	for _, e := range edges {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO chunk_edges (id, source_id, target_id, relation, weight)
+			 VALUES ($1, $2, $3, $4, $5)
+			 ON CONFLICT (source_id, target_id, relation) DO UPDATE SET weight = EXCLUDED.weight`,
+			e.ID, e.SourceID, e.TargetID, string(e.Relation), e.Weight,
+		)
+		if err != nil {
+			return fmt.Errorf("postgres: store edge: %w", err)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) GetEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkEdge, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, source_id, target_id, relation, weight FROM chunk_edges WHERE source_id = ANY($1)`,
+		chunkIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: get edges: %w", err)
+	}
+	defer rows.Close()
+	return scanEdgesPg(rows)
+}
+
+func (s *Store) GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkEdge, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, source_id, target_id, relation, weight FROM chunk_edges WHERE target_id = ANY($1)`,
+		chunkIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: get incoming edges: %w", err)
+	}
+	defer rows.Close()
+	return scanEdgesPg(rows)
+}
+
+func (s *Store) PruneOrphanEdges(ctx context.Context) (int, error) {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM chunk_edges WHERE source_id NOT IN (SELECT id FROM chunks) OR target_id NOT IN (SELECT id FROM chunks)`)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: prune orphan edges: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+func scanEdgesPg(rows pgx.Rows) ([]oasis.ChunkEdge, error) {
+	var edges []oasis.ChunkEdge
+	for rows.Next() {
+		var e oasis.ChunkEdge
+		var rel string
+		if err := rows.Scan(&e.ID, &e.SourceID, &e.TargetID, &rel, &e.Weight); err != nil {
+			return nil, fmt.Errorf("postgres: scan edge: %w", err)
+		}
+		e.Relation = oasis.RelationType(rel)
+		edges = append(edges, e)
+	}
+	return edges, rows.Err()
 }
 
 // --- Helpers ---
