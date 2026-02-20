@@ -1,5 +1,15 @@
-// Package openaicompat provides shared types, body building, response parsing,
-// and SSE streaming for OpenAI-compatible API providers (OpenAI, OpenRouter).
+// Package openaicompat provides a ready-to-use Provider for any OpenAI-compatible
+// API, plus shared helpers (types, body building, response parsing, SSE streaming)
+// for building custom providers.
+//
+// For most OpenAI-compatible services (OpenAI, OpenRouter, Groq, Together,
+// Fireworks, DeepSeek, Mistral, Ollama, vLLM, LM Studio, Azure OpenAI), use
+// NewProvider directly:
+//
+//	llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1")
+//
+// For providers that need custom request/response handling, use the shared helpers
+// (BuildBody, StreamSSE, ParseResponse) to build a custom oasis.Provider.
 package openaicompat
 
 import "encoding/json"

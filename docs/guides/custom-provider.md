@@ -1,16 +1,40 @@
 # Building a Custom Provider
 
-Implement the `Provider` interface to add support for a new LLM backend. All Oasis providers use raw HTTP — no SDK dependencies.
+Most OpenAI-compatible providers work out of the box with `openaicompat.NewProvider`. You only need a custom provider for APIs with non-OpenAI formats (like Google Gemini or Anthropic).
 
-## Implement Provider
+## Use openaicompat.NewProvider First
+
+If your LLM provider uses the OpenAI chat completions API format, use the built-in provider directly:
+
+```go
+import "github.com/nevindra/oasis/provider/openaicompat"
+
+// Any OpenAI-compatible API — just change the base URL
+llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1")
+llm := openaicompat.NewProvider("gsk-xxx", "llama-3.3-70b-versatile", "https://api.groq.com/openai/v1")
+llm := openaicompat.NewProvider("", "llama3", "http://localhost:11434/v1") // Ollama, no key
+
+// With options
+llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1",
+    openaicompat.WithName("openai"),
+    openaicompat.WithOptions(
+        openaicompat.WithTemperature(0.7),
+        openaicompat.WithMaxTokens(4096),
+    ),
+)
+```
+
+This covers OpenAI, Groq, Together, Fireworks, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure OpenAI, and more.
+
+## Custom Provider (Non-OpenAI APIs)
+
+For APIs with their own format, implement the `Provider` interface directly:
 
 ```go
 package myprovider
 
 import (
     "context"
-    "encoding/json"
-    "fmt"
     "net/http"
 
     oasis "github.com/nevindra/oasis"
@@ -54,12 +78,12 @@ func (p *Provider) ChatWithTools(ctx context.Context, req oasis.ChatRequest, too
     }, nil
 }
 
-func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- string) (oasis.ChatResponse, error) {
+func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
     defer close(ch)  // MUST close when done
 
     // Make streaming HTTP request (SSE)
     // For each chunk:
-    //   ch <- chunkText
+    //   ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: chunkText}
 
     return oasis.ChatResponse{
         Content: fullText,
@@ -69,6 +93,27 @@ func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch cha
 
 // compile-time check
 var _ oasis.Provider = (*Provider)(nil)
+```
+
+### Using openaicompat Helpers
+
+If your API is *mostly* OpenAI-compatible but needs custom headers or auth, use the shared helpers:
+
+```go
+func (p *Provider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
+    body := openaicompat.BuildBody(req.Messages, nil, p.model, req.ResponseSchema)
+    // Custom HTTP request with special headers...
+    var resp openaicompat.ChatResponse
+    json.NewDecoder(httpResp.Body).Decode(&resp)
+    return openaicompat.ParseResponse(resp)
+}
+
+func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+    // Don't defer close(ch) — StreamSSE handles it
+    body := openaicompat.BuildBody(req.Messages, nil, p.model, req.ResponseSchema)
+    // Custom HTTP request...
+    return openaicompat.StreamSSE(ctx, httpResp.Body, ch)
+}
 ```
 
 ## Key Requirements

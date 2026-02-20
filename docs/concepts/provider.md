@@ -64,9 +64,47 @@ Converts text to vectors for semantic search. Used by Store (vector search), Mem
 | Package | Provider | EmbeddingProvider | Notes |
 |---------|----------|-------------------|-------|
 | `provider/gemini` | `gemini.New(apiKey, model)` | `gemini.NewEmbedding(apiKey, model, dims)` | Google Gemini. Raw HTTP + SSE. |
-| `provider/openaicompat` | `openaicompat.New(apiKey, model, baseURL)` | — | OpenAI, Anthropic, Ollama, any compatible API |
+| `provider/openaicompat` | `openaicompat.NewProvider(apiKey, model, baseURL)` | — | Any OpenAI-compatible API (OpenAI, Groq, Together, Fireworks, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure OpenAI) |
 
 Both use raw HTTP with SSE parsing — no SDK dependencies.
+
+### OpenAI-Compatible Provider
+
+Most LLM providers implement the OpenAI chat completions API. Use `openaicompat.NewProvider` to connect to any of them:
+
+```go
+import "github.com/nevindra/oasis/provider/openaicompat"
+
+// OpenAI
+llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1")
+
+// Groq
+llm := openaicompat.NewProvider("gsk-xxx", "llama-3.3-70b-versatile", "https://api.groq.com/openai/v1")
+
+// Together AI
+llm := openaicompat.NewProvider("xxx", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "https://api.together.xyz/v1")
+
+// DeepSeek
+llm := openaicompat.NewProvider("sk-xxx", "deepseek-chat", "https://api.deepseek.com/v1")
+
+// Ollama (local, no API key)
+llm := openaicompat.NewProvider("", "llama3", "http://localhost:11434/v1")
+
+// OpenRouter
+llm := openaicompat.NewProvider("sk-xxx", "anthropic/claude-sonnet-4", "https://openrouter.ai/api/v1")
+```
+
+Configure with provider-level options:
+
+```go
+llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1",
+    openaicompat.WithName("openai"),              // for logs/observability
+    openaicompat.WithOptions(                     // applied to every request
+        openaicompat.WithTemperature(0.7),
+        openaicompat.WithMaxTokens(4096),
+    ),
+)
+```
 
 ## WithRetry Middleware
 

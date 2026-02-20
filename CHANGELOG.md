@@ -9,6 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ### Added
 
 - **`SchemaObject` typed builder** — type-safe alternative to raw JSON for `ResponseSchema`. `NewResponseSchema(name, schema)` marshals a `SchemaObject` into `ResponseSchema.Schema`. Covers common JSON Schema keywords: `type`, `description`, `properties`, `items`, `enum`, `required`. Raw `json.RawMessage` remains available for advanced schemas
+- **Generic OpenAI-compatible provider** (`provider/openaicompat`) — `NewProvider(apiKey, model, baseURL)` implements `oasis.Provider` for any service that speaks the OpenAI chat completions API. Works with OpenAI, Groq, Together, Fireworks, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure OpenAI, and more. Provider-level options: `WithName` (for logs/observability), `WithHTTPClient`, `WithOptions` (temperature, max tokens, etc. applied to every request). Uses the existing shared helpers (`BuildBody`, `StreamSSE`, `ParseResponse`) — no new dependencies
 
 ## [0.5.0] - 2026-02-19
 

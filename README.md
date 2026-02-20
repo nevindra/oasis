@@ -33,7 +33,10 @@ import (
 )
 
 func main() {
+    // Use any provider — Gemini, OpenAI, Groq, Ollama, etc.
     llm := gemini.New(apiKey, "gemini-2.5-flash")
+    // Or: llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1")
+    // Or: llm := openaicompat.NewProvider("", "llama3", "http://localhost:11434/v1")
     embedding := gemini.NewEmbedding(apiKey, "text-embedding-004", 768)
 
     // Single agent with tools
@@ -209,7 +212,7 @@ h.Cancel()
 
 | Component | Packages |
 | --------- | -------- |
-| **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Anthropic, Ollama) |
+| **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Groq, Together, DeepSeek, Mistral, Ollama, and any OpenAI-compatible API) |
 | **Storage** | `store/sqlite` (local), `store/libsql` (Turso/remote), `store/postgres` (PostgreSQL + pgvector) |
 | **Tools** | `tools/knowledge`, `tools/remember`, `tools/search`, `tools/schedule`, `tools/shell`, `tools/file`, `tools/http` |
 | **Observability** | `observer` (OpenTelemetry wrappers with cost tracking) |
