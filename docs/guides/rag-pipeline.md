@@ -388,6 +388,20 @@ Graph extraction degrades gracefully — LLM errors are silently skipped, and st
 | `WithMaxEdgesPerChunk(n)` | 0 (unlimited) | Cap edges per source chunk |
 | `WithGraphBatchSize(n)` | 5 | Chunks per LLM graph extraction call |
 | `WithCrossDocumentEdges(b)` | false | Enable cross-document edge discovery |
+| `WithSequenceEdges(b)` | false | Auto-create sequence edges between consecutive chunks |
+
+#### Sequence Edges (Lightweight, No LLM)
+
+`WithSequenceEdges(true)` automatically creates `sequence` edges between consecutive chunks in the same document — no LLM required. This lets `GraphRetriever` walk to neighboring chunks for additional context.
+
+```go
+// Graph traversal without any LLM cost
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithSequenceEdges(true),
+)
+```
+
+Works independently of `WithGraphExtraction` — use it alone for lightweight graph traversal, or combine both for the richest graph.
 
 ### Relationship Types
 

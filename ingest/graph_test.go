@@ -50,6 +50,65 @@ func TestPruneEdges(t *testing.T) {
 	}
 }
 
+func TestBuildSequenceEdges(t *testing.T) {
+	chunks := []oasis.Chunk{
+		{ID: "c1", DocumentID: "d1", ChunkIndex: 0, Content: "First chunk"},
+		{ID: "c2", DocumentID: "d1", ChunkIndex: 1, Content: "Second chunk"},
+		{ID: "c3", DocumentID: "d1", ChunkIndex: 2, Content: "Third chunk"},
+	}
+
+	edges := buildSequenceEdges(chunks)
+	if len(edges) != 2 {
+		t.Fatalf("got %d edges, want 2", len(edges))
+	}
+
+	// c1 → c2
+	if edges[0].SourceID != "c1" || edges[0].TargetID != "c2" {
+		t.Errorf("edge[0]: got %s→%s, want c1→c2", edges[0].SourceID, edges[0].TargetID)
+	}
+	if edges[0].Relation != oasis.RelSequence {
+		t.Errorf("edge[0].Relation = %q, want sequence", edges[0].Relation)
+	}
+	if edges[0].Weight != 1.0 {
+		t.Errorf("edge[0].Weight = %f, want 1.0", edges[0].Weight)
+	}
+
+	// c2 → c3
+	if edges[1].SourceID != "c2" || edges[1].TargetID != "c3" {
+		t.Errorf("edge[1]: got %s→%s, want c2→c3", edges[1].SourceID, edges[1].TargetID)
+	}
+}
+
+func TestBuildSequenceEdges_UnsortedInput(t *testing.T) {
+	chunks := []oasis.Chunk{
+		{ID: "c3", DocumentID: "d1", ChunkIndex: 2, Content: "Third"},
+		{ID: "c1", DocumentID: "d1", ChunkIndex: 0, Content: "First"},
+		{ID: "c2", DocumentID: "d1", ChunkIndex: 1, Content: "Second"},
+	}
+
+	edges := buildSequenceEdges(chunks)
+	if len(edges) != 2 {
+		t.Fatalf("got %d edges, want 2", len(edges))
+	}
+	// Should still be c1→c2, c2→c3 after sorting by ChunkIndex.
+	if edges[0].SourceID != "c1" || edges[0].TargetID != "c2" {
+		t.Errorf("edge[0]: got %s→%s, want c1→c2", edges[0].SourceID, edges[0].TargetID)
+	}
+	if edges[1].SourceID != "c2" || edges[1].TargetID != "c3" {
+		t.Errorf("edge[1]: got %s→%s, want c2→c3", edges[1].SourceID, edges[1].TargetID)
+	}
+}
+
+func TestBuildSequenceEdges_SingleChunk(t *testing.T) {
+	chunks := []oasis.Chunk{
+		{ID: "c1", DocumentID: "d1", ChunkIndex: 0, Content: "Only chunk"},
+	}
+	edges := buildSequenceEdges(chunks)
+	if len(edges) != 0 {
+		t.Fatalf("got %d edges, want 0", len(edges))
+	}
+}
+
 type mockGraphProvider struct {
 	response string
 }

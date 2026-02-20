@@ -133,6 +133,44 @@ func parseEdgeResponse(content string, chunks []oasis.Chunk) ([]oasis.ChunkEdge,
 	return edges, nil
 }
 
+// buildSequenceEdges creates sequence edges between consecutive chunks
+// (sorted by ChunkIndex) within the same document.
+func buildSequenceEdges(chunks []oasis.Chunk) []oasis.ChunkEdge {
+	if len(chunks) < 2 {
+		return nil
+	}
+
+	// Sort by ChunkIndex to ensure correct ordering.
+	sorted := make([]oasis.Chunk, len(chunks))
+	copy(sorted, chunks)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].ChunkIndex < sorted[j].ChunkIndex
+	})
+
+	edges := make([]oasis.ChunkEdge, 0, len(sorted)-1)
+	for i := 0; i < len(sorted)-1; i++ {
+		// Skip parent chunks in parent-child strategy (they have no embedding).
+		if sorted[i].ParentID != "" || sorted[i+1].ParentID != "" {
+			// Only link leaf chunks (children or flat chunks).
+			if sorted[i].ParentID == "" || sorted[i+1].ParentID == "" {
+				continue
+			}
+			// Only link children that share the same parent for sequence continuity.
+			if sorted[i].ParentID != sorted[i+1].ParentID {
+				continue
+			}
+		}
+		edges = append(edges, oasis.ChunkEdge{
+			ID:       oasis.NewID(),
+			SourceID: sorted[i].ID,
+			TargetID: sorted[i+1].ID,
+			Relation: oasis.RelSequence,
+			Weight:   1.0,
+		})
+	}
+	return edges
+}
+
 // pruneEdges removes edges below minWeight and caps edges per source chunk to maxPerChunk.
 func pruneEdges(edges []oasis.ChunkEdge, minWeight float32, maxPerChunk int) []oasis.ChunkEdge {
 	// Filter by min weight.

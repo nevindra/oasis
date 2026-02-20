@@ -36,6 +36,7 @@ type Ingestor struct {
 	maxEdgesPerChunk int
 	graphBatchSize   int
 	crossDocEdges    bool
+	sequenceEdges    bool
 }
 
 // NewIngestor creates an Ingestor with sensible defaults.
@@ -168,7 +169,7 @@ func (ing *Ingestor) IngestReader(ctx context.Context, r io.Reader, filename str
 
 // extractAndStoreEdges runs graph extraction if configured and stores edges.
 func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Chunk) error {
-	if ing.graphProvider == nil {
+	if ing.graphProvider == nil && !ing.sequenceEdges {
 		return nil
 	}
 
@@ -177,9 +178,19 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 		return nil // store doesn't support graph, skip silently
 	}
 
-	edges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize)
-	if err != nil {
-		return nil // degrade gracefully
+	var edges []oasis.ChunkEdge
+
+	// Sequence edges: deterministic, no LLM needed.
+	if ing.sequenceEdges {
+		edges = append(edges, buildSequenceEdges(chunks)...)
+	}
+
+	// LLM-based extraction.
+	if ing.graphProvider != nil {
+		llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize)
+		if err == nil {
+			edges = append(edges, llmEdges...)
+		}
 	}
 
 	if ing.minEdgeWeight > 0 || ing.maxEdgesPerChunk > 0 {

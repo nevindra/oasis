@@ -73,3 +73,12 @@ func WithGraphBatchSize(n int) Option {
 func WithCrossDocumentEdges(b bool) Option {
 	return func(ing *Ingestor) { ing.crossDocEdges = b }
 }
+
+// WithSequenceEdges enables automatic creation of sequence edges between
+// consecutive chunks in the same document (default false). This is a
+// lightweight, non-LLM alternative that links chunk[i] → chunk[i+1] with
+// RelSequence edges, allowing GraphRetriever to walk to neighboring chunks
+// for additional context. Works independently of WithGraphExtraction.
+func WithSequenceEdges(b bool) Option {
+	return func(ing *Ingestor) { ing.sequenceEdges = b }
+}
