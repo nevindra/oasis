@@ -132,10 +132,31 @@ type agentConfig struct {
 	maxTokens         int     // set by MaxTokens inside WithConversationMemory
 	planExecution     bool            // enabled by WithPlanExecution option
 	responseSchema    *ResponseSchema // set by WithResponseSchema option
+	dynamicPrompt     PromptFunc      // set by WithDynamicPrompt option
+	dynamicModel      ModelFunc       // set by WithDynamicModel option
+	dynamicTools      ToolsFunc       // set by WithDynamicTools option
 }
 
 // AgentOption configures an LLMAgent or Network.
 type AgentOption func(*agentConfig)
+
+// PromptFunc resolves the system prompt per-request.
+// When set via WithDynamicPrompt, it is called at the start of every
+// Execute/ExecuteStream call. The returned string replaces the static
+// WithPrompt value for that execution.
+type PromptFunc func(ctx context.Context, task AgentTask) string
+
+// ModelFunc resolves the LLM provider per-request.
+// When set via WithDynamicModel, it is called at the start of every
+// Execute/ExecuteStream call. The returned Provider replaces the
+// construction-time provider for that execution.
+type ModelFunc func(ctx context.Context, task AgentTask) Provider
+
+// ToolsFunc resolves the tool set per-request.
+// When set via WithDynamicTools, it is called at the start of every
+// Execute/ExecuteStream call. The returned tools REPLACE (not append to)
+// the construction-time tools for that execution.
+type ToolsFunc func(ctx context.Context, task AgentTask) []Tool
 
 // WithTools adds tools to the agent or network.
 func WithTools(tools ...Tool) AgentOption {
@@ -175,6 +196,31 @@ func WithPlanExecution() AgentOption {
 // OpenAI response_format).
 func WithResponseSchema(s *ResponseSchema) AgentOption {
 	return func(c *agentConfig) { c.responseSchema = s }
+}
+
+// WithDynamicPrompt sets a per-request prompt resolution function.
+// When set, the function is called at the start of every Execute/ExecuteStream
+// call, and its return value is used as the system prompt for that execution.
+// Overrides WithPrompt when set. If the function returns "", no system prompt
+// is used (same as omitting WithPrompt).
+func WithDynamicPrompt(fn PromptFunc) AgentOption {
+	return func(c *agentConfig) { c.dynamicPrompt = fn }
+}
+
+// WithDynamicModel sets a per-request model selection function.
+// When set, the function is called at the start of every Execute/ExecuteStream
+// call, and its return value is used as the LLM provider for that execution.
+// Overrides the construction-time provider when set.
+func WithDynamicModel(fn ModelFunc) AgentOption {
+	return func(c *agentConfig) { c.dynamicModel = fn }
+}
+
+// WithDynamicTools sets a per-request tool selection function.
+// When set, the function is called at the start of every Execute/ExecuteStream
+// call, and its return value REPLACES the construction-time tools for that
+// execution. To remove all tools for a request, return nil or an empty slice.
+func WithDynamicTools(fn ToolsFunc) AgentOption {
+	return func(c *agentConfig) { c.dynamicTools = fn }
 }
 
 // WithProcessors adds processors to the agent's execution pipeline.
@@ -629,6 +675,27 @@ func WithInputHandlerContext(ctx context.Context, h InputHandler) context.Contex
 func InputHandlerFromContext(ctx context.Context) (InputHandler, bool) {
 	h, ok := ctx.Value(inputHandlerCtxKey{}).(InputHandler)
 	return h, ok
+}
+
+// --- Task context propagation ---
+
+// taskCtxKey is the context key for AgentTask.
+type taskCtxKey struct{}
+
+// WithTaskContext returns a child context carrying the AgentTask.
+// Called automatically by LLMAgent and Network at Execute entry points.
+// Tools and processors can retrieve the task via TaskFromContext.
+func WithTaskContext(ctx context.Context, task AgentTask) context.Context {
+	return context.WithValue(ctx, taskCtxKey{}, task)
+}
+
+// TaskFromContext retrieves the AgentTask from ctx.
+// Returns the task and true if present, or zero AgentTask and false if not.
+// Use this in Tool.Execute to access task metadata (user ID, thread ID, etc.)
+// without changing the Tool interface.
+func TaskFromContext(ctx context.Context) (AgentTask, bool) {
+	task, ok := ctx.Value(taskCtxKey{}).(AgentTask)
+	return task, ok
 }
 
 // --- Suspend / Resume ---

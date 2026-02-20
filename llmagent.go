@@ -22,6 +22,9 @@ type LLMAgent struct {
 	inputHandler  InputHandler
 	planExecution  bool
 	responseSchema *ResponseSchema
+	dynamicPrompt  PromptFunc
+	dynamicModel   ModelFunc
+	dynamicTools   ToolsFunc
 	mem            agentMemory
 }
 
@@ -59,6 +62,9 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	a.inputHandler = cfg.inputHandler
 	a.planExecution = cfg.planExecution
 	a.responseSchema = cfg.responseSchema
+	a.dynamicPrompt = cfg.dynamicPrompt
+	a.dynamicModel = cfg.dynamicModel
+	a.dynamicTools = cfg.dynamicTools
 	return a
 }
 
@@ -67,7 +73,8 @@ func (a *LLMAgent) Description() string { return a.description }
 
 // Execute runs the tool-calling loop until the LLM produces a final text response.
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
-	return runLoop(ctx, a.buildLoopConfig(), task, nil)
+	ctx = WithTaskContext(ctx, task)
+	return runLoop(ctx, a.buildLoopConfig(ctx, task), task, nil)
 }
 
 // ExecuteStream runs the tool-calling loop like Execute, but emits StreamEvent
@@ -75,12 +82,35 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 // final LLM response and tool call start/result during tool iterations.
 // The channel is closed when streaming completes.
 func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
-	return runLoop(ctx, a.buildLoopConfig(), task, ch)
+	ctx = WithTaskContext(ctx, task)
+	return runLoop(ctx, a.buildLoopConfig(ctx, task), task, ch)
 }
 
 // buildLoopConfig wires LLMAgent fields into a loopConfig for runLoop.
-func (a *LLMAgent) buildLoopConfig() loopConfig {
-	toolDefs := a.tools.AllDefinitions()
+// Resolves dynamic prompt, model, and tools when configured.
+func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConfig {
+	// Resolve prompt: dynamic > static
+	prompt := a.systemPrompt
+	if a.dynamicPrompt != nil {
+		prompt = a.dynamicPrompt(ctx, task)
+	}
+
+	// Resolve provider: dynamic > construction-time
+	provider := a.provider
+	if a.dynamicModel != nil {
+		provider = a.dynamicModel(ctx, task)
+	}
+
+	// Resolve tools: dynamic replaces static
+	registry := a.tools
+	if a.dynamicTools != nil {
+		registry = NewToolRegistry()
+		for _, t := range a.dynamicTools(ctx, task) {
+			registry.Add(t)
+		}
+	}
+
+	toolDefs := registry.AllDefinitions()
 	if a.inputHandler != nil {
 		toolDefs = append(toolDefs, askUserToolDef)
 	}
@@ -88,22 +118,22 @@ func (a *LLMAgent) buildLoopConfig() loopConfig {
 		toolDefs = append(toolDefs, executePlanToolDef)
 	}
 	return loopConfig{
-		name:         "agent:" + a.name,
-		provider:     a.provider,
-		tools:        toolDefs,
-		processors:   a.processors,
-		maxIter:      a.maxIter,
-		mem:          &a.mem,
-		inputHandler: a.inputHandler,
-		dispatch:       a.makeDispatch(),
-		systemPrompt:   a.systemPrompt,
+		name:           "agent:" + a.name,
+		provider:       provider,
+		tools:          toolDefs,
+		processors:     a.processors,
+		maxIter:        a.maxIter,
+		mem:            &a.mem,
+		inputHandler:   a.inputHandler,
+		dispatch:       a.makeDispatch(registry),
+		systemPrompt:   prompt,
 		responseSchema: a.responseSchema,
 	}
 }
 
-// makeDispatch returns a dispatchFunc that executes tools via ToolRegistry
+// makeDispatch returns a dispatchFunc that executes tools via the given registry
 // and handles the ask_user and execute_plan special cases.
-func (a *LLMAgent) makeDispatch() dispatchFunc {
+func (a *LLMAgent) makeDispatch(registry *ToolRegistry) dispatchFunc {
 	var dispatch dispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) (string, Usage) {
 		// Special case: ask_user tool
@@ -120,7 +150,7 @@ func (a *LLMAgent) makeDispatch() dispatchFunc {
 			return executePlan(ctx, tc.Args, dispatch)
 		}
 
-		result, execErr := a.tools.Execute(ctx, tc.Name, tc.Args)
+		result, execErr := registry.Execute(ctx, tc.Name, tc.Args)
 		content := result.Content
 		if execErr != nil {
 			content = "error: " + execErr.Error()

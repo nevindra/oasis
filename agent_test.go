@@ -1883,6 +1883,168 @@ func TestWorkflowSuspendAndResume(t *testing.T) {
 	}
 }
 
+// --- Dynamic config tests ---
+
+func TestLLMAgentDynamicPrompt(t *testing.T) {
+	var capturedPrompt string
+	provider := &callbackProvider{
+		name:     "test",
+		response: ChatResponse{Content: "ok"},
+		onChat: func(req ChatRequest) {
+			for _, m := range req.Messages {
+				if m.Role == "system" {
+					capturedPrompt = m.Content
+				}
+			}
+		},
+	}
+
+	agent := NewLLMAgent("dynamic", "Dynamic prompt", provider,
+		WithPrompt("static fallback"),
+		WithDynamicPrompt(func(_ context.Context, task AgentTask) string {
+			return "dynamic: " + task.TaskUserID()
+		}),
+	)
+
+	agent.Execute(context.Background(), AgentTask{
+		Input:   "hi",
+		Context: map[string]any{ContextUserID: "alice"},
+	})
+
+	if capturedPrompt != "dynamic: alice" {
+		t.Errorf("prompt = %q, want %q", capturedPrompt, "dynamic: alice")
+	}
+}
+
+func TestLLMAgentDynamicPromptFallback(t *testing.T) {
+	var capturedPrompt string
+	provider := &callbackProvider{
+		name:     "test",
+		response: ChatResponse{Content: "ok"},
+		onChat: func(req ChatRequest) {
+			for _, m := range req.Messages {
+				if m.Role == "system" {
+					capturedPrompt = m.Content
+				}
+			}
+		},
+	}
+
+	agent := NewLLMAgent("static", "Static prompt", provider,
+		WithPrompt("I am static"),
+	)
+
+	agent.Execute(context.Background(), AgentTask{Input: "hi"})
+
+	if capturedPrompt != "I am static" {
+		t.Errorf("prompt = %q, want %q", capturedPrompt, "I am static")
+	}
+}
+
+func TestLLMAgentDynamicModel(t *testing.T) {
+	providerA := &mockProvider{name: "model-a", responses: []ChatResponse{{Content: "from A"}}}
+	providerB := &mockProvider{name: "model-b", responses: []ChatResponse{{Content: "from B"}}}
+
+	agent := NewLLMAgent("dynamic", "Dynamic model", providerA,
+		WithDynamicModel(func(_ context.Context, task AgentTask) Provider {
+			if task.Context["tier"] == "pro" {
+				return providerB
+			}
+			return providerA
+		}),
+	)
+
+	result, _ := agent.Execute(context.Background(), AgentTask{
+		Input:   "hi",
+		Context: map[string]any{"tier": "pro"},
+	})
+	if result.Output != "from B" {
+		t.Errorf("Output = %q, want %q", result.Output, "from B")
+	}
+}
+
+func TestLLMAgentDynamicTools(t *testing.T) {
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "calc", Args: json.RawMessage(`{}`)}}},
+			{Content: "used calc"},
+		},
+	}
+
+	agent := NewLLMAgent("dynamic", "Dynamic tools", provider,
+		WithTools(mockTool{}), // static: greet
+		WithDynamicTools(func(_ context.Context, task AgentTask) []Tool {
+			return []Tool{mockToolCalc{}}
+		}),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "calculate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "used calc" {
+		t.Errorf("Output = %q, want %q", result.Output, "used calc")
+	}
+}
+
+func TestLLMAgentTaskFromContextInTool(t *testing.T) {
+	var gotUserID string
+	ctxTool := &contextReadingTool{
+		onExecute: func(ctx context.Context) {
+			if task, ok := TaskFromContext(ctx); ok {
+				gotUserID = task.TaskUserID()
+			}
+		},
+	}
+
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "ctx_reader", Args: json.RawMessage(`{}`)}}},
+			{Content: "done"},
+		},
+	}
+
+	agent := NewLLMAgent("ctx", "Context test", provider, WithTools(ctxTool))
+	agent.Execute(context.Background(), AgentTask{
+		Input:   "test",
+		Context: map[string]any{ContextUserID: "user-42"},
+	})
+
+	if gotUserID != "user-42" {
+		t.Errorf("gotUserID = %q, want %q", gotUserID, "user-42")
+	}
+}
+
+// --- Task context tests ---
+
+func TestTaskFromContextPresent(t *testing.T) {
+	task := AgentTask{
+		Input:   "hello",
+		Context: map[string]any{ContextUserID: "u1"},
+	}
+	ctx := WithTaskContext(context.Background(), task)
+
+	got, ok := TaskFromContext(ctx)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got.Input != "hello" {
+		t.Errorf("Input = %q, want %q", got.Input, "hello")
+	}
+	if got.TaskUserID() != "u1" {
+		t.Errorf("TaskUserID() = %q, want %q", got.TaskUserID(), "u1")
+	}
+}
+
+func TestTaskFromContextMissing(t *testing.T) {
+	_, ok := TaskFromContext(context.Background())
+	if ok {
+		t.Error("expected ok=false for empty context")
+	}
+}
+
 // --- SSE streaming tests (from stream_test.go) ---
 
 // stubStreamingAgent implements StreamingAgent for testing.

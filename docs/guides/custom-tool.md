@@ -126,6 +126,31 @@ func New(store oasis.Store, emb oasis.EmbeddingProvider) *MyTool {
 
 No global state. No service locators. Dependencies are explicit in the function signature.
 
+## Accessing Task Context
+
+Tools receive the agent's `AgentTask` via `context.Context` — no interface changes needed. Use `TaskFromContext` to access user ID, thread ID, or custom context values:
+
+```go
+func (t *Tool) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
+    task, ok := oasis.TaskFromContext(ctx)
+    if !ok {
+        return oasis.ToolResult{Error: "no task context"}, nil
+    }
+
+    userID := task.TaskUserID()   // from ContextUserID
+    threadID := task.TaskThreadID() // from ContextThreadID
+
+    // Custom context values
+    if tier, ok := task.Context["tier"].(string); ok && tier != "pro" {
+        return oasis.ToolResult{Error: "pro tier required"}, nil
+    }
+
+    // ... tool logic using userID, threadID, etc.
+}
+```
+
+`TaskFromContext` is available automatically — `LLMAgent` and `Network` inject the task at the start of every `Execute` call.
+
 ## JSON Schema Tips
 
 Write clear descriptions — the LLM uses these to decide when and how to call your tool:

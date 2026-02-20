@@ -209,6 +209,23 @@ type ToolResult struct {
 }
 ```
 
+## Dynamic Config Function Types
+
+**File:** `agent.go`
+
+```go
+// PromptFunc resolves the system prompt per-request.
+type PromptFunc func(ctx context.Context, task AgentTask) string
+
+// ModelFunc resolves the LLM provider per-request.
+type ModelFunc func(ctx context.Context, task AgentTask) Provider
+
+// ToolsFunc resolves the tool set per-request.
+type ToolsFunc func(ctx context.Context, task AgentTask) []Tool
+```
+
+Set via `WithDynamicPrompt`, `WithDynamicModel`, `WithDynamicTools`. Called at the start of every `Execute`/`ExecuteStream` call. Dynamic values override their static counterparts.
+
 ## Agent Types
 
 **File:** `agent.go`

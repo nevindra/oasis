@@ -25,6 +25,9 @@ type Network struct {
 	inputHandler  InputHandler
 	planExecution  bool
 	responseSchema *ResponseSchema
+	dynamicPrompt  PromptFunc
+	dynamicModel   ModelFunc
+	dynamicTools   ToolsFunc
 	mem            agentMemory
 }
 
@@ -66,6 +69,9 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	n.inputHandler = cfg.inputHandler
 	n.planExecution = cfg.planExecution
 	n.responseSchema = cfg.responseSchema
+	n.dynamicPrompt = cfg.dynamicPrompt
+	n.dynamicModel = cfg.dynamicModel
+	n.dynamicTools = cfg.dynamicTools
 	return n
 }
 
@@ -74,7 +80,8 @@ func (n *Network) Description() string { return n.description }
 
 // Execute runs the network's routing loop.
 func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
-	return runLoop(ctx, n.buildLoopConfig(task, nil), task, nil)
+	ctx = WithTaskContext(ctx, task)
+	return runLoop(ctx, n.buildLoopConfig(ctx, task, nil), task, nil)
 }
 
 // ExecuteStream runs the network's routing loop like Execute, but emits
@@ -82,13 +89,36 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 // tool call start/result, and agent start/finish for subagent delegation.
 // The channel is closed when streaming completes.
 func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
-	return runLoop(ctx, n.buildLoopConfig(task, ch), task, ch)
+	ctx = WithTaskContext(ctx, task)
+	return runLoop(ctx, n.buildLoopConfig(ctx, task, ch), task, ch)
 }
 
 // buildLoopConfig wires Network fields into a loopConfig for runLoop.
+// Resolves dynamic prompt, model, and tools when configured.
 // ch is passed through so makeDispatch can emit agent-start/finish events.
-func (n *Network) buildLoopConfig(task AgentTask, ch chan<- StreamEvent) loopConfig {
-	toolDefs := n.buildToolDefs()
+func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- StreamEvent) loopConfig {
+	// Resolve prompt: dynamic > static
+	prompt := n.systemPrompt
+	if n.dynamicPrompt != nil {
+		prompt = n.dynamicPrompt(ctx, task)
+	}
+
+	// Resolve provider: dynamic > construction-time
+	router := n.router
+	if n.dynamicModel != nil {
+		router = n.dynamicModel(ctx, task)
+	}
+
+	// Resolve tools: dynamic replaces static
+	registry := n.tools
+	if n.dynamicTools != nil {
+		registry = NewToolRegistry()
+		for _, t := range n.dynamicTools(ctx, task) {
+			registry.Add(t)
+		}
+	}
+
+	toolDefs := n.buildToolDefs(registry)
 	if n.inputHandler != nil {
 		toolDefs = append(toolDefs, askUserToolDef)
 	}
@@ -96,15 +126,15 @@ func (n *Network) buildLoopConfig(task AgentTask, ch chan<- StreamEvent) loopCon
 		toolDefs = append(toolDefs, executePlanToolDef)
 	}
 	return loopConfig{
-		name:         "network:" + n.name,
-		provider:     n.router,
-		tools:        toolDefs,
-		processors:   n.processors,
-		maxIter:      n.maxIter,
-		mem:          &n.mem,
-		inputHandler: n.inputHandler,
-		dispatch:       n.makeDispatch(task, ch),
-		systemPrompt:   n.systemPrompt,
+		name:           "network:" + n.name,
+		provider:       router,
+		tools:          toolDefs,
+		processors:     n.processors,
+		maxIter:        n.maxIter,
+		mem:            &n.mem,
+		inputHandler:   n.inputHandler,
+		dispatch:       n.makeDispatch(task, ch, registry),
+		systemPrompt:   prompt,
 		responseSchema: n.responseSchema,
 	}
 }
@@ -112,7 +142,7 @@ func (n *Network) buildLoopConfig(task AgentTask, ch chan<- StreamEvent) loopCon
 // makeDispatch returns a dispatchFunc that routes tool calls to subagents,
 // the ask_user handler, or direct tools. When ch is non-nil, agent-start
 // and agent-finish events are emitted for subagent delegation.
-func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent) dispatchFunc {
+func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, registry *ToolRegistry) dispatchFunc {
 	var dispatch dispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) (string, Usage) {
 		// Special case: ask_user tool
@@ -179,7 +209,7 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent) disp
 		}
 
 		// Regular tool call
-		result, err := n.tools.Execute(ctx, tc.Name, tc.Args)
+		result, err := registry.Execute(ctx, tc.Name, tc.Args)
 		if err != nil {
 			return "error: " + err.Error(), Usage{}
 		}
@@ -191,8 +221,8 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent) disp
 	return dispatch
 }
 
-// buildToolDefs builds tool definitions from subagents and direct tools.
-func (n *Network) buildToolDefs() []ToolDefinition {
+// buildToolDefs builds tool definitions from subagents and the given tool registry.
+func (n *Network) buildToolDefs(registry *ToolRegistry) []ToolDefinition {
 	var defs []ToolDefinition
 
 	// Agent tool definitions
@@ -207,7 +237,7 @@ func (n *Network) buildToolDefs() []ToolDefinition {
 	}
 
 	// Direct tool definitions
-	defs = append(defs, n.tools.AllDefinitions()...)
+	defs = append(defs, registry.AllDefinitions()...)
 	return defs
 }
 

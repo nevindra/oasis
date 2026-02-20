@@ -14,6 +14,9 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
 | `WithPlanExecution()` | Enable batched tool calls via built-in `execute_plan` tool |
 | `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output matching the schema |
+| `WithDynamicPrompt(fn PromptFunc)` | Per-request system prompt resolution. Overrides `WithPrompt` |
+| `WithDynamicModel(fn ModelFunc)` | Per-request provider/model selection. Overrides constructor provider |
+| `WithDynamicTools(fn ToolsFunc)` | Per-request tool set. **Replaces** (not merges with) `WithTools` |
 | `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable history per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact read/write |
 

@@ -142,12 +142,17 @@ provider := oasis.WithRateLimit(p Provider, opts ...RateLimitOption) Provider
 
 ## Context Helpers
 
-**File:** `input.go`
+**File:** `agent.go`, `input.go`
 
 ```go
+ctx = oasis.WithTaskContext(ctx, task AgentTask) context.Context
+task, ok := oasis.TaskFromContext(ctx) (AgentTask, bool)
+
 ctx = oasis.WithInputHandlerContext(ctx, handler InputHandler) context.Context
 handler, ok := oasis.InputHandlerFromContext(ctx) (InputHandler, bool)
 ```
+
+`WithTaskContext`/`TaskFromContext` are called automatically by `LLMAgent` and `Network` at Execute entry points. Use `TaskFromContext` in tools to access task metadata (user ID, thread ID, custom context) without changing the `Tool` interface.
 
 ## ForEach Helpers
 

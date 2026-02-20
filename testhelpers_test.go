@@ -74,6 +74,49 @@ func (e errTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolRe
 	return ToolResult{}, errors.New("tool broken")
 }
 
+// callbackProvider captures ChatRequest via onChat callback for assertions.
+type callbackProvider struct {
+	name     string
+	response ChatResponse
+	onChat   func(ChatRequest)
+}
+
+func (c *callbackProvider) Name() string { return c.name }
+func (c *callbackProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
+	if c.onChat != nil {
+		c.onChat(req)
+	}
+	return c.response, nil
+}
+func (c *callbackProvider) ChatWithTools(_ context.Context, req ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
+	if c.onChat != nil {
+		c.onChat(req)
+	}
+	return c.response, nil
+}
+func (c *callbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	defer close(ch)
+	if c.onChat != nil {
+		c.onChat(req)
+	}
+	return c.response, nil
+}
+
+// contextReadingTool is a tool that captures context in Execute for testing.
+type contextReadingTool struct {
+	onExecute func(ctx context.Context)
+}
+
+func (t *contextReadingTool) Definitions() []ToolDefinition {
+	return []ToolDefinition{{Name: "ctx_reader", Description: "Reads context"}}
+}
+func (t *contextReadingTool) Execute(ctx context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+	if t.onExecute != nil {
+		t.onExecute(ctx)
+	}
+	return ToolResult{Content: "ok"}, nil
+}
+
 type multiTool struct{}
 
 func (m multiTool) Definitions() []ToolDefinition {

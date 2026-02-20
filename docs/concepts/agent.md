@@ -132,8 +132,78 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
 | `WithPlanExecution()` | Enable batched tool calls via `execute_plan` tool |
 | `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output |
+| `WithDynamicPrompt(fn PromptFunc)` | Per-request system prompt resolution |
+| `WithDynamicModel(fn ModelFunc)` | Per-request provider/model selection |
+| `WithDynamicTools(fn ToolsFunc)` | Per-request tool set (replaces static tools) |
 | `WithConversationMemory(s Store, opts...)` | Enable history load/persist per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact injection + auto-extraction |
+
+## Dynamic Configuration
+
+All three dynamic options accept a function called at the start of every `Execute`/`ExecuteStream` call. Dynamic values override their static counterparts.
+
+### Dynamic Prompt
+
+Per-request system prompt based on user attributes, locale, tier, etc.:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Multi-tenant assistant", provider,
+    oasis.WithPrompt("You are a helpful assistant."), // fallback
+    oasis.WithDynamicPrompt(func(ctx context.Context, task oasis.AgentTask) string {
+        user, _ := db.GetUser(ctx, task.TaskUserID())
+        return fmt.Sprintf("You assist %s, a %s-tier user.", user.Name, user.Tier)
+    }),
+)
+```
+
+### Dynamic Model
+
+Per-request provider selection (e.g., route pro-tier users to a better model):
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Tiered assistant", defaultProvider,
+    oasis.WithDynamicModel(func(ctx context.Context, task oasis.AgentTask) oasis.Provider {
+        if task.Context["tier"] == "pro" {
+            return geminiPro
+        }
+        return geminiFlash
+    }),
+)
+```
+
+### Dynamic Tools
+
+Per-request tool gating (e.g., admin-only tools):
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Role-gated assistant", provider,
+    oasis.WithDynamicTools(func(ctx context.Context, task oasis.AgentTask) []oasis.Tool {
+        if task.Context["role"] == "admin" {
+            return allTools
+        }
+        return safeTools
+    }),
+)
+```
+
+Dynamic tools **replace** (not merge with) the static `WithTools` set.
+
+### Task Context in Tools
+
+`LLMAgent` and `Network` automatically inject the `AgentTask` into `context.Context` at the start of every `Execute` call. Tools can read it via `TaskFromContext`:
+
+```go
+func (t *MyTool) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
+    task, ok := oasis.TaskFromContext(ctx)
+    if ok {
+        userID := task.TaskUserID()
+        // personalize, authorize, audit, etc.
+    }
+    // ...
+}
+```
+
+This works without any changes to the `Tool` interface.
 
 ## StreamingAgent
 
