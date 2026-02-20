@@ -24,6 +24,7 @@ type Network struct {
 	maxIter       int
 	inputHandler  InputHandler
 	planExecution  bool
+	codeRunner     CodeRunner
 	responseSchema *ResponseSchema
 	dynamicPrompt  PromptFunc
 	dynamicModel   ModelFunc
@@ -68,6 +69,7 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	}
 	n.inputHandler = cfg.inputHandler
 	n.planExecution = cfg.planExecution
+	n.codeRunner = cfg.codeRunner
 	n.responseSchema = cfg.responseSchema
 	n.dynamicPrompt = cfg.dynamicPrompt
 	n.dynamicModel = cfg.dynamicModel
@@ -125,6 +127,9 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 	if n.planExecution {
 		toolDefs = append(toolDefs, executePlanToolDef)
 	}
+	if n.codeRunner != nil {
+		toolDefs = append(toolDefs, executeCodeToolDef)
+	}
 	return loopConfig{
 		name:           "network:" + n.name,
 		provider:       router,
@@ -139,11 +144,11 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 	}
 }
 
-// makeDispatch returns a dispatchFunc that routes tool calls to subagents,
+// makeDispatch returns a DispatchFunc that routes tool calls to subagents,
 // the ask_user handler, or direct tools. When ch is non-nil, agent-start
 // and agent-finish events are emitted for subagent delegation.
-func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, registry *ToolRegistry) dispatchFunc {
-	var dispatch dispatchFunc
+func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, registry *ToolRegistry) DispatchFunc {
+	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) (string, Usage) {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && n.inputHandler != nil {
@@ -157,6 +162,11 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 		// Special case: execute_plan tool
 		if tc.Name == "execute_plan" && n.planExecution {
 			return executePlan(ctx, tc.Args, dispatch)
+		}
+
+		// Special case: execute_code tool
+		if tc.Name == "execute_code" && n.codeRunner != nil {
+			return executeCode(ctx, tc.Args, n.codeRunner, dispatch)
 		}
 
 		// Check if it's an agent call (prefixed with "agent_")

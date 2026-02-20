@@ -209,6 +209,26 @@ type ToolResult struct {
 }
 ```
 
+## Code Execution Types
+
+**File:** `code.go`
+
+```go
+type CodeRequest struct {
+    Code    string        `json:"code"`    // source code to execute
+    Timeout time.Duration `json:"-"`       // max duration (zero = runner default)
+}
+
+type CodeResult struct {
+    Output   string `json:"output"`          // structured result via set_result()
+    Logs     string `json:"logs,omitempty"`   // print() output and stderr
+    ExitCode int    `json:"exit_code"`        // process exit code (0 = success)
+    Error    string `json:"error,omitempty"`  // execution failure description
+}
+```
+
+`CodeRequest.Code` is the source code written by the LLM. `CodeResult.Output` contains the JSON-serialized data passed to `set_result()` in Python. `Logs` captures `print()` output (redirected to stderr by the prelude).
+
 ## Dynamic Config Function Types
 
 **File:** `agent.go`

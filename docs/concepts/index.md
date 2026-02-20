@@ -106,6 +106,12 @@ flowchart TD
 
 Both implement `Agent`, so they compose with each other — a Network can contain a Workflow as a subagent, and a Workflow can orchestrate a Network via `AgentStep`.
 
+### Execution Capabilities
+
+| Page | Feature | What it does |
+|------|---------|-------------|
+| [Code Execution](code-execution.md) | `CodeRunner`, `WithCodeExecution` | LLM writes Python, framework executes in sandbox with tool bridge |
+
 ### Memory & Processing
 
 | Page | Interface | What it does |

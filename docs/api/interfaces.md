@@ -303,6 +303,34 @@ Implemented by `store/sqlite`, `store/libsql` (FTS5), and `store/postgres` (GIN/
 
 ---
 
+## CodeRunner
+
+**File:** `code.go`
+
+```go
+type CodeRunner interface {
+    Run(ctx context.Context, req CodeRequest, dispatch DispatchFunc) (CodeResult, error)
+}
+```
+
+| Implementation | Constructor |
+|----------------|------------|
+| `code/SubprocessRunner` | `code.NewSubprocessRunner(pythonBin string, opts ...Option)` |
+
+---
+
+## DispatchFunc
+
+**File:** `agent.go`
+
+```go
+type DispatchFunc func(ctx context.Context, tc ToolCall) (string, Usage)
+```
+
+Bridges code execution back to the agent's tool registry. Provided by `LLMAgent` and `Network` — not constructed directly.
+
+---
+
 ## Ingest Interfaces
 
 **Package:** `github.com/nevindra/oasis/ingest`

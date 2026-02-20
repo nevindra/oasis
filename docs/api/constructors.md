@@ -94,6 +94,16 @@ wCtx.ResolveJSON(template string) json.RawMessage      // {{key}} → JSON value
 
 The `"input"` key is pre-populated with `AgentTask.Input`, so `{{input}}` resolves to the original task input in any workflow.
 
+## SubprocessRunner
+
+**Package:** `github.com/nevindra/oasis/code`
+
+```go
+runner := code.NewSubprocessRunner(pythonBin string, opts ...code.Option)
+```
+
+Creates a `CodeRunner` that executes Python code in a subprocess with a JSON-over-pipes protocol. The `pythonBin` argument is the Python binary (e.g., `"python3"`).
+
 ## Scheduler
 
 **File:** `scheduler.go`

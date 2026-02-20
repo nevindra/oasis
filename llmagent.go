@@ -21,6 +21,7 @@ type LLMAgent struct {
 	maxIter       int
 	inputHandler  InputHandler
 	planExecution  bool
+	codeRunner     CodeRunner
 	responseSchema *ResponseSchema
 	dynamicPrompt  PromptFunc
 	dynamicModel   ModelFunc
@@ -61,6 +62,7 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	}
 	a.inputHandler = cfg.inputHandler
 	a.planExecution = cfg.planExecution
+	a.codeRunner = cfg.codeRunner
 	a.responseSchema = cfg.responseSchema
 	a.dynamicPrompt = cfg.dynamicPrompt
 	a.dynamicModel = cfg.dynamicModel
@@ -117,6 +119,9 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 	if a.planExecution {
 		toolDefs = append(toolDefs, executePlanToolDef)
 	}
+	if a.codeRunner != nil {
+		toolDefs = append(toolDefs, executeCodeToolDef)
+	}
 	return loopConfig{
 		name:           "agent:" + a.name,
 		provider:       provider,
@@ -131,10 +136,10 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 	}
 }
 
-// makeDispatch returns a dispatchFunc that executes tools via the given registry
+// makeDispatch returns a DispatchFunc that executes tools via the given registry
 // and handles the ask_user and execute_plan special cases.
-func (a *LLMAgent) makeDispatch(registry *ToolRegistry) dispatchFunc {
-	var dispatch dispatchFunc
+func (a *LLMAgent) makeDispatch(registry *ToolRegistry) DispatchFunc {
+	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) (string, Usage) {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && a.inputHandler != nil {
@@ -148,6 +153,11 @@ func (a *LLMAgent) makeDispatch(registry *ToolRegistry) dispatchFunc {
 		// Special case: execute_plan tool
 		if tc.Name == "execute_plan" && a.planExecution {
 			return executePlan(ctx, tc.Args, dispatch)
+		}
+
+		// Special case: execute_code tool
+		if tc.Name == "execute_code" && a.codeRunner != nil {
+			return executeCode(ctx, tc.Args, a.codeRunner, dispatch)
 		}
 
 		result, execErr := registry.Execute(ctx, tc.Name, tc.Args)
@@ -217,7 +227,7 @@ type planStepResult struct {
 // executePlan handles the execute_plan tool call by parsing steps,
 // executing them in parallel via the given dispatch function, and
 // returning aggregated results as JSON. Shared by LLMAgent and Network.
-func executePlan(ctx context.Context, args json.RawMessage, dispatch dispatchFunc) (string, Usage) {
+func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFunc) (string, Usage) {
 	var params planArgs
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "error: invalid execute_plan args: " + err.Error(), Usage{}
@@ -260,6 +270,62 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch dispatchFun
 
 	out, _ := json.Marshal(stepResults)
 	return string(out), totalUsage
+}
+
+// --- execute_code tool ---
+
+// executeCodeToolDef is the tool definition for the built-in execute_code tool.
+var executeCodeToolDef = ToolDefinition{
+	Name:        "execute_code",
+	Description: "Execute Python code to perform complex operations. Use when you need conditional logic, data processing, loops, or to chain multiple tool calls with dependencies. You have access to call_tool(name, args) to invoke any available tool from within your code. The Python environment has full access to installed packages. Use print() for logs/debug output. Return results via set_result(data).",
+	Parameters: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"code": {
+				"type": "string",
+				"description": "Python code to execute. Use call_tool(name, args) to call tools. Use call_tools_parallel([(name, args), ...]) for parallel tool calls. Use set_result(data) to return structured results. Use print() for debug output."
+			}
+		},
+		"required": ["code"]
+	}`),
+}
+
+// executeCode handles the execute_code tool call by delegating to the CodeRunner.
+func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, dispatch DispatchFunc) (string, Usage) {
+	var params struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "error: invalid execute_code args: " + err.Error(), Usage{}
+	}
+	if params.Code == "" {
+		return "error: execute_code requires non-empty code", Usage{}
+	}
+
+	result, err := runner.Run(ctx, CodeRequest{Code: params.Code}, dispatch)
+	if err != nil {
+		return "error: code execution failed: " + err.Error(), Usage{}
+	}
+
+	// Build response: prioritize structured output, include logs
+	var response string
+	if result.Error != "" {
+		response = "error: " + result.Error
+		if result.Logs != "" {
+			response += "\n\nlogs:\n" + result.Logs
+		}
+		return response, Usage{}
+	}
+
+	if result.Output != "" {
+		response = result.Output
+	} else {
+		response = "(no result set — use set_result(data) to return structured output)"
+	}
+	if result.Logs != "" {
+		response += "\n\nlogs:\n" + result.Logs
+	}
+	return response, Usage{}
 }
 
 // --- ask_user tool ---

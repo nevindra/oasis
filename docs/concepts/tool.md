@@ -198,8 +198,51 @@ sequenceDiagram
 
 Works with both `LLMAgent` and `Network`. Provider-agnostic — any LLM can use it.
 
+## Code Execution
+
+When the LLM needs more than parallel fan-out — conditionals, loops, data flow between tool calls — use code execution. The LLM writes Python code that runs in a sandboxed subprocess with full access to agent tools via `call_tool()`.
+
+Enable with `WithCodeExecution()`:
+
+```go
+import "github.com/nevindra/oasis/code"
+
+runner := code.NewSubprocessRunner("python3")
+
+agent := oasis.NewLLMAgent("analyst", "Data analyst", provider,
+    oasis.WithTools(searchTool, fileTool),
+    oasis.WithCodeExecution(runner), // injects execute_code tool
+)
+```
+
+The framework auto-injects an `execute_code` tool. The LLM writes Python code that can call tools:
+
+```json
+{
+    "name": "execute_code",
+    "input": {
+        "code": "results = call_tool('web_search', {'query': 'Go frameworks'})\nfiltered = [r for r in results if r.get('score', 0) > 0.8]\nset_result({'top_results': filtered})"
+    }
+}
+```
+
+### Plan vs Code Execution
+
+| | `execute_plan` | `execute_code` |
+|---|---|---|
+| **Control flow** | Parallel only | Conditionals, loops, data flow |
+| **Data dependencies** | None | Full |
+| **Overhead** | None (Go-native) | Python subprocess |
+| **Best for** | Independent fan-out | Complex logic |
+
+Both can be enabled on the same agent — the LLM picks the right tool for each task.
+
+See [Code Execution](code-execution.md) for the full architecture, safety model, and Python API reference.
+
 ## See Also
 
 - [Custom Tool Guide](../guides/custom-tool.md) — build your own tool step by step
+- [Code Execution](code-execution.md) — sandboxed Python execution with tool bridge
+- [Code Execution Guide](../guides/code-execution.md) — patterns and recipes
 - [Agent](agent.md) — how agents use tools
 - [API Reference: Interfaces](../api/interfaces.md)

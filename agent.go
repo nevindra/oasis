@@ -131,6 +131,7 @@ type agentConfig struct {
 	maxHistory        int     // set by MaxHistory inside WithConversationMemory
 	maxTokens         int     // set by MaxTokens inside WithConversationMemory
 	planExecution     bool            // enabled by WithPlanExecution option
+	codeRunner        CodeRunner      // set by WithCodeExecution option
 	responseSchema    *ResponseSchema // set by WithResponseSchema option
 	dynamicPrompt     PromptFunc      // set by WithDynamicPrompt option
 	dynamicModel      ModelFunc       // set by WithDynamicModel option
@@ -188,6 +189,16 @@ func WithAgents(agents ...Agent) AgentOption {
 // needs to call the same or different tools multiple times with known inputs.
 func WithPlanExecution() AgentOption {
 	return func(c *agentConfig) { c.planExecution = true }
+}
+
+// WithCodeExecution enables the built-in "execute_code" tool that lets the LLM
+// write and execute Python code in a sandboxed subprocess. The code has access
+// to all agent tools via call_tool(name, args) and call_tools_parallel(calls).
+//
+// This complements WithPlanExecution: use execute_plan for simple parallel
+// fan-out, use execute_code for complex logic (conditionals, loops, data flow).
+func WithCodeExecution(runner CodeRunner) AgentOption {
+	return func(c *agentConfig) { c.codeRunner = runner }
 }
 
 // WithResponseSchema sets the response schema for structured JSON output.
@@ -338,10 +349,10 @@ func buildConfig(opts []AgentOption) agentConfig {
 
 // --- shared execution loop ---
 
-// dispatchFunc executes a single tool call and returns its content and usage.
+// DispatchFunc executes a single tool call and returns its content and usage.
 // LLMAgent provides one that calls ToolRegistry.Execute + ask_user.
 // Network provides one that also routes to subagents via the agent_* prefix.
-type dispatchFunc func(ctx context.Context, tc ToolCall) (string, Usage)
+type DispatchFunc func(ctx context.Context, tc ToolCall) (string, Usage)
 
 // loopConfig holds everything the shared runLoop needs to run.
 type loopConfig struct {
@@ -352,7 +363,7 @@ type loopConfig struct {
 	maxIter        int
 	mem            *agentMemory
 	inputHandler   InputHandler
-	dispatch       dispatchFunc
+	dispatch       DispatchFunc
 	systemPrompt   string
 	resumeMessages []ChatMessage    // if set, replaces buildMessages (used by suspend/resume)
 	responseSchema *ResponseSchema  // if set, attached to every ChatRequest
@@ -610,7 +621,7 @@ type toolExecResult struct {
 
 // dispatchParallel runs all tool calls concurrently via the dispatch function
 // and returns results in the same order as the input calls.
-func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch dispatchFunc) []toolExecResult {
+func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFunc) []toolExecResult {
 	results := make([]toolExecResult, len(calls))
 	var wg sync.WaitGroup
 

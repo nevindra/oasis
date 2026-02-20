@@ -13,6 +13,7 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithProcessors(processors ...any)` | Add processor middleware |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
 | `WithPlanExecution()` | Enable batched tool calls via built-in `execute_plan` tool |
+| `WithCodeExecution(runner CodeRunner)` | Enable Python code execution via built-in `execute_code` tool |
 | `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output matching the schema |
 | `WithDynamicPrompt(fn PromptFunc)` | Per-request system prompt resolution. Overrides `WithPrompt` |
 | `WithDynamicModel(fn ModelFunc)` | Per-request provider/model selection. Overrides constructor provider |
@@ -128,3 +129,17 @@ Chunker options:
 | `WithMaxTokens(n int)` | 512 | Max tokens per chunk |
 | `WithOverlapTokens(n int)` | 50 | Overlap between consecutive chunks |
 | `WithBreakpointPercentile(p int)` | 25 | Similarity percentile for semantic split detection (SemanticChunker) |
+
+## CodeRunner Options
+
+**Package:** `github.com/nevindra/oasis/code`
+
+Configures `code.NewSubprocessRunner`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithTimeout(d time.Duration)` | 30s | Maximum execution duration. Subprocess is killed on timeout |
+| `WithMaxOutput(bytes int)` | 64KB | Maximum output size. Output beyond this is truncated |
+| `WithWorkspace(path string)` | `os.TempDir()` | Working directory. File operations restricted to this path |
+| `WithEnv(key, value string)` | — | Set environment variable. Multiple calls accumulate |
+| `WithEnvPassthrough()` | minimal env | Pass all host environment variables to subprocess |
