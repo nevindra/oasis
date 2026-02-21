@@ -767,7 +767,7 @@ type executionState struct {
 	failureSkipped map[string]bool // steps skipped due to upstream failure (not When() condition)
 	suspendedStep  string          // name of step that suspended
 	suspendPayload json.RawMessage // payload from the suspended step
-	mu             sync.Mutex      // protects results, failedStep, failureSkipped
+	mu             sync.RWMutex    // protects results, failedStep, failureSkipped
 	cancel         context.CancelFunc
 }
 
@@ -778,8 +778,8 @@ func (s *executionState) setResult(name string, sr StepResult) {
 }
 
 func (s *executionState) getResult(name string) (StepResult, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	r, ok := s.results[name]
 	return r, ok
 }
@@ -1023,8 +1023,8 @@ func (w *Workflow) runDAG(ctx context.Context, state *executionState) {
 // suspended, or was itself skipped due to an upstream failure. Steps skipped
 // by a When() condition are treated as satisfied and do NOT propagate failure.
 func (w *Workflow) hasFailedUpstream(s *stepConfig, state *executionState) bool {
-	state.mu.Lock()
-	defer state.mu.Unlock()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
 	for _, dep := range s.after {
 		r, ok := state.results[dep]
 		if !ok {
@@ -1210,7 +1210,7 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	errCh := make(chan error, len(items))
+	errCh := make(chan error, concurrency)
 
 	for i, item := range items {
 		select {

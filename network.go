@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -17,7 +18,8 @@ type Network struct {
 	name          string
 	description   string
 	router        Provider
-	agents        map[string]Agent // keyed by name
+	agents            map[string]Agent // keyed by name
+	sortedAgentNames  []string         // pre-sorted for deterministic tool ordering
 	tools         *ToolRegistry
 	processors    *ProcessorChain
 	systemPrompt  string
@@ -63,7 +65,9 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	}
 	for _, a := range cfg.agents {
 		n.agents[a.Name()] = a
+		n.sortedAgentNames = append(n.sortedAgentNames, a.Name())
 	}
+	sort.Strings(n.sortedAgentNames)
 	for _, p := range cfg.processors {
 		n.processors.Add(p)
 	}
@@ -232,14 +236,15 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 }
 
 // buildToolDefs builds tool definitions from subagents and the given tool registry.
+// Agent tools use pre-sorted names for deterministic ordering across calls.
 func (n *Network) buildToolDefs(registry *ToolRegistry) []ToolDefinition {
 	var defs []ToolDefinition
 
-	// Agent tool definitions
-	for name, agent := range n.agents {
+	// Agent tool definitions (order fixed at construction time).
+	for _, name := range n.sortedAgentNames {
 		defs = append(defs, ToolDefinition{
 			Name:        "agent_" + name,
-			Description: agent.Description(),
+			Description: n.agents[name].Description(),
 			Parameters: json.RawMessage(
 				`{"type":"object","properties":{"task":{"type":"string","description":"The user's original message, copied verbatim. Do not paraphrase, translate, or summarize."}},"required":["task"]}`,
 			),

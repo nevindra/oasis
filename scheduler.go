@@ -164,6 +164,9 @@ func dayNameToDOW(name string) (int64, bool) {
 // schedParseInt parses a non-negative integer from a string.
 // Returns -1 if the string contains non-digit characters or is empty.
 func schedParseInt(s string) int {
+	if len(s) == 0 {
+		return -1
+	}
 	n := 0
 	for _, c := range s {
 		if c >= '0' && c <= '9' {
@@ -299,12 +302,17 @@ func NewScheduler(store Store, agent Agent, opts ...SchedulerOption) *Scheduler 
 // Start begins the polling loop. Blocks until ctx is cancelled.
 // Returns nil on clean shutdown.
 func (s *Scheduler) Start(ctx context.Context) error {
+	timer := time.NewTimer(0)
+	// Drain the initial fire so the first tick runs immediately.
+	<-timer.C
 	for {
 		s.tick(ctx)
+		timer.Reset(s.interval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil
-		case <-time.After(s.interval):
+		case <-timer.C:
 		}
 	}
 }

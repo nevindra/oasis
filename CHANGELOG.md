@@ -22,6 +22,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **Non-deterministic tool ordering in Network** — `buildToolDefs` iterated a map, causing randomized tool order sent to the LLM router on each call. Agent names are now pre-sorted at construction time for deterministic routing behavior
 - **PostProcessor skipped for no-tools streaming path** — `RunPostLLM` was never called when using `ExecuteStream` on a tool-less agent or on the max-iteration synthesis path. Processors now run for side effects (logging, validation) after streaming completes
 - **State/Done ordering in AgentHandle** — `State()` could return a terminal value before `Done()` was closed, causing `Result()` to return zero values. `State()` now waits on `Done()` when terminal, guaranteeing `Result()` consistency
+- **`schedParseInt` empty string accepted as valid** — empty string input returned 0 instead of -1, allowing malformed schedules like `":30 daily"` to be silently accepted as `"00:30 daily"`. Now correctly rejects empty components
+- **Timer leak in `Scheduler.Start`** — each polling iteration allocated a new `time.After` timer that could not be garbage collected until it fired. Replaced with a reusable `time.NewTimer` with proper `Stop()` on shutdown
 
 ### Changed
 
@@ -30,6 +32,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **Bounded parallel tool dispatch** — `dispatchParallel` now caps concurrency at 10 goroutines to prevent rate limiting and resource exhaustion. Single tool calls run inline without goroutine overhead
 - **Timeout on background persist goroutine** — `persistMessages` now applies a 30-second timeout to prevent goroutine leaks when store or embedding operations hang
 - **Batched fact embedding** — `extractAndPersistFacts` now embeds all extracted facts in a single `Embed` call instead of one per fact, reducing HTTP round-trips
+- **`ForEach` error channel right-sized** — `executeForEach` allocated `len(items)` buffer for the error channel; now uses `concurrency` (the actual max in-flight goroutines), saving memory on large collections
+- **`executionState` uses `sync.RWMutex`** — `getResult` and `hasFailedUpstream` now use `RLock` instead of exclusive `Lock`, allowing concurrent reads during DAG wave evaluation
 
 ## [0.5.0] - 2026-02-19
 

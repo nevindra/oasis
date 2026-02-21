@@ -97,7 +97,15 @@ func (h *AgentHandle) ID() string { return h.id }
 func (h *AgentHandle) Agent() Agent { return h.agent }
 
 // State returns the current execution state.
-func (h *AgentHandle) State() AgentState { return AgentState(h.state.Load()) }
+// If the state is terminal, State blocks until Done() is closed (nanoseconds)
+// to guarantee that Result() returns valid data when State().IsTerminal() is true.
+func (h *AgentHandle) State() AgentState {
+	s := AgentState(h.state.Load())
+	if s.IsTerminal() {
+		<-h.done
+	}
+	return s
+}
 
 // Done returns a channel closed when execution finishes (any terminal state).
 // Composable with select for multiplexing multiple handles.

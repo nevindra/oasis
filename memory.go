@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"strings"
+	"time"
 )
 
 // ExtractedFact is a user fact extracted from a conversation turn.
@@ -192,7 +193,9 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 	go func() {
 		// Detach from parent cancellation so persist + extraction can finish
 		// even after the handler returns. Inherits context values (trace IDs).
-		bgCtx := context.WithoutCancel(ctx)
+		// Timeout prevents goroutine leaks if store or embedding hangs.
+		bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
 
 		userMsg := Message{
 			ID: NewID(), ThreadID: threadID,
@@ -303,17 +306,29 @@ func (m *agentMemory) extractAndPersistFacts(ctx context.Context, agentName, use
 	}
 
 	facts := parseExtractedFacts(resp.Content)
+	if len(facts) == 0 {
+		return
+	}
+
+	// Handle supersedes first.
 	for _, f := range facts {
-		// Handle supersedes: semantically find and delete the old fact.
 		if f.Supersedes != nil {
 			m.deleteSupersededFact(ctx, agentName, *f.Supersedes)
 		}
+	}
 
-		embs, err := m.embedding.Embed(ctx, []string{f.Fact})
-		if err == nil && len(embs) > 0 {
-			if err := m.memory.UpsertFact(ctx, f.Fact, f.Category, embs[0]); err != nil {
-				log.Printf("[agent:%s] upsert fact: %v", agentName, err)
-			}
+	// Batch embed all facts in a single call.
+	texts := make([]string, len(facts))
+	for i, f := range facts {
+		texts[i] = f.Fact
+	}
+	embs, err := m.embedding.Embed(ctx, texts)
+	if err != nil || len(embs) != len(facts) {
+		return
+	}
+	for i, f := range facts {
+		if err := m.memory.UpsertFact(ctx, f.Fact, f.Category, embs[i]); err != nil {
+			log.Printf("[agent:%s] upsert fact: %v", agentName, err)
 		}
 	}
 }

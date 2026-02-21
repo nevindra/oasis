@@ -417,12 +417,23 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			resp, err = cfg.provider.ChatWithTools(ctx, req, cfg.tools)
 		} else if ch != nil {
 			// No tools, streaming — stream the response directly.
+			// ChatStream closes ch on completion or error.
 			resp, err = cfg.provider.ChatStream(ctx, req, ch)
 			if err != nil {
 				return AgentResult{Usage: totalUsage, Steps: steps}, err
 			}
 			totalUsage.InputTokens += resp.Usage.InputTokens
 			totalUsage.OutputTokens += resp.Usage.OutputTokens
+
+			// PostProcessor hook (response already streamed, but processors
+			// still run for side effects like logging and validation).
+			if err := cfg.processors.RunPostLLM(ctx, &resp); err != nil {
+				if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
+					return AgentResult{Usage: totalUsage, Steps: steps}, s
+				}
+				return handleProcessorErrorWithSteps(err, totalUsage, steps)
+			}
+
 			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
 			return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 		} else {
@@ -537,6 +548,14 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	totalUsage.InputTokens += resp.Usage.InputTokens
 	totalUsage.OutputTokens += resp.Usage.OutputTokens
 
+	// PostProcessor hook.
+	if err := cfg.processors.RunPostLLM(ctx, &resp); err != nil {
+		if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
+			return AgentResult{Usage: totalUsage, Steps: steps}, s
+		}
+		return handleProcessorErrorWithSteps(err, totalUsage, steps)
+	}
+
 	cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
 	return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 }
@@ -619,20 +638,50 @@ type toolExecResult struct {
 	duration time.Duration
 }
 
+// maxParallelDispatch caps the number of concurrent tool call goroutines
+// to avoid overwhelming external services with unbounded parallelism.
+const maxParallelDispatch = 10
+
 // dispatchParallel runs all tool calls concurrently via the dispatch function
 // and returns results in the same order as the input calls.
+// Single calls run inline (no goroutine). Multiple calls are capped at
+// maxParallelDispatch concurrent goroutines.
 func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFunc) []toolExecResult {
+	// Fast path: single call, no goroutine needed.
+	if len(calls) == 1 {
+		start := time.Now()
+		content, usage := dispatch(ctx, calls[0])
+		return []toolExecResult{{content: content, usage: usage, duration: time.Since(start)}}
+	}
+
 	results := make([]toolExecResult, len(calls))
 	var wg sync.WaitGroup
 
-	for i, tc := range calls {
-		wg.Add(1)
-		go func(idx int, tc ToolCall) {
-			defer wg.Done()
-			start := time.Now()
-			content, usage := dispatch(ctx, tc)
-			results[idx] = toolExecResult{content: content, usage: usage, duration: time.Since(start)}
-		}(i, tc)
+	if len(calls) <= maxParallelDispatch {
+		// All calls fit within the limit — no semaphore needed.
+		for i, tc := range calls {
+			wg.Add(1)
+			go func(idx int, tc ToolCall) {
+				defer wg.Done()
+				start := time.Now()
+				content, usage := dispatch(ctx, tc)
+				results[idx] = toolExecResult{content: content, usage: usage, duration: time.Since(start)}
+			}(i, tc)
+		}
+	} else {
+		// More calls than the limit — use semaphore to cap concurrency.
+		sem := make(chan struct{}, maxParallelDispatch)
+		for i, tc := range calls {
+			wg.Add(1)
+			go func(idx int, tc ToolCall) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				start := time.Now()
+				content, usage := dispatch(ctx, tc)
+				results[idx] = toolExecResult{content: content, usage: usage, duration: time.Since(start)}
+			}(i, tc)
+		}
 	}
 
 	wg.Wait()

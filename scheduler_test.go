@@ -267,7 +267,7 @@ func TestSchedParseInt(t *testing.T) {
 		{"0", 0},
 		{"15", 15},
 		{"99", 99},
-		{"", 0},     // empty string -> 0 (loop doesn't execute)
+		{"", -1},    // empty string -> -1 (invalid)
 		{"abc", -1}, // non-digit
 		{"1a2", -1}, // mixed
 	}
