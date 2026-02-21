@@ -1,6 +1,10 @@
 package ingest
 
-import oasis "github.com/nevindra/oasis"
+import (
+	"log/slog"
+
+	oasis "github.com/nevindra/oasis"
+)
 
 // Option configures an Ingestor.
 type Option func(*Ingestor)
@@ -81,4 +85,14 @@ func WithCrossDocumentEdges(b bool) Option {
 // for additional context. Works independently of WithGraphExtraction.
 func WithSequenceEdges(b bool) Option {
 	return func(ing *Ingestor) { ing.sequenceEdges = b }
+}
+
+// WithIngestorTracer sets the Tracer for an Ingestor.
+func WithIngestorTracer(t oasis.Tracer) Option {
+	return func(ing *Ingestor) { ing.tracer = t }
+}
+
+// WithIngestorLogger sets the structured logger for an Ingestor.
+func WithIngestorLogger(l *slog.Logger) Option {
+	return func(ing *Ingestor) { ing.logger = l }
 }

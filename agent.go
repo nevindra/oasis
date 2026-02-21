@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -136,6 +136,8 @@ type agentConfig struct {
 	dynamicPrompt     PromptFunc      // set by WithDynamicPrompt option
 	dynamicModel      ModelFunc       // set by WithDynamicModel option
 	dynamicTools      ToolsFunc       // set by WithDynamicTools option
+	tracer            Tracer          // set by WithTracer option
+	logger            *slog.Logger    // set by WithLogger option
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -232,6 +234,20 @@ func WithDynamicModel(fn ModelFunc) AgentOption {
 // execution. To remove all tools for a request, return nil or an empty slice.
 func WithDynamicTools(fn ToolsFunc) AgentOption {
 	return func(c *agentConfig) { c.dynamicTools = fn }
+}
+
+// WithTracer sets the tracer for the agent. When set, the agent emits
+// spans for execution, memory, and loop operations. Use observer.NewTracer()
+// for an OTEL-backed implementation.
+func WithTracer(t Tracer) AgentOption {
+	return func(c *agentConfig) { c.tracer = t }
+}
+
+// WithLogger sets the structured logger for the agent. When set, replaces
+// all log.Printf calls with structured slog output. If not set, a no-op
+// logger is used (no output).
+func WithLogger(l *slog.Logger) AgentOption {
+	return func(c *agentConfig) { c.logger = l }
 }
 
 // WithProcessors adds processors to the agent's execution pipeline.
@@ -335,14 +351,27 @@ func WithUserMemory(m MemoryStore, e EmbeddingProvider) AgentOption {
 }
 
 
+// nopLogger is a logger that discards all output. Used when WithLogger is not set.
+var nopLogger = slog.New(discardHandler{})
+
+type discardHandler struct{}
+
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d discardHandler) WithGroup(string) slog.Handler            { return d }
+
 func buildConfig(opts []AgentOption) agentConfig {
 	var c agentConfig
 	for _, opt := range opts {
 		opt(&c)
 	}
+	if c.logger == nil {
+		c.logger = nopLogger
+	}
 	// Warn about misconfigurations that can't be caught at compile time.
 	if c.memory != nil && c.store == nil {
-		log.Printf("[oasis] warning: WithUserMemory without WithConversationMemory — fact extraction (write) will be silently skipped")
+		c.logger.Warn("WithUserMemory without WithConversationMemory — fact extraction (write) will be silently skipped")
 	}
 	return c
 }
@@ -367,6 +396,8 @@ type loopConfig struct {
 	systemPrompt   string
 	resumeMessages []ChatMessage    // if set, replaces buildMessages (used by suspend/resume)
 	responseSchema *ResponseSchema  // if set, attached to every ChatRequest
+	tracer         Tracer           // nil = no tracing
+	logger         *slog.Logger     // never nil (nopLogger fallback)
 }
 
 // runLoop is the shared tool-calling loop used by both LLMAgent and Network.
@@ -397,10 +428,25 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	var lastAgentOutput string
 
 	for i := 0; i < cfg.maxIter; i++ {
+		// Start an iteration span if tracing is enabled.
+		iterCtx := ctx
+		var iterSpan Span
+		if cfg.tracer != nil {
+			iterCtx, iterSpan = cfg.tracer.Start(ctx, "agent.loop.iteration",
+				IntAttr("iteration", i),
+				BoolAttr("has_tools", len(cfg.tools) > 0))
+		}
+		endIter := func() {
+			if iterSpan != nil {
+				iterSpan.End()
+			}
+		}
+
 		req := ChatRequest{Messages: messages, ResponseSchema: cfg.responseSchema}
 
 		// PreProcessor hook.
-		if err := cfg.processors.RunPreLLM(ctx, &req); err != nil {
+		if err := cfg.processors.RunPreLLM(iterCtx, &req); err != nil {
+			endIter()
 			if ch != nil {
 				close(ch)
 			}
@@ -414,12 +460,13 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		var err error
 
 		if len(cfg.tools) > 0 {
-			resp, err = cfg.provider.ChatWithTools(ctx, req, cfg.tools)
+			resp, err = cfg.provider.ChatWithTools(iterCtx, req, cfg.tools)
 		} else if ch != nil {
 			// No tools, streaming — stream the response directly.
 			// ChatStream closes ch on completion or error.
-			resp, err = cfg.provider.ChatStream(ctx, req, ch)
+			resp, err = cfg.provider.ChatStream(iterCtx, req, ch)
 			if err != nil {
+				endIter()
 				return AgentResult{Usage: totalUsage, Steps: steps}, err
 			}
 			totalUsage.InputTokens += resp.Usage.InputTokens
@@ -427,20 +474,23 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 			// PostProcessor hook (response already streamed, but processors
 			// still run for side effects like logging and validation).
-			if err := cfg.processors.RunPostLLM(ctx, &resp); err != nil {
+			if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
+				endIter()
 				if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
 					return AgentResult{Usage: totalUsage, Steps: steps}, s
 				}
 				return handleProcessorErrorWithSteps(err, totalUsage, steps)
 			}
 
-			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
+			endIter()
+			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, resp.Content)
 			return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 		} else {
-			resp, err = cfg.provider.Chat(ctx, req)
+			resp, err = cfg.provider.Chat(iterCtx, req)
 		}
 
 		if err != nil {
+			endIter()
 			if ch != nil {
 				close(ch)
 			}
@@ -450,7 +500,8 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		totalUsage.OutputTokens += resp.Usage.OutputTokens
 
 		// PostProcessor hook.
-		if err := cfg.processors.RunPostLLM(ctx, &resp); err != nil {
+		if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
+			endIter()
 			if ch != nil {
 				close(ch)
 			}
@@ -470,8 +521,13 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				ch <- StreamEvent{Type: EventTextDelta, Content: content}
 				close(ch)
 			}
-			cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, content)
+			endIter()
+			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, content)
 			return AgentResult{Output: content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
+		}
+
+		if iterSpan != nil {
+			iterSpan.SetAttr(IntAttr("tool_count", len(resp.ToolCalls)))
 		}
 
 		// Append assistant message with tool calls.
@@ -489,7 +545,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		}
 
 		// Execute tool calls in parallel.
-		results := dispatchParallel(ctx, resp.ToolCalls, cfg.dispatch)
+		results := dispatchParallel(iterCtx, resp.ToolCalls, cfg.dispatch)
 
 		// Process results sequentially (PostToolProcessor + message assembly + trace collection).
 		for j, tc := range resp.ToolCalls {
@@ -512,7 +568,8 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			steps = append(steps, trace)
 
 			result := ToolResult{Content: results[j].content}
-			if err := cfg.processors.RunPostTool(ctx, tc, &result); err != nil {
+			if err := cfg.processors.RunPostTool(iterCtx, tc, &result); err != nil {
+				endIter()
 				if ch != nil {
 					close(ch)
 				}
@@ -528,10 +585,11 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				lastAgentOutput = result.Content
 			}
 		}
+		endIter()
 	}
 
 	// Max iterations — force synthesis.
-	log.Printf("[%s] max iterations reached, forcing synthesis", cfg.name)
+	cfg.logger.Warn("max iterations reached, forcing synthesis", "agent", cfg.name, "iteration", cfg.maxIter)
 	messages = append(messages, UserMessage(
 		"You have used all available tool calls. Summarize what you found and respond to the user."))
 

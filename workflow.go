@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -266,6 +266,8 @@ type workflowConfig struct {
 	onError      func(string, error)
 	defaultRetry int
 	defaultDelay time.Duration
+	tracer       Tracer
+	logger       *slog.Logger
 }
 
 // --- Step options ---
@@ -367,6 +369,18 @@ func WithDefaultRetry(n int, delay time.Duration) WorkflowOption {
 		c.defaultRetry = n
 		c.defaultDelay = delay
 	}
+}
+
+// WithWorkflowTracer sets the tracer for the workflow. When set, the workflow
+// emits spans for execution and step lifecycle events.
+func WithWorkflowTracer(t Tracer) WorkflowOption {
+	return func(c *workflowConfig) { c.tracer = t }
+}
+
+// WithWorkflowLogger sets the structured logger for the workflow.
+// If not set, a no-op logger is used (no output).
+func WithWorkflowLogger(l *slog.Logger) WorkflowOption {
+	return func(c *workflowConfig) { c.logger = l }
 }
 
 // --- Step definitions (return WorkflowOption) ---
@@ -589,6 +603,8 @@ type Workflow struct {
 	onError      func(string, error)
 	defaultRetry int
 	defaultDelay time.Duration
+	tracer       Tracer
+	logger       *slog.Logger
 }
 
 // compile-time check
@@ -616,6 +632,11 @@ func NewWorkflow(name, description string, opts ...WorkflowOption) (*Workflow, e
 		opt(&cfg)
 	}
 
+	logger := cfg.logger
+	if logger == nil {
+		logger = nopLogger
+	}
+
 	w := &Workflow{
 		name:         name,
 		description:  description,
@@ -625,6 +646,8 @@ func NewWorkflow(name, description string, opts ...WorkflowOption) (*Workflow, e
 		onError:      cfg.onError,
 		defaultRetry: cfg.defaultRetry,
 		defaultDelay: cfg.defaultDelay,
+		tracer:       cfg.tracer,
+		logger:       logger,
 	}
 
 	// Register steps, check for duplicates.
@@ -679,7 +702,7 @@ func NewWorkflow(name, description string, opts ...WorkflowOption) (*Workflow, e
 	reachable := w.findReachable()
 	for _, s := range cfg.steps {
 		if !reachable[s.name] {
-			log.Printf(" [workflow] warning: step %q in workflow %q is unreachable", s.name, name)
+			logger.Warn("unreachable step", "workflow", name, "step", s.name)
 		}
 	}
 
@@ -789,6 +812,35 @@ func (s *executionState) getResult(name string) (StepResult, bool) {
 // and marks downstream steps as StepSkipped.
 // Returns an AgentResult with the last successful step's output.
 func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+	if w.tracer != nil {
+		var span Span
+		ctx, span = w.tracer.Start(ctx, "workflow.execute",
+			StringAttr("workflow.name", w.name),
+			IntAttr("step_count", len(w.stepOrder)))
+		defer func() { span.End() }()
+
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		state := &executionState{
+			wCtx:           newWorkflowContext(task),
+			results:        make(map[string]StepResult),
+			failureSkipped: make(map[string]bool),
+			cancel:         cancel,
+		}
+
+		w.runDAG(ctx, state)
+
+		result, err := w.buildResult(state, task)
+		if err != nil {
+			span.Error(err)
+			span.SetAttr(StringAttr("workflow.status", "error"))
+		} else {
+			span.SetAttr(StringAttr("workflow.status", "ok"))
+		}
+		return result, err
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -1044,6 +1096,20 @@ func (w *Workflow) hasFailedUpstream(s *stepConfig, state *executionState) bool 
 func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *executionState) {
 	start := time.Now()
 
+	var stepSpan Span
+	if w.tracer != nil {
+		ctx, stepSpan = w.tracer.Start(ctx, "workflow.step",
+			StringAttr("step.name", s.name))
+	}
+	endSpan := func(status string) {
+		if stepSpan != nil {
+			stepSpan.SetAttr(
+				StringAttr("step.status", status),
+				Float64Attr("step.duration_ms", float64(time.Since(start).Milliseconds())))
+			stepSpan.End()
+		}
+	}
+
 	// Check context cancellation before starting.
 	if ctx.Err() != nil {
 		state.setResult(s.name, StepResult{
@@ -1051,6 +1117,7 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 			Status:   StepSkipped,
 			Duration: time.Since(start),
 		})
+		endSpan("skipped")
 		return
 	}
 
@@ -1061,7 +1128,8 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 			Status:   StepSkipped,
 			Duration: time.Since(start),
 		})
-		log.Printf(" [workflow] step %q skipped (condition not met)", s.name)
+		w.logger.Debug("step skipped (condition not met)", "workflow", w.name, "step", s.name)
+		endSpan("skipped")
 		return
 	}
 
@@ -1100,7 +1168,8 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 			state.suspendPayload = suspend.payload
 		}
 		state.mu.Unlock()
-		log.Printf(" [workflow] step %q suspended", s.name)
+		w.logger.Info("step suspended", "workflow", w.name, "step", s.name)
+		endSpan("suspended")
 		return
 	}
 
@@ -1117,7 +1186,7 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 		}
 		state.mu.Unlock()
 
-		log.Printf(" [workflow] step %q failed: %v", s.name, err)
+		w.logger.Error("step failed", "workflow", w.name, "step", s.name, "error", err)
 
 		// Call onError callback.
 		if w.onError != nil {
@@ -1126,6 +1195,10 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 
 		// Fail fast: cancel context so in-flight steps get cancelled.
 		state.cancel()
+		if stepSpan != nil {
+			stepSpan.Error(err)
+		}
+		endSpan("failed")
 		return
 	}
 
@@ -1137,7 +1210,8 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 		Output:   output,
 		Duration: duration,
 	})
-	log.Printf(" [workflow] step %q completed in %s", s.name, duration)
+	w.logger.Info("step completed", "workflow", w.name, "step", s.name, "duration", duration)
+	endSpan("success")
 }
 
 // executeWithRetry wraps a step execution function with retry logic.
@@ -1155,7 +1229,7 @@ func (w *Workflow) executeWithRetry(ctx context.Context, s *stepConfig, run func
 				case <-time.After(s.retryDelay):
 				}
 			}
-			log.Printf(" [workflow] step %q retry %d/%d", s.name, attempt, s.retry)
+			w.logger.Info("step retry", "workflow", w.name, "step", s.name, "attempt", attempt, "max_retries", s.retry)
 		}
 
 		lastErr = run()
@@ -1272,7 +1346,7 @@ func (w *Workflow) executeDoUntil(ctx context.Context, s *stepConfig, state *exe
 		}
 	}
 
-	log.Printf(" [workflow] step %q reached max iterations (%d)", s.name, maxIter)
+	w.logger.Warn("step reached max iterations", "workflow", w.name, "step", s.name, "max_iter", maxIter)
 	return nil
 }
 
@@ -1303,7 +1377,7 @@ func (w *Workflow) executeDoWhile(ctx context.Context, s *stepConfig, state *exe
 		}
 	}
 
-	log.Printf(" [workflow] step %q reached max iterations (%d)", s.name, maxIter)
+	w.logger.Warn("step reached max iterations", "workflow", w.name, "step", s.name, "max_iter", maxIter)
 	return nil
 }
 
@@ -1331,7 +1405,7 @@ func (w *Workflow) readStepOutput(s *stepConfig, wCtx *WorkflowContext) string {
 func (w *Workflow) safeCallback(fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf(" [workflow] callback panic: %v", r)
+			w.logger.Error("callback panic", "workflow", w.name, "panic", r)
 		}
 	}()
 	fn()

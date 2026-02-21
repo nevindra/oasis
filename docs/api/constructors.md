@@ -251,6 +251,6 @@ inst, shutdown, err := observer.Init(ctx, pricingOverrides)
 observer.WrapProvider(provider, modelName, inst) Provider
 observer.WrapEmbedding(embedding, modelName, inst) EmbeddingProvider
 observer.WrapTool(tool, inst) Tool
-observer.WrapAgent(agent, inst) Agent
+observer.NewTracer() oasis.Tracer
 observer.NewCostCalculator(overrides) *CostCalculator
 ```

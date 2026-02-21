@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"time"
 )
@@ -31,6 +31,8 @@ type Network struct {
 	dynamicPrompt  PromptFunc
 	dynamicModel   ModelFunc
 	dynamicTools   ToolsFunc
+	tracer         Tracer
+	logger         *slog.Logger
 	mem            agentMemory
 }
 
@@ -78,6 +80,10 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	n.dynamicPrompt = cfg.dynamicPrompt
 	n.dynamicModel = cfg.dynamicModel
 	n.dynamicTools = cfg.dynamicTools
+	n.tracer = cfg.tracer
+	n.logger = cfg.logger
+	n.mem.tracer = cfg.tracer
+	n.mem.logger = cfg.logger
 	return n
 }
 
@@ -87,7 +93,7 @@ func (n *Network) Description() string { return n.description }
 // Execute runs the network's routing loop.
 func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)
-	return runLoop(ctx, n.buildLoopConfig(ctx, task, nil), task, nil)
+	return n.executeWithSpan(ctx, task, nil)
 }
 
 // ExecuteStream runs the network's routing loop like Execute, but emits
@@ -96,6 +102,36 @@ func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, err
 // The channel is closed when streaming completes.
 func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)
+	return n.executeWithSpan(ctx, task, ch)
+}
+
+// executeWithSpan wraps runLoop with an agent.execute span when a tracer is configured.
+func (n *Network) executeWithSpan(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
+	if n.tracer != nil {
+		var span Span
+		ctx, span = n.tracer.Start(ctx, "agent.execute",
+			StringAttr("agent.name", n.name),
+			StringAttr("agent.type", "Network"))
+		defer span.End()
+
+		n.logger.Info("network started", "network", n.name)
+		result, err := runLoop(ctx, n.buildLoopConfig(ctx, task, ch), task, ch)
+
+		span.SetAttr(
+			IntAttr("tokens.input", result.Usage.InputTokens),
+			IntAttr("tokens.output", result.Usage.OutputTokens))
+		if err != nil {
+			span.Error(err)
+			span.SetAttr(StringAttr("agent.status", "error"))
+		} else {
+			span.SetAttr(StringAttr("agent.status", "ok"))
+		}
+		n.logger.Info("network completed", "network", n.name,
+			"status", statusStr(err),
+			"tokens.input", result.Usage.InputTokens,
+			"tokens.output", result.Usage.OutputTokens)
+		return result, err
+	}
 	return runLoop(ctx, n.buildLoopConfig(ctx, task, ch), task, ch)
 }
 
@@ -145,6 +181,8 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 		dispatch:       n.makeDispatch(task, ch, registry),
 		systemPrompt:   prompt,
 		responseSchema: n.responseSchema,
+		tracer:         n.tracer,
+		logger:         n.logger,
 	}
 }
 
@@ -188,7 +226,7 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 				return "error: invalid agent call args: " + err.Error(), Usage{}
 			}
 
-			log.Printf("[network:%s] -> agent_%s: %s", n.name, agentName, truncateStr(params.Task, 80))
+			n.logger.Info("delegating to subagent", "network", n.name, "agent", agentName, "task", truncateStr(params.Task, 80))
 
 			if ch != nil {
 				ch <- StreamEvent{Type: EventAgentStart, Name: agentName, Content: params.Task}

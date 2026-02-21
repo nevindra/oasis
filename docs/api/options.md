@@ -20,6 +20,8 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithDynamicTools(fn ToolsFunc)` | Per-request tool set. **Replaces** (not merges with) `WithTools` |
 | `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable history per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact read/write |
+| `WithTracer(t Tracer)` | Enable deep tracing (agent.execute, loop, memory spans) |
+| `WithLogger(l *slog.Logger)` | Enable structured logging (defaults to no-op) |
 
 ## ConversationOption
 
@@ -66,6 +68,8 @@ Configures workflow-level behavior.
 | `WithOnFinish(fn func(WorkflowResult))` | Callback after workflow completes |
 | `WithOnError(fn func(string, error))` | Callback when a step fails |
 | `WithDefaultRetry(n int, delay time.Duration)` | Default retry for all steps |
+| `WithWorkflowTracer(t Tracer)` | Enable workflow.execute and workflow.step spans |
+| `WithWorkflowLogger(l *slog.Logger)` | Enable structured logging for workflows |
 
 ## SchedulerOption
 
@@ -106,6 +110,8 @@ Configures `NewHybridRetriever`.
 | `WithKeywordWeight(w float32)` | 0.3 | Keyword weight in RRF (vector gets 1-w) |
 | `WithOverfetchMultiplier(n int)` | 3 | Fetch topK*n candidates before trim |
 | `WithFilters(f ...ChunkFilter)` | none | Metadata filters passed to both search paths |
+| `WithRetrieverTracer(t Tracer)` | nil | Enable retriever.retrieve spans |
+| `WithRetrieverLogger(l *slog.Logger)` | nil | Enable structured logging for retrieval |
 
 ## Ingest Options
 
@@ -121,6 +127,8 @@ Configures `NewHybridRetriever`.
 | `WithChildTokens(n int)` | 256 | Child chunk size |
 | `WithBatchSize(n int)` | 64 | Chunks per Embed() call |
 | `WithExtractor(ct ContentType, e Extractor)` | — | Register custom extractor |
+| `WithIngestorTracer(t oasis.Tracer)` | nil | Enable ingest.document spans |
+| `WithIngestorLogger(l *slog.Logger)` | nil | Enable structured logging for ingestion |
 
 Chunker options:
 

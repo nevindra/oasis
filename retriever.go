@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 )
@@ -59,6 +60,8 @@ type retrieverConfig struct {
 	keywordWeight       float32
 	overfetchMultiplier int
 	filters             []ChunkFilter
+	tracer              Tracer
+	logger              *slog.Logger
 }
 
 // WithReranker sets an optional re-ranking stage that runs after hybrid merge.
@@ -88,6 +91,16 @@ func WithOverfetchMultiplier(n int) RetrieverOption {
 // WithFilters sets metadata filters passed to SearchChunks and SearchChunksKeyword.
 func WithFilters(filters ...ChunkFilter) RetrieverOption {
 	return func(c *retrieverConfig) { c.filters = filters }
+}
+
+// WithRetrieverTracer sets the Tracer for a HybridRetriever.
+func WithRetrieverTracer(t Tracer) RetrieverOption {
+	return func(c *retrieverConfig) { c.tracer = t }
+}
+
+// WithRetrieverLogger sets the structured logger for a HybridRetriever.
+func WithRetrieverLogger(l *slog.Logger) RetrieverOption {
+	return func(c *retrieverConfig) { c.logger = l }
 }
 
 // --- ScoreReranker ---
@@ -203,6 +216,25 @@ func NewHybridRetriever(store Store, embedding EmbeddingProvider, opts ...Retrie
 // Retrieve searches the knowledge base using hybrid vector + keyword search,
 // resolves parent-child chunks, optionally re-ranks, and returns the top results.
 func (h *HybridRetriever) Retrieve(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
+	if h.cfg.tracer != nil {
+		var span Span
+		ctx, span = h.cfg.tracer.Start(ctx, "retriever.retrieve",
+			StringAttr("retriever.type", "hybrid"),
+			IntAttr("topK", topK))
+		defer func() { span.End() }()
+
+		results, err := h.retrieveInner(ctx, query, topK)
+		if err != nil {
+			span.Error(err)
+		} else {
+			span.SetAttr(IntAttr("result_count", len(results)))
+		}
+		return results, err
+	}
+	return h.retrieveInner(ctx, query, topK)
+}
+
+func (h *HybridRetriever) retrieveInner(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
 	embs, err := h.embedding.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
@@ -421,6 +453,8 @@ type graphRetrieverConfig struct {
 	minTraversalScore float32
 	seedTopK          int
 	filters           []ChunkFilter
+	tracer            Tracer
+	logger            *slog.Logger
 }
 
 // WithMaxHops sets the maximum number of graph traversal hops (default 2).
@@ -474,6 +508,16 @@ func WithGraphFilters(filters ...ChunkFilter) GraphRetrieverOption {
 	return func(c *graphRetrieverConfig) { c.filters = filters }
 }
 
+// WithGraphRetrieverTracer sets the Tracer for a GraphRetriever.
+func WithGraphRetrieverTracer(t Tracer) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.tracer = t }
+}
+
+// WithGraphRetrieverLogger sets the structured logger for a GraphRetriever.
+func WithGraphRetrieverLogger(l *slog.Logger) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.logger = l }
+}
+
 // GraphRetriever combines vector search with knowledge graph traversal.
 // It performs an initial vector search to find seed chunks, then traverses
 // stored chunk edges to discover contextually related content.
@@ -504,6 +548,25 @@ func NewGraphRetriever(store Store, embedding EmbeddingProvider, opts ...GraphRe
 
 // Retrieve searches the knowledge base using vector search + graph traversal.
 func (g *GraphRetriever) Retrieve(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
+	if g.cfg.tracer != nil {
+		var span Span
+		ctx, span = g.cfg.tracer.Start(ctx, "retriever.retrieve",
+			StringAttr("retriever.type", "graph"),
+			IntAttr("topK", topK))
+		defer func() { span.End() }()
+
+		results, err := g.retrieveInner(ctx, query, topK)
+		if err != nil {
+			span.Error(err)
+		} else {
+			span.SetAttr(IntAttr("result_count", len(results)))
+		}
+		return results, err
+	}
+	return g.retrieveInner(ctx, query, topK)
+}
+
+func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
 	embs, err := g.embedding.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)

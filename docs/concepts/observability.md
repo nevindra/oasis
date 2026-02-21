@@ -1,85 +1,164 @@
 # Observability
 
-The `observer` package wraps framework components with OpenTelemetry instrumentation — traces, metrics, and cost tracking. Zero changes to existing implementations, zero overhead when disabled.
+Deep tracing and structured logging built into the core framework. The root package defines minimal `Tracer`/`Span` interfaces (zero OTEL imports); the `observer` package provides the OTEL-backed implementation. When no tracer is configured, all span creation is skipped (nil check) — zero overhead.
 
 ## Architecture
 
-```mermaid
-graph LR
-    subgraph "Your Code"
-        AGENT[Agent]
-        PROVIDER[Provider]
-        TOOL[Tool]
-        EMB[EmbeddingProvider]
-    end
-
-    subgraph "Observer Wrappers"
-        OA[ObservedAgent]
-        OP[ObservedProvider]
-        OT[ObservedTool]
-        OE[ObservedEmbedding]
-    end
-
-    subgraph "OTEL Collector"
-        TRACES[Traces]
-        METRICS[Metrics]
-    end
-
-    AGENT --> OA --> TRACES
-    PROVIDER --> OP --> TRACES
-    TOOL --> OT --> METRICS
-    EMB --> OE --> METRICS
+```text
+User Code
+  oasis.NewLLMAgent("bot", provider,
+      oasis.WithTracer(observer.NewTracer()),
+      oasis.WithLogger(slog.Default()),
+  )
+         │
+Core Framework (root package)
+  tracer.go ──► Tracer/Span interface (pure Go, no OTEL)
+  agent.go  ──► spans via tracer (nil = no-op)
+  memory.go ──► spans + slog
+  workflow.go, network.go, retriever.go, ingest/
+         │
+observer/ (OTEL implementation)
+  NewTracer()     ──► oasis.Tracer backed by otel.Tracer()
+  WrapProvider()  ──► metrics + cost (unchanged)
+  WrapTool()      ──► metrics (unchanged)
+  WrapEmbedding() ──► metrics (unchanged)
+  Init()          ──► registers TracerProvider + MeterProvider
+         │
+OTEL SDK
+  TracerProvider → Jaeger / Grafana Tempo
+  MeterProvider  → Prometheus / OTLP
 ```
-
-All wrappers implement their respective interfaces, so they plug into existing code with no changes.
 
 ## Setup
 
-**Package:** `github.com/nevindra/oasis/observer`
+### Tracing (core framework)
+
+Pass a `Tracer` to any component that supports it:
+
+```go
+tracer := observer.NewTracer() // OTEL-backed
+
+agent := oasis.NewLLMAgent("bot", provider,
+    oasis.WithTracer(tracer),
+    oasis.WithLogger(slog.Default()),
+)
+
+wf := oasis.NewWorkflow("pipeline",
+    oasis.WithWorkflowTracer(tracer),
+    oasis.WithWorkflowLogger(slog.Default()),
+)
+
+retriever := oasis.NewHybridRetriever(store, emb,
+    oasis.WithRetrieverTracer(tracer),
+)
+
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithIngestorTracer(tracer),
+)
+```
+
+### Metrics (observer wrappers)
+
+Provider, tool, and embedding metrics still use `observer.Init`:
 
 ```go
 inst, shutdown, err := observer.Init(ctx, pricingOverrides)
 defer shutdown(ctx)
-```
 
-## Wrapping Components
-
-```go
-// Provider — emits llm.chat, llm.chat_with_tools, llm.chat_stream spans
+// Provider — emits llm.chat, llm.chat_with_tools, llm.chat_stream spans + metrics
 observed := observer.WrapProvider(provider, modelName, inst)
 
-// EmbeddingProvider — emits llm.embed spans
+// EmbeddingProvider — emits llm.embed spans + metrics
 observed := observer.WrapEmbedding(embedding, modelName, inst)
 
-// Tool — emits tool.execute spans
+// Tool — emits tool.execute spans + metrics
 observed := observer.WrapTool(tool, inst)
-
-// Agent — emits agent.execute parent span + lifecycle events
-observed := observer.WrapAgent(agent, inst)
 ```
 
-Compose with `WithRetry`:
+## Tracer / Span Interface
+
+**File:** `tracer.go`
 
 ```go
-// Retry happens inside, before observer records the call
-llm := observer.WrapProvider(
-    oasis.WithRetry(gemini.New(apiKey, model)),
-    modelName, inst,
-)
+type Tracer interface {
+    Start(ctx context.Context, name string, attrs ...SpanAttr) (context.Context, Span)
+}
+
+type Span interface {
+    SetAttr(attrs ...SpanAttr)
+    Event(name string, attrs ...SpanAttr)
+    Error(err error)
+    End()
+}
+
+type SpanAttr struct {
+    Key   string
+    Value any
+}
+
+// Helpers
+func StringAttr(k, v string) SpanAttr
+func IntAttr(k string, v int) SpanAttr
+func BoolAttr(k string, v bool) SpanAttr
+func Float64Attr(k string, v float64) SpanAttr
 ```
 
-## Traces
+## Span Hierarchy
 
-| Span Name | Key Attributes |
-|-----------|---------------|
-| `llm.chat` | model, provider, input_tokens, output_tokens, cost_usd |
-| `llm.chat_with_tools` | model, provider, tokens, cost_usd, tool_count, tool_names |
-| `llm.chat_stream` | model, provider, tokens, cost_usd, stream_chunks |
-| `llm.embed` | model, provider, text_count, dimensions |
-| `tool.execute` | tool_name, status, result_length |
-| `agent.execute` | agent_name, agent_type, agent_status, tokens |
+### Agent (LLMAgent / Network)
 
-`ObservedAgent` creates a parent span that contains all inner operations as child spans via context propagation.
+```text
+agent.execute (agent.name, agent.type, agent.status, tokens)
+│
+├─ agent.memory.load (thread_id)
+│
+├─ agent.loop.iteration (iteration, tool_count)
+│   ├─ llm.chat_with_tools          ← observer/WrapProvider
+│   └─ tool.execute (per tool)       ← observer/WrapTool
+│
+├─ agent.loop.iteration (iteration=1)
+│   └─ ...
+│
+└─ agent.memory.persist (thread_id)
+```
+
+Network adds `agent.delegate` spans for sub-agent routing.
+
+### Workflow
+
+```text
+workflow.execute (workflow.name, step_count, workflow.status)
+│
+├─ workflow.step (step.name, step.status, step.duration_ms)
+├─ workflow.step
+├─ workflow.step (concurrent)
+└─ workflow.step
+```
+
+### Retrieval
+
+```text
+retriever.retrieve (retriever.type="hybrid"|"graph", topK, result_count)
+```
+
+### Ingestion
+
+```text
+ingest.document (source, title, strategy, content_type, doc_id, chunk_count)
+```
+
+## Structured Logging
+
+All core framework components use `slog` for structured logging. Pass a logger via `WithLogger` (or `WithWorkflowLogger`, `WithRetrieverLogger`, `WithIngestorLogger`). When not set, a no-op logger is used.
+
+### Log Levels
+
+| Level | Used For |
+|-------|----------|
+| Debug | Step skipped, loop iteration details |
+| Info | Agent start/complete, step completed/suspended, subagent delegation |
+| Warn | Max iterations reached |
+| Error | Memory persist failure, step failed, callback panic |
 
 ## Metrics
 
@@ -93,8 +172,6 @@ llm := observer.WrapProvider(
 | `tool.duration` | Histogram | Tool latency in ms |
 | `embedding.requests` | Counter | Embedding call count |
 | `embedding.duration` | Histogram | Embedding latency in ms |
-| `agent.executions` | Counter | Agent execution count (by name, status) |
-| `agent.duration` | Histogram | Agent execution latency in ms |
 
 ## Cost Tracking
 
@@ -155,6 +232,21 @@ for _, step := range result.Steps {
 `StepTrace.Type` is `"tool"` for direct tool calls, `"agent"` for Network subagent delegations, and `"step"` for Workflow steps.
 
 Streaming consumers get the same data via `Usage` and `Duration` fields on `EventToolCallResult` and `EventAgentFinish` events.
+
+## Migration from `observer.WrapAgent`
+
+```go
+// Before
+observed := observer.WrapAgent(agent, inst)
+result, err := observed.Execute(ctx, task)
+
+// After
+agent := oasis.NewLLMAgent("bot", provider,
+    oasis.WithTracer(observer.NewTracer()),
+    oasis.WithLogger(slog.Default()),
+)
+result, err := agent.Execute(ctx, task)
+```
 
 ## See Also
 

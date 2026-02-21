@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand/v2"
 	"strings"
 	"time"
@@ -60,10 +60,19 @@ type agentMemory struct {
 	maxHistory        int               // 0 = use defaultMaxHistory
 	maxTokens         int               // 0 = disabled (no token-based trimming)
 	provider          Provider          // for auto-extraction when memory != nil
+	tracer            Tracer            // nil = no tracing
+	logger            *slog.Logger      // never nil (nopLogger fallback)
 }
 
 // buildMessages constructs the message list: system prompt + user memory + conversation history + user input.
 func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt string, task AgentTask) []ChatMessage {
+	if m.tracer != nil {
+		var span Span
+		ctx, span = m.tracer.Start(ctx, "agent.memory.load",
+			StringAttr("thread_id", task.TaskThreadID()))
+		defer span.End()
+	}
+
 	var messages []ChatMessage
 
 	// System prompt + user memory context
@@ -81,7 +90,7 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 		}
 		history, err := m.store.GetMessages(ctx, threadID, limit)
 		if err != nil {
-			log.Printf("[agent:%s] load history: %v", agentName, err)
+			m.logger.Error("load history failed", "agent", agentName, "error", err)
 		}
 		for _, msg := range history {
 			messages = append(messages, ChatMessage{Role: msg.Role, Content: msg.Content})
@@ -197,6 +206,13 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 		bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 
+		if m.tracer != nil {
+			var span Span
+			bgCtx, span = m.tracer.Start(bgCtx, "agent.memory.persist",
+				StringAttr("thread_id", threadID))
+			defer span.End()
+		}
+
 		userMsg := Message{
 			ID: NewID(), ThreadID: threadID,
 			Role: "user", Content: userText, CreatedAt: NowUnix(),
@@ -211,7 +227,7 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 		}
 
 		if err := m.store.StoreMessage(bgCtx, userMsg); err != nil {
-			log.Printf("[agent:%s] persist user msg: %v", agentName, err)
+			m.logger.Error("persist user message failed", "agent", agentName, "error", err)
 		}
 
 		asstMsg := Message{
@@ -219,7 +235,7 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 			Role: "assistant", Content: assistantText, CreatedAt: NowUnix(),
 		}
 		if err := m.store.StoreMessage(bgCtx, asstMsg); err != nil {
-			log.Printf("[agent:%s] persist assistant msg: %v", agentName, err)
+			m.logger.Error("persist assistant message failed", "agent", agentName, "error", err)
 		}
 
 		// Auto-extract user facts from this conversation turn.
@@ -229,7 +245,7 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 			// Probabilistic decay: ~5% chance per turn.
 			if rand.IntN(20) == 0 {
 				if err := m.memory.DecayOldFacts(bgCtx); err != nil {
-					log.Printf("[agent:%s] decay facts: %v", agentName, err)
+					m.logger.Error("decay facts failed", "agent", agentName, "error", err)
 				}
 			}
 		}
@@ -328,7 +344,7 @@ func (m *agentMemory) extractAndPersistFacts(ctx context.Context, agentName, use
 	}
 	for i, f := range facts {
 		if err := m.memory.UpsertFact(ctx, f.Fact, f.Category, embs[i]); err != nil {
-			log.Printf("[agent:%s] upsert fact: %v", agentName, err)
+			m.logger.Error("upsert fact failed", "agent", agentName, "error", err)
 		}
 	}
 }
@@ -352,7 +368,7 @@ func (m *agentMemory) deleteSupersededFact(ctx context.Context, agentName, super
 	for _, r := range results {
 		if r.Score >= supersedesMinScore {
 			if err := m.memory.DeleteFact(ctx, r.Fact.ID); err != nil {
-				log.Printf("[agent:%s] delete superseded fact %s: %v", agentName, r.Fact.ID, err)
+				m.logger.Error("delete superseded fact failed", "agent", agentName, "fact_id", r.Fact.ID, "error", err)
 			}
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 )
 
 const defaultMaxIter = 10
@@ -26,6 +27,8 @@ type LLMAgent struct {
 	dynamicPrompt  PromptFunc
 	dynamicModel   ModelFunc
 	dynamicTools   ToolsFunc
+	tracer         Tracer
+	logger         *slog.Logger
 	mem            agentMemory
 }
 
@@ -67,6 +70,10 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	a.dynamicPrompt = cfg.dynamicPrompt
 	a.dynamicModel = cfg.dynamicModel
 	a.dynamicTools = cfg.dynamicTools
+	a.tracer = cfg.tracer
+	a.logger = cfg.logger
+	a.mem.tracer = cfg.tracer
+	a.mem.logger = cfg.logger
 	return a
 }
 
@@ -76,7 +83,7 @@ func (a *LLMAgent) Description() string { return a.description }
 // Execute runs the tool-calling loop until the LLM produces a final text response.
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)
-	return runLoop(ctx, a.buildLoopConfig(ctx, task), task, nil)
+	return a.executeWithSpan(ctx, task, nil)
 }
 
 // ExecuteStream runs the tool-calling loop like Execute, but emits StreamEvent
@@ -85,7 +92,46 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 // The channel is closed when streaming completes.
 func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)
+	return a.executeWithSpan(ctx, task, ch)
+}
+
+// executeWithSpan wraps runLoop with an agent.execute span when a tracer is configured.
+func (a *LLMAgent) executeWithSpan(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
+	if a.tracer != nil {
+		var span Span
+		ctx, span = a.tracer.Start(ctx, "agent.execute",
+			StringAttr("agent.name", a.name),
+			StringAttr("agent.type", "LLMAgent"))
+		defer func() {
+			span.End()
+		}()
+
+		a.logger.Info("agent started", "agent", a.name)
+		result, err := runLoop(ctx, a.buildLoopConfig(ctx, task), task, ch)
+
+		span.SetAttr(
+			IntAttr("tokens.input", result.Usage.InputTokens),
+			IntAttr("tokens.output", result.Usage.OutputTokens))
+		if err != nil {
+			span.Error(err)
+			span.SetAttr(StringAttr("agent.status", "error"))
+		} else {
+			span.SetAttr(StringAttr("agent.status", "ok"))
+		}
+		a.logger.Info("agent completed", "agent", a.name,
+			"status", statusStr(err),
+			"tokens.input", result.Usage.InputTokens,
+			"tokens.output", result.Usage.OutputTokens)
+		return result, err
+	}
 	return runLoop(ctx, a.buildLoopConfig(ctx, task), task, ch)
+}
+
+func statusStr(err error) string {
+	if err != nil {
+		return "error"
+	}
+	return "ok"
 }
 
 // buildLoopConfig wires LLMAgent fields into a loopConfig for runLoop.
@@ -133,6 +179,8 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 		dispatch:       a.makeDispatch(registry),
 		systemPrompt:   prompt,
 		responseSchema: a.responseSchema,
+		tracer:         a.tracer,
+		logger:         a.logger,
 	}
 }
 

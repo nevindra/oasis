@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -37,6 +38,10 @@ type Ingestor struct {
 	graphBatchSize   int
 	crossDocEdges    bool
 	sequenceEdges    bool
+
+	// observability
+	tracer oasis.Tracer
+	logger *slog.Logger
 }
 
 // NewIngestor creates an Ingestor with sensible defaults.
@@ -64,6 +69,29 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 
 // IngestText ingests plain text content.
 func (ing *Ingestor) IngestText(ctx context.Context, text, source, title string) (IngestResult, error) {
+	if ing.tracer != nil {
+		var span oasis.Span
+		ctx, span = ing.tracer.Start(ctx, "ingest.document",
+			oasis.StringAttr("source", source),
+			oasis.StringAttr("title", title),
+			oasis.StringAttr("strategy", strategyName(ing.strategy)),
+			oasis.StringAttr("content_type", string(TypePlainText)))
+		defer func() { span.End() }()
+
+		result, err := ing.ingestText(ctx, text, source, title)
+		if err != nil {
+			span.Error(err)
+		} else {
+			span.SetAttr(
+				oasis.StringAttr("doc_id", result.DocumentID),
+				oasis.IntAttr("chunk_count", result.ChunkCount))
+		}
+		return result, err
+	}
+	return ing.ingestText(ctx, text, source, title)
+}
+
+func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string) (IngestResult, error) {
 	now := oasis.NowUnix()
 	docID := oasis.NewID()
 
@@ -100,6 +128,29 @@ func (ing *Ingestor) IngestFile(ctx context.Context, content []byte, filename st
 	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
 	ct := ContentTypeFromExtension(ext)
 
+	if ing.tracer != nil {
+		var span oasis.Span
+		ctx, span = ing.tracer.Start(ctx, "ingest.document",
+			oasis.StringAttr("source", filename),
+			oasis.StringAttr("title", filepath.Base(filename)),
+			oasis.StringAttr("strategy", strategyName(ing.strategy)),
+			oasis.StringAttr("content_type", string(ct)))
+		defer func() { span.End() }()
+
+		result, err := ing.ingestFile(ctx, content, filename, ct)
+		if err != nil {
+			span.Error(err)
+		} else {
+			span.SetAttr(
+				oasis.StringAttr("doc_id", result.DocumentID),
+				oasis.IntAttr("chunk_count", result.ChunkCount))
+		}
+		return result, err
+	}
+	return ing.ingestFile(ctx, content, filename, ct)
+}
+
+func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename string, ct ContentType) (IngestResult, error) {
 	extractor, ok := ing.extractors[ct]
 	if !ok {
 		if isBinaryContentType(ct) {
@@ -202,6 +253,18 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 	}
 
 	return gs.StoreEdges(ctx, edges)
+}
+
+// strategyName returns a human-readable name for a ChunkStrategy.
+func strategyName(s ChunkStrategy) string {
+	switch s {
+	case StrategyFlat:
+		return "flat"
+	case StrategyParentChild:
+		return "parent_child"
+	default:
+		return "unknown"
+	}
 }
 
 // chunkWith calls ChunkContext if the chunker implements ContextChunker,

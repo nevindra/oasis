@@ -45,10 +45,6 @@ type Instruments struct {
 	ToolDuration  metric.Float64Histogram
 	EmbedDuration metric.Float64Histogram
 
-	// Agent-level
-	AgentExecutions metric.Int64Counter
-	AgentDuration   metric.Float64Histogram
-
 	Cost *CostCalculator
 }
 
@@ -180,20 +176,6 @@ func newInstruments(pricing map[string]ModelPricing) (*Instruments, error) {
 		return nil, err
 	}
 
-	agentExecutions, err := meter.Int64Counter("agent.executions",
-		metric.WithDescription("Agent execution count"),
-		metric.WithUnit("{execution}"))
-	if err != nil {
-		return nil, err
-	}
-
-	agentDuration, err := meter.Float64Histogram("agent.duration",
-		metric.WithDescription("Agent execution duration"),
-		metric.WithUnit("ms"))
-	if err != nil {
-		return nil, err
-	}
-
 	return &Instruments{
 		Tracer:         tracer,
 		Meter:          meter,
@@ -205,9 +187,7 @@ func newInstruments(pricing map[string]ModelPricing) (*Instruments, error) {
 		EmbedRequests:  embedRequests,
 		LLMDuration:    llmDuration,
 		ToolDuration:   toolDuration,
-		EmbedDuration:   embedDuration,
-		AgentExecutions: agentExecutions,
-		AgentDuration:   agentDuration,
-		Cost:            NewCostCalculator(pricing),
+		EmbedDuration:  embedDuration,
+		Cost:           NewCostCalculator(pricing),
 	}, nil
 }

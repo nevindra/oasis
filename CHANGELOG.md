@@ -8,6 +8,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Deep observability** — tracing and structured logging built into the core framework, replacing external wrapper-based instrumentation
+  - `Tracer` and `Span` interfaces in root package (zero OTEL imports) — thin abstraction over any tracing backend
+  - `observer.NewTracer()` — OTEL-backed implementation using the global `TracerProvider`
+  - `WithTracer(Tracer)` / `WithLogger(*slog.Logger)` — agent-level options for `LLMAgent` and `Network`
+  - `WithWorkflowTracer(Tracer)` / `WithWorkflowLogger(*slog.Logger)` — workflow-level options
+  - `WithRetrieverTracer(Tracer)` / `WithRetrieverLogger(*slog.Logger)` — HybridRetriever options
+  - `WithGraphRetrieverTracer(Tracer)` / `WithGraphRetrieverLogger(*slog.Logger)` — GraphRetriever options
+  - `WithIngestorTracer(Tracer)` / `WithIngestorLogger(*slog.Logger)` — Ingestor options (in `ingest` package)
+  - Span hierarchy: `agent.execute` → `agent.memory.load` / `agent.loop.iteration` → `agent.memory.persist`; `workflow.execute` → `workflow.step`; `retriever.retrieve`; `ingest.document`
+  - All `log.Printf` calls in core framework replaced with structured `slog` (agent, memory, network, workflow)
+  - Helper types: `SpanAttr`, `StringAttr()`, `IntAttr()`, `BoolAttr()`, `Float64Attr()`
+  - When no tracer is configured, all span creation is skipped (nil check) — zero overhead
 - **Skill tool** (`tools/skill`) — agent-facing skill management through the standard `Tool` interface, enabling the self-improvement loop. Three actions: `skill_search` (embed query → semantic search → ranked results), `skill_create` (auto-embed description, auto-set `CreatedBy` from `TaskFromContext`), `skill_update` (partial update with read-modify-write, re-embeds only when description changes). Agents in a shared `Store` automatically discover each other's skills. Governance boundary: agents get search/create/update, humans retain delete via `Store.DeleteSkill()`. New `Skill` fields: `Tags []string` (categorization labels), `CreatedBy string` (origin tracking), `References []string` (skill composability). All three store backends (SQLite, PostgreSQL, libSQL) updated
 - **Dynamic agent configuration** — per-request resolution of system prompt, LLM provider, and tool set via `WithDynamicPrompt(PromptFunc)`, `WithDynamicModel(ModelFunc)`, and `WithDynamicTools(ToolsFunc)`. Each accepts a function called at the start of every `Execute`/`ExecuteStream` call, receiving `context.Context` and `AgentTask`. Dynamic values override their static counterparts (`WithPrompt`, constructor provider, `WithTools`). Works with both `LLMAgent` and `Network`. Use cases: multi-tenant prompt personalization, tier-based model selection, role-based tool gating
 - **Task context propagation** — `WithTaskContext(ctx, task)` / `TaskFromContext(ctx)` inject and retrieve `AgentTask` via `context.Context`. Called automatically by `LLMAgent` and `Network` at Execute entry points. Tools can now access task metadata (user ID, thread ID, custom context) without changes to the `Tool` interface
@@ -16,6 +28,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **Generic OpenAI-compatible provider** (`provider/openaicompat`) — `NewProvider(apiKey, model, baseURL)` implements `oasis.Provider` for any service that speaks the OpenAI chat completions API. Works with OpenAI, Groq, Together, Fireworks, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure OpenAI, and more. Provider-level options: `WithName` (for logs/observability), `WithHTTPClient`, `WithOptions` (temperature, max tokens, etc. applied to every request). Uses the existing shared helpers (`BuildBody`, `StreamSSE`, `ParseResponse`) — no new dependencies
 - **Data transform tool** (`tools/data`) — structured CSV/JSON/JSONL processing without Python subprocess overhead. Four composable functions that chain parse → filter → aggregate → transform. `data_parse` accepts raw CSV/JSON/JSONL text and returns structured records (auto-detects format). `data_filter` filters by conditions (8 operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `in`) with automatic numeric coercion. `data_aggregate` groups records and computes metrics (`sum`, `count`, `avg`, `min`, `max`) with optional `group_by`. `data_transform` selects columns, renames, sorts (numeric-aware), and limits output. All functions exchange data as JSON arrays of objects — the universal interchange format. Pure Go stdlib, no external dependencies. Constructor: `data.New()`. Output capped at 32KB with automatic truncation
 - **Code execution** (`WithCodeExecution`, `code` package) — LLM writes and executes Python code in a sandboxed subprocess with full tool bridge access. Complements `WithPlanExecution` (parallel fan-out) with complex logic capabilities: conditionals, loops, data flow between tool calls, error handling via try/except. Architecture: `CodeRunner` interface in root package with `SubprocessRunner` implementation in `code/` package. Embedded Python prelude injects `call_tool(name, args)`, `call_tools_parallel(calls)`, and `set_result(data)` functions. Communication uses a JSON-over-stdin/stdout protocol — `print()` output goes to stderr (captured as logs), structured results go through `set_result()`. Safety: workspace isolation (filesystem ops restricted to configured directory), `os.system`/`subprocess` blocked at Python level, pre-execution regex blocklist, configurable timeout with SIGKILL, recursion prevention (`execute_code` cannot call `execute_code`). New types: `CodeRunner`, `CodeRequest`, `CodeResult`, `DispatchFunc` (exported from `dispatchFunc`). New option: `WithCodeExecution(runner CodeRunner)`. `SubprocessRunner` options: `WithTimeout`, `WithMaxOutput`, `WithWorkspace`, `WithEnv`, `WithEnvPassthrough`. Works with both `LLMAgent` and `Network`. Provider-agnostic — any LLM can use the `execute_code` tool
+- **File tool** (`tools/file`) — three new operations: `file_list` (browse directories with type prefix), `file_delete` (remove files or empty directories), `file_stat` (get name, size, type, modification time as JSON). All operations sandboxed within the configured workspace path. Empty path defaults to workspace root for `file_list`
 
 ### Fixed
 
@@ -24,6 +37,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **State/Done ordering in AgentHandle** — `State()` could return a terminal value before `Done()` was closed, causing `Result()` to return zero values. `State()` now waits on `Done()` when terminal, guaranteeing `Result()` consistency
 - **`schedParseInt` empty string accepted as valid** — empty string input returned 0 instead of -1, allowing malformed schedules like `":30 daily"` to be silently accepted as `"00:30 daily"`. Now correctly rejects empty components
 - **Timer leak in `Scheduler.Start`** — each polling iteration allocated a new `time.After` timer that could not be garbage collected until it fired. Replaced with a reusable `time.NewTimer` with proper `Stop()` on shutdown
+
+### Removed
+
+- **Breaking:** `observer.WrapAgent()` and `ObservedAgent` — agent lifecycle spans are now created by the core framework via `WithTracer`. Remove the `WrapAgent` call and pass `oasis.WithTracer(observer.NewTracer())` to the agent constructor instead
+- `agent.executions` and `agent.duration` metrics from `observer.Instruments` — agent metrics are replaced by core tracing spans
 
 ### Changed
 

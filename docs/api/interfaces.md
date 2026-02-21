@@ -331,6 +331,46 @@ Bridges code execution back to the agent's tool registry. Provided by `LLMAgent`
 
 ---
 
+## Tracer
+
+**File:** `tracer.go`
+
+```go
+type Tracer interface {
+    Start(ctx context.Context, name string, attrs ...SpanAttr) (context.Context, Span)
+}
+```
+
+| Implementation | Constructor |
+|----------------|------------|
+| `observer` (OTEL-backed) | `observer.NewTracer()` |
+
+---
+
+## Span
+
+**File:** `tracer.go`
+
+```go
+type Span interface {
+    SetAttr(attrs ...SpanAttr)
+    Event(name string, attrs ...SpanAttr)
+    Error(err error)
+    End()
+}
+```
+
+Attribute helpers:
+
+```go
+oasis.StringAttr(k, v string) SpanAttr
+oasis.IntAttr(k string, v int) SpanAttr
+oasis.BoolAttr(k string, v bool) SpanAttr
+oasis.Float64Attr(k string, v float64) SpanAttr
+```
+
+---
+
 ## Ingest Interfaces
 
 **Package:** `github.com/nevindra/oasis/ingest`
