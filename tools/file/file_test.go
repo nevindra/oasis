@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -132,21 +133,173 @@ func TestFileWriteEmptyContent(t *testing.T) {
 	}
 }
 
+func TestFileList(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0644)
+	os.Mkdir(filepath.Join(dir, "subdir"), 0755)
+
+	tool := New(dir)
+	args, _ := json.Marshal(map[string]string{"path": "."})
+	result, _ := tool.Execute(context.Background(), "file_list", args)
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	if !strings.Contains(result.Content, "file\ta.txt") {
+		t.Errorf("expected a.txt in listing, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "dir\tsubdir") {
+		t.Errorf("expected subdir in listing, got: %s", result.Content)
+	}
+}
+
+func TestFileListEmpty(t *testing.T) {
+	tool := New(t.TempDir())
+	args, _ := json.Marshal(map[string]string{"path": "."})
+	result, _ := tool.Execute(context.Background(), "file_list", args)
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	if result.Content != "" {
+		t.Errorf("expected empty listing, got: %q", result.Content)
+	}
+}
+
+func TestFileListNonexistent(t *testing.T) {
+	tool := New(t.TempDir())
+	args, _ := json.Marshal(map[string]string{"path": "nope"})
+	result, _ := tool.Execute(context.Background(), "file_list", args)
+	if result.Error == "" {
+		t.Error("expected error for nonexistent directory")
+	}
+}
+
+func TestFileListDefaultPath(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "root.txt"), []byte("r"), 0644)
+	tool := New(dir)
+	// Empty path should list workspace root.
+	args, _ := json.Marshal(map[string]string{})
+	result, _ := tool.Execute(context.Background(), "file_list", args)
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	if !strings.Contains(result.Content, "root.txt") {
+		t.Errorf("expected root.txt in listing, got: %s", result.Content)
+	}
+}
+
+func TestFileDelete(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "del.txt"), []byte("bye"), 0644)
+	tool := New(dir)
+	args, _ := json.Marshal(map[string]string{"path": "del.txt"})
+	result, _ := tool.Execute(context.Background(), "file_delete", args)
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "del.txt")); !os.IsNotExist(err) {
+		t.Error("file should have been deleted")
+	}
+}
+
+func TestFileDeleteEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	os.Mkdir(filepath.Join(dir, "empty"), 0755)
+	tool := New(dir)
+	args, _ := json.Marshal(map[string]string{"path": "empty"})
+	result, _ := tool.Execute(context.Background(), "file_delete", args)
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+}
+
+func TestFileDeleteNonexistent(t *testing.T) {
+	tool := New(t.TempDir())
+	args, _ := json.Marshal(map[string]string{"path": "ghost.txt"})
+	result, _ := tool.Execute(context.Background(), "file_delete", args)
+	if result.Error == "" {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestFileDeleteNonEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	os.Mkdir(filepath.Join(dir, "notempty"), 0755)
+	os.WriteFile(filepath.Join(dir, "notempty", "child.txt"), []byte("x"), 0644)
+	tool := New(dir)
+	args, _ := json.Marshal(map[string]string{"path": "notempty"})
+	result, _ := tool.Execute(context.Background(), "file_delete", args)
+	if result.Error == "" {
+		t.Error("expected error for non-empty directory")
+	}
+}
+
+func TestFileStat(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "info.txt"), []byte("hello"), 0644)
+	tool := New(dir)
+	args, _ := json.Marshal(map[string]string{"path": "info.txt"})
+	result, _ := tool.Execute(context.Background(), "file_stat", args)
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	var stat map[string]any
+	if err := json.Unmarshal([]byte(result.Content), &stat); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if stat["name"] != "info.txt" {
+		t.Errorf("expected name info.txt, got %v", stat["name"])
+	}
+	if stat["type"] != "file" {
+		t.Errorf("expected type file, got %v", stat["type"])
+	}
+	if stat["size"] != float64(5) {
+		t.Errorf("expected size 5, got %v", stat["size"])
+	}
+}
+
+func TestFileStatDir(t *testing.T) {
+	dir := t.TempDir()
+	os.Mkdir(filepath.Join(dir, "mydir"), 0755)
+	tool := New(dir)
+	args, _ := json.Marshal(map[string]string{"path": "mydir"})
+	result, _ := tool.Execute(context.Background(), "file_stat", args)
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	var stat map[string]any
+	if err := json.Unmarshal([]byte(result.Content), &stat); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if stat["type"] != "directory" {
+		t.Errorf("expected type directory, got %v", stat["type"])
+	}
+}
+
+func TestFileStatNonexistent(t *testing.T) {
+	tool := New(t.TempDir())
+	args, _ := json.Marshal(map[string]string{"path": "nope.txt"})
+	result, _ := tool.Execute(context.Background(), "file_stat", args)
+	if result.Error == "" {
+		t.Error("expected error for nonexistent path")
+	}
+}
+
 func TestFileDefinitions(t *testing.T) {
 	tool := New(t.TempDir())
 	defs := tool.Definitions()
-	if len(defs) != 2 {
-		t.Fatalf("expected 2 definitions, got %d", len(defs))
+	if len(defs) != 5 {
+		t.Fatalf("expected 5 definitions, got %d", len(defs))
 	}
 
 	names := map[string]bool{}
 	for _, d := range defs {
 		names[d.Name] = true
 	}
-	if !names["file_read"] {
-		t.Error("missing file_read definition")
-	}
-	if !names["file_write"] {
-		t.Error("missing file_write definition")
+	for _, want := range []string{"file_read", "file_write", "file_list", "file_delete", "file_stat"} {
+		if !names[want] {
+			t.Errorf("missing %s definition", want)
+		}
 	}
 }

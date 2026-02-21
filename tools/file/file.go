@@ -11,7 +11,7 @@ import (
 	oasis "github.com/nevindra/oasis"
 )
 
-// Tool provides file read/write within a sandboxed workspace.
+// Tool provides file operations within a sandboxed workspace.
 type Tool struct {
 	workspacePath string
 }
@@ -33,6 +33,21 @@ func (t *Tool) Definitions() []oasis.ToolDefinition {
 			Description: "Write content to a file in the workspace. Creates parent directories if needed.",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path relative to workspace"},"content":{"type":"string","description":"Content to write"}},"required":["path","content"]}`),
 		},
+		{
+			Name:        "file_list",
+			Description: "List files and directories in a workspace directory. Returns one entry per line with type prefix (file/dir) and name.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Directory path relative to workspace (empty or '.' for root)"}}}`),
+		},
+		{
+			Name:        "file_delete",
+			Description: "Delete a file or empty directory from the workspace.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File or directory path relative to workspace"}},"required":["path"]}`),
+		},
+		{
+			Name:        "file_stat",
+			Description: "Get metadata for a file or directory in the workspace. Returns name, size, type, and modification time.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File or directory path relative to workspace"}},"required":["path"]}`),
+		},
 	}
 }
 
@@ -45,7 +60,11 @@ func (t *Tool) Execute(ctx context.Context, name string, args json.RawMessage) (
 		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
 
-	resolved, err := t.resolvePath(params.Path)
+	path := params.Path
+	if path == "" {
+		path = "."
+	}
+	resolved, err := t.resolvePath(path)
 	if err != nil {
 		return oasis.ToolResult{Error: err.Error()}, nil
 	}
@@ -55,6 +74,12 @@ func (t *Tool) Execute(ctx context.Context, name string, args json.RawMessage) (
 		return t.read(resolved)
 	case "file_write":
 		return t.write(resolved, params.Content)
+	case "file_list":
+		return t.list(resolved)
+	case "file_delete":
+		return t.remove(resolved)
+	case "file_stat":
+		return t.stat(resolved)
 	default:
 		return oasis.ToolResult{Error: "unknown file tool: " + name}, nil
 	}
@@ -96,4 +121,45 @@ func (t *Tool) write(path, content string) (oasis.ToolResult, error) {
 		return oasis.ToolResult{Error: "write error: " + err.Error()}, nil
 	}
 	return oasis.ToolResult{Content: fmt.Sprintf("Written %d bytes to %s", len(content), filepath.Base(path))}, nil
+}
+
+func (t *Tool) list(path string) (oasis.ToolResult, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return oasis.ToolResult{Error: "list error: " + err.Error()}, nil
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		kind := "file"
+		if e.IsDir() {
+			kind = "dir"
+		}
+		fmt.Fprintf(&b, "%s\t%s\n", kind, e.Name())
+	}
+	return oasis.ToolResult{Content: b.String()}, nil
+}
+
+func (t *Tool) remove(path string) (oasis.ToolResult, error) {
+	if err := os.Remove(path); err != nil {
+		return oasis.ToolResult{Error: "delete error: " + err.Error()}, nil
+	}
+	return oasis.ToolResult{Content: fmt.Sprintf("Deleted %s", filepath.Base(path))}, nil
+}
+
+func (t *Tool) stat(path string) (oasis.ToolResult, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return oasis.ToolResult{Error: "stat error: " + err.Error()}, nil
+	}
+	kind := "file"
+	if info.IsDir() {
+		kind = "directory"
+	}
+	out, _ := json.Marshal(map[string]any{
+		"name":     info.Name(),
+		"size":     info.Size(),
+		"type":     kind,
+		"modified": info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+	})
+	return oasis.ToolResult{Content: string(out)}, nil
 }
