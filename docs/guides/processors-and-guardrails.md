@@ -1,8 +1,91 @@
 # Processors and Guardrails
 
-Processors hook into the agent execution pipeline to transform, validate, or control messages. This guide shows practical examples.
+Processors hook into the agent execution pipeline to transform, validate, or control messages. This guide covers built-in guardrails and shows practical examples of custom processors.
 
-## Guardrail (PreProcessor)
+## Built-in Guardrails
+
+Oasis ships four guardrail types that cover common safety patterns. All implement the existing processor interfaces and compose via `WithProcessors()`.
+
+### InjectionGuard
+
+Multi-layer prompt injection detection (PreProcessor). Five detection layers:
+
+1. **Known phrases** — ~55 patterns covering instruction override, role hijacking, system prompt extraction, and policy bypass
+2. **Role override** — role prefixes (`system:`, `assistant:`), markdown headers (`## System`), XML tags (`<system>`)
+3. **Delimiter injection** — fake message boundaries (`--- system`), separator abuse (`==== begin`)
+4. **Encoding/obfuscation** — zero-width character stripping, base64-encoded payload detection
+5. **Custom patterns** — user-supplied string patterns and regex
+
+```go
+// Default — all layers enabled
+guard := oasis.NewInjectionGuard()
+
+// With custom patterns and regex
+guard := oasis.NewInjectionGuard(
+    oasis.InjectionPatterns("secret override", "admin mode"),
+    oasis.InjectionRegex(regexp.MustCompile(`(?i)\bsudo\s+mode\b`)),
+    oasis.InjectionResponse("Request blocked."),
+)
+
+// Skip layers that cause false positives
+guard := oasis.NewInjectionGuard(oasis.SkipLayers(2, 3))
+```
+
+### ContentGuard
+
+Input/output length enforcement (PreProcessor + PostProcessor). Limits are in runes (Unicode-safe).
+
+```go
+// Input only
+guard := oasis.NewContentGuard(oasis.MaxInputLength(5000))
+
+// Both input and output
+guard := oasis.NewContentGuard(
+    oasis.MaxInputLength(5000),
+    oasis.MaxOutputLength(10000),
+    oasis.ContentResponse("Message too long."),
+)
+```
+
+### KeywordGuard
+
+Keyword and regex content blocking (PreProcessor). Keywords are matched case-insensitively as substrings.
+
+```go
+guard := oasis.NewKeywordGuard("DROP TABLE", "rm -rf").
+    WithRegex(regexp.MustCompile(`\b(SSN|social\s+security)\b`)).
+    WithResponse("Blocked content detected.")
+```
+
+### MaxToolCallsGuard
+
+Tool call limiting (PostProcessor). Trims excess tool calls silently — graceful degradation instead of halting.
+
+```go
+guard := oasis.NewMaxToolCallsGuard(3) // keep first 3 tool calls
+```
+
+### Composing Guards
+
+Stack guards with custom processors in registration order:
+
+```go
+agent := oasis.NewLLMAgent("safe-agent", "Agent with guardrails", provider,
+    oasis.WithProcessors(
+        oasis.NewInjectionGuard(),                     // block injection
+        oasis.NewContentGuard(oasis.MaxInputLength(5000)), // enforce limits
+        oasis.NewKeywordGuard("DROP TABLE"),            // block keywords
+        oasis.NewMaxToolCallsGuard(3),                  // cap tool calls
+        &PIIRedactor{},                                 // custom: redact PII
+    ),
+)
+```
+
+## Custom Processors
+
+The examples below show how to build custom processors for cases not covered by the built-in guards.
+
+## Custom Guardrail (PreProcessor)
 
 Block prompt injection attempts:
 

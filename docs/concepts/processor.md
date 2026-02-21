@@ -103,7 +103,10 @@ Processors run in registration order at each hook point. An empty chain is a no-
 
 | Use Case | Interface | What it does |
 |----------|-----------|-------------|
-| Guardrails | PreProcessor | Block prompt injection, validate input |
+| Injection detection | PreProcessor | **Built-in:** `InjectionGuard` — multi-layer prompt injection detection (phrases, role override, delimiters, encoding, custom regex) |
+| Content length limits | PreProcessor + PostProcessor | **Built-in:** `ContentGuard` — enforce max rune count on input and output |
+| Keyword blocking | PreProcessor | **Built-in:** `KeywordGuard` — block messages containing specified keywords or regex patterns |
+| Tool call limiting | PostProcessor | **Built-in:** `MaxToolCallsGuard` — cap tool calls per LLM response (trims, doesn't halt) |
 | PII redaction | All three | Redact sensitive data at every stage |
 | Content moderation | PostProcessor | Filter harmful LLM output |
 | Tool filtering | PostProcessor | Remove/block specific tool calls |

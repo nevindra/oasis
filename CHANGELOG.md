@@ -8,6 +8,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Built-in guardrails** — four guardrail types in the root package, composable via `WithProcessors()`:
+  - `InjectionGuard` — multi-layer prompt injection detection (known phrases, role override, delimiter injection, encoding/obfuscation, custom regex). Options: `InjectionPatterns`, `InjectionRegex`, `InjectionResponse`, `SkipLayers`
+  - `ContentGuard` — input/output character length enforcement (rune-based). Options: `MaxInputLength`, `MaxOutputLength`, `ContentResponse`
+  - `KeywordGuard` — keyword and regex content blocking (case-insensitive substring). Builder methods: `WithRegex`, `WithResponse`
+  - `MaxToolCallsGuard` — tool call limiting per LLM response (trims excess, doesn't halt)
 - **Deep observability** — tracing and structured logging built into the core framework, replacing external wrapper-based instrumentation
   - `Tracer` and `Span` interfaces in root package (zero OTEL imports) — thin abstraction over any tracing backend
   - `observer.NewTracer()` — OTEL-backed implementation using the global `TracerProvider`
