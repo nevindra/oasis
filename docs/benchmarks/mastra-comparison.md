@@ -1,6 +1,6 @@
 # Mastra vs Oasis — Framework Comparison
 
-> Last updated: 2026-02-20
+> Last updated: 2026-02-21
 
 ## Language & Philosophy
 
@@ -22,9 +22,10 @@
 | **Dynamic Instructions** | Async functions for runtime personalization | `WithDynamicPrompt(PromptFunc)` — per-request prompt/model/tools resolution | Tie |
 | **Runtime Context/DI** | `runtimeContext` — typed dependency injection | `TaskFromContext(ctx)` — task context propagated to tools via `context.Context` | Tie |
 | **Structured Output** | Zod schema validation with error strategies (strict/warn/fallback) | `ResponseSchema` / `SchemaObject` — compile-time typed builder, zero runtime cost | Tie |
+| **Code Execution** | E2B Workspaces — shell commands in cloud sandbox (external service) | `WithCodeExecution` — sandboxed Python subprocess with tool bridge (`call_tool`, `call_tools_parallel`, `set_result`), no external deps | Oasis |
 | **Background Agents** | N/A | `Spawn()` / `AgentHandle` — goroutine-based with lifecycle states | Oasis |
 
-**Score: Mastra 0 — Oasis 2 — Tie 5**
+**Score: Mastra 0 — Oasis 3 — Tie 5**
 
 ---
 
@@ -82,15 +83,15 @@
 
 | Feature | Mastra | Oasis | Winner |
 |---|---|---|---|
-| **Chunking Strategies** | 9 strategies | 3 core + Flat/ParentChild hierarchy | Mastra |
+| **Chunking Strategies** | 9 strategies | 4 core (Recursive, Markdown, Semantic, ParentChild) + Flat hierarchy | Mastra |
 | **Parent-Child** | N/A | `StrategyParentChild` — match children, return parent context | Oasis |
 | **Extractors** | Text, HTML, Markdown, JSON | Text, HTML, Markdown, CSV, JSON, DOCX, PDF | Oasis |
 | **Retrieval** | Vector search + metadata filters + reranking | `HybridRetriever` — vector + FTS with RRF fusion + parent-child resolution | Oasis |
-| **GraphRAG** | Knowledge graph from chunks | N/A | Mastra |
+| **GraphRAG** | Query-time graph from retrieved chunks (threshold similarity, no persistence — [persistence requested](https://github.com/mastra-ai/mastra/issues/3926)) | `GraphRetriever` — LLM-based ingestion-time extraction, 8 typed relations, persistent `GraphStore` (all 3 backends), multi-hop BFS, score blending, `WithSequenceEdges` | Oasis |
 | **Reranking** | Weighted scoring, Cohere, ZeroEntropy, custom | `ScoreReranker`, `LLMReranker` | Mastra |
 | **Metadata Filtering** | MongoDB/Sift syntax, translated per store | `ChunkFilter` with operators (eq, in, gt, lt) | Tie |
 
-**Score: Mastra 3 — Oasis 3 — Tie 1**
+**Score: Mastra 2 — Oasis 4 — Tie 1**
 
 ---
 
@@ -158,10 +159,10 @@ Mastra has a convenience edge with string-based model selection. Oasis covers eq
 | Feature | Mastra | Oasis | Winner |
 |---|---|---|---|
 | **Client** | `MCPClient` — multi-server, auto-transport detection | N/A | Mastra |
-| **Server** | `MCPServer` — exposes tools + agents as MCP | MCP server over stdio (JSON-RPC 2.0), tools + resources | Mastra |
+| **Server** | `MCPServer` — exposes tools + agents as MCP | MCP server over stdio (JSON-RPC 2.0), tools + resources | Tie |
 | **Agents as Tools** | Auto-converts agents to `ask_<agent>` tools | N/A (manual wiring) | Mastra |
 
-**Score: Mastra 3 — Oasis 0**
+**Score: Mastra 2 — Oasis 0 — Tie 1**
 
 ---
 
@@ -174,6 +175,20 @@ Mastra has a convenience edge with string-based model selection. Oasis covers eq
 | **Architecture** | Separate storage + vector packages | Unified Store interface (relational + vector in one) | Oasis |
 
 **Score: Mastra 1 — Oasis 1 — Tie 1**
+
+---
+
+## Observability
+
+| Feature | Mastra | Oasis | Winner |
+|---|---|---|---|
+| **Tracing** | OpenTelemetry integration via `@mastra/core` | `Tracer` / `Span` interfaces in root package — zero OTEL imports, `observer.NewTracer()` OTEL backend | Tie |
+| **Structured Logging** | Console + custom logger support | `slog`-based structured logging throughout core framework | Tie |
+| **Execution Traces** | Step-by-step visibility in playground | `StepTrace` on `AgentResult` — per-tool name, input, output, tokens, duration (no OTEL required) | Oasis |
+| **Span Hierarchy** | Flat spans per operation | `agent.execute` → `agent.memory.load` / `agent.loop.iteration` → `agent.memory.persist`; `workflow.execute` → `workflow.step` | Oasis |
+| **Zero Overhead** | Always-on instrumentation | Nil-check skip — when no tracer configured, all span creation is skipped | Oasis |
+
+**Score: Mastra 0 — Oasis 3 — Tie 2**
 
 ---
 
@@ -197,7 +212,7 @@ Mastra has a convenience edge with string-based model selection. Oasis covers eq
 | **Dev Playground** | Built-in interactive UI (localhost:4111) | N/A | Mastra |
 | **API Generation** | OpenAPI spec + Swagger UI | N/A | Mastra |
 
-**Score: Mastra 4 — Oasis 1**
+**Score: Mastra 2 — Oasis 1 — N/A 2**
 
 ---
 
@@ -244,22 +259,23 @@ Mastra has a convenience edge with string-based model selection. Oasis covers eq
 
 | Category | Mastra | Oasis | Tie |
 |---|---|---|---|
-| Agent Primitives | 0 | 2 | 5 |
+| Agent Primitives | 0 | 3 | 5 |
 | Workflow / Orchestration | 1 | 7 | 4 |
 | Tool System | 1 | 2 | 1 |
 | Memory | 2 | 4 | 0 |
-| RAG Pipeline | 3 | 3 | 1 |
+| RAG Pipeline | 2 | 4 | 1 |
 | LLM Providers | 1 | 3 | 3 |
 | Streaming | 0 | 2 | 2 |
 | Human-in-the-Loop | 2 | 2 | 0 |
 | Processor / Guardrails | 2 | 3 | 1 |
-| MCP Support | 3 | 0 | 0 |
+| MCP Support | 2 | 0 | 1 |
 | Storage | 1 | 1 | 1 |
+| Observability | 0 | 3 | 2 |
 | Voice / Audio | 1 | 0 | 0 |
 | Deployment | 2 | 1 | 0 |
 | Developer Experience | 6 | 3 | 1 |
 | Performance | 0 | 10 | 1 |
-| **Total** | **25** | **43** | **20** |
+| **Total** | **23** | **48** | **23** |
 
 ---
 
@@ -276,12 +292,15 @@ Mastra has a convenience edge with string-based model selection. Oasis covers eq
 - **`PostToolProcessor`** — hook after each tool execution
 - **Background agents** (`Spawn`/`AgentHandle`) with lifecycle management
 - **Provider decorators** (composable `WithRetry` + `WithRateLimit`)
+- **Code execution** (`WithCodeExecution`) — sandboxed Python subprocess with tool bridge (`call_tool`, `call_tools_parallel`, `set_result`)
+- **Persistent GraphRAG** — LLM-based ingestion-time edge extraction with 8 typed relations, `GraphStore` in all backends, multi-hop BFS retrieval
+- **Deep observability** — `Tracer`/`Span` interfaces in root package (zero OTEL imports), `StepTrace` on every `AgentResult`, hierarchical spans, nil-check zero overhead
 
 ## Unique to Mastra
 
 - **Observational Memory** — context compression via observer/reflector agents
 - **Working Memory** — structured state persisted in system prompt
-- **GraphRAG** — knowledge graph traversal over chunks
+- **GraphRAG** — query-time graph construction (no persistence yet)
 - **Voice/Audio** — TTS, STT, speech-to-speech with 8+ providers
 - **MCP Client** — consume external MCP servers
 - **Model Router** — 2,436 models / 81 providers via single string
@@ -289,15 +308,14 @@ Mastra has a convenience edge with string-based model selection. Oasis covers eq
 - **Managed Cloud** — zero-config deployment (platform, not framework)
 - **Serverless deployers** — Cloudflare, Vercel, Netlify (platform, not framework)
 - **Built-in guardrails** — PII detection, prompt injection, moderation
-- **Model fallbacks** — automatic failover across providers
 
 ---
 
 ## Summary
 
-**Mastra** (25 wins) is a batteries-included TypeScript ecosystem — voice, dev tooling, and a growing community (150k+ weekly npm downloads). Best for teams in the Node/React ecosystem wanting quick setup with many integrations.
+**Mastra** (23 wins) is a batteries-included TypeScript ecosystem — voice, dev tooling, and a growing community (150k+ weekly npm downloads). Best for teams in the Node/React ecosystem wanting quick setup with many integrations.
 
-**Oasis** (43 wins) is a lean, composable Go framework — deeper control over the agent loop, unique workflow primitives (runtime definitions, plan execution, ForEach/DoWhile/DoUntil), sophisticated user memory with decay/supersession, hybrid retrieval, batch processing, rate limiting, and zero SDK dependencies. Best for teams wanting production-grade Go infrastructure with maximal control and minimal bloat.
+**Oasis** (48 wins) is a lean, composable Go framework — deeper control over the agent loop, unique workflow primitives (runtime definitions, plan execution, ForEach/DoWhile/DoUntil), sophisticated user memory with decay/supersession, persistent GraphRAG with typed relations, hybrid retrieval, deep observability with zero-overhead tracing, code execution with tool bridge, batch processing, rate limiting, and zero SDK dependencies. Best for teams wanting production-grade Go infrastructure with maximal control and minimal bloat.
 
 ---
 

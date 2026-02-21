@@ -191,6 +191,8 @@ const (
 | `WithMinTraversalScore(s)` | 0 | Minimum edge weight to follow |
 | `WithSeedTopK(k)` | 10 | Seed chunks from initial vector search |
 | `WithGraphFilters(f...)` | none | Metadata filters for vector search |
+| `WithGraphRetrieverTracer(t)` | nil | Attach a `Tracer` for span creation |
+| `WithGraphRetrieverLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
 ## Parent-Child Resolution
 
@@ -216,6 +218,8 @@ graph TB
 | `WithKeywordWeight(w)` | 0.3 | Keyword weight in RRF (vector gets 1-w) |
 | `WithOverfetchMultiplier(n)` | 3 | Fetch topK*n candidates before trim |
 | `WithFilters(f...)` | none | Metadata filters passed to both search paths |
+| `WithRetrieverTracer(t)` | nil | Attach a `Tracer` for span creation (`retriever.retrieve`) |
+| `WithRetrieverLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
 ## Filtering
 

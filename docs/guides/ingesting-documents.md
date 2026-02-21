@@ -130,7 +130,56 @@ func (e MyExtractor) ExtractWithMeta(content []byte) (ingest.ExtractResult, erro
 }
 ```
 
+## Graph Extraction
+
+Enable LLM-based knowledge graph extraction during ingestion. The LLM analyzes chunk pairs and identifies semantic relationships (references, elaborates, depends_on, etc.) stored as edges for `GraphRetriever`.
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithGraphExtraction(llm),
+    ingest.WithMinEdgeWeight(0.3),
+    ingest.WithMaxEdgesPerChunk(5),
+)
+```
+
+For lightweight graph traversal without LLM cost, use sequence edges:
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithSequenceEdges(true), // auto-creates edges between consecutive chunks
+)
+```
+
+See [RAG Pipeline: Graph RAG](rag-pipeline.md#graph-rag) for the full Graph RAG walkthrough.
+
+## Managing Ingested Documents
+
+List and delete documents after ingestion:
+
+```go
+// List all ingested documents
+docs, _ := store.ListDocuments(ctx)
+for _, doc := range docs {
+    fmt.Printf("%s: %s (%s)\n", doc.ID, doc.Title, doc.Source)
+}
+
+// Delete a document (also deletes its chunks and edges)
+store.DeleteDocument(ctx, "doc-abc")
+```
+
+## Observability
+
+Attach a tracer and logger to the ingestor for production monitoring:
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithIngestorTracer(tracer),
+    ingest.WithIngestorLogger(slog.Default()),
+)
+```
+
 ## See Also
 
 - [Ingest Concept](../concepts/ingest.md) — pipeline architecture
 - [Store Concept](../concepts/store.md) — where chunks are stored
+- [RAG Pipeline](rag-pipeline.md) — end-to-end RAG walkthrough

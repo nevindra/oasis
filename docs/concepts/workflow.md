@@ -294,6 +294,8 @@ outer, _ := oasis.NewWorkflow("outer", "Main pipeline",
 | `WithOnFinish(fn)` | Callback after workflow completes |
 | `WithOnError(fn)` | Callback when a step fails |
 | `WithDefaultRetry(n, delay)` | Default retry for all steps |
+| `WithWorkflowTracer(t)` | Attach a `Tracer` for span creation (`workflow.execute` → `workflow.step`) |
+| `WithWorkflowLogger(l)` | Attach a `*slog.Logger` for structured logging |
 
 ## Runtime Workflow Definitions
 

@@ -103,7 +103,7 @@ type MemoryStore interface {
 }
 ```
 
-**Shipped implementations:** `store/sqlite` (`sqlite.NewMemoryStore(store.DB())`), `store/postgres` (`postgres.NewMemoryStore(pool)`)
+**Shipped implementations:** `store/sqlite` (`sqlite.NewMemoryStore(store.DB())`), `store/libsql` (`libsql.NewMemoryStore(store.DB())`), `store/postgres` (`postgres.NewMemoryStore(pool)`)
 
 ## Confidence System
 

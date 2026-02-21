@@ -1,24 +1,20 @@
 # Oasis
 
-An AI agent framework for Go. Build tool-calling agents, multi-agent networks, and conversational assistants with composable, interface-driven primitives.
+Build AI agents in Go that actually compose. Single agents, multi-agent networks, DAG workflows, graph-powered RAG, code execution — all as recursive primitives. No LLM SDKs. No vendor lock-in. Just interfaces.
 
 ```go
 import oasis "github.com/nevindra/oasis"
 ```
 
-## Features
+## Why Oasis?
 
-- **Composable agents** -- `LLMAgent` for single-provider tool loops, `Network` for multi-agent coordination, `Workflow` for deterministic DAG-based orchestration. All three nest recursively. Multiple tool calls execute in parallel automatically.
-- **Streaming** -- `StreamingAgent` interface with channel-based token streaming. Tool-calling iterations run in blocking mode; the final response streams token-by-token. Built-in edit batching for messaging platforms.
-- **Memory & recall** -- conversation history (`WithConversationMemory`), cross-thread semantic search (`CrossThreadSearch`), and user fact injection (`WithUserMemory`). Built into `LLMAgent` and `Network`.
-- **Processor pipeline** -- `PreProcessor`, `PostProcessor`, `PostToolProcessor` hooks for guardrails, PII redaction, logging, and custom middleware.
-- **Human-in-the-loop** -- `InputHandler` interface for agents to pause and request human input, both LLM-driven (`ask_user` tool) and programmatic (processor gates).
-- **Background agents** -- `Spawn()` launches agents in background goroutines with `AgentHandle` for state tracking, cancellation, and `select`-based multiplexing.
-- **Interface-driven** -- every component (LLM, storage, tools, frontends, memory) is a Go interface. Swap implementations without touching the rest of the system.
-- **Built-in tools** -- knowledge search (RAG), web search, scheduled actions, shell execution, file I/O, HTTP requests.
-- **Observability** -- OpenTelemetry wrappers for providers, tools, embeddings, and agent executions with cost tracking.
-- **No LLM SDKs** -- all providers use raw `net/http`. Zero vendor lock-in.
-- **Pure-Go SQLite** -- `modernc.org/sqlite`, no CGO required.
+Most agent frameworks are wrappers around LLM SDKs with hardcoded abstractions. Oasis is different:
+
+- **Everything is an interface.** LLM providers, storage, tools, memory — swap any component without touching the rest. Write your own in 20 lines.
+- **Agents compose recursively.** An `LLMAgent` is an `Agent`. A `Network` of agents is an `Agent`. A `Workflow` containing both is an `Agent`. Nest them arbitrarily.
+- **No LLM SDKs.** Every provider uses raw `net/http`. You control the bytes. Zero vendor lock-in, minimal dependencies.
+- **Go-native concurrency.** Parallel tool dispatch, background agents via `Spawn()`, DAG workflows with automatic wave execution — all using goroutines and channels.
+- **Production primitives, not demos.** Rate limiting, retry with backoff, batch processing, persistent Graph RAG, semantic memory with decay, suspend/resume, code execution with tool bridge.
 
 ## Quick Start
 
@@ -33,42 +29,89 @@ import (
 )
 
 func main() {
-    // Use any provider — Gemini, OpenAI, Groq, Ollama, etc.
+    // Use any provider — Gemini, OpenAI, Groq, Ollama, DeepSeek, Mistral, vLLM, etc.
     llm := gemini.New(apiKey, "gemini-2.5-flash")
     // Or: llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1")
     // Or: llm := openaicompat.NewProvider("", "llama3", "http://localhost:11434/v1")
     embedding := gemini.NewEmbedding(apiKey, "text-embedding-004", 768)
 
-    // Single agent with tools
     agent := oasis.NewLLMAgent("assistant", "Helpful research assistant", llm,
         oasis.WithTools(
             knowledge.New(store, embedding),
             search.New(embedding, braveKey),
         ),
         oasis.WithPrompt("You are a helpful research assistant."),
+        oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding)),
+        oasis.WithUserMemory(memoryStore, embedding),
     )
 
     result, err := agent.Execute(ctx, oasis.AgentTask{Input: "What is quantum computing?"})
 }
 ```
 
-## Agents
+## Features
+
+### Agent Primitives
+
+- **LLMAgent** — single LLM with tools. Runs a tool-calling loop until the model produces a final response. Multiple tool calls execute in parallel automatically.
+- **Network** — coordinates multiple agents via an LLM router. Subagents appear as callable tools (`agent_<name>`). Networks nest recursively.
+- **Workflow** — deterministic DAG-based orchestration with `Step`, `AgentStep`, `ToolStep`, `ForEach`, `DoUntil`/`DoWhile`. Steps without dependencies run concurrently. Compile-time validation (cycles, missing deps, duplicates).
+- **Background agents** — `Spawn()` launches agents in goroutines with `AgentHandle` for lifecycle tracking, cancellation, and `select`-based multiplexing.
+
+### Intelligence
+
+- **Code execution** — LLM writes and runs Python code in a sandboxed subprocess with full tool bridge access (`call_tool`, `call_tools_parallel`, `set_result`). Complex logic, loops, conditionals, error handling via try/except.
+- **Plan execution** — LLM batches multiple tool calls in a single turn via `execute_plan`. All steps run in parallel without re-sampling. Reduces latency and tokens for fan-out patterns.
+- **Dynamic configuration** — per-request resolution of prompt, model, and tool set via `WithDynamicPrompt`, `WithDynamicModel`, `WithDynamicTools`. Multi-tenant personalization, tier-based model selection, role-based tool gating.
+- **Structured output** — `WithResponseSchema` enforces JSON output at the agent level. `SchemaObject` typed builder for compile-time safety.
+- **Suspend/Resume** — pause agent or workflow execution to await external input, then continue from where it left off.
+
+### Memory & RAG
+
+- **Conversation memory** — load/persist history per thread with `MaxHistory` and `MaxTokens` trimming.
+- **Cross-thread recall** — semantic search across all threads with cosine similarity filtering.
+- **User memory** — LLM-extracted facts with semantic deduplication, confidence decay, and contradiction supersession. Runs automatically after each turn.
+- **Graph RAG** — LLM-based graph extraction during ingestion discovers 8 relationship types between chunks. `GraphRetriever` combines vector search with multi-hop BFS traversal. Persistent `GraphStore` in all three backends.
+- **Hybrid retrieval** — `HybridRetriever` fuses vector search + FTS keyword search with Reciprocal Rank Fusion, parent-child chunk resolution, and optional LLM re-ranking.
+- **Semantic chunking** — embedding-based topic boundary detection alongside recursive and markdown-aware chunkers.
+- **Skills** — database-persisted instruction packages with semantic search. Agents discover and create skills for each other.
+
+### Streaming & Events
+
+- **Structured streaming** — `StreamEvent` with 5 typed events: `TextDelta`, `ToolCallStart`, `ToolCallResult`, `AgentStart`, `AgentFinish`. Full visibility into agent execution.
+- **Execution traces** — every `AgentResult` includes `Steps []StepTrace` with per-tool timing, token usage, and input/output. No OTEL setup required.
+- **SSE helper** — `ServeSSE` streams agent responses as Server-Sent Events with zero boilerplate.
+
+### Resilience
+
+- **Retry** — `WithRetry` wraps any provider with exponential backoff on 429/503.
+- **Rate limiting** — `WithRateLimit` with sliding-window RPM and TPM accounting. Blocks requests until budget allows.
+- **Batch processing** — `BatchProvider` and `BatchEmbeddingProvider` for async offline jobs at reduced cost.
+- **Processor pipeline** — `PreProcessor`, `PostProcessor`, `PostToolProcessor` hooks for guardrails, PII redaction, logging. `ErrHalt` short-circuits execution.
+- **Human-in-the-loop** — `InputHandler` lets agents pause and ask humans for input, both LLM-driven (`ask_user` tool) and programmatic.
+
+### Observability
+
+- **Deep tracing** — `Tracer` and `Span` interfaces in the root package. Span hierarchy: `agent.execute` → `agent.memory.load` / `agent.loop.iteration` → `agent.memory.persist`. Zero overhead when no tracer configured.
+- **Structured logging** — all framework logging uses `slog`. Pass `WithLogger(*slog.Logger)` to any agent.
+- **OTEL integration** — `observer.NewTracer()` backed by the global `TracerProvider`.
+
+## Agents in Depth
 
 ### LLMAgent
-
-A single LLM with tools. Runs a tool-calling loop until the model produces a final text response.
 
 ```go
 researcher := oasis.NewLLMAgent("researcher", "Searches the web", llm,
     oasis.WithTools(searchTool, knowledgeTool),
     oasis.WithPrompt("You are a research specialist."),
     oasis.WithMaxIter(5),
+    oasis.WithCodeExecution(runner),     // let the LLM write and run code
+    oasis.WithPlanExecution(),           // let the LLM batch tool calls
+    oasis.WithTracer(observer.NewTracer()),
 )
 ```
 
 ### Network
-
-Coordinates multiple agents and tools via an LLM router. The router sees subagents as callable tools (`agent_<name>`) and decides which to invoke.
 
 ```go
 researcher := oasis.NewLLMAgent("researcher", "Searches for information", llm,
@@ -81,15 +124,13 @@ team := oasis.NewNetwork("team", "Research and writing team", router,
     oasis.WithTools(knowledgeTool),
 )
 
-// Networks compose recursively
+// Networks compose recursively — a Network is just another Agent
 org := oasis.NewNetwork("org", "Full organization", ceo,
     oasis.WithAgents(team, opsTeam),
 )
 ```
 
 ### Workflow
-
-Deterministic, DAG-based task orchestration. Steps run in dependency order with automatic parallelism. Use it when you know the execution order at build time.
 
 ```go
 pipeline, err := oasis.NewWorkflow("research-pipeline", "Research and write",
@@ -105,73 +146,23 @@ pipeline, err := oasis.NewWorkflow("research-pipeline", "Research and write",
 result, err := pipeline.Execute(ctx, oasis.AgentTask{Input: "Go error handling"})
 ```
 
-Step types: `Step` (function), `AgentStep` (delegate to Agent), `ToolStep` (call a tool), `ForEach` (iterate with concurrency), `DoUntil`/`DoWhile` (loop). See [docs/concepts/workflow.md](docs/concepts/workflow.md) for the full guide.
-
-### Processors
-
-Middleware hooks that run at specific points in the agent execution pipeline.
-
-```go
-agent := oasis.NewLLMAgent("guarded", "Safe agent", llm,
-    oasis.WithTools(searchTool),
-    oasis.WithProcessors(&guardrail, &piiRedactor, &logger),
-)
-```
-
-| Interface | Hook Point | Use Cases |
-| --------- | ---------- | --------- |
-| `PreProcessor` | Before LLM call | Input validation, context injection, rate limiting |
-| `PostProcessor` | After LLM response | Output filtering, tool call validation |
-| `PostToolProcessor` | After tool execution | Result redaction, audit logging |
-
-Return `ErrHalt` from any processor to short-circuit execution with a canned response.
-
-### Human-in-the-Loop
-
-The `InputHandler` interface lets agents pause execution and ask a human for input. Two patterns:
-
-- **LLM-driven** -- the LLM calls a built-in `ask_user` tool when it decides it needs clarification.
-- **Programmatic** -- processors or workflow steps retrieve the handler from context via `InputHandlerFromContext(ctx)` for approval gates, review steps, etc.
-
-```go
-agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
-    oasis.WithTools(searchTool),
-    oasis.WithInputHandler(myHandler), // enables ask_user tool + context propagation
-)
-```
-
-Networks propagate the handler to all subagents automatically.
-
-### Memory & Recall
-
-Agents can load conversation history, recall relevant context from past threads, and inject user facts into the system prompt -- all via options.
-
-```go
-agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
-    oasis.WithTools(searchTool),
-    oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding)), // load/persist history + cross-thread recall
-    oasis.WithUserMemory(memoryStore, embedding),                           // inject user facts into system prompt
-)
-
-result, err := agent.Execute(ctx, oasis.AgentTask{
-    Input: "What did we discuss yesterday?",
-    Context: map[string]any{
-        oasis.ContextThreadID: "thread-123",
-        oasis.ContextUserID:   "user-42",
-    },
-})
-```
+Step types: `Step` (function), `AgentStep` (delegate to Agent), `ToolStep` (call a tool), `ForEach` (iterate with concurrency), `DoUntil`/`DoWhile` (loop). Workflows can also be defined from JSON at runtime via `FromDefinition` for visual workflow builders.
 
 ### Streaming
 
-Both `LLMAgent` and `Network` implement the `StreamingAgent` interface. Tool-calling iterations run in blocking mode; only the final response streams token-by-token.
-
 ```go
 if sa, ok := agent.(oasis.StreamingAgent); ok {
-    ch := make(chan string)
+    ch := make(chan oasis.StreamEvent)
     go func() {
-        for token := range ch {
-            fmt.Print(token)
+        for event := range ch {
+            switch event.Type {
+            case oasis.EventTextDelta:
+                fmt.Print(event.Content)
+            case oasis.EventToolCallStart:
+                fmt.Printf("\n[calling %s]\n", event.Name)
+            case oasis.EventToolCallResult:
+                fmt.Printf("[%s returned]\n", event.Name)
+            }
         }
     }()
     result, err := sa.ExecuteStream(ctx, task, ch)
@@ -180,18 +171,11 @@ if sa, ok := agent.(oasis.StreamingAgent); ok {
 
 ### Background Agents
 
-`Spawn()` launches an agent in a background goroutine and returns an `AgentHandle` for tracking, awaiting, and cancelling.
-
 ```go
 h := oasis.Spawn(ctx, agent, task)
 
-// Check state without blocking
 fmt.Println(h.State()) // Running, Completed, Failed, Cancelled
-
-// Wait for completion
 result, err := h.Wait()
-
-// Or cancel
 h.Cancel()
 ```
 
@@ -199,24 +183,29 @@ h.Cancel()
 
 | Interface | Purpose |
 | --------- | ------- |
-| `Provider` | LLM backend -- `Chat`, `ChatWithTools`, `ChatStream` |
+| `Provider` | LLM backend — `Chat`, `ChatWithTools`, `ChatStream` |
 | `EmbeddingProvider` | Text-to-vector embedding |
-| `Store` | Persistence with vector search |
+| `Store` | Persistence with vector search, keyword search, graph storage |
 | `MemoryStore` | Long-term semantic memory (facts, confidence, decay) |
 | `Tool` | Pluggable capability for LLM function calling |
-| `Agent` | Composable work unit -- `LLMAgent`, `Network`, `Workflow`, or custom |
-| `StreamingAgent` | Optional `Agent` capability -- `ExecuteStream` with channel-based token streaming |
-| `InputHandler` | Human-in-the-loop -- pause agent and request human input |
+| `Agent` | Composable work unit — `LLMAgent`, `Network`, `Workflow`, or custom |
+| `StreamingAgent` | Token streaming with structured events |
+| `InputHandler` | Human-in-the-loop — pause and request human input |
+| `Tracer` / `Span` | Tracing abstraction (zero OTEL imports in your code) |
+| `Retriever` | Composable retrieval with re-ranking |
+| `CodeRunner` | Sandboxed code execution with tool bridge |
 
 ## Included Implementations
 
 | Component | Packages |
 | --------- | -------- |
-| **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Groq, Together, DeepSeek, Mistral, Ollama, and any OpenAI-compatible API) |
-| **Storage** | `store/sqlite` (local), `store/libsql` (Turso/remote), `store/postgres` (PostgreSQL + pgvector) |
-| **Tools** | `tools/knowledge`, `tools/remember`, `tools/search`, `tools/schedule`, `tools/shell`, `tools/file`, `tools/http` |
-| **Observability** | `observer` (OpenTelemetry wrappers with cost tracking) |
-| **Ingestion** | `ingest` (HTML, Markdown, plain text chunking pipeline) |
+| **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Groq, Together, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure, and any OpenAI-compatible API) |
+| **Storage** | `store/sqlite` (local, pure-Go), `store/libsql` (Turso/remote), `store/postgres` (PostgreSQL + pgvector). All three support `Store`, `MemoryStore`, `GraphStore`, and `KeywordSearcher` |
+| **Tools** | `tools/knowledge` (RAG), `tools/remember`, `tools/search` (web), `tools/schedule`, `tools/shell`, `tools/file`, `tools/http`, `tools/data` (CSV/JSON transform), `tools/skill` (agent skill management) |
+| **Code** | `code` (sandboxed Python subprocess with tool bridge) |
+| **Retrieval** | `HybridRetriever` (vector + FTS + RRF), `GraphRetriever` (multi-hop BFS), `ScoreReranker`, `LLMReranker` |
+| **Ingestion** | `ingest` (HTML, Markdown, CSV, JSON, DOCX, PDF extractors; recursive, markdown, semantic chunkers; parent-child strategy) |
+| **Observability** | `observer` (OpenTelemetry-backed `Tracer` implementation) |
 
 ## Installation
 
@@ -233,16 +222,19 @@ oasis/
 |-- types.go, provider.go, tool.go     # Core interfaces and domain types
 |-- store.go, memory.go
 |-- agent.go, llmagent.go, network.go   # Agent primitives
-|-- workflow.go                        # Workflow primitive (DAG orchestration)
+|-- workflow.go                         # DAG orchestration
 |-- processor.go                        # Processor pipeline
-|-- input.go                            # Human-in-the-loop (InputHandler)
+|-- input.go                            # Human-in-the-loop
+|-- retriever.go                        # Retrieval pipeline
+|-- handle.go                           # Spawn() + AgentHandle
 |
 |-- provider/gemini/                    # Google Gemini provider
 |-- provider/openaicompat/              # OpenAI-compatible provider
-|-- store/sqlite/                       # Local SQLite store + MemoryStore
+|-- store/sqlite/                       # Local SQLite (pure-Go, no CGO)
 |-- store/libsql/                       # Remote Turso store
-|-- store/postgres/                     # PostgreSQL + pgvector store + MemoryStore
-|-- observer/                           # OTEL observability wrappers
+|-- store/postgres/                     # PostgreSQL + pgvector
+|-- code/                              # Sandboxed code execution
+|-- observer/                           # OTEL observability
 |-- ingest/                             # Document chunking pipeline
 |-- tools/                              # Built-in tools
 |
@@ -257,21 +249,17 @@ See [docs/configuration/reference.md](docs/configuration/reference.md) for the f
 
 ## Documentation
 
-- [Getting Started](docs/getting-started/) -- installation, quick start, reference app
-- [Concepts](docs/concepts/) -- architecture, interfaces, and primitives
-- [Guides](docs/guides/) -- how-to guides for building custom components
-- [Configuration](docs/configuration/reference.md) -- all config options and environment variables
-- [API Reference](docs/api/) -- complete interface definitions, types, and options
-- [Contributing](docs/contributing.md) -- engineering principles and coding conventions
-- [Deployment](cmd/bot_example/DEPLOYMENT.md) -- Docker, cloud deployment for the reference bot
+- [Getting Started](docs/getting-started/) — installation, quick start, reference app
+- [Concepts](docs/concepts/) — architecture, interfaces, and primitives
+- [Guides](docs/guides/) — how-to guides for building custom components
+- [Configuration](docs/configuration/reference.md) — all config options and environment variables
+- [API Reference](docs/api/) — complete interface definitions, types, and options
+- [Contributing](docs/contributing.md) — engineering principles and coding conventions
+- [Deployment](cmd/bot_example/DEPLOYMENT.md) — Docker, cloud deployment for the reference bot
 
 ## MCP Docs Server
 
-Oasis ships an MCP (Model Context Protocol) server that exposes framework documentation to AI assistants. Connect it to Claude Code, Cursor, Windsurf, or any MCP-compatible tool so the assistant can look up Oasis APIs, search docs, and write correct code without guessing.
-
-### Setup
-
-Add to your project's `.mcp.json`:
+Oasis ships an MCP (Model Context Protocol) server that exposes framework documentation to AI assistants. Connect it to Claude Code, Cursor, Windsurf, or any MCP-compatible tool.
 
 ```json
 {
@@ -285,41 +273,7 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Or install the binary first:
-
-```bash
-go install github.com/nevindra/oasis/cmd/mcp-docs@latest
-```
-
-```json
-{
-  "mcpServers": {
-    "oasis": {
-      "type": "stdio",
-      "command": "mcp-docs"
-    }
-  }
-}
-```
-
-### What It Provides
-
-**Resources** -- all framework documentation exposed as MCP resources with `oasis://` URIs:
-
-| URI Pattern | Content |
-| ----------- | ------- |
-| `oasis://concepts/*` | Architecture, agents, tools, workflows, memory, etc. |
-| `oasis://guides/*` | How-to guides for custom tools, providers, RAG, streaming, etc. |
-| `oasis://api/*` | Interfaces, types, constructors, options, errors |
-| `oasis://configuration/*` | Config reference |
-| `oasis://getting-started/*` | Installation, quick start |
-| `oasis://contributing` | Engineering principles and conventions |
-
-**Tools** -- `search_docs` for keyword search across all documentation. Returns matching snippets with resource URIs.
-
-### How It Works
-
-The server embeds all documentation at build time via `//go:embed` and communicates over stdio using JSON-RPC 2.0 (MCP protocol revision 2025-03-26). No network access, no API keys, no deployment -- it runs as a local subprocess managed by your AI tool.
+All docs are embedded at build time via `//go:embed`. No network access, no API keys — runs as a local subprocess.
 
 ## License
 

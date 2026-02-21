@@ -123,7 +123,7 @@ for _, step := range result.Steps {
 Options shared by `NewLLMAgent` and `NewNetwork`:
 
 | Option | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `WithTools(tools ...Tool)` | Add tools |
 | `WithPrompt(s string)` | Set system prompt |
 | `WithMaxIter(n int)` | Max tool-calling iterations (default 10) |
@@ -131,12 +131,15 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithProcessors(processors ...any)` | Add processor middleware |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
 | `WithPlanExecution()` | Enable batched tool calls via `execute_plan` tool |
-| `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output |
+| `WithCodeExecution(r CodeRunner)` | Enable sandboxed code execution via `execute_code` tool |
+| `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output. Use `NewResponseSchema(name, schema)` with `SchemaObject` for type-safe schema building |
 | `WithDynamicPrompt(fn PromptFunc)` | Per-request system prompt resolution |
 | `WithDynamicModel(fn ModelFunc)` | Per-request provider/model selection |
 | `WithDynamicTools(fn ToolsFunc)` | Per-request tool set (replaces static tools) |
 | `WithConversationMemory(s Store, opts...)` | Enable history load/persist per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact injection + auto-extraction |
+| `WithTracer(t Tracer)` | Attach a tracer for span creation (`agent.execute` → `agent.loop.iteration`, etc.) |
+| `WithLogger(l *slog.Logger)` | Attach a structured logger (replaces `log.Printf`) |
 
 ## Dynamic Configuration
 
@@ -216,7 +219,17 @@ type StreamingAgent interface {
 }
 ```
 
-Both `LLMAgent` and `Network` implement it. The channel carries typed `StreamEvent` values — text deltas, tool call start/result, and agent start/finish (Network only). Check at runtime via type assertion:
+Both `LLMAgent` and `Network` implement it. The channel carries typed `StreamEvent` values:
+
+| Event | Emitted by | Fields |
+| ----- | ---------- | ------ |
+| `EventTextDelta` | Provider | `Content` (token text) |
+| `EventToolCallStart` | Agent | `Name`, `Args` (JSON) |
+| `EventToolCallResult` | Agent | `Name`, `Content` (result), `Usage`, `Duration` |
+| `EventAgentStart` | Network | `Name` (subagent name) |
+| `EventAgentFinish` | Network | `Name`, `Content` (output), `Usage`, `Duration` |
+
+Check at runtime via type assertion:
 
 ```go
 if sa, ok := agent.(oasis.StreamingAgent); ok {
@@ -252,10 +265,18 @@ handle.Cancel()   // request cancellation
 
 See [Background Agents Guide](../guides/background-agents.md) for patterns.
 
+## Suspend/Resume
+
+Agents support pausing execution to await external input. A processor can return `Suspend(payload)` to pause the agent — `Execute` returns `ErrSuspended`, which carries a `Resume(ctx, data)` method to continue from where it left off. Conversation history is preserved across suspend/resume cycles.
+
+See [Workflow](workflow.md) for DAG-level suspend/resume and [Processors](processor.md) for processor-triggered gates.
+
 ## See Also
 
 - [Network](network.md) — multi-agent coordination
 - [Workflow](workflow.md) — deterministic DAG orchestration
 - [Tool](tool.md) — what agents can do
+- [Code Execution](code-execution.md) — sandboxed Python with tool bridge
 - [Memory](memory.md) — conversation and user memory
+- [Observability](observability.md) — tracing and structured logging
 - [Custom Agent Guide](../guides/custom-agent.md)

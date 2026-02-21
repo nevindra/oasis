@@ -143,21 +143,57 @@ func (t *TokenBudget) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
 }
 ```
 
-## Retries
+## Suspend from Processors
 
-Retries are handled at different levels depending on what you're retrying:
+Processors can trigger suspension to pause execution for external input. Return `Suspend()` from a `PreProcessor` or `PostProcessor` to halt the agent — the caller receives `*ErrSuspended` and can resume later:
+
+```go
+type ComplianceGate struct{}
+
+func (g *ComplianceGate) PostLLM(_ context.Context, resp *oasis.ChatResponse) error {
+    if containsSensitiveAction(resp.ToolCalls) {
+        payload, _ := json.Marshal(map[string]any{
+            "reason":     "sensitive action detected",
+            "tool_calls": resp.ToolCalls,
+        })
+        return oasis.Suspend(json.RawMessage(payload))
+    }
+    return nil
+}
+```
+
+The caller handles suspension the same way as Workflow suspend:
+
+```go
+result, err := agent.Execute(ctx, task)
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    // Show payload to human, get approval...
+    result, err = suspended.Resume(ctx, json.RawMessage(`{"approved": true}`))
+}
+```
+
+## Retries and Rate Limiting
+
+Retries and rate limiting are handled at different levels depending on what you're protecting:
 
 - **LLM call retries** (429, 503) — use `oasis.WithRetry(provider)` at the Provider level. Wraps the provider with exponential backoff before the agent loop sees the error.
+- **Rate limiting** — use `oasis.WithRateLimit(provider, limits...)` to proactively throttle requests. Sleeps before hitting limits instead of reacting to 429 errors.
 - **Workflow step retries** — use `oasis.Retry(n, delay)` on individual steps. Re-executes the step function up to N times with the specified delay.
-- **Processors** cannot trigger retries — they transform/validate within a single iteration. If you need to retry an entire agent execution, wrap the `Execute` call at the application level.
+- **Processors** cannot trigger retries — they transform/validate within a single iteration.
 
 ```go
 // Provider-level retries (transient HTTP errors)
 provider := oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryMaxAttempts(5))
 
+// Rate limiting (proactive throttling)
+provider = oasis.WithRateLimit(provider, oasis.RPM(60), oasis.TPM(100000))
+
 // Workflow step-level retries
 oasis.Step("fetch", fetchFunc, oasis.Retry(3, 2*time.Second))
 ```
+
+`WithRetry` and `WithRateLimit` compose — use both for production workloads.
 
 ## Registration
 

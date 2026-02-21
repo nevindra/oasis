@@ -76,6 +76,9 @@ Extractors convert raw bytes into plain text. Content type is detected from file
 | `HTMLExtractor` | `text/html` | Strips tags, scripts, styles; decodes entities |
 | `MarkdownExtractor` | `text/markdown` | Strips formatting, preserves content |
 | `pdf.NewExtractor()` | PDF | Opt-in, `ingest/pdf` subpackage |
+| `csv.NewExtractor()` | CSV | Opt-in, `ingest/csv` subpackage. Headers → labeled paragraphs |
+| `json.NewExtractor()` | JSON | Opt-in, `ingest/json` subpackage. Recursive key flattening |
+| `docx.NewExtractor()` | DOCX | Opt-in, `ingest/docx` subpackage. Pure Go, implements `MetadataExtractor` |
 
 ```go
 // Custom extractor for unsupported formats
@@ -225,6 +228,9 @@ All methods return `IngestResult{DocumentID, Document, ChunkCount}`.
 | `WithChildTokens(n)` | 256 | Child chunk size |
 | `WithBatchSize(n)` | 64 | Chunks per `Embed()` call |
 | `WithExtractor(ct, e)` | — | Register custom extractor for content type |
+| `WithGraphExtraction(p)` | nil | Enable LLM-based graph extraction |
+| `WithIngestorTracer(t)` | nil | Attach a `Tracer` for span creation |
+| `WithIngestorLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
 ---
 
@@ -339,6 +345,8 @@ Available filter constructors: `ByDocument(ids...)`, `BySource(source)`, `ByMeta
 | `WithKeywordWeight(w)` | 0.3 | Keyword weight in RRF merge |
 | `WithOverfetchMultiplier(n)` | 3 | Fetch topK*n candidates before trim |
 | `WithFilters(f...)` | none | Metadata filters passed to both search paths |
+| `WithRetrieverTracer(t)` | nil | Attach a `Tracer` for span creation |
+| `WithRetrieverLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
 ---
 
@@ -461,6 +469,8 @@ If the Store doesn't implement `GraphStore`, `GraphRetriever` falls back to vect
 | `WithMinTraversalScore(s)` | 0 | Minimum edge weight to follow |
 | `WithSeedTopK(k)` | 10 | Seed chunks from initial vector search |
 | `WithGraphFilters(f...)` | none | Metadata filters for vector search |
+| `WithGraphRetrieverTracer(t)` | nil | Attach a `Tracer` for span creation |
+| `WithGraphRetrieverLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
 ### When to Use Graph RAG
 

@@ -17,6 +17,7 @@ graph TB
     STORE --> CONFIG[Config<br>key-value]
     STORE --> SCHED[Scheduled Actions<br>CRUD + due query]
     STORE --> SKILLS[Skills<br>CRUD + vector search]
+    STORE --> GRAPH[Graph Edges<br>store + query + prune]
     STORE --> LIFE[Lifecycle<br>Init + Close]
 
     style STORE fill:#e1f5fe
@@ -53,7 +54,7 @@ ChatID (room/channel)
 ```
 
 | Concept | Context Key | Struct Field | Meaning |
-|---------|-------------|--------------|---------|
+| ------- | ----------- | ------------ | ------- |
 | **ChatID** | `ContextChatID` | `Thread.ChatID` | The room, channel, or DM scope. In Telegram this is the chat. In a SaaS app it could be a workspace or user account. |
 | **UserID** | `ContextUserID` | — | The individual person. Multiple users can share a ChatID (group chats). Not stored on Thread — it's request-scoped metadata. |
 | **ThreadID** | `ContextThreadID` | `Thread.ID` / `Message.ThreadID` | A single conversation. `ListThreads(ctx, chatID, limit)` returns all threads in a chat. `GetMessages(ctx, threadID, limit)` returns turns within a thread. |
@@ -141,7 +142,7 @@ Close() error    // clean up connections
 ## Shipped Implementations
 
 | Package | Constructor | Notes |
-|---------|------------|-------|
+| ------- | ----------- | ----- |
 | `store/sqlite` | `sqlite.New(path)` | Local pure-Go SQLite (`modernc.org/sqlite`) |
 | `store/libsql` | `libsql.New(path, opts...)` | Local/remote Turso/libSQL with DiskANN |
 | `store/postgres` | `postgres.New(pool, opts...)` | PostgreSQL + pgvector (HNSW indexes) |
@@ -156,6 +157,7 @@ All three packages also ship a `MemoryStore` implementation in the same package 
 - libSQL options: `WithEmbeddingDimension(dim)` — default 1536
 
 **PostgreSQL (pgvector):**
+
 - Uses native `vector` columns with HNSW indexes for cosine distance search
 - Full-text search via `tsvector`/`tsquery` with GIN index (no FTS5 virtual table)
 - Accepts an externally-owned `*pgxpool.Pool` — share one pool across Store, MemoryStore, and your app
@@ -243,8 +245,11 @@ messages (id, thread_id, role, content, embedding, created_at)
 
 -- Knowledge base
 documents (id, title, source, content, created_at)
-chunks    (id, document_id, parent_id, content, chunk_index, embedding)
+chunks    (id, document_id, parent_id, content, chunk_index, embedding, metadata)
 chunks_fts USING fts5(chunk_id UNINDEXED, content)  -- FTS5 keyword search
+
+-- Knowledge graph
+chunk_edges (source_chunk_id, target_chunk_id, relation, weight)
 
 -- Config
 config (key PRIMARY KEY, value)
@@ -257,6 +262,45 @@ scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt,
 skills (id, name, description, instructions, tools, model, embedding,
         created_at, updated_at)
 ```
+
+## GraphStore
+
+`GraphStore` is an optional Store capability for storing and querying knowledge graph edges between chunks. Discovered via type assertion — all three shipped backends implement it.
+
+```go
+type GraphStore interface {
+    StoreEdges(ctx context.Context, edges []ChunkEdge) error
+    GetEdges(ctx context.Context, chunkID string) ([]ChunkEdge, error)
+    GetIncomingEdges(ctx context.Context, chunkID string) ([]ChunkEdge, error)
+    PruneOrphanEdges(ctx context.Context) (int, error)
+}
+```
+
+### ChunkEdge
+
+```go
+type ChunkEdge struct {
+    SourceChunkID string
+    TargetChunkID string
+    Relation      RelationType  // references, elaborates, depends_on, contradicts, part_of, similar_to, sequence, caused_by
+    Weight        float64       // edge strength [0, 1]
+}
+```
+
+Eight relationship types are extracted during ingestion via `WithGraphExtraction(provider)` on the Ingestor. Edges are stored in the `chunk_edges` table and cascade-deleted when the parent document is removed. Orphan edges (where one side's chunk no longer exists) are cleaned up by `PruneOrphanEdges`.
+
+The [GraphRetriever](retrieval.md) uses `GraphStore` to perform multi-hop BFS traversal, discovering related content that vector similarity alone would miss.
+
+### Discovering GraphStore
+
+```go
+if gs, ok := store.(oasis.GraphStore); ok {
+    edges, _ := gs.GetEdges(ctx, chunkID)
+    // traverse the graph
+}
+```
+
+See [Ingest](ingest.md) for graph extraction during ingestion and [Retrieval](retrieval.md) for graph-augmented search.
 
 ## See Also
 

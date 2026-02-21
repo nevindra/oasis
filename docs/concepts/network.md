@@ -118,8 +118,27 @@ The key distinction is **when the routing decision happens**:
 
 **Use Workflow when** you already know the steps: "Extract text → chunk → embed → store" — a fixed pipeline that runs the same way every time.
 
+## Observability
+
+Network supports the same tracing and logging options as LLMAgent:
+
+```go
+team := oasis.NewNetwork("team", "Research team", router,
+    oasis.WithAgents(researcher, writer),
+    oasis.WithTracer(observer.NewTracer()),
+    oasis.WithLogger(slog.Default()),
+)
+```
+
+Network adds `agent.delegate` spans for sub-agent routing in the trace hierarchy. See [Observability](observability.md).
+
+## Suspend/Resume
+
+Network supports suspend/resume — processors can return `Suspend(payload)` to pause execution. Conversation history is preserved across suspend/resume cycles. See [Agent](agent.md#suspendresume) and [Processor](processor.md#suspend).
+
 ## See Also
 
-- [Agent](agent.md) — the underlying interface
+- [Agent](agent.md) — the underlying interface and shared options
 - [Workflow](workflow.md) — deterministic alternative
 - [Processor](processor.md) — middleware hooks work the same way
+- [Observability](observability.md) — tracing and structured logging

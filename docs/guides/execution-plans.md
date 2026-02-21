@@ -196,6 +196,25 @@ if errors.As(err, &suspended) {
 }
 ```
 
+### Error Handling
+
+When an inner workflow step fails, `wf.Execute` returns a `*WorkflowError` with details about which step failed:
+
+```go
+result, err := wf.Execute(ctx, oasis.AgentTask{Input: input})
+
+var wfErr *oasis.WorkflowError
+if errors.As(err, &wfErr) {
+    fmt.Println("failed step:", wfErr.StepName)
+    fmt.Println("cause:", wfErr.Err)
+    for name, step := range wfErr.Result.Steps {
+        fmt.Printf("  %s: %s\n", name, step.Status)
+    }
+}
+```
+
+Don't confuse `WorkflowError` with `ErrSuspended` — suspension is not a failure. Check for `ErrSuspended` first.
+
 ## Pattern 3: Plan Modification
 
 The human might want to modify the plan before approving. Handle this by re-compiling:
@@ -217,6 +236,60 @@ if errors.As(err, &suspended) {
 ```
 
 This avoids a dedicated "plan store" — the plan is just data that flows through the Suspend/Resume boundary.
+
+## Advanced: Condition and Template Nodes
+
+Beyond `tool` and `llm` node types, `FromDefinition` supports `condition` (branching) and `template` (string interpolation) nodes for richer runtime workflows.
+
+### Condition Branching
+
+Route execution based on previous step results:
+
+```go
+def := oasis.WorkflowDefinition{
+    Name: "conditional-pipeline",
+    Nodes: []oasis.NodeDefinition{
+        {ID: "analyze", Type: oasis.NodeTool, Tool: "analyzer", ToolName: "classify",
+            Args: map[string]any{"text": "{{input}}"}},
+        {ID: "check", Type: oasis.NodeCondition,
+            Expression:  "{{analyze.result}} contains critical",
+            TrueBranch:  []string{"escalate"},
+            FalseBranch: []string{"auto-handle"},
+        },
+        {ID: "escalate", Type: oasis.NodeLLM, Agent: "senior",
+            Input: "Critical issue: {{analyze.result}}"},
+        {ID: "auto-handle", Type: oasis.NodeLLM, Agent: "junior",
+            Input: "Handle routine issue: {{analyze.result}}"},
+    },
+    Edges: [][2]string{{"analyze", "check"}},
+}
+```
+
+Supported operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`. For complex logic, register a Go function:
+
+```go
+reg := oasis.DefinitionRegistry{
+    Conditions: map[string]func(*oasis.WorkflowContext) bool{
+        "needs_escalation": func(wCtx *oasis.WorkflowContext) bool {
+            score, _ := wCtx.Get("analyze.result")
+            // complex logic here
+            return strings.Contains(score.(string), "critical")
+        },
+    },
+}
+// Reference by name: Expression: "needs_escalation"
+```
+
+### Template Nodes
+
+Interpolate values from previous steps without calling an LLM:
+
+```go
+{ID: "format", Type: oasis.NodeTemplate,
+    Input: "Analysis complete. Result: {{analyze.result}}. Action: {{handle.output}}"},
+```
+
+Template nodes use `{{key}}` placeholders that resolve against `WorkflowContext`. Missing keys resolve to empty strings.
 
 ## Tips
 

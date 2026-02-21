@@ -98,7 +98,7 @@ result, err := registry.Execute(ctx, "web_search", argsJSON)
 | `tools/search` | `web_search` | EmbeddingProvider, Brave API key |
 | `tools/schedule` | `schedule_create`, `schedule_list`, `schedule_update`, `schedule_delete` | Store |
 | `tools/shell` | `shell_exec` | workspace path |
-| `tools/file` | `file_read`, `file_write`, `file_list` | workspace path |
+| `tools/file` | `file_read`, `file_write`, `file_list`, `file_delete`, `file_stat` | workspace path |
 | `tools/http` | `http_fetch` | (none) |
 | `tools/data` | `data_parse`, `data_filter`, `data_aggregate`, `data_transform` | (none) |
 | `tools/skill` | `skill_search`, `skill_create`, `skill_update` | Store, EmbeddingProvider |

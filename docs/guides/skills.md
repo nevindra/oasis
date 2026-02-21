@@ -317,6 +317,15 @@ The reference app uses two-stage resolution for app-level skill selection:
 
 This is an application-level pattern — the framework provides storage and search, you decide how to select and apply skills. The skill tool provides a different path: the agent itself decides when and how to use skills during execution.
 
+## Task Context for CreatedBy
+
+The skill tool reads `CreatedBy` from `TaskFromContext()` — the user ID propagated through the agent's execution context. `LLMAgent` and `Network` inject this automatically. If you're using the skill tool in a custom agent, ensure task context is propagated:
+
+```go
+ctx = oasis.WithTaskContext(ctx, task)
+result, _ := skillTool.Execute(ctx, "skill_create", args)
+```
+
 ## See Also
 
 - [Store Concept](../concepts/store.md) — persistence layer

@@ -131,6 +131,25 @@ data: {"type":"text-delta","content":"Hello"}
 
 Works with any router (Echo, Chi, Gin) since they all expose `http.ResponseWriter`.
 
+## Processors and Streaming
+
+PostProcessors run for side effects even on the streaming path. When an agent streams its final response, the framework still calls `RunPostLLM` after streaming completes — the PostProcessor sees the full assembled response.
+
+This means logging, analytics, and guardrail processors work identically regardless of whether the caller used `Execute` or `ExecuteStream`.
+
+## Observability
+
+Streaming works with `WithTracer` — the same span hierarchy (`agent.execute` → `agent.llm.call` → `agent.tool.call`) applies to `ExecuteStream`. Tool events appear as child spans within the streaming execution.
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithTracer(tracer),
+)
+// ExecuteStream produces the same trace spans as Execute
+```
+
 ## See Also
 
 - [Agent Concept](../concepts/agent.md) — StreamingAgent interface
+- [Processors Guide](processors-and-guardrails.md) — PostProcessor details
+- [Observability](../concepts/observability.md) — Tracer/Span interfaces

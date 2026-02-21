@@ -22,17 +22,22 @@ result, _ := agent.Execute(ctx, oasis.AgentTask{
 
 Without `thread_id`, the agent runs stateless — no history loaded or persisted.
 
-## Token Budget for History
+## History Limits
 
-Limit conversation history by estimated token count instead of (or in addition to) message count:
+Control how much conversation history is loaded before each LLM call. Two options compose — whichever triggers first wins:
 
 ```go
-// Trim oldest messages until history fits within 4000 estimated tokens
+// By message count (default: 10 most recent messages)
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store, oasis.MaxHistory(30)),
+)
+
+// By estimated token budget — trim oldest-first to fit
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithConversationMemory(store, oasis.MaxTokens(4000)),
 )
 
-// Compose with MaxHistory — both limits apply, whichever triggers first
+// Both compose — whichever triggers first wins
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithConversationMemory(store,
         oasis.MaxHistory(50),
@@ -72,10 +77,19 @@ oasis.CrossThreadSearch(embedding, oasis.MinScore(0.50))
 Learn and remember things about the user:
 
 ```go
+// SQLite
 store := sqlite.New("oasis.db")
 store.Init(ctx)
 memoryStore := sqlite.NewMemoryStore(store.DB())
 memoryStore.Init(ctx)
+
+// PostgreSQL alternative:
+//   store := postgres.New(pool)
+//   memoryStore := postgres.NewMemoryStore(pool)
+
+// libSQL/Turso alternative:
+//   store := libsql.New(dbURL, authToken)
+//   memoryStore := libsql.NewMemoryStore(store.DB())
 
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithConversationMemory(store),  // required for write path

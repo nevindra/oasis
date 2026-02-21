@@ -19,6 +19,8 @@ flowchart TD
     PRE -.->|ErrHalt| HALT([Return canned response])
     POST -.->|ErrHalt| HALT
     POSTTOOL -.->|ErrHalt| HALT
+    PRE -.->|Suspend| PAUSE([Pause for external input])
+    POST -.->|Suspend| PAUSE
 
     style PRE fill:#fff3e0
     style POST fill:#fff3e0
@@ -60,6 +62,32 @@ type ErrHalt struct {
 
 The agent loop catches `ErrHalt` and returns `AgentResult{Output: halt.Response}` with a nil error. Other errors propagate as infrastructure failures.
 
+## Suspend
+
+Return `Suspend(payload)` from any processor to pause agent execution:
+
+```go
+func (g *ApprovalGate) PostLLM(ctx context.Context, resp *oasis.ChatResponse) error {
+    if hasDangerousToolCalls(resp) {
+        return oasis.Suspend(json.RawMessage(`{"reason": "dangerous tool calls need approval"}`))
+    }
+    return nil
+}
+```
+
+The agent returns `ErrSuspended` with the payload. The caller can inspect the payload, collect external input, and resume:
+
+```go
+result, err := agent.Execute(ctx, task)
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    // show payload to human, collect approval
+    result, err = suspended.Resume(ctx, approvalData)
+}
+```
+
+`Suspend` works in `LLMAgent`, `Network`, and `Workflow`. Conversation history and DAG state are preserved across suspend/resume cycles. See [InputHandler](input-handler.md) for the related `ask_user` pattern.
+
 ## Registration
 
 ```go
@@ -82,7 +110,7 @@ Processors run in registration order at each hook point. An empty chain is a no-
 | Token budget | PreProcessor | Trim message history to fit budget |
 | Logging | PostProcessor + PostToolProcessor | Log LLM responses, token usage, and tool executions |
 | Audit logging | PostToolProcessor | Log all tool executions |
-| Approval gates | PostProcessor | Ask human before executing dangerous tools |
+| Approval gates | PostProcessor | Ask human before executing dangerous tools (use `Suspend` for structured gates) |
 
 ## What Processors Don't Do
 

@@ -178,6 +178,16 @@ with open("results.json", "w") as f:
 open("/etc/passwd")
 ```
 
+### Max Output
+
+Limit the size of captured stdout/stderr:
+
+```go
+runner := code.NewSubprocessRunner("python3",
+    code.WithMaxOutput(1 << 20), // 1 MB max output
+)
+```
+
 ### Environment Variables
 
 Pass specific environment variables:

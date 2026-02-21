@@ -17,6 +17,7 @@ llm := openaicompat.NewProvider("", "llama3", "http://localhost:11434/v1") // Ol
 // With options
 llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1",
     openaicompat.WithName("openai"),
+    openaicompat.WithHTTPClient(customClient), // custom HTTP client
     openaicompat.WithOptions(
         openaicompat.WithTemperature(0.7),
         openaicompat.WithMaxTokens(4096),
@@ -60,6 +61,7 @@ func (p *Provider) Name() string { return "myprovider" }
 
 func (p *Provider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
     // Convert req.Messages to your API format
+    // Handle req.Messages[].Attachments for multimodal input
     // Make HTTP request
     // Parse response
     return oasis.ChatResponse{
@@ -130,6 +132,26 @@ func wrapErr(resp *http.Response) error {
 }
 ```
 
+## Handling Attachments
+
+Messages may include `Attachment` values for multimodal input (images, PDFs, audio). Providers must handle both forms:
+
+```go
+for _, att := range msg.Attachments {
+    if att.URL != "" {
+        // URL-based: download or pass as file URI to the API
+        // Gemini uses fileData, OpenAI uses file blocks
+    }
+    if len(att.Data) > 0 {
+        // Inline binary: base64-encode for the API
+        encoded := base64.StdEncoding.EncodeToString(att.Data)
+    }
+    // att.MIMEType tells you what the content is (image/png, application/pdf, etc.)
+}
+```
+
+See the Gemini and openaicompat providers for reference implementations.
+
 ## Implementing EmbeddingProvider
 
 ```go
@@ -142,17 +164,49 @@ func (p *Provider) Embed(ctx context.Context, texts []string) ([][]float32, erro
 func (p *Provider) Dimensions() int { return 1536 }
 ```
 
-## Composing with Middleware
+## Optional: BatchProvider
+
+For high-throughput workloads, implement `BatchProvider` and/or `BatchEmbeddingProvider`:
 
 ```go
-// Add retry
+// BatchProvider sends multiple chat requests in one API call
+type BatchProvider interface {
+    ChatBatch(ctx context.Context, requests []ChatRequest) ([]ChatResponse, error)
+}
+
+// BatchEmbeddingProvider embeds multiple batches efficiently
+type BatchEmbeddingProvider interface {
+    EmbedBatch(ctx context.Context, batches [][]string) ([][]float32, error)
+}
+```
+
+These are optional interfaces discovered via type assertion. The framework uses them automatically when available (e.g., during ingestion).
+
+## Composing with Middleware
+
+All middleware works with any `Provider` — built-in or custom:
+
+```go
+// Add retry (retries on ErrHTTP with 429/5xx)
 llm := oasis.WithRetry(myprovider.New(apiKey, model, baseURL))
+
+// Add rate limiting (proactive — sleeps before hitting limits)
+llm = oasis.WithRateLimit(llm, oasis.RPM(60), oasis.TPM(100000))
 
 // Add observability
 llm = observer.WrapProvider(llm, model, inst)
 ```
 
+`WithRetry` and `WithRateLimit` compose — use both for production:
+
+```go
+llm := oasis.WithRateLimit(
+    oasis.WithRetry(myprovider.New(apiKey, model, baseURL)),
+    oasis.RPM(60),
+)
+```
+
 ## See Also
 
-- [Provider Concept](../concepts/provider.md)
-- [Observability](../concepts/observability.md) — wrapping providers
+- [Provider Concept](../concepts/provider.md) — full interface reference
+- [Observability](../concepts/observability.md) — wrapping providers with tracing

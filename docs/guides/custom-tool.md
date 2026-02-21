@@ -177,6 +177,14 @@ Write clear descriptions — the LLM uses these to decide when and how to call y
 }
 ```
 
+## Concurrency
+
+When the LLM returns multiple tool calls in a single response, they execute concurrently (up to 10 in parallel). Your `Execute` method must be goroutine-safe:
+
+- Don't share mutable state between calls without synchronization
+- Use the `ctx` parameter for cancellation — if the agent is cancelled, in-flight tool calls receive a cancelled context
+- HTTP clients and database pools are safe to share (they handle concurrency internally)
+
 ## See Also
 
 - [Tool Concept](../concepts/tool.md)

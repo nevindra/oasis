@@ -13,6 +13,8 @@ flowchart LR
     CHUNKS --> EMBED["EmbeddingProvider<br>(batched)"]
     EMBED --> VECTORS["Chunks + embeddings"]
     VECTORS --> STORE["Store<br>StoreDocument()"]
+    VECTORS --> GRAPH["Graph Extraction<br>(optional, LLM-based)"]
+    GRAPH --> EDGES["GraphStore<br>StoreEdges()"]
 ```
 
 ## Quick Usage
@@ -179,10 +181,40 @@ ingestor := ingest.NewIngestor(store, embedding,
 )
 ```
 
+## Graph Extraction
+
+When enabled, the ingestor uses an LLM to discover relationships between chunks during ingestion. Extracted edges are stored in the `GraphStore` and used by the [GraphRetriever](retrieval.md) for multi-hop traversal at query time.
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithGraphExtraction(llm),          // enable LLM-based graph extraction
+    ingest.WithMinEdgeWeight(0.5),            // minimum confidence for edges
+    ingest.WithMaxEdgesPerChunk(10),          // cap edges per chunk
+    ingest.WithGraphBatchSize(5),             // chunks per LLM call
+    ingest.WithCrossDocumentEdges(true),      // discover cross-document relations
+    ingest.WithSequenceEdges(true),           // add sequence edges between consecutive chunks
+)
+```
+
+The LLM analyzes pairs of chunks and discovers 8 relationship types:
+
+| Relation | Meaning |
+| -------- | ------- |
+| `references` | One chunk cites or refers to another |
+| `elaborates` | One chunk expands on another's topic |
+| `depends_on` | One chunk requires another for context |
+| `contradicts` | Chunks present conflicting information |
+| `part_of` | One chunk is a component of another's topic |
+| `similar_to` | Chunks cover closely related content |
+| `sequence` | Chunks appear consecutively in the source |
+| `caused_by` | One chunk describes a cause/effect of another |
+
+Graph extraction runs after embedding and storage. The Store must implement `GraphStore` (all three shipped backends do). See [Store](store.md) for the `GraphStore` interface.
+
 ## Ingestor Options
 
 | Option | Default | Description |
-|--------|---------|-------------|
+| ------ | ------- | ----------- |
 | `WithChunker(c)` | RecursiveChunker | Custom chunker for flat strategy |
 | `WithParentChunker(c)` | — | Parent-level chunker |
 | `WithChildChunker(c)` | — | Child-level chunker |
@@ -191,6 +223,14 @@ ingestor := ingest.NewIngestor(store, embedding,
 | `WithChildTokens(n)` | 256 | Child chunk size |
 | `WithBatchSize(n)` | 64 | Chunks per `Embed()` call |
 | `WithExtractor(ct, e)` | — | Register custom extractor for content type |
+| `WithGraphExtraction(p)` | disabled | Enable LLM-based graph edge extraction |
+| `WithMinEdgeWeight(w)` | 0.0 | Minimum weight threshold for storing edges |
+| `WithMaxEdgesPerChunk(n)` | unlimited | Cap on edges extracted per chunk |
+| `WithGraphBatchSize(n)` | 5 | Chunks per graph extraction LLM call |
+| `WithCrossDocumentEdges(b)` | false | Allow edges between chunks from different documents |
+| `WithSequenceEdges(b)` | false | Add sequence edges between consecutive chunks |
+| `WithIngestorTracer(t)` | nil | Attach a `Tracer` for span creation (`ingest.document`) |
+| `WithIngestorLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
 Chunker options (shared by all chunker constructors):
 
