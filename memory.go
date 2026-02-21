@@ -59,6 +59,7 @@ type agentMemory struct {
 	semanticMinScore  float32           // 0 = use defaultSemanticRecallMinScore
 	maxHistory        int               // 0 = use defaultMaxHistory
 	maxTokens         int               // 0 = disabled (no token-based trimming)
+	autoTitle         bool              // generate thread title from first message
 	provider          Provider          // for auto-extraction when memory != nil
 	tracer            Tracer            // nil = no tracing
 	logger            *slog.Logger      // never nil (nopLogger fallback)
@@ -196,9 +197,47 @@ func (m *agentMemory) buildSystemPrompt(ctx context.Context, basePrompt string, 
 	return strings.Join(parts, "\n\n")
 }
 
+// ensureThread creates the thread row if it doesn't exist yet, and updates
+// its updated_at timestamp. Called before persisting messages so that
+// ListThreads / GetThread work correctly for threads created via
+// WithConversationMemory.
+func (m *agentMemory) ensureThread(ctx context.Context, agentName string, task AgentTask) {
+	threadID := task.TaskThreadID()
+	now := NowUnix()
+
+	_, err := m.store.GetThread(ctx, threadID)
+	if err != nil {
+		// Thread doesn't exist yet — create it.
+		chatID := task.TaskChatID()
+		if chatID == "" {
+			chatID = threadID
+		}
+		if createErr := m.store.CreateThread(ctx, Thread{
+			ID:        threadID,
+			ChatID:    chatID,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}); createErr != nil {
+			// May fail if another goroutine just created it (race) — log and continue.
+			m.logger.Debug("create thread failed (may already exist)", "agent", agentName, "thread_id", threadID, "error", createErr)
+		}
+		return
+	}
+
+	// Thread exists — bump updated_at so ListThreads ordering stays current.
+	if updateErr := m.store.UpdateThread(ctx, Thread{
+		ID:        threadID,
+		UpdatedAt: now,
+	}); updateErr != nil {
+		m.logger.Error("update thread timestamp failed", "agent", agentName, "thread_id", threadID, "error", updateErr)
+	}
+}
+
 // persistMessages stores user and assistant messages in the background.
 // No-op if Store is not configured or thread_id is absent.
-func (m *agentMemory) persistMessages(ctx context.Context, agentName string, task AgentTask, userText, assistantText string) {
+// If steps is non-empty, they are stored as metadata on the assistant message
+// so that execution traces are persisted alongside the conversation.
+func (m *agentMemory) persistMessages(ctx context.Context, agentName string, task AgentTask, userText, assistantText string, steps []StepTrace) {
 	threadID := task.TaskThreadID()
 	if m.store == nil || threadID == "" {
 		return
@@ -218,9 +257,13 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 			defer span.End()
 		}
 
+		// Ensure thread row exists and updated_at is current.
+		m.ensureThread(bgCtx, agentName, task)
+
+		now := NowUnix()
 		userMsg := Message{
 			ID: NewID(), ThreadID: threadID,
-			Role: "user", Content: userText, CreatedAt: NowUnix(),
+			Role: "user", Content: userText, CreatedAt: now,
 		}
 
 		// Embed before storing so we only write once.
@@ -237,10 +280,18 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 
 		asstMsg := Message{
 			ID: NewID(), ThreadID: threadID,
-			Role: "assistant", Content: assistantText, CreatedAt: NowUnix(),
+			Role: "assistant", Content: assistantText, CreatedAt: now + 1,
+		}
+		if len(steps) > 0 {
+			asstMsg.Metadata = map[string]any{"steps": steps}
 		}
 		if err := m.store.StoreMessage(bgCtx, asstMsg); err != nil {
 			m.logger.Error("persist assistant message failed", "agent", agentName, "error", err)
+		}
+
+		// Auto-generate thread title from the first user message.
+		if m.autoTitle && m.provider != nil {
+			m.generateTitle(bgCtx, agentName, userText, threadID)
 		}
 
 		// Auto-extract user facts from this conversation turn.
@@ -255,6 +306,49 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 			}
 		}
 	}()
+}
+
+// generateTitlePrompt is the system prompt for thread title generation.
+const generateTitlePrompt = `Generate a short title (max 8 words) for this conversation based on the user's message. Return ONLY the title text, nothing else. No quotes, no prefix.`
+
+// generateTitle generates a thread title from the user message using the LLM
+// and updates the thread. Skipped if the thread already has a title.
+func (m *agentMemory) generateTitle(ctx context.Context, agentName, userText, threadID string) {
+	thread, err := m.store.GetThread(ctx, threadID)
+	if err != nil || thread.Title != "" {
+		return
+	}
+
+	resp, err := m.provider.Chat(ctx, ChatRequest{
+		Messages: []ChatMessage{
+			SystemMessage(generateTitlePrompt),
+			UserMessage(userText),
+		},
+	})
+	if err != nil {
+		m.logger.Error("generate title failed", "agent", agentName, "error", err)
+		return
+	}
+
+	title := strings.TrimSpace(resp.Content)
+	// Strip surrounding quotes if LLM wraps the title.
+	if len(title) >= 2 && title[0] == '"' && title[len(title)-1] == '"' {
+		title = title[1 : len(title)-1]
+	}
+	if title == "" {
+		return
+	}
+	if r := []rune(title); len(r) > 100 {
+		title = string(r[:100])
+	}
+
+	if err := m.store.UpdateThread(ctx, Thread{
+		ID:        threadID,
+		Title:     title,
+		UpdatedAt: NowUnix(),
+	}); err != nil {
+		m.logger.Error("update thread title failed", "agent", agentName, "thread_id", threadID, "error", err)
+	}
 }
 
 // extractFactsPrompt is the system prompt for fact extraction with supersedes support.

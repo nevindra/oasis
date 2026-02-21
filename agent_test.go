@@ -558,8 +558,22 @@ func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
 	for ev := range ch {
 		events = append(events, ev)
 	}
-	if len(events) == 0 {
-		t.Error("expected at least one event on channel")
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 events (input-received, processing-start, text-delta), got %d", len(events))
+	}
+	// First event should be input-received.
+	if events[0].Type != EventInputReceived {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventInputReceived)
+	}
+	if events[0].Name != "streamer" {
+		t.Errorf("events[0].Name = %q, want %q", events[0].Name, "streamer")
+	}
+	if events[0].Content != "hi" {
+		t.Errorf("events[0].Content = %q, want %q", events[0].Content, "hi")
+	}
+	// Second event should be processing-start.
+	if events[1].Type != EventProcessingStart {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventProcessingStart)
 	}
 }
 
@@ -587,13 +601,20 @@ func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "after tool call")
 	}
 
-	// Channel should be closed and contain tool + text events
+	// Channel should be closed and contain lifecycle + tool + text events
 	var events []StreamEvent
 	for ev := range ch {
 		events = append(events, ev)
 	}
-	if len(events) == 0 {
-		t.Error("expected at least one event on channel")
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 events, got %d", len(events))
+	}
+	// First two events should be lifecycle events.
+	if events[0].Type != EventInputReceived {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventInputReceived)
+	}
+	if events[1].Type != EventProcessingStart {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventProcessingStart)
 	}
 	// Should have tool-call-start, tool-call-result, and text-delta events
 	var hasToolStart, hasToolResult, hasTextDelta bool
@@ -661,10 +682,20 @@ func TestNetworkExecuteStream(t *testing.T) {
 	for ev := range ch {
 		events = append(events, ev)
 	}
-	if len(events) == 0 {
-		t.Error("expected at least one event on channel")
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 events, got %d", len(events))
 	}
-	// Should have tool-call-start, tool-call-result, agent-start, agent-finish, and text-delta
+	// First two events should be lifecycle events.
+	if events[0].Type != EventInputReceived {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventInputReceived)
+	}
+	if events[0].Name != "net" {
+		t.Errorf("events[0].Name = %q, want %q", events[0].Name, "net")
+	}
+	if events[1].Type != EventProcessingStart {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventProcessingStart)
+	}
+	// Should have agent-start and agent-finish events
 	var hasAgentStart, hasAgentFinish bool
 	for _, ev := range events {
 		switch ev.Type {
@@ -679,6 +710,263 @@ func TestNetworkExecuteStream(t *testing.T) {
 	}
 	if !hasAgentFinish {
 		t.Error("expected agent-finish event")
+	}
+}
+
+func TestNetworkExecuteStreamDelegatesToStreamingSubagent(t *testing.T) {
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			// Router calls agent_streamer
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "agent_streamer",
+				Args: json.RawMessage(`{"task":"say hi"}`),
+			}}},
+			// Final response after delegation
+			{Content: "done"},
+		},
+	}
+
+	// Subagent that implements StreamingAgent — emits token-by-token events.
+	streamer := &stubStreamingAgent{
+		name: "streamer",
+		desc: "Streams tokens",
+		events: []StreamEvent{
+			{Type: EventTextDelta, Content: "hel"},
+			{Type: EventTextDelta, Content: "lo "},
+			{Type: EventTextDelta, Content: "world"},
+		},
+		result: AgentResult{Output: "hello world"},
+	}
+
+	network := NewNetwork("net", "Streaming delegation", router, WithAgents(streamer))
+
+	ch := make(chan StreamEvent, 32)
+	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "done" {
+		t.Errorf("Output = %q, want %q", result.Output, "done")
+	}
+
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+
+	// First two events should be lifecycle events.
+	if events[0].Type != EventInputReceived {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventInputReceived)
+	}
+	if events[1].Type != EventProcessingStart {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventProcessingStart)
+	}
+
+	// Expect: input-received, processing-start, then
+	// tool-call-start, agent-start, 3x text-delta (forwarded from subagent),
+	// agent-finish, tool-call-result. The router's final text-delta is
+	// suppressed because the sub-agent already streamed via ExecuteStream.
+	var agentStart, agentFinish int
+	var textDeltas []string
+	for _, ev := range events {
+		switch ev.Type {
+		case EventAgentStart:
+			agentStart++
+		case EventAgentFinish:
+			agentFinish++
+		case EventTextDelta:
+			textDeltas = append(textDeltas, ev.Content)
+		}
+	}
+	if agentStart != 1 {
+		t.Errorf("agent-start events = %d, want 1", agentStart)
+	}
+	if agentFinish != 1 {
+		t.Errorf("agent-finish events = %d, want 1", agentFinish)
+	}
+	// Only the 3 forwarded text-deltas from the subagent; the router's
+	// final response is suppressed to avoid duplication.
+	if len(textDeltas) != 3 {
+		t.Errorf("text-delta events = %d, want 3 (got: %v)", len(textDeltas), textDeltas)
+	}
+	if len(textDeltas) >= 3 {
+		if textDeltas[0] != "hel" || textDeltas[1] != "lo " || textDeltas[2] != "world" {
+			t.Errorf("forwarded deltas = %v, want [hel, lo , world]", textDeltas[:3])
+		}
+	}
+}
+
+func TestNetworkStreamNoDuplicateWhenRouterEchoes(t *testing.T) {
+	subagentOutput := "hello world"
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			// Router delegates to agent_streamer
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "agent_streamer",
+				Args: json.RawMessage(`{"task":"say hi"}`),
+			}}},
+			// Router echoes the sub-agent output verbatim — common for
+			// pure-routing LLMs. This must NOT produce a second text-delta.
+			{Content: subagentOutput},
+		},
+	}
+
+	streamer := &stubStreamingAgent{
+		name: "streamer",
+		desc: "Streams tokens",
+		events: []StreamEvent{
+			{Type: EventTextDelta, Content: "hello "},
+			{Type: EventTextDelta, Content: "world"},
+		},
+		result: AgentResult{Output: subagentOutput},
+	}
+
+	network := NewNetwork("net", "Streaming dedup", router, WithAgents(streamer))
+
+	ch := make(chan StreamEvent, 32)
+	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != subagentOutput {
+		t.Errorf("Output = %q, want %q", result.Output, subagentOutput)
+	}
+
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+
+	// Count text-delta events — should only have the 2 from the sub-agent,
+	// NOT a 3rd duplicate from the router's echoed final response.
+	var textDeltas []string
+	for _, ev := range events {
+		if ev.Type == EventTextDelta {
+			textDeltas = append(textDeltas, ev.Content)
+		}
+	}
+	if len(textDeltas) != 2 {
+		t.Errorf("text-delta events = %d, want 2 (got: %v)", len(textDeltas), textDeltas)
+	}
+	if len(textDeltas) >= 2 {
+		if textDeltas[0] != "hello " || textDeltas[1] != "world" {
+			t.Errorf("deltas = %v, want [hello , world]", textDeltas)
+		}
+	}
+}
+
+func TestNetworkStreamNoDuplicateWhenRouterEmpty(t *testing.T) {
+	subagentOutput := "hello world"
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			// Router delegates to agent_streamer
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "agent_streamer",
+				Args: json.RawMessage(`{"task":"say hi"}`),
+			}}},
+			// Router returns empty — falls back to lastAgentOutput.
+			// Must NOT produce a second text-delta.
+			{Content: ""},
+		},
+	}
+
+	streamer := &stubStreamingAgent{
+		name: "streamer",
+		desc: "Streams tokens",
+		events: []StreamEvent{
+			{Type: EventTextDelta, Content: "hello "},
+			{Type: EventTextDelta, Content: "world"},
+		},
+		result: AgentResult{Output: subagentOutput},
+	}
+
+	network := NewNetwork("net", "Streaming dedup empty", router, WithAgents(streamer))
+
+	ch := make(chan StreamEvent, 32)
+	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != subagentOutput {
+		t.Errorf("Output = %q, want %q", result.Output, subagentOutput)
+	}
+
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+
+	// Count text-delta events — should only have the 2 from the sub-agent.
+	var textDeltas []string
+	for _, ev := range events {
+		if ev.Type == EventTextDelta {
+			textDeltas = append(textDeltas, ev.Content)
+		}
+	}
+	if len(textDeltas) != 2 {
+		t.Errorf("text-delta events = %d, want 2 (got: %v)", len(textDeltas), textDeltas)
+	}
+}
+
+func TestNetworkStreamNoDuplicateWhenRouterParaphrases(t *testing.T) {
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			// Router delegates to agent_streamer
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "agent_streamer",
+				Args: json.RawMessage(`{"task":"say hi"}`),
+			}}},
+			// Router paraphrases the sub-agent output (different text,
+			// same meaning). Must NOT produce a second text-delta.
+			{Content: "A greeting: hello world!"},
+		},
+	}
+
+	streamer := &stubStreamingAgent{
+		name: "streamer",
+		desc: "Streams tokens",
+		events: []StreamEvent{
+			{Type: EventTextDelta, Content: "hello "},
+			{Type: EventTextDelta, Content: "world"},
+		},
+		result: AgentResult{Output: "hello world"},
+	}
+
+	network := NewNetwork("net", "Streaming dedup paraphrase", router, WithAgents(streamer))
+
+	ch := make(chan StreamEvent, 32)
+	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// AgentResult.Output carries the router's response for non-streaming consumers.
+	if result.Output != "A greeting: hello world!" {
+		t.Errorf("Output = %q, want %q", result.Output, "A greeting: hello world!")
+	}
+
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+
+	// Only the 2 text-deltas from the sub-agent; the router's paraphrase
+	// is suppressed in the stream (available via AgentResult.Output).
+	var textDeltas []string
+	for _, ev := range events {
+		if ev.Type == EventTextDelta {
+			textDeltas = append(textDeltas, ev.Content)
+		}
+	}
+	if len(textDeltas) != 2 {
+		t.Errorf("text-delta events = %d, want 2 (got: %v)", len(textDeltas), textDeltas)
 	}
 }
 
@@ -702,10 +990,8 @@ func TestLLMAgentExecuteStreamProviderError(t *testing.T) {
 		t.Errorf("error = %q, want %q", err.Error(), "stream error")
 	}
 
-	// Channel should be closed
-	_, open := <-ch
-	if open {
-		t.Error("channel should be closed after error")
+	// Drain any lifecycle events and verify channel is closed.
+	for range ch {
 	}
 }
 

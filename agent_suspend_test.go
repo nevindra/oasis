@@ -151,10 +151,8 @@ func TestRunLoopSuspendClosesStreamChannel(t *testing.T) {
 		t.Fatalf("expected ErrSuspended, got %v", err)
 	}
 
-	// Channel should be closed.
-	_, open := <-ch
-	if open {
-		t.Error("channel should be closed on suspend")
+	// Drain any lifecycle events and verify channel is closed.
+	for range ch {
 	}
 }
 

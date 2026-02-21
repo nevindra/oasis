@@ -179,6 +179,28 @@ What happens during `Execute`:
 6. Persist user and assistant messages
 7. (Background) Extract and upsert user facts from the conversation turn
 
+## Execution Trace Persistence
+
+When `WithConversationMemory` is enabled, assistant messages automatically include execution traces in their `Metadata` field. After each agent execution, `result.Steps` (the `[]StepTrace` from `AgentResult`) is stored under the `"steps"` key:
+
+```go
+// Automatically set by the memory pipeline — no user action needed
+assistantMsg.Metadata = map[string]any{"steps": result.Steps}
+```
+
+This means any Oasis app with conversation memory gets persisted execution traces for free. Query them back via `Store.GetMessages` or `Store.SearchMessages`:
+
+```go
+messages, _ := store.GetMessages(ctx, threadID, 10)
+for _, m := range messages {
+    if steps, ok := m.Metadata["steps"]; ok {
+        fmt.Printf("Assistant used %d tool calls\n", len(steps.([]any)))
+    }
+}
+```
+
+Metadata is stored as JSON TEXT (SQLite/libSQL) or JSONB (PostgreSQL). The `Metadata` field is `map[string]any`, so you can also store custom per-message metadata by setting it before calling `Store.StoreMessage` directly.
+
 ## See Also
 
 - [Store](store.md) — persistence layer

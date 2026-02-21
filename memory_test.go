@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -44,13 +45,17 @@ func (s *stubStore) UpdateSkill(_ context.Context, _ Skill) error { return nil }
 func (s *stubStore) DeleteSkill(_ context.Context, _ string) error { return nil }
 func (s *stubStore) SearchSkills(_ context.Context, _ []float32, _ int) ([]ScoredSkill, error) { return nil, nil }
 
-// recordingStore tracks calls to StoreMessage and returns canned history.
+// recordingStore tracks calls to StoreMessage, CreateThread, UpdateThread
+// and returns canned history.
 type recordingStore struct {
 	stubStore
-	mu       sync.Mutex
-	history  []Message         // returned by GetMessages
-	related  []ScoredMessage   // returned by SearchMessages
-	stored   []Message         // recorded by StoreMessage
+	mu             sync.Mutex
+	history        []Message         // returned by GetMessages
+	related        []ScoredMessage   // returned by SearchMessages
+	stored         []Message         // recorded by StoreMessage
+	threads        map[string]Thread // tracked threads (for GetThread)
+	createdThreads []Thread          // recorded by CreateThread
+	updatedThreads []Thread          // recorded by UpdateThread
 }
 
 func (s *recordingStore) GetMessages(_ context.Context, _ string, limit int) ([]Message, error) {
@@ -71,11 +76,65 @@ func (s *recordingStore) StoreMessage(_ context.Context, msg Message) error {
 	return nil
 }
 
+func (s *recordingStore) CreateThread(_ context.Context, t Thread) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.threads == nil {
+		s.threads = make(map[string]Thread)
+	}
+	s.threads[t.ID] = t
+	s.createdThreads = append(s.createdThreads, t)
+	return nil
+}
+
+func (s *recordingStore) GetThread(_ context.Context, id string) (Thread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.threads != nil {
+		if t, ok := s.threads[id]; ok {
+			return t, nil
+		}
+	}
+	return Thread{}, fmt.Errorf("get thread: not found")
+}
+
+func (s *recordingStore) UpdateThread(_ context.Context, t Thread) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updatedThreads = append(s.updatedThreads, t)
+	if s.threads != nil {
+		if existing, ok := s.threads[t.ID]; ok {
+			if t.Title != "" {
+				existing.Title = t.Title
+			}
+			existing.UpdatedAt = t.UpdatedAt
+			s.threads[t.ID] = existing
+		}
+	}
+	return nil
+}
+
 func (s *recordingStore) storedMessages() []Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := make([]Message, len(s.stored))
 	copy(cp, s.stored)
+	return cp
+}
+
+func (s *recordingStore) getCreatedThreads() []Thread {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]Thread, len(s.createdThreads))
+	copy(cp, s.createdThreads)
+	return cp
+}
+
+func (s *recordingStore) getUpdatedThreads() []Thread {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]Thread, len(s.updatedThreads))
+	copy(cp, s.updatedThreads)
 	return cp
 }
 
@@ -686,6 +745,209 @@ func TestParseExtractedFactsMarkdownFence(t *testing.T) {
 	}
 	if facts[0].Fact != "User likes Go" {
 		t.Errorf("fact = %q, want %q", facts[0].Fact, "User likes Go")
+	}
+}
+
+func TestPersistMessagesCreatesThread(t *testing.T) {
+	store := &recordingStore{}
+
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "hi back"}},
+	}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+	)
+
+	task := AgentTask{
+		Input: "hello",
+		Context: map[string]any{
+			ContextThreadID: "thread-new",
+			ContextChatID:   "chat-42",
+		},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for background persist
+	time.Sleep(100 * time.Millisecond)
+
+	created := store.getCreatedThreads()
+	if len(created) != 1 {
+		t.Fatalf("expected 1 created thread, got %d", len(created))
+	}
+	if created[0].ID != "thread-new" {
+		t.Errorf("thread ID = %q, want %q", created[0].ID, "thread-new")
+	}
+	if created[0].ChatID != "chat-42" {
+		t.Errorf("thread ChatID = %q, want %q", created[0].ChatID, "chat-42")
+	}
+	if created[0].CreatedAt == 0 {
+		t.Error("thread CreatedAt should be non-zero")
+	}
+}
+
+func TestPersistMessagesUpdatesExistingThread(t *testing.T) {
+	store := &recordingStore{
+		threads: map[string]Thread{
+			"thread-existing": {ID: "thread-existing", ChatID: "chat-1", CreatedAt: 1000, UpdatedAt: 1000},
+		},
+	}
+
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "reply"}},
+	}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+	)
+
+	task := AgentTask{
+		Input:   "another message",
+		Context: map[string]any{ContextThreadID: "thread-existing"},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Should NOT create a new thread.
+	created := store.getCreatedThreads()
+	if len(created) != 0 {
+		t.Errorf("expected 0 created threads, got %d", len(created))
+	}
+
+	// Should update the thread's updated_at.
+	updated := store.getUpdatedThreads()
+	if len(updated) != 1 {
+		t.Fatalf("expected 1 updated thread, got %d", len(updated))
+	}
+	if updated[0].ID != "thread-existing" {
+		t.Errorf("updated thread ID = %q, want %q", updated[0].ID, "thread-existing")
+	}
+	if updated[0].UpdatedAt <= 1000 {
+		t.Error("updated_at should be bumped to current time")
+	}
+}
+
+func TestPersistMessagesThreadFallbackChatID(t *testing.T) {
+	// When no chat_id is in context, thread should use thread_id as chat_id.
+	store := &recordingStore{}
+
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "ok"}},
+	}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+	)
+
+	task := AgentTask{
+		Input:   "hello",
+		Context: map[string]any{ContextThreadID: "thread-solo"},
+		// No ContextChatID
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	created := store.getCreatedThreads()
+	if len(created) != 1 {
+		t.Fatalf("expected 1 created thread, got %d", len(created))
+	}
+	if created[0].ChatID != "thread-solo" {
+		t.Errorf("thread ChatID = %q, want %q (fallback to thread_id)", created[0].ChatID, "thread-solo")
+	}
+}
+
+func TestGenerateTitleOnFirstMessage(t *testing.T) {
+	store := &recordingStore{}
+
+	// Provider returns two responses:
+	// 1st for the main chat, 2nd for title generation.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{Content: "I can help with Go!"},
+			{Content: "Help with Go Programming"},
+		},
+	}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store, AutoTitle()),
+	)
+
+	task := AgentTask{
+		Input: "Can you help me write a Go program?",
+		Context: map[string]any{
+			ContextThreadID: "thread-title",
+			ContextChatID:   "chat-1",
+		},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for background persist + title generation.
+	time.Sleep(200 * time.Millisecond)
+
+	// Thread should have been created with a title.
+	store.mu.Lock()
+	thread, ok := store.threads["thread-title"]
+	store.mu.Unlock()
+	if !ok {
+		t.Fatal("expected thread to exist")
+	}
+	if thread.Title != "Help with Go Programming" {
+		t.Errorf("thread Title = %q, want %q", thread.Title, "Help with Go Programming")
+	}
+}
+
+func TestGenerateTitleSkipsExistingTitle(t *testing.T) {
+	store := &recordingStore{
+		threads: map[string]Thread{
+			"thread-existing": {ID: "thread-existing", ChatID: "chat-1", Title: "Old Title", CreatedAt: 1000, UpdatedAt: 1000},
+		},
+	}
+
+	// Provider only needs 1 response (for chat). Title generation should be skipped.
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "reply"}},
+	}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store, AutoTitle()),
+	)
+
+	task := AgentTask{
+		Input:   "hello again",
+		Context: map[string]any{ContextThreadID: "thread-existing"},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Title should remain unchanged.
+	store.mu.Lock()
+	thread := store.threads["thread-existing"]
+	store.mu.Unlock()
+	if thread.Title != "Old Title" {
+		t.Errorf("thread Title = %q, want %q (should not change)", thread.Title, "Old Title")
 	}
 }
 

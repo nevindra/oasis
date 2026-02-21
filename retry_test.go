@@ -3,6 +3,7 @@ package oasis
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // stubProvider is a test Provider that returns pre-configured results in order.
@@ -195,5 +196,96 @@ func TestWithRetry_ChatStream_NoRetryAfterTokensSent(t *testing.T) {
 	}
 	if stub.calls != 1 {
 		t.Errorf("got %d calls, want 1 (no retry after tokens sent)", stub.calls)
+	}
+}
+
+// --- RetryAfter tests ---
+
+func TestWithRetry_Chat_RespectsRetryAfter(t *testing.T) {
+	// Server says wait 100ms via Retry-After. Verify the retry waits at least that long
+	// even when base delay is 0.
+	stub := &stubProvider{results: []stubResult{
+		{err: &ErrHTTP{Status: 429, Body: "rate limited", RetryAfter: 100 * time.Millisecond}},
+		{resp: ChatResponse{Content: "ok"}},
+	}}
+	p := WithRetry(stub, RetryBaseDelay(0))
+
+	start := time.Now()
+	resp, err := p.Chat(context.Background(), ChatRequest{})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Errorf("got %q, want %q", resp.Content, "ok")
+	}
+	if elapsed < 80*time.Millisecond {
+		t.Errorf("retry was too fast: %v, expected at least ~100ms from Retry-After", elapsed)
+	}
+	if stub.calls != 2 {
+		t.Errorf("got %d calls, want 2", stub.calls)
+	}
+}
+
+func TestWithRetry_ChatStream_RespectsRetryAfter(t *testing.T) {
+	stub := &stubProvider{results: []stubResult{
+		{err: &ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
+		{tokens: []string{"ok"}, resp: ChatResponse{Content: "ok"}},
+	}}
+	p := WithRetry(stub, RetryBaseDelay(0))
+
+	start := time.Now()
+	ch := make(chan StreamEvent, 8)
+	_, err := p.ChatStream(context.Background(), ChatRequest{}, ch)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed < 80*time.Millisecond {
+		t.Errorf("retry was too fast: %v, expected at least ~100ms from Retry-After", elapsed)
+	}
+}
+
+// --- RetryTimeout tests ---
+
+func TestWithRetry_Chat_TimeoutExceeded(t *testing.T) {
+	// Two transient errors with 100ms Retry-After each. Timeout of 50ms should
+	// cause the retry loop to give up after the first attempt's wait.
+	stub := &stubProvider{results: []stubResult{
+		{err: &ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
+		{err: &ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
+		{resp: ChatResponse{Content: "ok"}},
+	}}
+	p := WithRetry(stub, RetryBaseDelay(0), RetryTimeout(50*time.Millisecond))
+
+	_, err := p.Chat(context.Background(), ChatRequest{})
+	if err == nil {
+		t.Fatal("expected error due to timeout, got nil")
+	}
+	// Should have made 1 call, then the timeout fires during the wait.
+	if stub.calls > 2 {
+		t.Errorf("got %d calls, expected at most 2 with 50ms timeout", stub.calls)
+	}
+}
+
+func TestWithRetry_Chat_TimeoutAllowsSuccess(t *testing.T) {
+	// One transient error with no Retry-After, generous timeout — should succeed.
+	stub := &stubProvider{results: []stubResult{
+		{err: &ErrHTTP{Status: 503}},
+		{resp: ChatResponse{Content: "ok"}},
+	}}
+	p := WithRetry(stub, RetryBaseDelay(0), RetryTimeout(5*time.Second))
+
+	resp, err := p.Chat(context.Background(), ChatRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Errorf("got %q, want %q", resp.Content, "ok")
+	}
+	if stub.calls != 2 {
+		t.Errorf("got %d calls, want 2", stub.calls)
 	}
 }

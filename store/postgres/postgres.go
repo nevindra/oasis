@@ -129,6 +129,7 @@ func (s *Store) Init(ctx context.Context) error {
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
 			embedding %s,
+			metadata JSONB,
 			created_at BIGINT NOT NULL
 		)`, vtype),
 		`CREATE INDEX IF NOT EXISTS messages_thread_idx ON messages(thread_id)`,
@@ -223,18 +224,26 @@ func (s *Store) Init(ctx context.Context) error {
 
 // StoreMessage inserts or replaces a message.
 func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
+	var metaJSON *string
+	if len(msg.Metadata) > 0 {
+		data, _ := json.Marshal(msg.Metadata)
+		v := string(data)
+		metaJSON = &v
+	}
+
 	if len(msg.Embedding) > 0 {
 		embStr := serializeEmbedding(msg.Embedding)
 		_, err := s.pool.Exec(ctx,
-			`INSERT INTO messages (id, thread_id, role, content, embedding, created_at)
-			 VALUES ($1, $2, $3, $4, $5::vector, $6)
+			`INSERT INTO messages (id, thread_id, role, content, embedding, metadata, created_at)
+			 VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, $7)
 			 ON CONFLICT (id) DO UPDATE SET
 			   thread_id = EXCLUDED.thread_id,
 			   role = EXCLUDED.role,
 			   content = EXCLUDED.content,
 			   embedding = EXCLUDED.embedding,
+			   metadata = EXCLUDED.metadata,
 			   created_at = EXCLUDED.created_at`,
-			msg.ID, msg.ThreadID, msg.Role, msg.Content, embStr, msg.CreatedAt)
+			msg.ID, msg.ThreadID, msg.Role, msg.Content, embStr, metaJSON, msg.CreatedAt)
 		if err != nil {
 			return fmt.Errorf("postgres: store message: %w", err)
 		}
@@ -242,15 +251,16 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 	}
 
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO messages (id, thread_id, role, content, embedding, created_at)
-		 VALUES ($1, $2, $3, $4, NULL, $5)
+		`INSERT INTO messages (id, thread_id, role, content, embedding, metadata, created_at)
+		 VALUES ($1, $2, $3, $4, NULL, $5::jsonb, $6)
 		 ON CONFLICT (id) DO UPDATE SET
 		   thread_id = EXCLUDED.thread_id,
 		   role = EXCLUDED.role,
 		   content = EXCLUDED.content,
 		   embedding = NULL,
+		   metadata = EXCLUDED.metadata,
 		   created_at = EXCLUDED.created_at`,
-		msg.ID, msg.ThreadID, msg.Role, msg.Content, msg.CreatedAt)
+		msg.ID, msg.ThreadID, msg.Role, msg.Content, metaJSON, msg.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("postgres: store message: %w", err)
 	}
@@ -261,10 +271,10 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 // ordered chronologically (oldest first).
 func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]oasis.Message, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, thread_id, role, content, created_at
+		`SELECT id, thread_id, role, content, metadata, created_at
 		 FROM messages
 		 WHERE thread_id = $1
-		 ORDER BY created_at DESC
+		 ORDER BY created_at DESC, id DESC
 		 LIMIT $2`,
 		threadID, limit)
 	if err != nil {
@@ -275,8 +285,12 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 	var messages []oasis.Message
 	for rows.Next() {
 		var m oasis.Message
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		var metaJSON []byte
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &metaJSON, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("postgres: scan message: %w", err)
+		}
+		if metaJSON != nil {
+			_ = json.Unmarshal(metaJSON, &m.Metadata)
 		}
 		messages = append(messages, m)
 	}
@@ -296,7 +310,7 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
 	embStr := serializeEmbedding(embedding)
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, thread_id, role, content, created_at,
+		`SELECT id, thread_id, role, content, metadata, created_at,
 		        1 - (embedding <=> $1::vector) AS score
 		 FROM messages
 		 WHERE embedding IS NOT NULL
@@ -311,9 +325,13 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 	var results []oasis.ScoredMessage
 	for rows.Next() {
 		var m oasis.Message
+		var metaJSON []byte
 		var score float32
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt, &score); err != nil {
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &metaJSON, &m.CreatedAt, &score); err != nil {
 			return nil, fmt.Errorf("postgres: scan message: %w", err)
+		}
+		if metaJSON != nil {
+			_ = json.Unmarshal(metaJSON, &m.Metadata)
 		}
 		results = append(results, oasis.ScoredMessage{Message: m, Score: score})
 	}

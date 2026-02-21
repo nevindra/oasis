@@ -129,9 +129,14 @@ func (p *Provider) sendHTTP(ctx context.Context, body ChatRequest) (*http.Respon
 }
 
 // httpErr reads the response body and returns an ErrHTTP for retry middleware.
+// Parses the Retry-After header when present (429/503 responses).
 func (p *Provider) httpErr(resp *http.Response) error {
 	body, _ := io.ReadAll(resp.Body)
-	return &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(body)}
+	return &oasis.ErrHTTP{
+		Status:     resp.StatusCode,
+		Body:       string(body),
+		RetryAfter: oasis.ParseRetryAfter(resp.Header.Get("Retry-After")),
+	}
 }
 
 // Compile-time interface check.

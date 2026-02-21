@@ -85,7 +85,7 @@ func (e *GeminiEmbedding) BatchEmbedStatus(ctx context.Context, jobID string) (o
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return oasis.BatchJob{}, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(respBody)}
+		return oasis.BatchJob{}, httpErr(resp, string(respBody))
 	}
 
 	var br batchResponse
@@ -125,7 +125,7 @@ func (e *GeminiEmbedding) BatchEmbedResults(ctx context.Context, jobID string) (
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(respBody)}
+		return nil, httpErr(resp, string(respBody))
 	}
 
 	var br batchEmbedResponse
@@ -178,7 +178,7 @@ func (e *GeminiEmbedding) doBatchRequest(ctx context.Context, url string, payloa
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return oasis.BatchJob{}, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(respBody)}
+		return oasis.BatchJob{}, httpErr(resp, string(respBody))
 	}
 
 	var br batchResponse

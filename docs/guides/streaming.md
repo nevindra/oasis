@@ -12,6 +12,10 @@ if sa, ok := agent.(oasis.StreamingAgent); ok {
     go func() {
         for ev := range ch {
             switch ev.Type {
+            case oasis.EventInputReceived:
+                fmt.Printf("[%s received: %s]\n", ev.Name, ev.Content)
+            case oasis.EventProcessingStart:
+                fmt.Printf("[%s processing...]\n", ev.Name)
             case oasis.EventTextDelta:
                 fmt.Print(ev.Content)
             case oasis.EventToolCallStart:
@@ -31,15 +35,17 @@ if sa, ok := agent.(oasis.StreamingAgent); ok {
 
 ## Stream Events
 
-The channel carries typed `StreamEvent` values. Five event types:
+The channel carries typed `StreamEvent` values. Seven event types:
 
-| Event Type            | Emitted By                     | Payload                                  |
-| --------------------- | ------------------------------ | ---------------------------------------- |
-| `EventTextDelta`      | Provider (ChatStream)          | `Content` = text chunk                   |
-| `EventToolCallStart`  | runLoop (before tool dispatch) | `Name` = tool name, `Args` = arguments   |
-| `EventToolCallResult` | runLoop (after tool completes) | `Name` = tool name, `Content` = result, `Usage`, `Duration` |
-| `EventAgentStart`     | Network dispatch               | `Name` = agent name, `Content` = task    |
-| `EventAgentFinish`    | Network dispatch               | `Name` = agent name, `Content` = output, `Usage`, `Duration` |
+| Event Type             | Emitted By                      | Payload                                                       |
+| ---------------------- | ------------------------------- | ------------------------------------------------------------- |
+| `EventInputReceived`   | LLMAgent/Network entry          | `Name` = agent name, `Content` = task input                   |
+| `EventProcessingStart` | runLoop (after context loading) | `Name` = loop identifier (e.g. `agent:name`)                  |
+| `EventTextDelta`       | Provider (ChatStream)           | `Content` = text chunk                                        |
+| `EventToolCallStart`   | runLoop (before tool dispatch)  | `Name` = tool name, `Args` = arguments                        |
+| `EventToolCallResult`  | runLoop (after tool completes)  | `Name` = tool name, `Content` = result, `Usage`, `Duration`   |
+| `EventAgentStart`      | Network dispatch                | `Name` = agent name, `Content` = task                         |
+| `EventAgentFinish`     | Network dispatch                | `Name` = agent name, `Content` = output, `Usage`, `Duration`  |
 
 ```go
 type StreamEvent struct {
@@ -63,6 +69,9 @@ sequenceDiagram
     participant LLM
 
     Caller->>Agent: ExecuteStream(task, ch)
+    Agent-->>Caller: ch <- InputReceived
+    Agent->>Agent: build messages (memory, context)
+    Agent-->>Caller: ch <- ProcessingStart
 
     rect rgb(240, 240, 240)
         Note over Agent,LLM: Blocking tool loop (with events)
@@ -131,11 +140,31 @@ data: {"type":"text-delta","content":"Hello"}
 
 Works with any router (Echo, Chi, Gin) since they all expose `http.ResponseWriter`.
 
+> **Note:** `ServeSSE` handles real-time streaming only. If `WithConversationMemory` is configured on the agent, messages and execution traces are persisted to the database automatically by the memory pipeline — you don't need to store them separately in your handler.
+
 ## Processors and Streaming
 
 PostProcessors run for side effects even on the streaming path. When an agent streams its final response, the framework still calls `RunPostLLM` after streaming completes — the PostProcessor sees the full assembled response.
 
 This means logging, analytics, and guardrail processors work identically regardless of whether the caller used `Execute` or `ExecuteStream`.
+
+## Execution Trace Persistence
+
+When `WithConversationMemory` is enabled, execution traces (`result.Steps`) are **automatically saved** to the database in the assistant message's `Metadata` field — no extra code needed. This happens in the background after `ExecuteStream` completes, the same as with `Execute`.
+
+This means the SSE stream is for real-time display, but you don't need to persist steps yourself. They're already in the database:
+
+```go
+// Steps are automatically persisted — just query them back
+messages, _ := store.GetMessages(ctx, threadID, 10)
+for _, m := range messages {
+    if steps, ok := m.Metadata["steps"]; ok {
+        // execution traces from the agent run
+    }
+}
+```
+
+See [Memory: Execution Trace Persistence](../concepts/memory.md#execution-trace-persistence) for full details.
 
 ## Observability
 

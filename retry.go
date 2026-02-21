@@ -14,6 +14,7 @@ type retryProvider struct {
 	inner       Provider
 	maxAttempts int
 	baseDelay   time.Duration
+	timeout     time.Duration // overall timeout across all attempts; 0 = no limit
 }
 
 // RetryOption configures a retryProvider.
@@ -30,11 +31,21 @@ func RetryBaseDelay(d time.Duration) RetryOption {
 	return func(r *retryProvider) { r.baseDelay = d }
 }
 
+// RetryTimeout sets the overall timeout for the entire retry sequence. If the
+// total time across all attempts exceeds this duration, the retry loop gives up
+// and returns the last error. The zero value (default) disables the timeout.
+func RetryTimeout(d time.Duration) RetryOption {
+	return func(r *retryProvider) { r.timeout = d }
+}
+
 // WithRetry wraps p with automatic retry on transient HTTP errors (429, 503).
-// Retries use exponential backoff with jitter. Compose with any Provider:
+// Retries use exponential backoff with jitter. When the error includes a
+// Retry-After duration (parsed from the HTTP header), the retry delay is at
+// least that long. Compose with any Provider:
 //
 //	chatLLM = oasis.WithRetry(gemini.New(apiKey, model))
 //	chatLLM = oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryMaxAttempts(5))
+//	chatLLM = oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryTimeout(30*time.Second))
 func WithRetry(p Provider, opts ...RetryOption) Provider {
 	r := &retryProvider{
 		inner:       p,
@@ -52,6 +63,7 @@ func (r *retryProvider) Name() string { return r.inner.Name() }
 
 // Chat implements Provider with retry.
 func (r *retryProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	ctx = r.withTimeout(ctx)
 	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), func() (ChatResponse, error) {
 		return r.inner.Chat(ctx, req)
 	})
@@ -59,6 +71,7 @@ func (r *retryProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse
 
 // ChatWithTools implements Provider with retry.
 func (r *retryProvider) ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error) {
+	ctx = r.withTimeout(ctx)
 	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), func() (ChatResponse, error) {
 		return r.inner.ChatWithTools(ctx, req, tools)
 	})
@@ -69,6 +82,7 @@ func (r *retryProvider) ChatWithTools(ctx context.Context, req ChatRequest, tool
 // through immediately to avoid sending duplicate content.
 // ch is always closed before returning.
 func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	ctx = r.withTimeout(ctx)
 	var lastErr error
 	for i := 0; i < r.maxAttempts; i++ {
 		mid := make(chan StreamEvent, 64)
@@ -97,16 +111,31 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 		lastErr = streamErr
 		log.Printf("[retry] %s: transient %d (attempt %d/%d), retrying", r.inner.Name(), statusOf(streamErr), i+1, r.maxAttempts)
 		if i < r.maxAttempts-1 {
+			delay := retryDelay(r.baseDelay, i, streamErr)
 			select {
 			case <-ctx.Done():
 				close(ch)
 				return ChatResponse{}, ctx.Err()
-			case <-time.After(retryBackoff(r.baseDelay, i)):
+			case <-time.After(delay):
 			}
 		}
 	}
 	close(ch)
 	return ChatResponse{}, lastErr
+}
+
+// withTimeout returns a child context with a deadline if r.timeout is set.
+// If timeout is zero or ctx already has an earlier deadline, returns ctx unchanged.
+func (r *retryProvider) withTimeout(ctx context.Context) context.Context {
+	if r.timeout <= 0 {
+		return ctx
+	}
+	deadline := time.Now().Add(r.timeout)
+	if existing, ok := ctx.Deadline(); ok && existing.Before(deadline) {
+		return ctx
+	}
+	ctx, _ = context.WithDeadline(ctx, deadline)
+	return ctx
 }
 
 // isTransient reports whether err is a retryable HTTP error (429 or 503).
@@ -124,6 +153,26 @@ func statusOf(err error) int {
 	return 0
 }
 
+// retryAfterOf extracts the Retry-After duration from an ErrHTTP, or 0.
+func retryAfterOf(err error) time.Duration {
+	var e *ErrHTTP
+	if errors.As(err, &e) {
+		return e.RetryAfter
+	}
+	return 0
+}
+
+// retryDelay computes the delay before retry attempt i, using exponential
+// backoff as a floor and the server's Retry-After value (if present) as a
+// minimum. The effective delay is max(backoff, retryAfter).
+func retryDelay(base time.Duration, i int, err error) time.Duration {
+	backoff := retryBackoff(base, i)
+	if ra := retryAfterOf(err); ra > backoff {
+		return ra
+	}
+	return backoff
+}
+
 // retryCall calls fn up to maxAttempts times, sleeping between transient failures.
 func retryCall[T any](ctx context.Context, maxAttempts int, base time.Duration, name string, fn func() (T, error)) (T, error) {
 	var zero T
@@ -136,10 +185,11 @@ func retryCall[T any](ctx context.Context, maxAttempts int, base time.Duration, 
 		last = err
 		log.Printf("[retry] %s: transient %d (attempt %d/%d), retrying", name, statusOf(err), i+1, maxAttempts)
 		if i < maxAttempts-1 {
+			delay := retryDelay(base, i, err)
 			select {
 			case <-ctx.Done():
 				return zero, ctx.Err()
-			case <-time.After(retryBackoff(base, i)):
+			case <-time.After(delay):
 			}
 		}
 	}

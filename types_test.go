@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestUserMessage(t *testing.T) {
@@ -255,6 +256,34 @@ func TestErrHTTPZeroStatus(t *testing.T) {
 	want := "http 0: "
 	if got := e.Error(); got != want {
 		t.Errorf("ErrHTTP{}.Error() = %q, want %q", got, want)
+	}
+}
+
+// --- ParseRetryAfter tests ---
+
+func TestParseRetryAfter_Seconds(t *testing.T) {
+	got := ParseRetryAfter("120")
+	want := 120 * time.Second
+	if got != want {
+		t.Errorf("ParseRetryAfter(%q) = %v, want %v", "120", got, want)
+	}
+}
+
+func TestParseRetryAfter_Zero(t *testing.T) {
+	if got := ParseRetryAfter("0"); got != 0 {
+		t.Errorf("ParseRetryAfter(%q) = %v, want 0", "0", got)
+	}
+}
+
+func TestParseRetryAfter_Empty(t *testing.T) {
+	if got := ParseRetryAfter(""); got != 0 {
+		t.Errorf("ParseRetryAfter(%q) = %v, want 0", "", got)
+	}
+}
+
+func TestParseRetryAfter_InvalidString(t *testing.T) {
+	if got := ParseRetryAfter("not-a-number"); got != 0 {
+		t.Errorf("ParseRetryAfter(%q) = %v, want 0", "not-a-number", got)
 	}
 }
 

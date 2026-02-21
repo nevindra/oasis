@@ -117,7 +117,7 @@ func (g *Gemini) BatchStatus(ctx context.Context, jobID string) (oasis.BatchJob,
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return oasis.BatchJob{}, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(respBody)}
+		return oasis.BatchJob{}, httpErr(resp, string(respBody))
 	}
 
 	var br batchResponse
@@ -159,7 +159,7 @@ func (g *Gemini) BatchChatResults(ctx context.Context, jobID string) ([]oasis.Ch
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(respBody)}
+		return nil, httpErr(resp, string(respBody))
 	}
 
 	var br batchResponse
@@ -196,7 +196,7 @@ func (g *Gemini) BatchCancel(ctx context.Context, jobID string) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(b)}
+		return httpErr(resp, string(b))
 	}
 
 	return nil
@@ -227,7 +227,7 @@ func (g *Gemini) doBatchRequest(ctx context.Context, url string, payload map[str
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return oasis.BatchJob{}, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(respBody)}
+		return oasis.BatchJob{}, httpErr(resp, string(respBody))
 	}
 
 	var br batchResponse

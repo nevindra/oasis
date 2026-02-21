@@ -179,6 +179,7 @@ func (s *Store) Init(ctx context.Context) error {
 	_, _ = db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN metadata TEXT")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE messages ADD COLUMN metadata TEXT")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE conversations RENAME TO threads")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN title TEXT")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE threads ADD COLUMN metadata TEXT")
@@ -229,19 +230,25 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 		return err
 	}
 
+	var metaJSON *string
+	if len(msg.Metadata) > 0 {
+		data, _ := json.Marshal(msg.Metadata)
+		v := string(data)
+		metaJSON = &v
+	}
 
 	if len(msg.Embedding) > 0 {
 		embJSON := serializeEmbedding(msg.Embedding)
 		_, err = db.ExecContext(ctx,
-			`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, created_at)
-			 VALUES (?, ?, ?, ?, vector(?), ?)`,
-			msg.ID, msg.ThreadID, msg.Role, msg.Content, embJSON, msg.CreatedAt,
+			`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, metadata, created_at)
+			 VALUES (?, ?, ?, ?, vector(?), ?, ?)`,
+			msg.ID, msg.ThreadID, msg.Role, msg.Content, embJSON, metaJSON, msg.CreatedAt,
 		)
 	} else {
 		_, err = db.ExecContext(ctx,
-			`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, created_at)
-			 VALUES (?, ?, ?, ?, NULL, ?)`,
-			msg.ID, msg.ThreadID, msg.Role, msg.Content, msg.CreatedAt,
+			`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, metadata, created_at)
+			 VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+			msg.ID, msg.ThreadID, msg.Role, msg.Content, metaJSON, msg.CreatedAt,
 		)
 	}
 	if err != nil {
@@ -258,12 +265,11 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 		return nil, err
 	}
 
-
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, created_at
+		`SELECT id, thread_id, role, content, metadata, created_at
 		 FROM messages
 		 WHERE thread_id = ?
-		 ORDER BY created_at DESC
+		 ORDER BY created_at DESC, id DESC
 		 LIMIT ?`,
 		threadID, limit,
 	)
@@ -275,8 +281,12 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 	var messages []oasis.Message
 	for rows.Next() {
 		var m oasis.Message
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		var metaJSON sql.NullString
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &metaJSON, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
+		}
+		if metaJSON.Valid {
+			_ = json.Unmarshal([]byte(metaJSON.String), &m.Metadata)
 		}
 		messages = append(messages, m)
 	}
@@ -301,10 +311,9 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 		return nil, err
 	}
 
-
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
-		`SELECT m.id, m.thread_id, m.role, m.content, m.created_at,
+		`SELECT m.id, m.thread_id, m.role, m.content, m.metadata, m.created_at,
 		        1.0 - vector_distance_cos(m.embedding, vector(?)) AS score
 		 FROM vector_top_k('messages_vector_idx', vector(?), ?) AS v
 		 JOIN messages AS m ON m.rowid = v.id`,
@@ -318,9 +327,13 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 	var messages []oasis.ScoredMessage
 	for rows.Next() {
 		var m oasis.Message
+		var metaJSON sql.NullString
 		var score float32
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt, &score); err != nil {
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &metaJSON, &m.CreatedAt, &score); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
+		}
+		if metaJSON.Valid {
+			_ = json.Unmarshal([]byte(metaJSON.String), &m.Metadata)
 		}
 		if score < 0 {
 			score = 0

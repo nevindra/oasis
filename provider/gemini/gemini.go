@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/nevindra/oasis"
 )
@@ -102,7 +103,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return oasis.ChatResponse{}, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(b)}
+		return oasis.ChatResponse{}, httpErr(resp, string(b))
 	}
 
 	var fullContent strings.Builder
@@ -208,7 +209,7 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return oasis.ChatResponse{}, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(respBody)}
+		return oasis.ChatResponse{}, httpErr(resp, string(respBody))
 	}
 
 	var parsed geminiResponse
@@ -270,6 +271,49 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 
 func (g *Gemini) wrapErr(msg string) error {
 	return &oasis.ErrLLM{Provider: "gemini", Message: msg}
+}
+
+// httpErr creates an ErrHTTP from an HTTP response, extracting the retry delay
+// from the Retry-After header or from the Gemini-specific google.rpc.RetryInfo
+// detail in the JSON error body.
+func httpErr(resp *http.Response, body string) *oasis.ErrHTTP {
+	ra := oasis.ParseRetryAfter(resp.Header.Get("Retry-After"))
+	if ra == 0 {
+		ra = parseRetryInfo(body)
+	}
+	return &oasis.ErrHTTP{
+		Status:     resp.StatusCode,
+		Body:       body,
+		RetryAfter: ra,
+	}
+}
+
+// parseRetryInfo extracts the retryDelay from a Gemini error body containing
+// a google.rpc.RetryInfo detail. Returns 0 if not found or unparseable.
+func parseRetryInfo(body string) time.Duration {
+	var envelope struct {
+		Error struct {
+			Details []json.RawMessage `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &envelope) != nil {
+		return 0
+	}
+	for _, raw := range envelope.Error.Details {
+		var detail struct {
+			Type       string `json:"@type"`
+			RetryDelay string `json:"retryDelay"`
+		}
+		if json.Unmarshal(raw, &detail) != nil {
+			continue
+		}
+		if detail.Type == "type.googleapis.com/google.rpc.RetryInfo" && detail.RetryDelay != "" {
+			if d, err := time.ParseDuration(detail.RetryDelay); err == nil {
+				return d
+			}
+		}
+	}
+	return 0
 }
 
 // ---- Embedding provider ----
@@ -337,7 +381,7 @@ func (e *GeminiEmbedding) Embed(ctx context.Context, texts []string) ([][]float3
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, &oasis.ErrHTTP{Status: resp.StatusCode, Body: string(respBody)}
+			return nil, httpErr(resp, string(respBody))
 		}
 
 		var parsed embedResponse

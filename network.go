@@ -56,6 +56,7 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 			semanticMinScore:  cfg.semanticMinScore,
 			maxHistory:        cfg.maxHistory,
 			maxTokens:         cfg.maxTokens,
+			autoTitle:         cfg.autoTitle,
 			provider:          router,
 		},
 	}
@@ -107,6 +108,11 @@ func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- S
 
 // executeWithSpan wraps runLoop with an agent.execute span when a tracer is configured.
 func (n *Network) executeWithSpan(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
+	// Emit input-received event so consumers know a task arrived.
+	if ch != nil {
+		ch <- StreamEvent{Type: EventInputReceived, Name: n.name, Content: task.Input}
+	}
+
 	if n.tracer != nil {
 		var span Span
 		ctx, span = n.tracer.Start(ctx, "agent.execute",
@@ -232,12 +238,39 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 				ch <- StreamEvent{Type: EventAgentStart, Name: agentName, Content: params.Task}
 			}
 
-			start := time.Now()
-			result, err := agent.Execute(ctx, AgentTask{
+			subTask := AgentTask{
 				Input:       params.Task,
 				Attachments: parentTask.Attachments,
 				Context:     parentTask.Context,
-			})
+			}
+
+			start := time.Now()
+
+			var result AgentResult
+			var err error
+
+			// When streaming and the subagent supports it, delegate via
+			// ExecuteStream so tokens flow through the parent channel
+			// in real time instead of arriving as one big chunk.
+			if ch != nil {
+				if sa, ok := agent.(StreamingAgent); ok {
+					subCh := make(chan StreamEvent, 64)
+					done := make(chan struct{})
+					go func() {
+						defer close(done)
+						for ev := range subCh {
+							ch <- ev
+						}
+					}()
+					result, err = sa.ExecuteStream(ctx, subTask, subCh)
+					<-done // wait for all forwarded events
+				} else {
+					result, err = agent.Execute(ctx, subTask)
+				}
+			} else {
+				result, err = agent.Execute(ctx, subTask)
+			}
+
 			elapsed := time.Since(start)
 
 			if ch != nil {

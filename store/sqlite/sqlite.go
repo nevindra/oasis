@@ -126,6 +126,7 @@ func (s *Store) Init(ctx context.Context) error {
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN metadata TEXT")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE messages ADD COLUMN metadata TEXT")
 
 	// Migrate conversations → threads
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE conversations RENAME TO threads")
@@ -165,11 +166,17 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 		v := serializeEmbedding(msg.Embedding)
 		embJSON = &v
 	}
+	var metaJSON *string
+	if len(msg.Metadata) > 0 {
+		data, _ := json.Marshal(msg.Metadata)
+		v := string(data)
+		metaJSON = &v
+	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		msg.ID, msg.ThreadID, msg.Role, msg.Content, embJSON, msg.CreatedAt,
+		`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, metadata, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		msg.ID, msg.ThreadID, msg.Role, msg.Content, embJSON, metaJSON, msg.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("store message: %w", err)
@@ -181,10 +188,10 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 // ordered chronologically (oldest first).
 func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]oasis.Message, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, created_at
+		`SELECT id, thread_id, role, content, metadata, created_at
 		 FROM messages
 		 WHERE thread_id = ?
-		 ORDER BY created_at DESC
+		 ORDER BY created_at DESC, id DESC
 		 LIMIT ?`,
 		threadID, limit,
 	)
@@ -196,8 +203,12 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 	var messages []oasis.Message
 	for rows.Next() {
 		var m oasis.Message
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		var metaJSON sql.NullString
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &metaJSON, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
+		}
+		if metaJSON.Valid {
+			_ = json.Unmarshal([]byte(metaJSON.String), &m.Metadata)
 		}
 		messages = append(messages, m)
 	}
@@ -216,7 +227,7 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 // SearchMessages performs brute-force cosine similarity search over messages.
 func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, embedding, created_at
+		`SELECT id, thread_id, role, content, embedding, metadata, created_at
 		 FROM messages WHERE embedding IS NOT NULL`,
 	)
 	if err != nil {
@@ -229,8 +240,12 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 	for rows.Next() {
 		var m oasis.Message
 		var embJSON string
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &embJSON, &m.CreatedAt); err != nil {
+		var metaJSON sql.NullString
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &embJSON, &metaJSON, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
+		}
+		if metaJSON.Valid {
+			_ = json.Unmarshal([]byte(metaJSON.String), &m.Metadata)
 		}
 		stored, err := deserializeEmbedding(embJSON)
 		if err != nil {

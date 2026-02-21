@@ -51,6 +51,7 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 			semanticMinScore:  cfg.semanticMinScore,
 			maxHistory:        cfg.maxHistory,
 			maxTokens:         cfg.maxTokens,
+			autoTitle:         cfg.autoTitle,
 			provider:          provider,
 		},
 	}
@@ -97,6 +98,11 @@ func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- 
 
 // executeWithSpan wraps runLoop with an agent.execute span when a tracer is configured.
 func (a *LLMAgent) executeWithSpan(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
+	// Emit input-received event so consumers know a task arrived.
+	if ch != nil {
+		ch <- StreamEvent{Type: EventInputReceived, Name: a.name, Content: task.Input}
+	}
+
 	if a.tracer != nil {
 		var span Span
 		ctx, span = a.tracer.Start(ctx, "agent.execute",

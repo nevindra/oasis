@@ -297,12 +297,13 @@ type Thread struct {
 }
 
 type Message struct {
-	ID        string    `json:"id"`
-	ThreadID  string    `json:"thread_id"`
-	Role      string    `json:"role"` // "user" or "assistant"
-	Content   string    `json:"content"`
-	Embedding []float32 `json:"-"`
-	CreatedAt int64     `json:"created_at"`
+	ID        string         `json:"id"`
+	ThreadID  string         `json:"thread_id"`
+	Role      string         `json:"role"` // "user" or "assistant"
+	Content   string         `json:"content"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	Embedding []float32      `json:"-"`
+	CreatedAt int64          `json:"created_at"`
 }
 
 type Fact struct {
@@ -563,10 +564,33 @@ func (e *ErrLLM) Error() string {
 }
 
 type ErrHTTP struct {
-	Status int
-	Body   string
+	Status     int
+	Body       string
+	RetryAfter time.Duration // parsed from Retry-After header; zero = not set
 }
 
 func (e *ErrHTTP) Error() string {
 	return fmt.Sprintf("http %d: %s", e.Status, e.Body)
+}
+
+// ParseRetryAfter parses a Retry-After header value into a duration.
+// Supports both delay-seconds ("120") and HTTP-date ("Wed, 21 Oct 2015 07:28:00 GMT")
+// formats per RFC 9110 §10.2.3. Returns zero on empty or unparseable values.
+func ParseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	// Try seconds first (most common for rate limiting).
+	var secs int
+	if _, err := fmt.Sscanf(value, "%d", &secs); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	// Try HTTP-date format.
+	if t, err := time.Parse(time.RFC1123, value); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d
+		}
+	}
+	return 0
 }

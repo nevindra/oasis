@@ -6,6 +6,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **`Message.Metadata` field** — `map[string]any` on `Message` for flexible per-message metadata, persisted as JSON (SQLite/libSQL) or JSONB (PostgreSQL). When `WithConversationMemory` is enabled, assistant messages automatically include execution traces (`steps` key) from `AgentResult.Steps`, giving any Oasis app persisted execution traces for free. Schema migration is automatic (best-effort `ALTER TABLE` for existing databases)
+- **`AutoTitle()` conversation option** — opt-in automatic thread title generation from the first user message; runs in the background alongside message persistence; skipped when thread already has a title. Usage: `WithConversationMemory(store, AutoTitle())`
+
+### Fixed
+
+- **Conversation history message ordering corruption** — user and assistant messages persisted with `NowUnix()` (second-level resolution) could share the same `created_at` timestamp, causing non-deterministic ordering in `GetMessages` across all store implementations (SQLite, libSQL, PostgreSQL). When the assistant message appeared before the user message in history, the LLM would repeat/summarize the previous answer. Fixed with two layers: (1) assistant message now gets `created_at = now + 1` so timestamps are always distinct, (2) added UUIDv7 `id` as a secondary sort key (`ORDER BY created_at DESC, id DESC`) as a safety net for legacy data
+- **`WithConversationMemory` never created thread rows** — `persistMessages` only called `StoreMessage` but never `CreateThread`, leaving the `threads` table empty. Added `ensureThread` to create the thread row on first message and bump `updated_at` on subsequent turns, so `ListThreads`/`GetThread` work correctly for memory-managed threads
+- **Network streaming arrived as single chunk** — when a subagent implemented `StreamingAgent`, Network still called `Execute()` (blocking), collecting the entire response before emitting it as one `text-delta`. Network now detects `StreamingAgent` via type assertion and calls `ExecuteStream`, forwarding token-by-token events through the parent channel in real time
+- **Network streaming duplicated sub-agent output** — when a Network delegated to a streaming sub-agent, the sub-agent's text-delta events were forwarded correctly, but the router's final response (echo, paraphrase, or empty) emitted a second text-delta, causing consumers to see the response doubled. The router's final text-delta is now suppressed entirely when a sub-agent already streamed; `AgentResult.Output` still carries the router's final text for programmatic use
+
 ## [0.6.0] - 2026-02-21
 
 ### Added

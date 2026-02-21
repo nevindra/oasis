@@ -34,12 +34,13 @@ type Thread struct {
 }
 
 type Message struct {
-    ID        string    `json:"id"`
-    ThreadID  string    `json:"thread_id"`
-    Role      string    `json:"role"`       // "user" or "assistant"
-    Content   string    `json:"content"`
-    Embedding []float32 `json:"-"`
-    CreatedAt int64     `json:"created_at"`
+    ID        string         `json:"id"`
+    ThreadID  string         `json:"thread_id"`
+    Role      string         `json:"role"`       // "user" or "assistant"
+    Content   string         `json:"content"`
+    Metadata  map[string]any `json:"metadata,omitempty"`
+    Embedding []float32      `json:"-"`
+    CreatedAt int64          `json:"created_at"`
 }
 
 type Fact struct {

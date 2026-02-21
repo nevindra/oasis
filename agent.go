@@ -130,6 +130,7 @@ type agentConfig struct {
 	semanticMinScore  float32 // set by MinScore inside CrossThreadSearch
 	maxHistory        int     // set by MaxHistory inside WithConversationMemory
 	maxTokens         int     // set by MaxTokens inside WithConversationMemory
+	autoTitle         bool    // set by AutoTitle inside WithConversationMemory
 	planExecution     bool            // enabled by WithPlanExecution option
 	codeRunner        CodeRunner      // set by WithCodeExecution option
 	responseSchema    *ResponseSchema // set by WithResponseSchema option
@@ -315,6 +316,14 @@ func MaxTokens(n int) ConversationOption {
 	return func(c *agentConfig) { c.maxTokens = n }
 }
 
+// AutoTitle enables automatic thread title generation. When set, the agent
+// generates a short title from the first user message and stores it on the
+// thread. Titles are only generated once per thread (skipped if the thread
+// already has a title). Runs in the background alongside message persistence.
+func AutoTitle() ConversationOption {
+	return func(c *agentConfig) { c.autoTitle = true }
+}
+
 // WithConversationMemory enables conversation history on the agent.
 // When set and task.Context["thread_id"] is present, the agent loads
 // recent messages before the LLM call and persists the exchange afterward.
@@ -421,6 +430,11 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		messages = cfg.mem.buildMessages(ctx, cfg.name, cfg.systemPrompt, task)
 	}
 
+	// Emit processing-start event after context is built, before the loop.
+	if ch != nil {
+		ch <- StreamEvent{Type: EventProcessingStart, Name: cfg.name}
+	}
+
 	// lastAgentOutput tracks the most recent sub-agent result so we can fall
 	// back to it when the router produces an empty final response (common for
 	// pure-routing LLMs that don't synthesize a reply after delegating).
@@ -483,7 +497,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			}
 
 			endIter()
-			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, resp.Content)
+			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, resp.Content, steps)
 			return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 		} else {
 			resp, err = cfg.provider.Chat(iterCtx, req)
@@ -518,11 +532,20 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				content = lastAgentOutput
 			}
 			if ch != nil {
-				ch <- StreamEvent{Type: EventTextDelta, Content: content}
+				// Only emit text-delta if no sub-agent already streamed.
+				// When a Network delegates to a streaming sub-agent, its
+				// text-delta events are forwarded to the parent channel in
+				// real time. The router's final response (echo, paraphrase,
+				// or empty) would duplicate the content consumers already
+				// received. Skip the delta entirely; AgentResult.Output
+				// still carries the correct final text for non-streaming use.
+				if lastAgentOutput == "" {
+					ch <- StreamEvent{Type: EventTextDelta, Content: content}
+				}
 				close(ch)
 			}
 			endIter()
-			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, content)
+			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, content, steps)
 			return AgentResult{Output: content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 		}
 
@@ -614,7 +637,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		return handleProcessorErrorWithSteps(err, totalUsage, steps)
 	}
 
-	cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content)
+	cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content, steps)
 	return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 }
 
@@ -966,6 +989,13 @@ type BatchEmbeddingProvider interface {
 type StreamEventType string
 
 const (
+	// EventInputReceived signals that a task has been received by an agent.
+	// Name carries the agent name; Content carries the task input text.
+	EventInputReceived StreamEventType = "input-received"
+	// EventProcessingStart signals that the agent loop has begun processing
+	// (after memory/context loading, before the first LLM call).
+	// Name carries the loop identifier (e.g. "agent:name" or "network:name").
+	EventProcessingStart StreamEventType = "processing-start"
 	// EventTextDelta carries an incremental text chunk from the LLM.
 	EventTextDelta StreamEventType = "text-delta"
 	// EventToolCallStart signals a tool is about to be invoked.
