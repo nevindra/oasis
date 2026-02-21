@@ -17,9 +17,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **Data transform tool** (`tools/data`) — structured CSV/JSON/JSONL processing without Python subprocess overhead. Four composable functions that chain parse → filter → aggregate → transform. `data_parse` accepts raw CSV/JSON/JSONL text and returns structured records (auto-detects format). `data_filter` filters by conditions (8 operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `in`) with automatic numeric coercion. `data_aggregate` groups records and computes metrics (`sum`, `count`, `avg`, `min`, `max`) with optional `group_by`. `data_transform` selects columns, renames, sorts (numeric-aware), and limits output. All functions exchange data as JSON arrays of objects — the universal interchange format. Pure Go stdlib, no external dependencies. Constructor: `data.New()`. Output capped at 32KB with automatic truncation
 - **Code execution** (`WithCodeExecution`, `code` package) — LLM writes and executes Python code in a sandboxed subprocess with full tool bridge access. Complements `WithPlanExecution` (parallel fan-out) with complex logic capabilities: conditionals, loops, data flow between tool calls, error handling via try/except. Architecture: `CodeRunner` interface in root package with `SubprocessRunner` implementation in `code/` package. Embedded Python prelude injects `call_tool(name, args)`, `call_tools_parallel(calls)`, and `set_result(data)` functions. Communication uses a JSON-over-stdin/stdout protocol — `print()` output goes to stderr (captured as logs), structured results go through `set_result()`. Safety: workspace isolation (filesystem ops restricted to configured directory), `os.system`/`subprocess` blocked at Python level, pre-execution regex blocklist, configurable timeout with SIGKILL, recursion prevention (`execute_code` cannot call `execute_code`). New types: `CodeRunner`, `CodeRequest`, `CodeResult`, `DispatchFunc` (exported from `dispatchFunc`). New option: `WithCodeExecution(runner CodeRunner)`. `SubprocessRunner` options: `WithTimeout`, `WithMaxOutput`, `WithWorkspace`, `WithEnv`, `WithEnvPassthrough`. Works with both `LLMAgent` and `Network`. Provider-agnostic — any LLM can use the `execute_code` tool
 
+### Fixed
+
+- **Non-deterministic tool ordering in Network** — `buildToolDefs` iterated a map, causing randomized tool order sent to the LLM router on each call. Agent names are now pre-sorted at construction time for deterministic routing behavior
+- **PostProcessor skipped for no-tools streaming path** — `RunPostLLM` was never called when using `ExecuteStream` on a tool-less agent or on the max-iteration synthesis path. Processors now run for side effects (logging, validation) after streaming completes
+- **State/Done ordering in AgentHandle** — `State()` could return a terminal value before `Done()` was closed, causing `Result()` to return zero values. `State()` now waits on `Done()` when terminal, guaranteeing `Result()` consistency
+
 ### Changed
 
+- **License changed from Apache-2.0 to AGPL-3.0** — copyleft protection for network use; commercial licensing available for proprietary embedding. Versions v0.1.0–v0.5.0 remain Apache-2.0 on the Go module proxy
 - **`dispatchFunc` exported as `DispatchFunc`** — the tool dispatch function type is now exported for use by the `code` package's `CodeRunner` interface. All internal references updated
+- **Bounded parallel tool dispatch** — `dispatchParallel` now caps concurrency at 10 goroutines to prevent rate limiting and resource exhaustion. Single tool calls run inline without goroutine overhead
+- **Timeout on background persist goroutine** — `persistMessages` now applies a 30-second timeout to prevent goroutine leaks when store or embedding operations hang
+- **Batched fact embedding** — `extractAndPersistFacts` now embeds all extracted facts in a single `Embed` call instead of one per fact, reducing HTTP round-trips
 
 ## [0.5.0] - 2026-02-19
 

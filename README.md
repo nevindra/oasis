@@ -323,4 +323,4 @@ The server embeds all documentation at build time via `//go:embed` and communica
 
 ## License
 
-[Apache-2.0](LICENSE)
+[AGPL-3.0](LICENSE) — commercial licensing available, contact nevindra for details
