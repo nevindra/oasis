@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 )
@@ -134,6 +135,64 @@ func TestMessageConstructorsEmpty(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.msg.Role != tt.role {
 				t.Errorf("%s(\"\").Role = %q, want %q", tt.name, tt.msg.Role, tt.role)
+			}
+		})
+	}
+}
+
+// --- Attachment helper tests ---
+
+func TestAttachment_InlineData_FromData(t *testing.T) {
+	att := Attachment{MimeType: "image/png", Data: []byte("raw-bytes")}
+	got := att.InlineData()
+	if string(got) != "raw-bytes" {
+		t.Errorf("InlineData() = %q, want %q", got, "raw-bytes")
+	}
+}
+
+func TestAttachment_InlineData_FromBase64(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte("legacy-data"))
+	att := Attachment{MimeType: "image/png", Base64: encoded}
+	got := att.InlineData()
+	if string(got) != "legacy-data" {
+		t.Errorf("InlineData() = %q, want %q", got, "legacy-data")
+	}
+}
+
+func TestAttachment_InlineData_DataTakesPriority(t *testing.T) {
+	att := Attachment{
+		MimeType: "image/png",
+		Data:     []byte("preferred"),
+		Base64:   base64.StdEncoding.EncodeToString([]byte("ignored")),
+	}
+	got := att.InlineData()
+	if string(got) != "preferred" {
+		t.Errorf("InlineData() = %q, want %q (Data should take priority)", got, "preferred")
+	}
+}
+
+func TestAttachment_InlineData_URLOnly(t *testing.T) {
+	att := Attachment{MimeType: "video/mp4", URL: "https://example.com/video.mp4"}
+	if got := att.InlineData(); got != nil {
+		t.Errorf("InlineData() = %v, want nil for URL-only attachment", got)
+	}
+}
+
+func TestAttachment_HasInlineData(t *testing.T) {
+	tests := []struct {
+		name string
+		att  Attachment
+		want bool
+	}{
+		{"Data set", Attachment{Data: []byte("x")}, true},
+		{"Base64 set", Attachment{Base64: "abc"}, true},
+		{"URL only", Attachment{URL: "https://example.com"}, false},
+		{"empty", Attachment{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.att.HasInlineData(); got != tt.want {
+				t.Errorf("HasInlineData() = %v, want %v", got, tt.want)
 			}
 		})
 	}

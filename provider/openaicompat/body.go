@@ -1,8 +1,10 @@
 package openaicompat
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/nevindra/oasis"
 )
@@ -63,12 +65,23 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 						Text: m.Content,
 					})
 				}
-				for _, img := range m.Attachments {
-					dataURL := fmt.Sprintf("data:%s;base64,%s", img.MimeType, img.Base64)
-					blocks = append(blocks, ContentBlock{
-						Type:     "image_url",
-						ImageURL: &ImageURL{URL: dataURL},
-					})
+				for _, att := range m.Attachments {
+					url := att.URL
+					if url == "" {
+						url = fmt.Sprintf("data:%s;base64,%s",
+							att.MimeType, base64.StdEncoding.EncodeToString(att.InlineData()))
+					}
+					if strings.HasPrefix(att.MimeType, "image/") {
+						blocks = append(blocks, ContentBlock{
+							Type:     "image_url",
+							ImageURL: &ImageURL{URL: url},
+						})
+					} else {
+						blocks = append(blocks, ContentBlock{
+							Type: "file",
+							File: &FileData{URL: url},
+						})
+					}
 				}
 				msgs = append(msgs, Message{
 					Role:    m.Role,

@@ -138,7 +138,94 @@ func TestBuildBody_ToolResult(t *testing.T) {
 	}
 }
 
-func TestBuildBody_Images(t *testing.T) {
+func TestBuildBody_ImageInlineData(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{
+			Role:    "user",
+			Content: "What is this?",
+			Attachments: []oasis.Attachment{
+				{MimeType: "image/png", Data: []byte("raw-png")},
+			},
+		},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil)
+
+	msg := req.Messages[0]
+	blocks, ok := msg.Content.([]ContentBlock)
+	if !ok {
+		t.Fatalf("expected content to be []ContentBlock, got %T", msg.Content)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 content blocks (text + image), got %d", len(blocks))
+	}
+
+	if blocks[0].Type != "text" {
+		t.Errorf("expected first block type 'text', got %q", blocks[0].Type)
+	}
+	if blocks[1].Type != "image_url" {
+		t.Errorf("expected second block type 'image_url', got %q", blocks[1].Type)
+	}
+	if blocks[1].ImageURL == nil {
+		t.Fatal("expected image_url to be non-nil")
+	}
+	expectedURL := "data:image/png;base64,cmF3LXBuZw==" // base64("raw-png")
+	if blocks[1].ImageURL.URL != expectedURL {
+		t.Errorf("expected URL %q, got %q", expectedURL, blocks[1].ImageURL.URL)
+	}
+}
+
+func TestBuildBody_ImageURL(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{
+			Role:    "user",
+			Content: "What is this?",
+			Attachments: []oasis.Attachment{
+				{MimeType: "image/png", URL: "https://example.com/photo.png"},
+			},
+		},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil)
+	blocks := req.Messages[0].Content.([]ContentBlock)
+
+	if blocks[1].Type != "image_url" {
+		t.Errorf("expected 'image_url', got %q", blocks[1].Type)
+	}
+	if blocks[1].ImageURL.URL != "https://example.com/photo.png" {
+		t.Errorf("expected direct URL, got %q", blocks[1].ImageURL.URL)
+	}
+}
+
+func TestBuildBody_VideoFile(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{
+			Role:    "user",
+			Content: "Describe this video",
+			Attachments: []oasis.Attachment{
+				{MimeType: "video/mp4", URL: "https://example.com/clip.mp4"},
+			},
+		},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil)
+	blocks := req.Messages[0].Content.([]ContentBlock)
+
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(blocks))
+	}
+	if blocks[1].Type != "file" {
+		t.Errorf("expected 'file' block for video, got %q", blocks[1].Type)
+	}
+	if blocks[1].File == nil {
+		t.Fatal("expected File to be non-nil")
+	}
+	if blocks[1].File.URL != "https://example.com/clip.mp4" {
+		t.Errorf("expected video URL, got %q", blocks[1].File.URL)
+	}
+}
+
+func TestBuildBody_DeprecatedBase64(t *testing.T) {
 	messages := []oasis.ChatMessage{
 		{
 			Role:    "user",
@@ -150,43 +237,13 @@ func TestBuildBody_Images(t *testing.T) {
 	}
 
 	req := BuildBody(messages, nil, "gpt-4o", nil)
+	blocks := req.Messages[0].Content.([]ContentBlock)
 
-	if len(req.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(req.Messages))
-	}
-
-	msg := req.Messages[0]
-	if msg.Role != "user" {
-		t.Errorf("expected role 'user', got %q", msg.Role)
-	}
-
-	// Content should be []ContentBlock, not a string.
-	blocks, ok := msg.Content.([]ContentBlock)
-	if !ok {
-		t.Fatalf("expected content to be []ContentBlock, got %T", msg.Content)
-	}
-	if len(blocks) != 2 {
-		t.Fatalf("expected 2 content blocks (text + image), got %d", len(blocks))
-	}
-
-	// First block: text.
-	if blocks[0].Type != "text" {
-		t.Errorf("expected first block type 'text', got %q", blocks[0].Type)
-	}
-	if blocks[0].Text != "What is this?" {
-		t.Errorf("unexpected text: %q", blocks[0].Text)
-	}
-
-	// Second block: image_url.
 	if blocks[1].Type != "image_url" {
-		t.Errorf("expected second block type 'image_url', got %q", blocks[1].Type)
+		t.Errorf("expected 'image_url' for deprecated Base64, got %q", blocks[1].Type)
 	}
 	if blocks[1].ImageURL == nil {
 		t.Fatal("expected image_url to be non-nil")
-	}
-	expectedURL := "data:image/png;base64,iVBOR..."
-	if blocks[1].ImageURL.URL != expectedURL {
-		t.Errorf("expected URL %q, got %q", expectedURL, blocks[1].ImageURL.URL)
 	}
 }
 

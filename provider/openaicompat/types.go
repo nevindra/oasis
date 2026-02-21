@@ -64,13 +64,19 @@ type Message struct {
 
 // ContentBlock represents a typed content block for multimodal messages.
 type ContentBlock struct {
-	Type     string    `json:"type"`               // "text" or "image_url"
+	Type     string    `json:"type"` // "text", "image_url", or "file"
 	Text     string    `json:"text,omitempty"`
 	ImageURL *ImageURL `json:"image_url,omitempty"`
+	File     *FileData `json:"file,omitempty"`
 }
 
 // ImageURL holds the URL (or data URI) for an image content block.
 type ImageURL struct {
+	URL string `json:"url"`
+}
+
+// FileData holds a URL (or data URI) for a non-image file content block (video, audio, PDF, etc.).
+type FileData struct {
 	URL string `json:"url"`
 }
 

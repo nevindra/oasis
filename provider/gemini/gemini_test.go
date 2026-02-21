@@ -186,14 +186,14 @@ func TestBuildBody_ToolDeclarations(t *testing.T) {
 	}
 }
 
-func TestBuildBody_Images(t *testing.T) {
+func TestBuildBody_InlineData(t *testing.T) {
 	g := testGemini()
 	messages := []oasis.ChatMessage{
 		{
 			Role:    "user",
 			Content: "What is this?",
 			Attachments: []oasis.Attachment{
-				{MimeType: "image/png", Base64: "iVBOR..."},
+				{MimeType: "image/png", Data: []byte("raw-png-bytes")},
 			},
 		},
 	}
@@ -213,12 +213,10 @@ func TestBuildBody_Images(t *testing.T) {
 		t.Fatalf("expected 2 parts (text + image), got %d", len(parts))
 	}
 
-	// First part should be text.
 	if parts[0]["text"] != "What is this?" {
 		t.Errorf("expected text part, got %v", parts[0])
 	}
 
-	// Second part should be inlineData.
 	inlineData, ok := parts[1]["inlineData"].(map[string]any)
 	if !ok {
 		t.Fatal("expected inlineData part")
@@ -226,8 +224,73 @@ func TestBuildBody_Images(t *testing.T) {
 	if inlineData["mimeType"] != "image/png" {
 		t.Errorf("expected mimeType 'image/png', got %q", inlineData["mimeType"])
 	}
-	if inlineData["data"] != "iVBOR..." {
-		t.Errorf("expected base64 data, got %q", inlineData["data"])
+	wantB64 := "cmF3LXBuZy1ieXRlcw==" // base64("raw-png-bytes")
+	if inlineData["data"] != wantB64 {
+		t.Errorf("expected base64 %q, got %q", wantB64, inlineData["data"])
+	}
+}
+
+func TestBuildBody_URLAttachment(t *testing.T) {
+	g := testGemini()
+	messages := []oasis.ChatMessage{
+		{
+			Role:    "user",
+			Content: "Describe this video",
+			Attachments: []oasis.Attachment{
+				{MimeType: "video/mp4", URL: "gs://bucket/video.mp4"},
+			},
+		},
+	}
+
+	body, err := g.buildBody(messages, nil, nil)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	contents := body["contents"].([]map[string]any)
+	parts := contents[0]["parts"].([]map[string]any)
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts (text + fileData), got %d", len(parts))
+	}
+
+	fileData, ok := parts[1]["fileData"].(map[string]any)
+	if !ok {
+		t.Fatal("expected fileData part")
+	}
+	if fileData["mimeType"] != "video/mp4" {
+		t.Errorf("expected mimeType 'video/mp4', got %q", fileData["mimeType"])
+	}
+	if fileData["fileUri"] != "gs://bucket/video.mp4" {
+		t.Errorf("expected fileUri, got %q", fileData["fileUri"])
+	}
+}
+
+func TestBuildBody_DeprecatedBase64(t *testing.T) {
+	g := testGemini()
+	messages := []oasis.ChatMessage{
+		{
+			Role:    "user",
+			Content: "What is this?",
+			Attachments: []oasis.Attachment{
+				{MimeType: "image/png", Base64: "iVBOR..."},
+			},
+		},
+	}
+
+	body, err := g.buildBody(messages, nil, nil)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	contents := body["contents"].([]map[string]any)
+	parts := contents[0]["parts"].([]map[string]any)
+
+	inlineData, ok := parts[1]["inlineData"].(map[string]any)
+	if !ok {
+		t.Fatal("expected inlineData part for deprecated Base64")
+	}
+	if inlineData["mimeType"] != "image/png" {
+		t.Errorf("expected mimeType 'image/png', got %q", inlineData["mimeType"])
 	}
 }
 
@@ -688,8 +751,8 @@ func TestExtractAttachmentsFromParsed(t *testing.T) {
 	if atts[0].MimeType != "image/png" {
 		t.Errorf("expected mimeType 'image/png', got %q", atts[0].MimeType)
 	}
-	if atts[0].Base64 != "abc123" {
-		t.Errorf("expected base64 'abc123', got %q", atts[0].Base64)
+	if len(atts[0].Data) == 0 {
+		t.Error("expected Data to be populated")
 	}
 }
 

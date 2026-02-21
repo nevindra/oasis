@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -367,11 +368,36 @@ type ChatMessage struct {
 	Metadata   json.RawMessage `json:"metadata,omitempty"` // provider-specific (e.g. Gemini thoughtSignature)
 }
 
-// Attachment represents binary content (image, PDF, audio, etc.) sent inline to a multimodal LLM.
+// Attachment represents binary content (image, PDF, audio, video, etc.) sent to a multimodal LLM.
 // The MimeType determines how the provider interprets the data.
+//
+// Populate URL for remote references (pre-uploaded to storage/CDN) or Data for
+// transient inline bytes. Providers resolve the best transport: URL > Data > Base64.
 type Attachment struct {
 	MimeType string `json:"mime_type"`
-	Base64   string `json:"base64"`
+	URL      string `json:"url,omitempty"`
+	Data     []byte `json:"-"`
+
+	// Deprecated: use Data for inline bytes or URL for remote references.
+	Base64 string `json:"base64,omitempty"`
+}
+
+// InlineData returns raw bytes from whichever inline source is populated.
+// Priority: Data > Base64 (decoded). Returns nil if only URL is set.
+func (a Attachment) InlineData() []byte {
+	if len(a.Data) > 0 {
+		return a.Data
+	}
+	if a.Base64 != "" {
+		data, _ := base64.StdEncoding.DecodeString(a.Base64)
+		return data
+	}
+	return nil
+}
+
+// HasInlineData reports whether inline bytes are available (Data or Base64).
+func (a Attachment) HasInlineData() bool {
+	return len(a.Data) > 0 || a.Base64 != ""
 }
 
 type ToolCall struct {

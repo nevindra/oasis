@@ -4,6 +4,7 @@ package gemini
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -244,9 +245,10 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 				toolCalls = append(toolCalls, tc)
 			}
 			if part.InlineData != nil {
+				raw, _ := base64.StdEncoding.DecodeString(part.InlineData.Data)
 				attachments = append(attachments, oasis.Attachment{
 					MimeType: part.InlineData.MimeType,
-					Base64:   part.InlineData.Data,
+					Data:     raw,
 				})
 			}
 		}
@@ -431,13 +433,22 @@ func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefin
 				parts = append(parts, map[string]any{"text": m.Content})
 			}
 
-			for _, img := range m.Attachments {
-				parts = append(parts, map[string]any{
-					"inlineData": map[string]any{
-						"mimeType": img.MimeType,
-						"data":     img.Base64,
-					},
-				})
+			for _, att := range m.Attachments {
+				if att.URL != "" {
+					parts = append(parts, map[string]any{
+						"fileData": map[string]any{
+							"mimeType": att.MimeType,
+							"fileUri":  att.URL,
+						},
+					})
+				} else if data := att.InlineData(); len(data) > 0 {
+					parts = append(parts, map[string]any{
+						"inlineData": map[string]any{
+							"mimeType": att.MimeType,
+							"data":     base64.StdEncoding.EncodeToString(data),
+						},
+					})
+				}
 			}
 
 			// Gemini requires at least one part.
@@ -673,9 +684,10 @@ func extractAttachmentsFromParsed(parsed map[string]json.RawMessage) []oasis.Att
 	var attachments []oasis.Attachment
 	for _, p := range candidate.Content.Parts {
 		if p.InlineData != nil {
+			raw, _ := base64.StdEncoding.DecodeString(p.InlineData.Data)
 			attachments = append(attachments, oasis.Attachment{
 				MimeType: p.InlineData.MimeType,
-				Base64:   p.InlineData.Data,
+				Data:     raw,
 			})
 		}
 	}

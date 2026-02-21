@@ -154,8 +154,19 @@ type ChatMessage struct {
 
 type Attachment struct {
     MimeType string `json:"mime_type"`
-    Base64   string `json:"base64"`
+    URL      string `json:"url,omitempty"`
+    Data     []byte `json:"-"`
+
+    // Deprecated: use Data for inline bytes or URL for remote references.
+    Base64 string `json:"base64,omitempty"`
 }
+
+// InlineData returns raw bytes from whichever inline source is populated.
+// Priority: Data > Base64 (decoded). Returns nil if only URL is set.
+func (a Attachment) InlineData() []byte
+
+// HasInlineData reports whether inline bytes are available (Data or Base64).
+func (a Attachment) HasInlineData() bool
 
 type ToolCall struct {
     ID       string          `json:"id"`
