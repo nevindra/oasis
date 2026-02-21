@@ -100,6 +100,8 @@ result, err := registry.Execute(ctx, "web_search", argsJSON)
 | `tools/shell` | `shell_exec` | workspace path |
 | `tools/file` | `file_read`, `file_write`, `file_list` | workspace path |
 | `tools/http` | `http_fetch` | (none) |
+| `tools/data` | `data_parse`, `data_filter`, `data_aggregate`, `data_transform` | (none) |
+| `tools/skill` | `skill_search`, `skill_create`, `skill_update` | Store, EmbeddingProvider |
 
 ## Parallel Execution
 

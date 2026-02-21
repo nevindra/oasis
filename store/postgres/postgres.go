@@ -179,6 +179,9 @@ func (s *Store) Init(ctx context.Context) error {
 			instructions TEXT NOT NULL,
 			tools TEXT NOT NULL DEFAULT '',
 			model TEXT NOT NULL DEFAULT '',
+			tags TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			refs TEXT NOT NULL DEFAULT '',
 			embedding %s,
 			created_at BIGINT NOT NULL,
 			updated_at BIGINT NOT NULL
@@ -833,37 +836,53 @@ func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
 		data, _ := json.Marshal(skill.Tools)
 		toolsJSON = string(data)
 	}
+	var tagsJSON string
+	if len(skill.Tags) > 0 {
+		data, _ := json.Marshal(skill.Tags)
+		tagsJSON = string(data)
+	}
+	var refsJSON string
+	if len(skill.References) > 0 {
+		data, _ := json.Marshal(skill.References)
+		refsJSON = string(data)
+	}
 
 	if len(skill.Embedding) > 0 {
 		embStr := serializeEmbedding(skill.Embedding)
 		_, err := s.pool.Exec(ctx,
-			`INSERT INTO skills (id, name, description, instructions, tools, model, embedding, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9)`,
+			`INSERT INTO skills (id, name, description, instructions, tools, model, tags, created_by, refs, embedding, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector, $11, $12)`,
 			skill.ID, skill.Name, skill.Description, skill.Instructions,
-			toolsJSON, skill.Model, embStr, skill.CreatedAt, skill.UpdatedAt)
+			toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embStr, skill.CreatedAt, skill.UpdatedAt)
 		return err
 	}
 
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO skills (id, name, description, instructions, tools, model, embedding, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)`,
+		`INSERT INTO skills (id, name, description, instructions, tools, model, tags, created_by, refs, embedding, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)`,
 		skill.ID, skill.Name, skill.Description, skill.Instructions,
-		toolsJSON, skill.Model, skill.CreatedAt, skill.UpdatedAt)
+		toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, skill.CreatedAt, skill.UpdatedAt)
 	return err
 }
 
 func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
 	var sk oasis.Skill
-	var tools, model string
+	var tools, model, tags, refs string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, name, description, instructions, tools, model, created_at, updated_at
+		`SELECT id, name, description, instructions, tools, model, tags, created_by, refs, created_at, updated_at
 		 FROM skills WHERE id = $1`, id,
-	).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt)
+	).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &sk.CreatedBy, &refs, &sk.CreatedAt, &sk.UpdatedAt)
 	if err != nil {
 		return oasis.Skill{}, fmt.Errorf("postgres: get skill: %w", err)
 	}
 	if tools != "" {
 		_ = json.Unmarshal([]byte(tools), &sk.Tools)
+	}
+	if tags != "" {
+		_ = json.Unmarshal([]byte(tags), &sk.Tags)
+	}
+	if refs != "" {
+		_ = json.Unmarshal([]byte(refs), &sk.References)
 	}
 	sk.Model = model
 	return sk, nil
@@ -871,7 +890,7 @@ func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
 
 func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, description, instructions, tools, model, created_at, updated_at
+		`SELECT id, name, description, instructions, tools, model, tags, created_by, refs, created_at, updated_at
 		 FROM skills ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: list skills: %w", err)
@@ -881,12 +900,18 @@ func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
 	var skills []oasis.Skill
 	for rows.Next() {
 		var sk oasis.Skill
-		var tools, model string
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		var tools, model, tags, refs string
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &sk.CreatedBy, &refs, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("postgres: scan skill: %w", err)
 		}
 		if tools != "" {
 			_ = json.Unmarshal([]byte(tools), &sk.Tools)
+		}
+		if tags != "" {
+			_ = json.Unmarshal([]byte(tags), &sk.Tags)
+		}
+		if refs != "" {
+			_ = json.Unmarshal([]byte(refs), &sk.References)
 		}
 		sk.Model = model
 		skills = append(skills, sk)
@@ -900,18 +925,28 @@ func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
 		data, _ := json.Marshal(skill.Tools)
 		toolsJSON = string(data)
 	}
+	var tagsJSON string
+	if len(skill.Tags) > 0 {
+		data, _ := json.Marshal(skill.Tags)
+		tagsJSON = string(data)
+	}
+	var refsJSON string
+	if len(skill.References) > 0 {
+		data, _ := json.Marshal(skill.References)
+		refsJSON = string(data)
+	}
 
 	if len(skill.Embedding) > 0 {
 		embStr := serializeEmbedding(skill.Embedding)
 		_, err := s.pool.Exec(ctx,
-			`UPDATE skills SET name=$1, description=$2, instructions=$3, tools=$4, model=$5, embedding=$6::vector, updated_at=$7 WHERE id=$8`,
-			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, embStr, skill.UpdatedAt, skill.ID)
+			`UPDATE skills SET name=$1, description=$2, instructions=$3, tools=$4, model=$5, tags=$6, created_by=$7, refs=$8, embedding=$9::vector, updated_at=$10 WHERE id=$11`,
+			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embStr, skill.UpdatedAt, skill.ID)
 		return err
 	}
 
 	_, err := s.pool.Exec(ctx,
-		`UPDATE skills SET name=$1, description=$2, instructions=$3, tools=$4, model=$5, embedding=NULL, updated_at=$6 WHERE id=$7`,
-		skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, skill.UpdatedAt, skill.ID)
+		`UPDATE skills SET name=$1, description=$2, instructions=$3, tools=$4, model=$5, tags=$6, created_by=$7, refs=$8, embedding=NULL, updated_at=$9 WHERE id=$10`,
+		skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, skill.UpdatedAt, skill.ID)
 	return err
 }
 
@@ -925,7 +960,7 @@ func (s *Store) DeleteSkill(ctx context.Context, id string) error {
 func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredSkill, error) {
 	embStr := serializeEmbedding(embedding)
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, description, instructions, tools, model, created_at, updated_at,
+		`SELECT id, name, description, instructions, tools, model, tags, created_by, refs, created_at, updated_at,
 		        1 - (embedding <=> $1::vector) AS score
 		 FROM skills
 		 WHERE embedding IS NOT NULL
@@ -940,13 +975,19 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 	var results []oasis.ScoredSkill
 	for rows.Next() {
 		var sk oasis.Skill
-		var tools, model string
+		var tools, model, tags, refs string
 		var score float32
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt, &score); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &sk.CreatedBy, &refs, &sk.CreatedAt, &sk.UpdatedAt, &score); err != nil {
 			return nil, fmt.Errorf("postgres: scan skill: %w", err)
 		}
 		if tools != "" {
 			_ = json.Unmarshal([]byte(tools), &sk.Tools)
+		}
+		if tags != "" {
+			_ = json.Unmarshal([]byte(tags), &sk.Tags)
+		}
+		if refs != "" {
+			_ = json.Unmarshal([]byte(refs), &sk.References)
 		}
 		sk.Model = model
 		results = append(results, oasis.ScoredSkill{Skill: sk, Score: score})

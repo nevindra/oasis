@@ -159,6 +159,9 @@ func (s *Store) Init(ctx context.Context) error {
 		instructions TEXT NOT NULL,
 		tools TEXT,
 		model TEXT,
+		tags TEXT,
+		created_by TEXT,
+		refs TEXT,
 		embedding F32_BLOB(%d),
 		created_at INTEGER NOT NULL,
 		updated_at INTEGER NOT NULL
@@ -1095,20 +1098,32 @@ func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
 		v := string(data)
 		toolsJSON = &v
 	}
+	var tagsJSON *string
+	if len(skill.Tags) > 0 {
+		data, _ := json.Marshal(skill.Tags)
+		v := string(data)
+		tagsJSON = &v
+	}
+	var refsJSON *string
+	if len(skill.References) > 0 {
+		data, _ := json.Marshal(skill.References)
+		v := string(data)
+		refsJSON = &v
+	}
 
 	if len(skill.Embedding) > 0 {
 		embJSON := serializeEmbedding(skill.Embedding)
 		_, err = db.ExecContext(ctx,
-			`INSERT INTO skills (id, name, description, instructions, tools, model, embedding, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, vector(?), ?, ?)`,
+			`INSERT INTO skills (id, name, description, instructions, tools, model, tags, created_by, refs, embedding, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, vector(?), ?, ?)`,
 			skill.ID, skill.Name, skill.Description, skill.Instructions,
-			toolsJSON, skill.Model, embJSON, skill.CreatedAt, skill.UpdatedAt)
+			toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embJSON, skill.CreatedAt, skill.UpdatedAt)
 	} else {
 		_, err = db.ExecContext(ctx,
-			`INSERT INTO skills (id, name, description, instructions, tools, model, embedding, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+			`INSERT INTO skills (id, name, description, instructions, tools, model, tags, created_by, refs, embedding, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 			skill.ID, skill.Name, skill.Description, skill.Instructions,
-			toolsJSON, skill.Model, skill.CreatedAt, skill.UpdatedAt)
+			toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, skill.CreatedAt, skill.UpdatedAt)
 	}
 	return err
 }
@@ -1121,12 +1136,11 @@ func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
 	defer db.Close()
 
 	var sk oasis.Skill
-	var tools sql.NullString
-	var model sql.NullString
+	var tools, model, tags, createdBy, refs sql.NullString
 	err = db.QueryRowContext(ctx,
-		`SELECT id, name, description, instructions, tools, model, created_at, updated_at
+		`SELECT id, name, description, instructions, tools, model, tags, created_by, refs, created_at, updated_at
 		 FROM skills WHERE id = ?`, id,
-	).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt)
+	).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &createdBy, &refs, &sk.CreatedAt, &sk.UpdatedAt)
 	if err != nil {
 		return oasis.Skill{}, fmt.Errorf("get skill: %w", err)
 	}
@@ -1135,6 +1149,15 @@ func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
 	}
 	if model.Valid {
 		sk.Model = model.String
+	}
+	if tags.Valid {
+		_ = json.Unmarshal([]byte(tags.String), &sk.Tags)
+	}
+	if createdBy.Valid {
+		sk.CreatedBy = createdBy.String
+	}
+	if refs.Valid {
+		_ = json.Unmarshal([]byte(refs.String), &sk.References)
 	}
 	return sk, nil
 }
@@ -1147,7 +1170,7 @@ func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
 	defer db.Close()
 
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, name, description, instructions, tools, model, created_at, updated_at
+		`SELECT id, name, description, instructions, tools, model, tags, created_by, refs, created_at, updated_at
 		 FROM skills ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("list skills: %w", err)
@@ -1157,9 +1180,8 @@ func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
 	var skills []oasis.Skill
 	for rows.Next() {
 		var sk oasis.Skill
-		var tools sql.NullString
-		var model sql.NullString
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		var tools, model, tags, createdBy, refs sql.NullString
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &createdBy, &refs, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan skill: %w", err)
 		}
 		if tools.Valid {
@@ -1167,6 +1189,15 @@ func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
 		}
 		if model.Valid {
 			sk.Model = model.String
+		}
+		if tags.Valid {
+			_ = json.Unmarshal([]byte(tags.String), &sk.Tags)
+		}
+		if createdBy.Valid {
+			sk.CreatedBy = createdBy.String
+		}
+		if refs.Valid {
+			_ = json.Unmarshal([]byte(refs.String), &sk.References)
 		}
 		skills = append(skills, sk)
 	}
@@ -1186,16 +1217,28 @@ func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
 		v := string(data)
 		toolsJSON = &v
 	}
+	var tagsJSON *string
+	if len(skill.Tags) > 0 {
+		data, _ := json.Marshal(skill.Tags)
+		v := string(data)
+		tagsJSON = &v
+	}
+	var refsJSON *string
+	if len(skill.References) > 0 {
+		data, _ := json.Marshal(skill.References)
+		v := string(data)
+		refsJSON = &v
+	}
 
 	if len(skill.Embedding) > 0 {
 		embJSON := serializeEmbedding(skill.Embedding)
 		_, err = db.ExecContext(ctx,
-			`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, embedding=vector(?), updated_at=? WHERE id=?`,
-			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, embJSON, skill.UpdatedAt, skill.ID)
+			`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, tags=?, created_by=?, refs=?, embedding=vector(?), updated_at=? WHERE id=?`,
+			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embJSON, skill.UpdatedAt, skill.ID)
 	} else {
 		_, err = db.ExecContext(ctx,
-			`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, embedding=NULL, updated_at=? WHERE id=?`,
-			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, skill.UpdatedAt, skill.ID)
+			`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, tags=?, created_by=?, refs=?, embedding=NULL, updated_at=? WHERE id=?`,
+			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, skill.UpdatedAt, skill.ID)
 	}
 	return err
 }
@@ -1222,7 +1265,7 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
-		`SELECT sk.id, sk.name, sk.description, sk.instructions, sk.tools, sk.model, sk.created_at, sk.updated_at,
+		`SELECT sk.id, sk.name, sk.description, sk.instructions, sk.tools, sk.model, sk.tags, sk.created_by, sk.refs, sk.created_at, sk.updated_at,
 		        1.0 - vector_distance_cos(sk.embedding, vector(?)) AS score
 		 FROM vector_top_k('skills_vector_idx', vector(?), ?) AS v
 		 JOIN skills AS sk ON sk.rowid = v.id`,
@@ -1236,10 +1279,9 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 	var skills []oasis.ScoredSkill
 	for rows.Next() {
 		var sk oasis.Skill
-		var tools sql.NullString
-		var model sql.NullString
+		var tools, model, tags, createdBy, refs sql.NullString
 		var score float32
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &sk.CreatedAt, &sk.UpdatedAt, &score); err != nil {
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &createdBy, &refs, &sk.CreatedAt, &sk.UpdatedAt, &score); err != nil {
 			return nil, fmt.Errorf("scan skill: %w", err)
 		}
 		if tools.Valid {
@@ -1247,6 +1289,15 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		}
 		if model.Valid {
 			sk.Model = model.String
+		}
+		if tags.Valid {
+			_ = json.Unmarshal([]byte(tags.String), &sk.Tags)
+		}
+		if createdBy.Valid {
+			sk.CreatedBy = createdBy.String
+		}
+		if refs.Valid {
+			_ = json.Unmarshal([]byte(refs.String), &sk.References)
 		}
 		if score < 0 {
 			score = 0

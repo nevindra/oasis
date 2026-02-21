@@ -50,7 +50,7 @@ oasis/                              # FRAMEWORK (root package)
 |-- observer/                       # OTEL observability wrappers
 |-- retriever.go                    # Retrieval pipeline (Retriever, Reranker, HybridRetriever)
 |-- ingest/                         # Document chunking pipeline
-|-- tools/{knowledge,remember,search,schedule,shell,file,http}/
+|-- tools/{knowledge,remember,search,schedule,shell,file,http,data}/
 |
 |-- cmd/bot_example/               # REFERENCE APP (demo, not the product)
 |-- internal/{config,bot}/         # App config + orchestration

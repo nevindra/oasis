@@ -94,6 +94,16 @@ wCtx.ResolveJSON(template string) json.RawMessage      // {{key}} → JSON value
 
 The `"input"` key is pre-populated with `AgentTask.Input`, so `{{input}}` resolves to the original task input in any workflow.
 
+## DataTool
+
+**Package:** `github.com/nevindra/oasis/tools/data`
+
+```go
+tool := data.New()
+```
+
+Creates a data transform tool with four functions: `data_parse`, `data_filter`, `data_aggregate`, `data_transform`. No dependencies — pure Go stdlib.
+
 ## SubprocessRunner
 
 **Package:** `github.com/nevindra/oasis/code`

@@ -280,6 +280,9 @@ func TestSkillCRUD(t *testing.T) {
 		Instructions: "Use web_search to find information, then summarize.",
 		Tools:        []string{"web_search", "browse"},
 		Model:        "gpt-4o",
+		Tags:         []string{"research", "web"},
+		CreatedBy:    "agent-001",
+		References:   []string{"skill-abc"},
 		CreatedAt:    oasis.NowUnix(),
 		UpdatedAt:    oasis.NowUnix(),
 	}
@@ -306,6 +309,15 @@ func TestSkillCRUD(t *testing.T) {
 	if got.Model != "gpt-4o" {
 		t.Errorf("expected model 'gpt-4o', got %q", got.Model)
 	}
+	if len(got.Tags) != 2 || got.Tags[0] != "research" {
+		t.Errorf("expected tags [research, web], got %v", got.Tags)
+	}
+	if got.CreatedBy != "agent-001" {
+		t.Errorf("expected created_by 'agent-001', got %q", got.CreatedBy)
+	}
+	if len(got.References) != 1 || got.References[0] != "skill-abc" {
+		t.Errorf("expected references [skill-abc], got %v", got.References)
+	}
 
 	// List
 	skills, err := s.ListSkills(ctx)
@@ -319,6 +331,7 @@ func TestSkillCRUD(t *testing.T) {
 	// Update
 	skill.Name = "deep-research"
 	skill.Instructions = "Updated instructions"
+	skill.Tags = []string{"research", "deep"}
 	skill.UpdatedAt = oasis.NowUnix()
 	if err := s.UpdateSkill(ctx, skill); err != nil {
 		t.Fatalf("UpdateSkill: %v", err)
@@ -329,6 +342,9 @@ func TestSkillCRUD(t *testing.T) {
 	}
 	if got.Instructions != "Updated instructions" {
 		t.Errorf("after update: expected updated instructions, got %q", got.Instructions)
+	}
+	if len(got.Tags) != 2 || got.Tags[1] != "deep" {
+		t.Errorf("after update: expected tags [research, deep], got %v", got.Tags)
 	}
 
 	// Create a second skill, then delete the first

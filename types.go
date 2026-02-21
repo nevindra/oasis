@@ -348,6 +348,9 @@ type Skill struct {
 	Instructions string    `json:"instructions"`
 	Tools        []string  `json:"tools,omitempty"`
 	Model        string    `json:"model,omitempty"`
+	Tags         []string  `json:"tags,omitempty"`       // categorization labels
+	CreatedBy    string    `json:"created_by,omitempty"`  // origin: user ID or agent ID
+	References   []string  `json:"references,omitempty"` // skill IDs this builds on
 	Embedding    []float32 `json:"-"`
 	CreatedAt    int64     `json:"created_at"`
 	UpdatedAt    int64     `json:"updated_at"`
