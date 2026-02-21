@@ -75,6 +75,9 @@ func Spawn(ctx context.Context, agent Agent, task AgentTask) *AgentHandle {
 		h.state.Store(int32(StateRunning))
 		result, err := agent.Execute(ctx, task)
 
+		// Write result/err before close(done). The channel close is the
+		// happens-before barrier: all readers (<-h.done in Await, State,
+		// Result) are guaranteed to see these writes after the close.
 		h.result = result
 		h.err = err
 		if ctx.Err() != nil && err != nil {

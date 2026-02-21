@@ -733,8 +733,15 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 			wg.Add(1)
 			go func(idx int, tc ToolCall) {
 				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
+				// Guard semaphore acquisition with ctx to prevent goroutine
+				// hangs when the context is cancelled while waiting.
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-ctx.Done():
+					results[idx] = toolExecResult{content: "error: " + ctx.Err().Error()}
+					return
+				}
 				start := time.Now()
 				content, usage := dispatch(ctx, tc)
 				results[idx] = toolExecResult{content: content, usage: usage, duration: time.Since(start)}
@@ -748,6 +755,11 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 
 // truncateStr truncates a string to n runes.
 func truncateStr(s string, n int) string {
+	// Fast path: byte length ≤ n guarantees rune count ≤ n,
+	// avoiding the []rune allocation for short/ASCII strings.
+	if len(s) <= n {
+		return s
+	}
 	r := []rune(s)
 	if len(r) <= n {
 		return s

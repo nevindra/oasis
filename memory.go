@@ -75,8 +75,18 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 
 	var messages []ChatMessage
 
+	// Embed input once — reused by both user memory and cross-thread search
+	// to avoid duplicate embedding API calls.
+	var inputEmbedding []float32
+	if m.embedding != nil && (m.memory != nil || m.crossThreadSearch) {
+		embs, err := m.embedding.Embed(ctx, []string{task.Input})
+		if err == nil && len(embs) > 0 {
+			inputEmbedding = embs[0]
+		}
+	}
+
 	// System prompt + user memory context
-	prompt := m.buildSystemPrompt(ctx, systemPrompt, task.Input)
+	prompt := m.buildSystemPrompt(ctx, systemPrompt, inputEmbedding)
 	if prompt != "" {
 		messages = append(messages, SystemMessage(prompt))
 	}
@@ -132,33 +142,30 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 
 		// Cross-thread recall: search relevant messages across all threads,
 		// excluding the current thread (already in history) and low-score results.
-		if m.crossThreadSearch && m.embedding != nil {
-			embs, err := m.embedding.Embed(ctx, []string{task.Input})
-			if err == nil && len(embs) > 0 {
-				minScore := m.semanticMinScore
-				if minScore == 0 {
-					minScore = defaultSemanticRecallMinScore
+		if m.crossThreadSearch && len(inputEmbedding) > 0 {
+			minScore := m.semanticMinScore
+			if minScore == 0 {
+				minScore = defaultSemanticRecallMinScore
+			}
+			related, err := m.store.SearchMessages(ctx, inputEmbedding, 5)
+			if err == nil {
+				var recall strings.Builder
+				recall.WriteString("Relevant context from past conversations:\n")
+				n := 0
+				for _, r := range related {
+					// Skip messages from the current thread (already in history).
+					if r.ThreadID == threadID {
+						continue
+					}
+					// Skip low-relevance results.
+					if r.Score < minScore {
+						continue
+					}
+					fmt.Fprintf(&recall, "[%s]: %s\n", r.Role, r.Content)
+					n++
 				}
-				related, err := m.store.SearchMessages(ctx, embs[0], 5)
-				if err == nil {
-					var recall strings.Builder
-					recall.WriteString("Relevant context from past conversations:\n")
-					n := 0
-					for _, r := range related {
-						// Skip messages from the current thread (already in history).
-						if r.ThreadID == threadID {
-							continue
-						}
-						// Skip low-relevance results.
-						if r.Score < minScore {
-							continue
-						}
-						fmt.Fprintf(&recall, "[%s]: %s\n", r.Role, r.Content)
-						n++
-					}
-					if n > 0 {
-						messages = append(messages, SystemMessage(recall.String()))
-					}
+				if n > 0 {
+					messages = append(messages, SystemMessage(recall.String()))
 				}
 			}
 		}
@@ -171,20 +178,18 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 }
 
 // buildSystemPrompt assembles the system prompt with optional user memory context.
-func (m *agentMemory) buildSystemPrompt(ctx context.Context, basePrompt, input string) string {
+// inputEmbedding is the pre-computed embedding of the user input (may be nil).
+func (m *agentMemory) buildSystemPrompt(ctx context.Context, basePrompt string, inputEmbedding []float32) string {
 	var parts []string
 	if basePrompt != "" {
 		parts = append(parts, basePrompt)
 	}
 
 	// User memory: inject known facts
-	if m.memory != nil && m.embedding != nil {
-		embs, err := m.embedding.Embed(ctx, []string{input})
-		if err == nil && len(embs) > 0 {
-			memCtx, err := m.memory.BuildContext(ctx, embs[0])
-			if err == nil && memCtx != "" {
-				parts = append(parts, memCtx)
-			}
+	if m.memory != nil && len(inputEmbedding) > 0 {
+		memCtx, err := m.memory.BuildContext(ctx, inputEmbedding)
+		if err == nil && memCtx != "" {
+			parts = append(parts, memCtx)
 		}
 	}
 

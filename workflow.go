@@ -1284,7 +1284,7 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	errCh := make(chan error, concurrency)
+	errCh := make(chan error, len(items))
 
 	for i, item := range items {
 		select {

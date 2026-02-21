@@ -171,10 +171,10 @@ result, _ := agent.Execute(ctx, oasis.AgentTask{
 
 What happens during `Execute`:
 
-1. Load recent conversation history from Store
-2. Embed the input, search for relevant messages across all threads
-3. Embed the input, retrieve relevant user facts from MemoryStore
-4. Inject history + cross-thread results + user facts into the system prompt
+1. Embed the input once (reused by both user memory and cross-thread search)
+2. Retrieve relevant user facts from MemoryStore, inject into system prompt
+3. Load recent conversation history from Store
+4. Search for relevant messages across all threads (reuses embedding from step 1)
 5. Run the tool-calling loop
 6. Persist user and assistant messages
 7. (Background) Extract and upsert user facts from the conversation turn
