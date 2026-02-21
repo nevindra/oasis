@@ -211,11 +211,10 @@ func TestStoreDocument(t *testing.T) {
 	}
 
 	// Verify document was stored by querying directly.
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
-		t.Fatalf("openDB: %v", err)
+		t.Fatalf("getDB: %v", err)
 	}
-	defer db.Close()
 
 	var count int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM documents WHERE id = ?", doc.ID).Scan(&count); err != nil {

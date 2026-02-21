@@ -135,6 +135,11 @@ func (s *Store) Init(ctx context.Context) error {
 	_, _ = s.db.ExecContext(ctx, "UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE messages RENAME COLUMN conversation_id TO thread_id")
 
+	// Indexes on frequently queried columns.
+	_, _ = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id)`)
+	_, _ = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_threads_chat ON threads(chat_id)`)
+	_, _ = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id)`)
+
 	// FTS5 full-text index for keyword search over chunks.
 	_, _ = s.db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, content)`)
 
@@ -356,6 +361,17 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
+// safeMetaKey returns true if the key contains only alphanumeric chars and underscores.
+// This prevents SQL injection when the key is interpolated into JSON path expressions.
+func safeMetaKey(key string) bool {
+	for _, c := range key {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return len(key) > 0
+}
+
 // buildChunkFilters translates ChunkFilter values into SQL WHERE clauses.
 // Returns (whereClause, args, needsDocJoin). The whereClause includes a leading " AND ..."
 // for each filter. needsDocJoin is true when any filter references document-level fields.
@@ -387,6 +403,9 @@ func buildChunkFilters(filters []oasis.ChunkFilter) (string, []any, bool) {
 			}
 
 		case f.Field == "source":
+			if f.Op != oasis.OpEq {
+				continue
+			}
 			needsDocJoin = true
 			clauses = append(clauses, "d.source = ?")
 			args = append(args, f.Value)
@@ -395,13 +414,17 @@ func buildChunkFilters(filters []oasis.ChunkFilter) (string, []any, bool) {
 			needsDocJoin = true
 			if f.Op == oasis.OpGt {
 				clauses = append(clauses, "d.created_at > ?")
+				args = append(args, f.Value)
 			} else if f.Op == oasis.OpLt {
 				clauses = append(clauses, "d.created_at < ?")
+				args = append(args, f.Value)
 			}
-			args = append(args, f.Value)
 
 		case strings.HasPrefix(f.Field, "meta."):
 			key := strings.TrimPrefix(f.Field, "meta.")
+			if !safeMetaKey(key) {
+				continue
+			}
 			clauses = append(clauses, "json_extract(c.metadata, '$."+key+"') = ?")
 			args = append(args, f.Value)
 		}

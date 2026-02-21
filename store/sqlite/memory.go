@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/nevindra/oasis"
@@ -122,14 +123,9 @@ func (s *MemoryStore) SearchFacts(ctx context.Context, embedding []float32, topK
 		all = append(all, oasis.ScoredFact{Fact: f, Score: cosineSimilarity(embedding, emb)})
 	}
 
-	// Sort by score descending (selection sort — fine for small N).
-	for i := 0; i < len(all); i++ {
-		for j := i + 1; j < len(all); j++ {
-			if all[j].Score > all[i].Score {
-				all[i], all[j] = all[j], all[i]
-			}
-		}
-	}
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Score > all[j].Score
+	})
 
 	if len(all) > topK {
 		all = all[:topK]

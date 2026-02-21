@@ -62,7 +62,7 @@ func WithEFConstruction(ef int) Option {
 
 // WithEFSearch sets the HNSW ef_search parameter (query-time candidate list
 // size). Higher values improve recall at the cost of latency. Default:
-// pgvector's 40. Applied via SET LOCAL during Init().
+// pgvector's 40. Applied via SET (session-level) during Init().
 func WithEFSearch(ef int) Option {
 	return func(c *pgConfig) { c.hnswEFSearch = ef }
 }
@@ -207,6 +207,10 @@ func (s *Store) Init(ctx context.Context) error {
 	}
 
 	if s.cfg.hnswEFSearch > 0 {
+		// SET (session-level) is used here because SET LOCAL only applies
+		// within a transaction. With a connection pool each checkout gets its
+		// own session, so SET persists for the session lifetime which is the
+		// closest we can get to a pool-wide default.
 		if _, err := s.pool.Exec(ctx, fmt.Sprintf("SET hnsw.ef_search = %d", s.cfg.hnswEFSearch)); err != nil {
 			return fmt.Errorf("postgres: set ef_search: %w", err)
 		}
@@ -432,6 +436,17 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	return tx.Commit(ctx)
 }
 
+// safeMetaKey returns true if the key contains only alphanumeric chars and underscores.
+// This prevents SQL injection when the key is interpolated into JSON path expressions.
+func safeMetaKey(key string) bool {
+	for _, c := range key {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return len(key) > 0
+}
+
 // buildChunkFiltersPg translates ChunkFilter values into Postgres WHERE clauses.
 // startParam is the next $N placeholder number.
 func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, []any, bool) {
@@ -465,6 +480,9 @@ func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, [
 			}
 
 		case f.Field == "source":
+			if f.Op != oasis.OpEq {
+				continue
+			}
 			needsDocJoin = true
 			clauses = append(clauses, fmt.Sprintf("d.source = $%d", p))
 			p++
@@ -474,14 +492,19 @@ func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, [
 			needsDocJoin = true
 			if f.Op == oasis.OpGt {
 				clauses = append(clauses, fmt.Sprintf("d.created_at > $%d", p))
+				p++
+				args = append(args, f.Value)
 			} else if f.Op == oasis.OpLt {
 				clauses = append(clauses, fmt.Sprintf("d.created_at < $%d", p))
+				p++
+				args = append(args, f.Value)
 			}
-			p++
-			args = append(args, f.Value)
 
 		case strings.HasPrefix(f.Field, "meta."):
 			key := strings.TrimPrefix(f.Field, "meta.")
+			if !safeMetaKey(key) {
+				continue
+			}
 			clauses = append(clauses, fmt.Sprintf("c.metadata->>'%s' = $%d", key, p))
 			p++
 			args = append(args, f.Value)

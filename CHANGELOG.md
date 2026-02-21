@@ -33,6 +33,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Fixed
 
+- **SQL injection via metadata filter key** — `buildChunkFilters` (SQLite) and `buildChunkFiltersPg` (PostgreSQL) interpolated user-supplied `meta.*` keys directly into SQL/JSON path expressions. Added `safeMetaKey()` validator that rejects keys containing anything other than `[a-zA-Z0-9_]`
+- **`created_at` filter arg/clause mismatch** — `buildChunkFilters` (SQLite) and `buildChunkFiltersPg` (PostgreSQL) always appended args for `created_at` filters even when the `Op` was neither `OpGt` nor `OpLt`, producing arg count mismatches. Args now append inside each branch
+- **`source` filter accepted non-equality operators** — `buildChunkFilters` and `buildChunkFiltersPg` generated `source = ?` regardless of `FilterOp`; now skips filters where `Op != OpEq`
+- **O(n^2) fact sorting in SQLite MemoryStore** — `SearchFacts` used selection sort; replaced with `sort.Slice` (O(n log n))
+- **libSQL connection-per-call overhead** — `store/libsql.Store` opened and closed a `*sql.DB` on every method call (35+ open/close cycles per request). Refactored to a single persistent `*sql.DB` with `SetMaxOpenConns(1)`, matching the `store/sqlite` pattern
+- **Missing indexes on frequently queried columns** — added `idx_messages_thread`, `idx_threads_chat`, and `idx_chunks_document` indexes to SQLite and libSQL stores
+- **`WithEFSearch` doc inaccuracy** — doc comment said "SET LOCAL" but the code uses `SET` (session-level); updated comment and added explanatory note about connection pool behavior
 - **Non-deterministic tool ordering in Network** — `buildToolDefs` iterated a map, causing randomized tool order sent to the LLM router on each call. Agent names are now pre-sorted at construction time for deterministic routing behavior
 - **PostProcessor skipped for no-tools streaming path** — `RunPostLLM` was never called when using `ExecuteStream` on a tool-less agent or on the max-iteration synthesis path. Processors now run for side effects (logging, validation) after streaming completes
 - **State/Done ordering in AgentHandle** — `State()` could return a terminal value before `Done()` was closed, causing `Result()` to return zero values. `State()` now waits on `Done()` when terminal, guaranteeing `Result()` consistency

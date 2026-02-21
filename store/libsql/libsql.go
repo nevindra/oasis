@@ -17,9 +17,11 @@ import (
 
 // Store implements oasis.Store backed by libSQL / Turso.
 //
-// It uses fresh connections per call to avoid STREAM_EXPIRED errors
-// on remote Turso databases.
+// For local databases, a persistent connection pool is used with
+// SetMaxOpenConns(1) to serialize writes and avoid SQLITE_BUSY errors.
+// Remote Turso support is reserved for a future go-libsql driver integration.
 type Store struct {
+	db     *sql.DB // persistent connection for local mode
 	dbPath string
 	dbURL  string // for Turso remote
 	token  string // for Turso auth
@@ -45,15 +47,25 @@ var _ oasis.KeywordSearcher = (*Store)(nil)
 var _ oasis.GraphStore = (*Store)(nil)
 
 // New creates a Store that uses a local SQLite file at dbPath.
+// It opens a single shared connection pool with SetMaxOpenConns(1) so that
+// all goroutines serialize through one connection, eliminating SQLITE_BUSY
+// errors caused by concurrent writers.
 func New(dbPath string, opts ...Option) *Store {
 	cfg := config{embeddingDimension: 1536}
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return &Store{dbPath: dbPath, cfg: cfg}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		panic(fmt.Sprintf("libsql: open driver: %v", err))
+	}
+	db.SetMaxOpenConns(1)
+	return &Store{db: db, dbPath: dbPath, cfg: cfg}
 }
 
 // NewRemote creates a Store that connects to a remote Turso database.
+// Note: remote Turso connections are not yet supported; this constructor
+// is reserved for future go-libsql driver integration.
 func NewRemote(url, token string, opts ...Option) *Store {
 	cfg := config{embeddingDimension: 1536}
 	for _, o := range opts {
@@ -62,34 +74,27 @@ func NewRemote(url, token string, opts ...Option) *Store {
 	return &Store{dbURL: url, token: token, cfg: cfg}
 }
 
-// openDB opens a fresh database connection.
-// For local mode it uses the pure-Go modernc.org/sqlite driver.
-// For remote Turso, it uses the libsql:// URL scheme (requires the
-// go-libsql driver in production; this implementation uses the sqlite
-// driver for local/test use).
-func (s *Store) openDB() (*sql.DB, error) {
+// getDB returns the persistent database connection for local mode.
+// For remote Turso, returns an error until the go-libsql driver is integrated.
+func (s *Store) getDB() (*sql.DB, error) {
+	if s.db != nil {
+		return s.db, nil
+	}
 	if s.dbURL != "" {
-		// Remote Turso: use the URL with auth token as query param.
-		// In production you'd use github.com/tursodatabase/go-libsql connector.
-		// For now, this returns an error since pure-Go sqlite can't talk to Turso.
 		return nil, fmt.Errorf("remote Turso connections require the go-libsql driver; use New() for local databases")
 	}
-	db, err := sql.Open("sqlite", s.dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
-	return db, nil
+	return nil, fmt.Errorf("libsql: store not initialized")
 }
 
 // Init creates all required tables and attempts to create vector indexes.
 // Vector index creation errors are silently ignored because local SQLite
 // does not support libsql vector extensions.
 func (s *Store) Init(ctx context.Context) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	dim := s.cfg.embeddingDimension
 	tables := []string{
@@ -181,6 +186,11 @@ func (s *Store) Init(ctx context.Context) error {
 	_, _ = db.ExecContext(ctx, "UPDATE threads SET updated_at = created_at WHERE updated_at IS NULL")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE messages RENAME COLUMN conversation_id TO thread_id")
 
+	// Indexes on frequently queried columns.
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id)`)
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_threads_chat ON threads(chat_id)`)
+	_, _ = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_chunks_document ON chunks(document_id)`)
+
 	// FTS5 full-text index for keyword search over chunks.
 	_, _ = db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, content)`)
 
@@ -214,11 +224,11 @@ func (s *Store) Init(ctx context.Context) error {
 // field is non-nil, it is stored using the vector() function; otherwise
 // the embedding column is set to NULL.
 func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	if len(msg.Embedding) > 0 {
 		embJSON := serializeEmbedding(msg.Embedding)
@@ -243,11 +253,11 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 // GetMessages returns the most recent messages for a thread,
 // ordered chronologically (oldest first).
 func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]oasis.Message, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, thread_id, role, content, created_at
@@ -286,11 +296,11 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 // the libsql vector_top_k function. Cosine similarity scores are computed
 // via vector_distance_cos on the topK results.
 func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
@@ -322,11 +332,11 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 
 // StoreDocument inserts a document and all its chunks in a single transaction.
 func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []oasis.Chunk) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -388,11 +398,11 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 // ListDocuments returns the most recent documents, ordered by creation time
 // (newest first), limited by limit.
 func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, title, source, content, created_at
@@ -420,11 +430,11 @@ func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document,
 // DeleteDocument removes a document, its chunks, and associated FTS entries
 // in a single transaction.
 func (s *Store) DeleteDocument(ctx context.Context, id string) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -567,11 +577,11 @@ func loadDocMap(ctx context.Context, db *sql.DB, ids []string) map[string]oasis.
 // When filters are present, overfetches topK*3 and filters in-memory since
 // vector_top_k does not support WHERE clauses.
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	fetchK := topK
 	if len(filters) > 0 {
@@ -649,11 +659,11 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 // SearchChunksKeyword performs full-text keyword search over document chunks
 // using FTS5. Results are sorted by relevance.
 func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	// Build optional WHERE clauses for chunk-level filters (document_id).
 	// Doc-level filters are applied post-query.
@@ -754,11 +764,11 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	placeholders := make([]string, len(ids))
 	args := make([]any, len(ids))
@@ -797,11 +807,11 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 
 // CreateThread inserts a new thread.
 func (s *Store) CreateThread(ctx context.Context, thread oasis.Thread) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	var metaJSON *string
 	if len(thread.Metadata) > 0 {
@@ -823,11 +833,11 @@ func (s *Store) CreateThread(ctx context.Context, thread oasis.Thread) error {
 
 // GetThread returns a thread by ID.
 func (s *Store) GetThread(ctx context.Context, id string) (oasis.Thread, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return oasis.Thread{}, err
 	}
-	defer db.Close()
+
 
 	var t oasis.Thread
 	var title sql.NullString
@@ -850,11 +860,11 @@ func (s *Store) GetThread(ctx context.Context, id string) (oasis.Thread, error) 
 
 // ListThreads returns threads for a chatID, ordered by most recently updated first.
 func (s *Store) ListThreads(ctx context.Context, chatID string, limit int) ([]oasis.Thread, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, chat_id, title, metadata, created_at, updated_at
@@ -889,11 +899,11 @@ func (s *Store) ListThreads(ctx context.Context, chatID string, limit int) ([]oa
 
 // UpdateThread updates a thread's title, metadata, and updated_at.
 func (s *Store) UpdateThread(ctx context.Context, thread oasis.Thread) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	var metaJSON *string
 	if len(thread.Metadata) > 0 {
@@ -914,11 +924,11 @@ func (s *Store) UpdateThread(ctx context.Context, thread oasis.Thread) error {
 
 // DeleteThread removes a thread and its messages.
 func (s *Store) DeleteThread(ctx context.Context, id string) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -940,11 +950,11 @@ func (s *Store) DeleteThread(ctx context.Context, id string) error {
 // GetConfig returns the value for a config key. If the key does not exist,
 // an empty string is returned with no error.
 func (s *Store) GetConfig(ctx context.Context, key string) (string, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return "", err
 	}
-	defer db.Close()
+
 
 	var value string
 	err = db.QueryRowContext(ctx,
@@ -963,11 +973,11 @@ func (s *Store) GetConfig(ctx context.Context, key string) (string, error) {
 
 // SetConfig inserts or replaces a config key-value pair.
 func (s *Store) SetConfig(ctx context.Context, key, value string) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	_, err = db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)`,
@@ -982,11 +992,11 @@ func (s *Store) SetConfig(ctx context.Context, key, value string) error {
 // --- Scheduled Actions ---
 
 func (s *Store) CreateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 	_, err = db.ExecContext(ctx,
 		`INSERT INTO scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -996,11 +1006,11 @@ func (s *Store) CreateScheduledAction(ctx context.Context, action oasis.Schedule
 }
 
 func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledAction, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at FROM scheduled_actions ORDER BY next_run`)
 	if err != nil {
 		return nil, err
@@ -1010,11 +1020,11 @@ func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledActi
 }
 
 func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.ScheduledAction, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at FROM scheduled_actions WHERE enabled = 1 AND next_run <= ?`, now)
 	if err != nil {
 		return nil, err
@@ -1024,11 +1034,11 @@ func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.
 }
 
 func (s *Store) UpdateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 	_, err = db.ExecContext(ctx,
 		`UPDATE scheduled_actions SET description=?, schedule=?, tool_calls=?, synthesis_prompt=?, next_run=?, enabled=?, skill_id=? WHERE id=?`,
 		action.Description, action.Schedule, action.ToolCalls, action.SynthesisPrompt, action.NextRun, boolToInt(action.Enabled), action.SkillID, action.ID)
@@ -1036,31 +1046,31 @@ func (s *Store) UpdateScheduledAction(ctx context.Context, action oasis.Schedule
 }
 
 func (s *Store) UpdateScheduledActionEnabled(ctx context.Context, id string, enabled bool) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 	_, err = db.ExecContext(ctx, `UPDATE scheduled_actions SET enabled=? WHERE id=?`, boolToInt(enabled), id)
 	return err
 }
 
 func (s *Store) DeleteScheduledAction(ctx context.Context, id string) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 	_, err = db.ExecContext(ctx, `DELETE FROM scheduled_actions WHERE id=?`, id)
 	return err
 }
 
 func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return 0, err
 	}
-	defer db.Close()
+
 	res, err := db.ExecContext(ctx, `DELETE FROM scheduled_actions`)
 	if err != nil {
 		return 0, err
@@ -1070,11 +1080,11 @@ func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
 }
 
 func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 	rows, err := db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at FROM scheduled_actions WHERE description LIKE ?`, "%"+pattern+"%")
 	if err != nil {
 		return nil, err
@@ -1086,11 +1096,11 @@ func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern s
 // --- Skills ---
 
 func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	var toolsJSON *string
 	if len(skill.Tools) > 0 {
@@ -1129,11 +1139,11 @@ func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
 }
 
 func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return oasis.Skill{}, err
 	}
-	defer db.Close()
+
 
 	var sk oasis.Skill
 	var tools, model, tags, createdBy, refs sql.NullString
@@ -1163,11 +1173,11 @@ func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
 }
 
 func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, name, description, instructions, tools, model, tags, created_by, refs, created_at, updated_at
@@ -1205,11 +1215,11 @@ func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
 }
 
 func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	var toolsJSON *string
 	if len(skill.Tools) > 0 {
@@ -1244,11 +1254,11 @@ func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
 }
 
 func (s *Store) DeleteSkill(ctx context.Context, id string) error {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 	_, err = db.ExecContext(ctx, `DELETE FROM skills WHERE id=?`, id)
 	return err
 }
@@ -1257,11 +1267,11 @@ func (s *Store) DeleteSkill(ctx context.Context, id string) error {
 // vector_top_k function. Cosine similarity scores are computed via
 // vector_distance_cos on the topK results.
 func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredSkill, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	embJSON := serializeEmbedding(embedding)
 	rows, err := db.QueryContext(ctx,
@@ -1313,11 +1323,11 @@ func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
 	if len(edges) == 0 {
 		return nil
 	}
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1342,11 +1352,11 @@ func (s *Store) GetEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkE
 	if len(chunkIDs) == 0 {
 		return nil, nil
 	}
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	placeholders := make([]string, len(chunkIDs))
 	args := make([]any, len(chunkIDs))
@@ -1365,11 +1375,11 @@ func (s *Store) GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]oasi
 	if len(chunkIDs) == 0 {
 		return nil, nil
 	}
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+
 
 	placeholders := make([]string, len(chunkIDs))
 	args := make([]any, len(chunkIDs))
@@ -1385,11 +1395,11 @@ func (s *Store) GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]oasi
 }
 
 func (s *Store) PruneOrphanEdges(ctx context.Context) (int, error) {
-	db, err := s.openDB()
+	db, err := s.getDB()
 	if err != nil {
 		return 0, err
 	}
-	defer db.Close()
+
 
 	result, err := db.ExecContext(ctx,
 		`DELETE FROM chunk_edges WHERE source_id NOT IN (SELECT id FROM chunks) OR target_id NOT IN (SELECT id FROM chunks)`)
@@ -1420,8 +1430,11 @@ func scanEdgesLibsql(ctx context.Context, db *sql.DB, query string, args []any) 
 	return edges, rows.Err()
 }
 
-// Close is a no-op since we use fresh connections per call.
+// Close closes the underlying database connection.
 func (s *Store) Close() error {
+	if s.db != nil {
+		return s.db.Close()
+	}
 	return nil
 }
 
