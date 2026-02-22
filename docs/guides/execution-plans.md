@@ -294,7 +294,7 @@ Template nodes use `{{key}}` placeholders that resolve against `WorkflowContext`
 ## Tips
 
 - **Keep plans serializable.** Use JSON-friendly structs so plans can cross process boundaries (webhooks, queues, databases).
-- **Don't over-plan.** If the LLM can execute 2-3 tool calls safely, use `WithPlanExecution()` for parallel batching instead of the full plan pattern.
+- **Don't over-plan.** If the LLM can execute 2-3 tool calls safely, use `WithPlanExecution()` for parallel batching instead of the full plan pattern. Note: `execute_plan` is capped at 50 steps per call.
 - **Validate plans.** `FromDefinition` validates at construction time (unknown tools, cycles, missing edges). Use this as a guard against malformed LLM output.
 - **Combine with processors.** A `PreProcessor` can intercept dangerous tool calls and force the plan pattern automatically.
 

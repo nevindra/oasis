@@ -192,6 +192,10 @@ type WorkflowResult struct {
 	Usage Usage
 }
 
+// ErrMaxIterExceeded is returned by DoUntil/DoWhile steps when the loop cap
+// is reached without the exit condition being met.
+var ErrMaxIterExceeded = errors.New("step reached max iterations without meeting exit condition")
+
 // WorkflowError is returned by Workflow.Execute when one or more steps fail.
 // Callers can inspect per-step results via errors.As:
 //
@@ -833,8 +837,13 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 
 		result, err := w.buildResult(state, task)
 		if err != nil {
-			span.Error(err)
-			span.SetAttr(StringAttr("workflow.status", "error"))
+			var suspended *ErrSuspended
+			if errors.As(err, &suspended) {
+				span.SetAttr(StringAttr("workflow.status", "suspended"))
+			} else {
+				span.Error(err)
+				span.SetAttr(StringAttr("workflow.status", "error"))
+			}
 		} else {
 			span.SetAttr(StringAttr("workflow.status", "ok"))
 		}
@@ -1290,7 +1299,7 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	errCh := make(chan error, len(items))
+	errCh := make(chan error, concurrency)
 
 	for i, item := range items {
 		select {
@@ -1359,7 +1368,7 @@ func (w *Workflow) executeDoUntil(ctx context.Context, s *stepConfig, state *exe
 	}
 
 	w.logger.Warn("step reached max iterations", "workflow", w.name, "step", s.name, "max_iter", maxIter)
-	return nil
+	return fmt.Errorf("step %s: %w", s.name, ErrMaxIterExceeded)
 }
 
 // executeDoWhile repeats a step function while the condition returns true,
@@ -1390,7 +1399,7 @@ func (w *Workflow) executeDoWhile(ctx context.Context, s *stepConfig, state *exe
 	}
 
 	w.logger.Warn("step reached max iterations", "workflow", w.name, "step", s.name, "max_iter", maxIter)
-	return nil
+	return fmt.Errorf("step %s: %w", s.name, ErrMaxIterExceeded)
 }
 
 // readStepOutput reads the step's output from context based on naming conventions.

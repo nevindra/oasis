@@ -815,13 +815,13 @@ type indexedResult struct {
 
 // dispatchParallel runs all tool calls concurrently via the dispatch function
 // and returns results in the same order as the input calls.
-// Single calls run inline (no goroutine). Multiple calls are capped at
-// maxParallelDispatch concurrent goroutines.
+// Single calls run inline (no goroutine). Multiple calls use a fixed worker
+// pool of min(len(calls), maxParallelDispatch) goroutines pulling from a
+// shared work channel, avoiding unbounded goroutine creation.
 //
-// Unlike a bare wg.Wait(), the collection loop is context-aware: if ctx is
-// cancelled while tool calls are still in-flight, the function returns
-// immediately with context-error results for incomplete calls instead of
-// blocking indefinitely.
+// The collection loop is context-aware: if ctx is cancelled while tool calls
+// are still in-flight, the function returns immediately with context-error
+// results for incomplete calls instead of blocking indefinitely.
 func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFunc) []toolExecResult {
 	// Fast path: single call, no goroutine needed.
 	if len(calls) == 1 {
@@ -830,35 +830,53 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 		return []toolExecResult{{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
 	}
 
-	ch := make(chan indexedResult, len(calls))
-	sem := make(chan struct{}, maxParallelDispatch)
+	resultCh := make(chan indexedResult, len(calls))
 
-	for i, tc := range calls {
-		go func(idx int, tc ToolCall) {
-			// Acquire semaphore or bail on context cancellation.
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				ch <- indexedResult{idx, toolExecResult{content: "error: " + ctx.Err().Error(), isError: true}}
-				return
-			}
-			if ctx.Err() != nil {
-				ch <- indexedResult{idx, toolExecResult{content: "error: " + ctx.Err().Error(), isError: true}}
-				return
-			}
-			start := time.Now()
-			dr := dispatch(ctx, tc)
-			ch <- indexedResult{idx, toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
-		}(i, tc)
+	// Work channel: each item is an (index, ToolCall) pair for workers to consume.
+	type workItem struct {
+		idx int
+		tc  ToolCall
 	}
+	workCh := make(chan workItem, len(calls))
+	for i, tc := range calls {
+		workCh <- workItem{idx: i, tc: tc}
+	}
+	close(workCh)
+
+	// Spawn a fixed pool of workers — never more goroutines than needed.
+	numWorkers := min(len(calls), maxParallelDispatch)
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
+	for range numWorkers {
+		go func() {
+			defer wg.Done()
+			for w := range workCh {
+				if ctx.Err() != nil {
+					resultCh <- indexedResult{w.idx, toolExecResult{content: "error: " + ctx.Err().Error(), isError: true}}
+					continue
+				}
+				start := time.Now()
+				dr := dispatch(ctx, w.tc)
+				resultCh <- indexedResult{w.idx, toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
+			}
+		}()
+	}
+
+	// Close resultCh once all workers are done.
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
 
 	// Collect results, bailing out if ctx is cancelled while calls are in-flight.
 	results := make([]toolExecResult, len(calls))
 	seen := make([]bool, len(calls))
 	for received := 0; received < len(calls); received++ {
 		select {
-		case r := <-ch:
+		case r, ok := <-resultCh:
+			if !ok {
+				break
+			}
 			results[r.idx] = r.result
 			seen[r.idx] = true
 		case <-ctx.Done():
@@ -1152,6 +1170,8 @@ func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, 
 	w.Header().Set("Connection", "keep-alive")
 
 	ch := make(chan StreamEvent, 64)
+	var closeOnce sync.Once
+	safeClose := func() { closeOnce.Do(func() { close(ch) }) }
 
 	type execResult struct {
 		result AgentResult
@@ -1164,7 +1184,9 @@ func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, 
 			if p := recover(); p != nil {
 				// Ensure ch is closed so the for-range loop below
 				// doesn't block forever, then signal the error.
-				close(ch)
+				// Use sync.Once because ExecuteStream may have already
+				// closed ch before the panic site.
+				safeClose()
 				resultCh <- execResult{AgentResult{}, fmt.Errorf("agent panic: %v", p)}
 				return
 			}

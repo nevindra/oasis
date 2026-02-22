@@ -259,7 +259,11 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 			n.logger.Info("delegating to subagent", "network", n.name, "agent", agentName, "task", truncateStr(params.Task, 80))
 
 			if ch != nil {
-				ch <- StreamEvent{Type: EventAgentStart, Name: agentName, Content: params.Task}
+				select {
+				case ch <- StreamEvent{Type: EventAgentStart, Name: agentName, Content: params.Task}:
+				case <-ctx.Done():
+					return DispatchResult{Content: ctx.Err().Error(), IsError: true}
+				}
 			}
 
 			subTask := AgentTask{
@@ -318,12 +322,15 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 				if err == nil {
 					output = result.Output
 				}
-				ch <- StreamEvent{
+				select {
+				case ch <- StreamEvent{
 					Type:     EventAgentFinish,
 					Name:     agentName,
 					Content:  output,
 					Usage:    result.Usage,
 					Duration: elapsed,
+				}:
+				case <-ctx.Done():
 				}
 			}
 

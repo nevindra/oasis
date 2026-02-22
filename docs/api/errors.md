@@ -52,6 +52,16 @@ type WorkflowError struct {
 
 Implements `Unwrap()` for `errors.Is`/`errors.As` chains.
 
+## ErrMaxIterExceeded
+
+**File:** `workflow.go`
+
+```go
+var ErrMaxIterExceeded = errors.New("step reached max iterations without meeting exit condition")
+```
+
+Returned (wrapped) by `DoUntil`/`DoWhile` steps when the loop cap is reached without the exit condition being met. Use `errors.Is(err, oasis.ErrMaxIterExceeded)` to detect.
+
 ## ErrSuspended
 
 **File:** `suspend.go`

@@ -11,14 +11,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`ToolRegistry.Execute` O(1) lookup** — `ToolRegistry` now maintains a `map[string]Tool` index built during `Add()`, replacing the O(n*m) linear scan in `Execute()` with a single map lookup
 - **Dynamic tools skip intermediate `ToolRegistry`** — when `WithDynamicTools` is set, `LLMAgent` and `Network` build tool definitions and a lookup index directly from the returned `[]Tool` slice, avoiding a throwaway `ToolRegistry` allocation on every `Execute` call
 - **`dispatchParallel` is context-aware** — replaced `sync.WaitGroup` + `wg.Wait()` with channel-based result collection that `select`s on `ctx.Done()`. If the context is cancelled while tool calls are in-flight, the function returns immediately with error results for incomplete calls instead of blocking indefinitely
+- **`dispatchParallel` uses worker pool** — replaced eager goroutine-per-call spawning (which created N goroutines upfront, gated by a semaphore) with a fixed worker pool of `min(len(calls), 10)` goroutines pulling from a shared work channel. Prevents unbounded goroutine creation when `execute_plan` or providers return many tool calls
 
 ### Fixed
 
+- **Unbounded `execute_plan` step count** — `executePlan` accepted any number of steps, allowing a misbehaving LLM to trigger mass goroutine creation and potential resource exhaustion. Now capped at 50 steps (`maxPlanSteps`) with a clear error message when exceeded
+- **Double-close panic in `ServeSSE` panic recovery** — if `ExecuteStream` already closed `ch` before the panic site, the recovery handler's bare `close(ch)` would panic inside `recover()` (unrecoverable). Now uses `sync.Once`
+- **Unconditional channel sends in `Network` dispatch** — `EventAgentStart`/`EventAgentFinish` used bare `ch <- ev` without a context-guarded `select`, blocking the dispatch goroutine forever if the consumer stopped reading. Now wrapped in `select` with `ctx.Done()`
+- **Suspension misclassified as error in Workflow tracer** — `*ErrSuspended` (deliberate human-in-the-loop pause) was reported via `span.Error()` with status `"error"`, polluting dashboards with false errors. Now sets status `"suspended"` without marking the span as errored
 - **Goroutine leak on agent panic in `ServeSSE`** — the goroutine running `ExecuteStream` now has `recover()`. If the agent panics, `ch` is closed and an error is sent to `resultCh`, preventing the `for ev := range ch` loop from blocking forever
 - **Goroutine leak on ctx cancel during sub-agent streaming** — the forwarding goroutine in `Network` now spawns a background drain on context cancellation, releasing references to the parent channel and `done` signal promptly instead of blocking until `ExecuteStream` closes `subCh`
 - **`time.After` timer leak in workflow retry delay** — replaced `time.After` with `time.NewTimer` + explicit `Stop()` so the timer is freed immediately when context is cancelled during the retry wait
 - **`When` condition dropped from tool step in static-args path** — `buildToolNode` now propagates the `When` condition to the tool step when static (non-template) args are used, matching the template-args path behavior
 - **Error detection via `"error: "` string prefix is fragile** — added `IsError bool` to `DispatchResult` and `toolExecResult` for structural error signaling. `executePlan` now uses `.isError` instead of checking string prefixes, preventing misclassification of tools that legitimately return text starting with `"error: "`
+- **Parallel `ask_user` in `execute_plan`** — blocked inside plan steps, preventing concurrent `InputHandler.RequestInput` calls
+- **Unbounded `errCh` in `executeForEach`** — buffer reduced from `len(items)` to `concurrency`
+- **`DoUntil`/`DoWhile` silent success on max-iter** — now returns `ErrMaxIterExceeded` instead of `nil` when the loop cap is hit without the exit condition being met
 
 ### Added
 

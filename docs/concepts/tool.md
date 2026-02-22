@@ -105,7 +105,7 @@ result, err := registry.Execute(ctx, "web_search", argsJSON)
 
 ## Parallel Execution
 
-When an LLM returns multiple tool calls in a single response, the agent executes them concurrently:
+When an LLM returns multiple tool calls in a single response, the agent executes them concurrently using a fixed worker pool (capped at 10 workers). Single calls run inline without goroutine overhead:
 
 ```mermaid
 sequenceDiagram
@@ -195,6 +195,7 @@ sequenceDiagram
 - **Parallel only** — all steps run concurrently, no sequential ordering
 - **No data flow** — step 2 cannot reference step 1's result
 - **No recursion** — steps cannot call `execute_plan` itself
+- **Max 50 steps** — capped at 50 steps per call to prevent resource exhaustion
 - **Partial failures** — a failed step reports its error without aborting the others
 - **Opt-in** — the tool is only available when `WithPlanExecution()` is set
 

@@ -57,7 +57,7 @@ flowchart TD
 
 ### Key Behaviors
 
-- **Parallel tool execution** — when the LLM returns multiple tool calls in one response, they run concurrently via goroutines (capped at 10, context-cancellation aware)
+- **Parallel tool execution** — when the LLM returns multiple tool calls in one response, they run concurrently via a fixed worker pool (capped at 10 workers, context-cancellation aware). Single calls run inline without goroutine overhead
 - **Max iterations** — defaults to 10. When reached, the agent appends a synthesis prompt and makes one final LLM call
 - **Streaming** — LLMAgent implements `StreamingAgent`. Emits `StreamEvent` values throughout execution: tool call start/result events during tool iterations, text-delta events during the final response
 - **Memory** — stateless by default. Enable with `WithConversationMemory` and `WithUserMemory`

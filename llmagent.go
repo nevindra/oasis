@@ -304,6 +304,10 @@ type planStepResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// maxPlanSteps caps the number of steps in a single execute_plan call
+// to prevent resource exhaustion from unbounded goroutine creation.
+const maxPlanSteps = 50
+
 // executePlan handles the execute_plan tool call by parsing steps,
 // executing them in parallel via the given dispatch function, and
 // returning aggregated results as JSON. Shared by LLMAgent and Network.
@@ -314,6 +318,9 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 	}
 	if len(params.Steps) == 0 {
 		return DispatchResult{Content: "error: execute_plan requires at least one step", IsError: true}
+	}
+	if len(params.Steps) > maxPlanSteps {
+		return DispatchResult{Content: fmt.Sprintf("error: execute_plan limited to %d steps, got %d", maxPlanSteps, len(params.Steps)), IsError: true}
 	}
 
 	// Build tool calls, preventing recursion.
@@ -329,8 +336,18 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 		}
 	}
 
+	// Wrap dispatch to block ask_user inside parallel plan steps.
+	// Most InputHandler implementations aren't designed for concurrent
+	// invocation, and simultaneous user prompts are confusing.
+	safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
+		if tc.Name == "ask_user" {
+			return DispatchResult{Content: "error: ask_user cannot be called from within execute_plan", IsError: true}
+		}
+		return dispatch(ctx, tc)
+	}
+
 	// Execute all steps in parallel.
-	results := dispatchParallel(ctx, calls, dispatch)
+	results := dispatchParallel(ctx, calls, safeDispatch)
 
 	// Aggregate results.
 	var totalUsage Usage
