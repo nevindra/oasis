@@ -139,6 +139,54 @@ Chunker options:
 | `WithOverlapTokens(n int)` | 50 | Overlap between consecutive chunks |
 | `WithBreakpointPercentile(p int)` | 25 | Similarity percentile for semantic split detection (SemanticChunker) |
 
+## Gemini Options
+
+**Package:** `github.com/nevindra/oasis/provider/gemini`
+
+Passed directly to `gemini.New(apiKey, model, ...Option)`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithTemperature(t float64)` | 0.1 | Sampling temperature |
+| `WithTopP(p float64)` | 0.9 | Nucleus sampling top-p |
+| `WithThinking(enabled bool)` | false | Enable thinking mode — sends `thinkingConfig` with dynamic budget (-1) |
+| `WithStructuredOutput(enabled bool)` | true | When enabled, responses with a `ResponseSchema` use `application/json` MIME type |
+| `WithResponseModalities(modalities ...string)` | — (text-only) | Required for image generation — use `WithResponseModalities("TEXT", "IMAGE")` |
+| `WithMediaResolution(r string)` | — (omitted) | Media resolution for multimodal inputs: `"MEDIA_RESOLUTION_LOW"`, `"MEDIA_RESOLUTION_MEDIUM"`, `"MEDIA_RESOLUTION_HIGH"` |
+| `WithCodeExecution(enabled bool)` | false | Enable Gemini's built-in code execution tool |
+| `WithFunctionCalling(enabled bool)` | false | Allow implicit function calling. When false and no tools are provided, `toolConfig` mode is set to `NONE` |
+| `WithGoogleSearch(enabled bool)` | false | Enable grounding with Google Search |
+| `WithURLContext(enabled bool)` | false | Enable URL context tool |
+
+## OpenAI-Compatible Options
+
+**Package:** `github.com/nevindra/oasis/provider/openaicompat`
+
+### ProviderOption
+
+Passed to `openaicompat.NewProvider(apiKey, model, baseURL, ...ProviderOption)`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithName(name string)` | `"openai"` | Provider name returned by `Name()` — used in logs and observability |
+| `WithHTTPClient(c *http.Client)` | default client | Custom HTTP client (e.g. for timeouts or proxies) |
+| `WithOptions(opts ...Option)` | — | Request-level options applied to every request made by this provider |
+
+### Option
+
+Passed inside `WithOptions(...)` or accumulated per-request.
+
+| Option | Range | Description |
+|--------|-------|-------------|
+| `WithTemperature(t float64)` | 0.0–2.0 | Sampling temperature |
+| `WithTopP(p float64)` | 0.0–1.0 | Nucleus sampling top-p |
+| `WithMaxTokens(n int)` | — | Maximum output tokens |
+| `WithFrequencyPenalty(p float64)` | -2.0–2.0 | Frequency penalty |
+| `WithPresencePenalty(p float64)` | -2.0–2.0 | Presence penalty |
+| `WithStop(s ...string)` | — | One or more stop sequences |
+| `WithSeed(s int)` | — | Deterministic seed for reproducible outputs |
+| `WithToolChoice(choice any)` | — | Tool selection: `"none"`, `"auto"`, `"required"`, or a specific tool object |
+
 ## CodeRunner Options
 
 **Package:** `github.com/nevindra/oasis/code`

@@ -68,6 +68,32 @@ Converts text to vectors for semantic search. Used by Store (vector search), Mem
 
 Both use raw HTTP with SSE parsing — no SDK dependencies.
 
+### Gemini Provider
+
+```go
+import "github.com/nevindra/oasis/provider/gemini"
+
+llm := gemini.New(apiKey, "gemini-2.0-flash")
+
+// With options
+llm := gemini.New(apiKey, "gemini-2.0-flash",
+    gemini.WithTemperature(0.7),
+    gemini.WithGoogleSearch(true),
+)
+
+// Image generation model
+llm := gemini.New(apiKey, "gemini-2.0-flash-exp-image-generation",
+    gemini.WithResponseModalities("TEXT", "IMAGE"),
+)
+
+// Thinking model
+llm := gemini.New(apiKey, "gemini-2.5-flash-thinking",
+    gemini.WithThinking(true),
+)
+```
+
+See [API Reference: Options — Gemini Options](../api/options.md#gemini-options) for the full option list.
+
 ### OpenAI-Compatible Provider
 
 Most LLM providers implement the OpenAI chat completions API. Use `openaicompat.NewProvider` to connect to any of them:
@@ -105,6 +131,8 @@ llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1",
     ),
 )
 ```
+
+See [API Reference: Options — OpenAI-Compatible Options](../api/options.md#openai-compatible-options) for the full option list.
 
 ## WithRetry Middleware
 

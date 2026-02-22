@@ -26,12 +26,12 @@ type batchMetadata struct {
 	CreateTime  string          `json:"createTime"`
 	UpdateTime  string          `json:"updateTime"`
 	BatchStats  *batchStatsJSON `json:"batchStats"`
-	Dest        *batchDest      `json:"dest"`
+	Output      *batchOutput    `json:"output"`
 }
 
 type batchStatsJSON struct {
 	RequestCount          stringInt `json:"requestCount"`
-	SucceededRequestCount stringInt `json:"succeededRequestCount"`
+	SucceededRequestCount stringInt `json:"successfulRequestCount"`
 	FailedRequestCount    stringInt `json:"failedRequestCount"`
 	PendingRequestCount   stringInt `json:"pendingRequestCount"`
 }
@@ -60,7 +60,11 @@ func (s *stringInt) UnmarshalJSON(data []byte) error {
 	return err
 }
 
-type batchDest struct {
+type batchOutput struct {
+	InlinedResponses *batchInlinedResponseList `json:"inlinedResponses"`
+}
+
+type batchInlinedResponseList struct {
 	InlinedResponses []batchInlinedResponse `json:"inlinedResponses"`
 }
 
@@ -167,13 +171,14 @@ func (g *Gemini) BatchChatResults(ctx context.Context, jobID string) ([]oasis.Ch
 		return nil, g.wrapErr("parse results response: " + err.Error())
 	}
 
-	if br.Metadata.Dest == nil {
+	if br.Metadata.Output == nil || br.Metadata.Output.InlinedResponses == nil {
 		return nil, g.wrapErr("no results in batch response")
 	}
 
-	results := make([]oasis.ChatResponse, 0, len(br.Metadata.Dest.InlinedResponses))
-	for _, inlined := range br.Metadata.Dest.InlinedResponses {
-		results = append(results, parseGeminiResponse(inlined.Response))
+	inlined := br.Metadata.Output.InlinedResponses.InlinedResponses
+	results := make([]oasis.ChatResponse, 0, len(inlined))
+	for _, item := range inlined {
+		results = append(results, parseGeminiResponse(item.Response))
 	}
 
 	return results, nil

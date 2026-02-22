@@ -238,18 +238,19 @@ SQLite/libSQL use an FTS5 virtual table (`chunks_fts`) synchronized in `StoreDoc
 
 ## Database Schema
 
+Quick reference (column names only):
+
 ```sql
 -- Threads
 threads  (id, chat_id, title, metadata, created_at, updated_at)
-messages (id, thread_id, role, content, embedding, created_at)
+messages (id, thread_id, role, content, embedding, metadata, created_at)
 
 -- Knowledge base
 documents (id, title, source, content, created_at)
 chunks    (id, document_id, parent_id, content, chunk_index, embedding, metadata)
-chunks_fts USING fts5(chunk_id UNINDEXED, content)  -- FTS5 keyword search
 
 -- Knowledge graph
-chunk_edges (source_chunk_id, target_chunk_id, relation, weight)
+chunk_edges (id, source_id, target_id, relation, weight)
 
 -- Config
 config (key PRIMARY KEY, value)
@@ -259,9 +260,153 @@ scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt,
                    next_run, enabled, skill_id, created_at)
 
 -- Skills
-skills (id, name, description, instructions, tools, model, embedding,
-        created_at, updated_at)
+skills (id, name, description, instructions, tools, model, tags,
+        created_by, refs, embedding, created_at, updated_at)
+
+-- User memory (MemoryStore)
+user_facts (id, fact, category, confidence, embedding,
+            source_message_id, created_at, updated_at)
 ```
+
+### PostgreSQL Schema (pgvector)
+
+Full DDL as created by `Store.Init()` and `MemoryStore.Init()`. Requires the `pgvector` extension.
+
+```sql
+-- Extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Threads
+CREATE TABLE IF NOT EXISTS threads (
+    id         TEXT PRIMARY KEY,
+    chat_id    TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    metadata   JSONB,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+
+-- Messages
+CREATE TABLE IF NOT EXISTS messages (
+    id         TEXT PRIMARY KEY,
+    thread_id  TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    embedding  vector,          -- vector(N) when WithEmbeddingDimension is set
+    metadata   JSONB,
+    created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_thread_idx    ON messages(thread_id);
+CREATE INDEX IF NOT EXISTS messages_embedding_idx ON messages USING hnsw (embedding vector_cosine_ops);
+
+-- Documents
+CREATE TABLE IF NOT EXISTS documents (
+    id         TEXT PRIMARY KEY,
+    title      TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    created_at BIGINT NOT NULL
+);
+
+-- Chunks
+CREATE TABLE IF NOT EXISTS chunks (
+    id           TEXT PRIMARY KEY,
+    document_id  TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    chunk_index  INTEGER NOT NULL,
+    embedding    vector,        -- vector(N) when WithEmbeddingDimension is set
+    parent_id    TEXT,
+    metadata     JSONB
+);
+CREATE INDEX IF NOT EXISTS chunks_document_idx  ON chunks(document_id);
+CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS chunks_fts_idx       ON chunks USING gin(to_tsvector('english', content));
+
+-- Config (key-value)
+CREATE TABLE IF NOT EXISTS config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- Scheduled Actions
+CREATE TABLE IF NOT EXISTS scheduled_actions (
+    id               TEXT PRIMARY KEY,
+    description      TEXT NOT NULL DEFAULT '',
+    schedule         TEXT NOT NULL DEFAULT '',
+    tool_calls       TEXT NOT NULL DEFAULT '',
+    synthesis_prompt TEXT NOT NULL DEFAULT '',
+    next_run         BIGINT NOT NULL DEFAULT 0,
+    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+    skill_id         TEXT NOT NULL DEFAULT '',
+    created_at       BIGINT NOT NULL DEFAULT 0
+);
+
+-- Skills
+CREATE TABLE IF NOT EXISTS skills (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    tools        TEXT NOT NULL DEFAULT '',
+    model        TEXT NOT NULL DEFAULT '',
+    tags         TEXT NOT NULL DEFAULT '',
+    created_by   TEXT NOT NULL DEFAULT '',
+    refs         TEXT NOT NULL DEFAULT '',
+    embedding    vector,        -- vector(N) when WithEmbeddingDimension is set
+    created_at   BIGINT NOT NULL,
+    updated_at   BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS skills_embedding_idx ON skills USING hnsw (embedding vector_cosine_ops);
+
+-- Knowledge Graph Edges
+CREATE TABLE IF NOT EXISTS chunk_edges (
+    id        TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    relation  TEXT NOT NULL,
+    weight    REAL NOT NULL,
+    UNIQUE(source_id, target_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_chunk_edges_source ON chunk_edges(source_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_edges_target ON chunk_edges(target_id);
+
+-- User Facts (MemoryStore — created by MemoryStore.Init())
+CREATE TABLE IF NOT EXISTS user_facts (
+    id                TEXT PRIMARY KEY,
+    fact              TEXT NOT NULL,
+    category          TEXT NOT NULL,
+    confidence        REAL DEFAULT 1.0,
+    embedding         vector,  -- vector(N) when WithEmbeddingDimension is set
+    source_message_id TEXT,
+    created_at        BIGINT NOT NULL,
+    updated_at        BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (embedding vector_cosine_ops);
+```
+
+### PostgreSQL Notes
+
+| Topic | Detail |
+| ----- | ------ |
+| **Vector columns** | Untyped `vector` by default. Use `WithEmbeddingDimension(N)` to get `vector(N)` — enables dimension mismatch detection at insert time and better index optimization. Only affects new tables. |
+| **HNSW indexes** | Created on `messages.embedding`, `chunks.embedding`, `skills.embedding`, and `user_facts.embedding`. Tunable via `WithHNSWM(m)` and `WithEFConstruction(ef)` — appended as `WITH (m = M, ef_construction = EF)` on `CREATE INDEX`. |
+| **ef_search** | Set via `WithEFSearch(ef)`. Applied as `SET hnsw.ef_search = N` (session-level) during `Init()`. Higher values improve recall at the cost of latency. |
+| **Full-text search** | GIN expression index on `to_tsvector('english', content)` — no separate FTS table (unlike SQLite's FTS5 virtual table). Queries use `plainto_tsquery`. |
+| **Metadata** | Stored as `JSONB`. Chunk metadata filters use `metadata->>'key'` operator. Message/thread metadata stored as `JSONB` with `::jsonb` casts on insert. |
+| **Timestamps** | All `created_at` / `updated_at` columns are `BIGINT` (Unix seconds), not SQL timestamps. |
+| **Connection pool** | Both `Store` and `MemoryStore` accept an externally-owned `*pgxpool.Pool`. The caller creates and closes the pool. `Store.Close()` is a no-op. |
+| **Idempotent init** | All DDL uses `IF NOT EXISTS`. Safe to call `Init()` on every startup. |
+| **Transactions** | `StoreDocument` (doc + chunks), `DeleteDocument` (edges + chunks + doc), `DeleteThread` (messages + thread), and `StoreEdges` (batch) run in transactions. |
+
+### SQLite / libSQL Differences
+
+| Feature | SQLite / libSQL | PostgreSQL |
+| ------- | --------------- | ---------- |
+| Vector storage | JSON `[]float32` (SQLite) / `F32_BLOB(N)` (libSQL) | Native `vector` column |
+| Vector search | Brute-force in-process (SQLite) / DiskANN (libSQL) | HNSW index |
+| Full-text search | FTS5 virtual table (`chunks_fts`) | GIN index on `tsvector` |
+| Metadata | JSON TEXT, queried via `json_extract()` | JSONB, queried via `->>'key'` |
+| Message metadata | TEXT (JSON-serialized) | JSONB |
 
 ## GraphStore
 
