@@ -61,16 +61,20 @@ type ToolResult struct {
 // ToolRegistry holds all registered tools and dispatches execution.
 type ToolRegistry struct {
 	tools []Tool
+	index map[string]Tool // name → Tool for O(1) dispatch
 }
 
 // NewToolRegistry creates an empty registry.
 func NewToolRegistry() *ToolRegistry {
-	return &ToolRegistry{}
+	return &ToolRegistry{index: make(map[string]Tool)}
 }
 
-// Add registers a tool.
+// Add registers a tool and indexes its definitions for O(1) lookup.
 func (r *ToolRegistry) Add(t Tool) {
 	r.tools = append(r.tools, t)
+	for _, d := range t.Definitions() {
+		r.index[d.Name] = t
+	}
 }
 
 // AllDefinitions returns tool definitions from all registered tools.
@@ -82,14 +86,10 @@ func (r *ToolRegistry) AllDefinitions() []ToolDefinition {
 	return defs
 }
 
-// Execute dispatches a tool call by name.
+// Execute dispatches a tool call by name using the pre-built index.
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
-	for _, t := range r.tools {
-		for _, d := range t.Definitions() {
-			if d.Name == name {
-				return t.Execute(ctx, name, args)
-			}
-		}
+	if t, ok := r.index[name]; ok {
+		return t.Execute(ctx, name, args)
 	}
 	return ToolResult{Error: "unknown tool: " + name}, nil
 }

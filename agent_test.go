@@ -1351,7 +1351,7 @@ func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 	// Verify that a failed step reports error without aborting other steps
 	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
 		if tc.Name == "fail" {
-			return DispatchResult{Content: "error: tool broken"}
+			return DispatchResult{Content: "error: tool broken", IsError: true}
 		}
 		return DispatchResult{Content: "ok_" + tc.Name}
 	}
@@ -1372,8 +1372,8 @@ func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 	if steps[0].Status != "ok" {
 		t.Errorf("step 0 status = %q, want ok", steps[0].Status)
 	}
-	if steps[1].Status != "error" || steps[1].Error != "tool broken" {
-		t.Errorf("step 1 = %+v, want status=error error='tool broken'", steps[1])
+	if steps[1].Status != "error" || steps[1].Error != "error: tool broken" {
+		t.Errorf("step 1 = %+v, want status=error error='error: tool broken'", steps[1])
 	}
 	if steps[2].Status != "ok" {
 		t.Errorf("step 2 status = %q, want ok", steps[2].Status)

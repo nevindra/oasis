@@ -157,16 +157,32 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 		router = n.dynamicModel(ctx, task)
 	}
 
-	// Resolve tools: dynamic replaces static
-	registry := n.tools
+	// Resolve tools: dynamic replaces static.
+	// When dynamicTools is set, build definitions and an index directly
+	// from the returned tools, avoiding an intermediate ToolRegistry allocation.
+	var rawToolDefs []ToolDefinition
+	var executeTool toolExecFunc
 	if n.dynamicTools != nil {
-		registry = NewToolRegistry()
-		for _, t := range n.dynamicTools(ctx, task) {
-			registry.Add(t)
+		dynTools := n.dynamicTools(ctx, task)
+		index := make(map[string]Tool, len(dynTools))
+		for _, t := range dynTools {
+			for _, d := range t.Definitions() {
+				rawToolDefs = append(rawToolDefs, d)
+				index[d.Name] = t
+			}
 		}
+		executeTool = func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
+			if t, ok := index[name]; ok {
+				return t.Execute(ctx, name, args)
+			}
+			return ToolResult{Error: "unknown tool: " + name}, nil
+		}
+	} else {
+		rawToolDefs = n.tools.AllDefinitions()
+		executeTool = n.tools.Execute
 	}
 
-	toolDefs := n.buildToolDefs(registry)
+	toolDefs := n.buildToolDefs(rawToolDefs)
 	if n.inputHandler != nil {
 		toolDefs = append(toolDefs, askUserToolDef)
 	}
@@ -184,7 +200,7 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 		maxIter:        n.maxIter,
 		mem:            &n.mem,
 		inputHandler:   n.inputHandler,
-		dispatch:       n.makeDispatch(task, ch, registry),
+		dispatch:       n.makeDispatch(task, ch, executeTool),
 		systemPrompt:   prompt,
 		responseSchema: n.responseSchema,
 		tracer:         n.tracer,
@@ -195,14 +211,14 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 // makeDispatch returns a DispatchFunc that routes tool calls to subagents,
 // the ask_user handler, or direct tools. When ch is non-nil, agent-start
 // and agent-finish events are emitted for subagent delegation.
-func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, registry *ToolRegistry) DispatchFunc {
+func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, executeTool toolExecFunc) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && n.inputHandler != nil {
 			content, err := executeAskUser(ctx, n.inputHandler, n.name, tc)
 			if err != nil {
-				return DispatchResult{Content: "error: " + err.Error()}
+				return DispatchResult{Content: "error: " + err.Error(), IsError: true}
 			}
 			return DispatchResult{Content: content}
 		}
@@ -218,7 +234,7 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 			// preventing unbounded recursion via execute_code → execute_plan → execute_code.
 			safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
 				if tc.Name == "execute_plan" || tc.Name == "execute_code" {
-					return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code"}
+					return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code", IsError: true}
 				}
 				return dispatch(ctx, tc)
 			}
@@ -230,14 +246,14 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 			agentName := tc.Name[6:]
 			agent, ok := n.agents[agentName]
 			if !ok {
-				return DispatchResult{Content: fmt.Sprintf("error: unknown agent %q", agentName)}
+				return DispatchResult{Content: fmt.Sprintf("error: unknown agent %q", agentName), IsError: true}
 			}
 
 			var params struct {
 				Task string `json:"task"`
 			}
 			if err := json.Unmarshal(tc.Args, &params); err != nil {
-				return DispatchResult{Content: "error: invalid agent call args: " + err.Error()}
+				return DispatchResult{Content: "error: invalid agent call args: " + err.Error(), IsError: true}
 			}
 
 			n.logger.Info("delegating to subagent", "network", n.name, "agent", agentName, "task", truncateStr(params.Task, 80))
@@ -275,9 +291,13 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 							select {
 							case ch <- ev:
 							case <-ctx.Done():
-								// Drain remaining events to unblock ExecuteStream.
-								for range subCh {
-								}
+								// Drain in background so this goroutine releases
+								// references to ch and done promptly, even if
+								// ExecuteStream is slow to close subCh.
+								go func() {
+									for range subCh {
+									}
+								}()
 								return
 							}
 						}
@@ -308,27 +328,27 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 			}
 
 			if err != nil {
-				return DispatchResult{Content: "error: " + err.Error()}
+				return DispatchResult{Content: "error: " + err.Error(), IsError: true}
 			}
 			return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
 		}
 
 		// Regular tool call
-		result, err := registry.Execute(ctx, tc.Name, tc.Args)
+		result, err := executeTool(ctx, tc.Name, tc.Args)
 		if err != nil {
-			return DispatchResult{Content: "error: " + err.Error()}
+			return DispatchResult{Content: "error: " + err.Error(), IsError: true}
 		}
 		if result.Error != "" {
-			return DispatchResult{Content: "error: " + result.Error}
+			return DispatchResult{Content: "error: " + result.Error, IsError: true}
 		}
 		return DispatchResult{Content: result.Content}
 	}
 	return dispatch
 }
 
-// buildToolDefs builds tool definitions from subagents and the given tool registry.
+// buildToolDefs builds tool definitions from subagents and the given tool definitions.
 // Agent tools use pre-sorted names for deterministic ordering across calls.
-func (n *Network) buildToolDefs(registry *ToolRegistry) []ToolDefinition {
+func (n *Network) buildToolDefs(toolDefs []ToolDefinition) []ToolDefinition {
 	var defs []ToolDefinition
 
 	// Agent tool definitions (order fixed at construction time).
@@ -343,7 +363,7 @@ func (n *Network) buildToolDefs(registry *ToolRegistry) []ToolDefinition {
 	}
 
 	// Direct tool definitions
-	defs = append(defs, registry.AllDefinitions()...)
+	defs = append(defs, toolDefs...)
 	return defs
 }
 

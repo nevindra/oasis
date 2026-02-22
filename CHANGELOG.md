@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+
+- **`ToolRegistry.Execute` O(1) lookup** — `ToolRegistry` now maintains a `map[string]Tool` index built during `Add()`, replacing the O(n*m) linear scan in `Execute()` with a single map lookup
+- **Dynamic tools skip intermediate `ToolRegistry`** — when `WithDynamicTools` is set, `LLMAgent` and `Network` build tool definitions and a lookup index directly from the returned `[]Tool` slice, avoiding a throwaway `ToolRegistry` allocation on every `Execute` call
+- **`dispatchParallel` is context-aware** — replaced `sync.WaitGroup` + `wg.Wait()` with channel-based result collection that `select`s on `ctx.Done()`. If the context is cancelled while tool calls are in-flight, the function returns immediately with error results for incomplete calls instead of blocking indefinitely
+
+### Fixed
+
+- **Goroutine leak on agent panic in `ServeSSE`** — the goroutine running `ExecuteStream` now has `recover()`. If the agent panics, `ch` is closed and an error is sent to `resultCh`, preventing the `for ev := range ch` loop from blocking forever
+- **Goroutine leak on ctx cancel during sub-agent streaming** — the forwarding goroutine in `Network` now spawns a background drain on context cancellation, releasing references to the parent channel and `done` signal promptly instead of blocking until `ExecuteStream` closes `subCh`
+- **`time.After` timer leak in workflow retry delay** — replaced `time.After` with `time.NewTimer` + explicit `Stop()` so the timer is freed immediately when context is cancelled during the retry wait
+- **`When` condition dropped from tool step in static-args path** — `buildToolNode` now propagates the `When` condition to the tool step when static (non-template) args are used, matching the template-args path behavior
+- **Error detection via `"error: "` string prefix is fragile** — added `IsError bool` to `DispatchResult` and `toolExecResult` for structural error signaling. `executePlan` now uses `.isError` instead of checking string prefixes, preventing misclassification of tools that legitimately return text starting with `"error: "`
+
 ### Added
 
 - **Ingest: all extractors auto-registered** — `NewIngestor` now registers all seven extractors by default (`PlainTextExtractor`, `HTMLExtractor`, `MarkdownExtractor`, `CSVExtractor`, `JSONExtractor`, `DOCXExtractor`, `PDFExtractor`). No import or `WithExtractor` call required for standard formats

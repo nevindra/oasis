@@ -1227,10 +1227,12 @@ func (w *Workflow) executeWithRetry(ctx context.Context, s *stepConfig, run func
 	for attempt := range maxAttempts {
 		if attempt > 0 {
 			if s.retryDelay > 0 {
+				t := time.NewTimer(s.retryDelay)
 				select {
 				case <-ctx.Done():
+					t.Stop()
 					return ctx.Err()
-				case <-time.After(s.retryDelay):
+				case <-t.C:
 				}
 			}
 			w.logger.Info("step retry", "workflow", w.name, "step", s.name, "attempt", attempt, "max_retries", s.retry)
@@ -1664,6 +1666,9 @@ func buildToolNode(n NodeDefinition, after []string, reg DefinitionRegistry, whe
 		}, stepOpts...)
 
 		toolStepOpts := []StepOption{After(argsKey), ArgsFrom(argsKey)}
+		if when != nil {
+			toolStepOpts = append(toolStepOpts, When(when))
+		}
 		if n.OutputTo != "" {
 			toolStepOpts = append(toolStepOpts, OutputTo(n.OutputTo))
 		}

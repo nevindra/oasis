@@ -155,16 +155,31 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 		provider = a.dynamicModel(ctx, task)
 	}
 
-	// Resolve tools: dynamic replaces static
-	registry := a.tools
+	// Resolve tools: dynamic replaces static.
+	// When dynamicTools is set, build definitions and an index directly
+	// from the returned tools, avoiding an intermediate ToolRegistry allocation.
+	var toolDefs []ToolDefinition
+	var executeTool toolExecFunc
 	if a.dynamicTools != nil {
-		registry = NewToolRegistry()
-		for _, t := range a.dynamicTools(ctx, task) {
-			registry.Add(t)
+		dynTools := a.dynamicTools(ctx, task)
+		index := make(map[string]Tool, len(dynTools))
+		for _, t := range dynTools {
+			for _, d := range t.Definitions() {
+				toolDefs = append(toolDefs, d)
+				index[d.Name] = t
+			}
 		}
+		executeTool = func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
+			if t, ok := index[name]; ok {
+				return t.Execute(ctx, name, args)
+			}
+			return ToolResult{Error: "unknown tool: " + name}, nil
+		}
+	} else {
+		toolDefs = a.tools.AllDefinitions()
+		executeTool = a.tools.Execute
 	}
 
-	toolDefs := registry.AllDefinitions()
 	if a.inputHandler != nil {
 		toolDefs = append(toolDefs, askUserToolDef)
 	}
@@ -182,7 +197,7 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 		maxIter:        a.maxIter,
 		mem:            &a.mem,
 		inputHandler:   a.inputHandler,
-		dispatch:       a.makeDispatch(registry),
+		dispatch:       a.makeDispatch(executeTool),
 		systemPrompt:   prompt,
 		responseSchema: a.responseSchema,
 		tracer:         a.tracer,
@@ -190,16 +205,16 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 	}
 }
 
-// makeDispatch returns a DispatchFunc that executes tools via the given registry
-// and handles the ask_user and execute_plan special cases.
-func (a *LLMAgent) makeDispatch(registry *ToolRegistry) DispatchFunc {
+// makeDispatch returns a DispatchFunc that executes tools via the given
+// executor function and handles the ask_user and execute_plan special cases.
+func (a *LLMAgent) makeDispatch(executeTool toolExecFunc) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && a.inputHandler != nil {
 			content, err := executeAskUser(ctx, a.inputHandler, a.name, tc)
 			if err != nil {
-				return DispatchResult{Content: "error: " + err.Error()}
+				return DispatchResult{Content: "error: " + err.Error(), IsError: true}
 			}
 			return DispatchResult{Content: content}
 		}
@@ -215,21 +230,24 @@ func (a *LLMAgent) makeDispatch(registry *ToolRegistry) DispatchFunc {
 			// preventing unbounded recursion via execute_code → execute_plan → execute_code.
 			safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
 				if tc.Name == "execute_plan" || tc.Name == "execute_code" {
-					return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code"}
+					return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code", IsError: true}
 				}
 				return dispatch(ctx, tc)
 			}
 			return executeCode(ctx, tc.Args, a.codeRunner, safeDispatch)
 		}
 
-		result, execErr := registry.Execute(ctx, tc.Name, tc.Args)
+		result, execErr := executeTool(ctx, tc.Name, tc.Args)
 		content := result.Content
+		isErr := false
 		if execErr != nil {
 			content = "error: " + execErr.Error()
+			isErr = true
 		} else if result.Error != "" {
 			content = "error: " + result.Error
+			isErr = true
 		}
-		return DispatchResult{Content: content}
+		return DispatchResult{Content: content, IsError: isErr}
 	}
 	return dispatch
 }
@@ -292,17 +310,17 @@ type planStepResult struct {
 func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFunc) DispatchResult {
 	var params planArgs
 	if err := json.Unmarshal(args, &params); err != nil {
-		return DispatchResult{Content: "error: invalid execute_plan args: " + err.Error()}
+		return DispatchResult{Content: "error: invalid execute_plan args: " + err.Error(), IsError: true}
 	}
 	if len(params.Steps) == 0 {
-		return DispatchResult{Content: "error: execute_plan requires at least one step"}
+		return DispatchResult{Content: "error: execute_plan requires at least one step", IsError: true}
 	}
 
 	// Build tool calls, preventing recursion.
 	calls := make([]ToolCall, len(params.Steps))
 	for i, step := range params.Steps {
 		if step.Tool == "execute_plan" {
-			return DispatchResult{Content: "error: execute_plan steps cannot call execute_plan"}
+			return DispatchResult{Content: "error: execute_plan steps cannot call execute_plan", IsError: true}
 		}
 		calls[i] = ToolCall{
 			ID:   fmt.Sprintf("plan_step_%d", i),
@@ -327,9 +345,9 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 		}
 
 		sr := planStepResult{Step: i, Tool: step.Tool, Status: "ok", Result: results[i].content}
-		if len(results[i].content) > 7 && results[i].content[:7] == "error: " {
+		if results[i].isError {
 			sr.Status = "error"
-			sr.Error = results[i].content[7:]
+			sr.Error = results[i].content
 			sr.Result = ""
 		}
 		stepResults[i] = sr
@@ -363,15 +381,15 @@ func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, d
 		Code string `json:"code"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return DispatchResult{Content: "error: invalid execute_code args: " + err.Error()}
+		return DispatchResult{Content: "error: invalid execute_code args: " + err.Error(), IsError: true}
 	}
 	if params.Code == "" {
-		return DispatchResult{Content: "error: execute_code requires non-empty code"}
+		return DispatchResult{Content: "error: execute_code requires non-empty code", IsError: true}
 	}
 
 	result, err := runner.Run(ctx, CodeRequest{Code: params.Code}, dispatch)
 	if err != nil {
-		return DispatchResult{Content: "error: code execution failed: " + err.Error()}
+		return DispatchResult{Content: "error: code execution failed: " + err.Error(), IsError: true}
 	}
 
 	// Build response: prioritize structured output, include logs
@@ -381,7 +399,7 @@ func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, d
 		if result.Logs != "" {
 			response += "\n\nlogs:\n" + result.Logs
 		}
-		return DispatchResult{Content: response}
+		return DispatchResult{Content: response, IsError: true}
 	}
 
 	if result.Output != "" {

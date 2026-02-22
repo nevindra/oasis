@@ -392,12 +392,20 @@ type DispatchResult struct {
 	Content     string
 	Usage       Usage
 	Attachments []Attachment
+	// IsError signals that Content represents an error message rather than
+	// a successful tool result. This enables structural error detection
+	// without relying on string-prefix heuristics.
+	IsError bool
 }
 
 // DispatchFunc executes a single tool call and returns the result.
 // LLMAgent provides one that calls ToolRegistry.Execute + ask_user.
 // Network provides one that also routes to subagents via the agent_* prefix.
 type DispatchFunc func(ctx context.Context, tc ToolCall) DispatchResult
+
+// toolExecFunc executes a tool by name. Abstracts ToolRegistry.Execute so
+// dispatch functions work without an intermediate registry allocation.
+type toolExecFunc = func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error)
 
 // loopConfig holds everything the shared runLoop needs to run.
 type loopConfig struct {
@@ -791,66 +799,78 @@ type toolExecResult struct {
 	usage       Usage
 	attachments []Attachment
 	duration    time.Duration
+	isError     bool
 }
 
 // maxParallelDispatch caps the number of concurrent tool call goroutines
 // to avoid overwhelming external services with unbounded parallelism.
 const maxParallelDispatch = 10
 
+// indexedResult pairs a tool execution result with its position in the
+// original call slice, allowing channel-based collection in order.
+type indexedResult struct {
+	idx    int
+	result toolExecResult
+}
+
 // dispatchParallel runs all tool calls concurrently via the dispatch function
 // and returns results in the same order as the input calls.
 // Single calls run inline (no goroutine). Multiple calls are capped at
 // maxParallelDispatch concurrent goroutines.
+//
+// Unlike a bare wg.Wait(), the collection loop is context-aware: if ctx is
+// cancelled while tool calls are still in-flight, the function returns
+// immediately with context-error results for incomplete calls instead of
+// blocking indefinitely.
 func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFunc) []toolExecResult {
 	// Fast path: single call, no goroutine needed.
 	if len(calls) == 1 {
 		start := time.Now()
 		dr := dispatch(ctx, calls[0])
-		return []toolExecResult{{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start)}}
+		return []toolExecResult{{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
 	}
 
+	ch := make(chan indexedResult, len(calls))
+	sem := make(chan struct{}, maxParallelDispatch)
+
+	for i, tc := range calls {
+		go func(idx int, tc ToolCall) {
+			// Acquire semaphore or bail on context cancellation.
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				ch <- indexedResult{idx, toolExecResult{content: "error: " + ctx.Err().Error(), isError: true}}
+				return
+			}
+			if ctx.Err() != nil {
+				ch <- indexedResult{idx, toolExecResult{content: "error: " + ctx.Err().Error(), isError: true}}
+				return
+			}
+			start := time.Now()
+			dr := dispatch(ctx, tc)
+			ch <- indexedResult{idx, toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
+		}(i, tc)
+	}
+
+	// Collect results, bailing out if ctx is cancelled while calls are in-flight.
 	results := make([]toolExecResult, len(calls))
-	var wg sync.WaitGroup
-
-	if len(calls) <= maxParallelDispatch {
-		// All calls fit within the limit — no semaphore needed.
-		for i, tc := range calls {
-			wg.Add(1)
-			go func(idx int, tc ToolCall) {
-				defer wg.Done()
-				if ctx.Err() != nil {
-					results[idx] = toolExecResult{content: "error: " + ctx.Err().Error()}
-					return
+	seen := make([]bool, len(calls))
+	for received := 0; received < len(calls); received++ {
+		select {
+		case r := <-ch:
+			results[r.idx] = r.result
+			seen[r.idx] = true
+		case <-ctx.Done():
+			errResult := toolExecResult{content: "error: " + ctx.Err().Error(), isError: true}
+			for i := range results {
+				if !seen[i] {
+					results[i] = errResult
 				}
-				start := time.Now()
-				dr := dispatch(ctx, tc)
-				results[idx] = toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start)}
-			}(i, tc)
-		}
-	} else {
-		// More calls than the limit — use semaphore to cap concurrency.
-		sem := make(chan struct{}, maxParallelDispatch)
-		for i, tc := range calls {
-			wg.Add(1)
-			go func(idx int, tc ToolCall) {
-				defer wg.Done()
-				// Guard semaphore acquisition with ctx to prevent goroutine
-				// hangs when the context is cancelled while waiting.
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-				case <-ctx.Done():
-					results[idx] = toolExecResult{content: "error: " + ctx.Err().Error()}
-					return
-				}
-				start := time.Now()
-				dr := dispatch(ctx, tc)
-				results[idx] = toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start)}
-			}(i, tc)
+			}
+			return results
 		}
 	}
-
-	wg.Wait()
 	return results
 }
 
@@ -1140,6 +1160,15 @@ func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, 
 	resultCh := make(chan execResult, 1)
 
 	go func() {
+		defer func() {
+			if p := recover(); p != nil {
+				// Ensure ch is closed so the for-range loop below
+				// doesn't block forever, then signal the error.
+				close(ch)
+				resultCh <- execResult{AgentResult{}, fmt.Errorf("agent panic: %v", p)}
+				return
+			}
+		}()
 		r, err := agent.ExecuteStream(ctx, task, ch)
 		resultCh <- execResult{r, err}
 	}()
