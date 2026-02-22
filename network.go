@@ -197,14 +197,14 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 // and agent-finish events are emitted for subagent delegation.
 func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, registry *ToolRegistry) DispatchFunc {
 	var dispatch DispatchFunc
-	dispatch = func(ctx context.Context, tc ToolCall) (string, Usage) {
+	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && n.inputHandler != nil {
 			content, err := executeAskUser(ctx, n.inputHandler, n.name, tc)
 			if err != nil {
-				return "error: " + err.Error(), Usage{}
+				return DispatchResult{Content: "error: " + err.Error()}
 			}
-			return content, Usage{}
+			return DispatchResult{Content: content}
 		}
 
 		// Special case: execute_plan tool
@@ -216,9 +216,9 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 		if tc.Name == "execute_code" && n.codeRunner != nil {
 			// Wrap dispatch to block execute_plan/execute_code calls from within code,
 			// preventing unbounded recursion via execute_code → execute_plan → execute_code.
-			safeDispatch := func(ctx context.Context, tc ToolCall) (string, Usage) {
+			safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
 				if tc.Name == "execute_plan" || tc.Name == "execute_code" {
-					return "error: " + tc.Name + " cannot be called from within execute_code", Usage{}
+					return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code"}
 				}
 				return dispatch(ctx, tc)
 			}
@@ -230,14 +230,14 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 			agentName := tc.Name[6:]
 			agent, ok := n.agents[agentName]
 			if !ok {
-				return fmt.Sprintf("error: unknown agent %q", agentName), Usage{}
+				return DispatchResult{Content: fmt.Sprintf("error: unknown agent %q", agentName)}
 			}
 
 			var params struct {
 				Task string `json:"task"`
 			}
 			if err := json.Unmarshal(tc.Args, &params); err != nil {
-				return "error: invalid agent call args: " + err.Error(), Usage{}
+				return DispatchResult{Content: "error: invalid agent call args: " + err.Error()}
 			}
 
 			n.logger.Info("delegating to subagent", "network", n.name, "agent", agentName, "task", truncateStr(params.Task, 80))
@@ -308,20 +308,20 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 			}
 
 			if err != nil {
-				return "error: " + err.Error(), Usage{}
+				return DispatchResult{Content: "error: " + err.Error()}
 			}
-			return result.Output, result.Usage
+			return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
 		}
 
 		// Regular tool call
 		result, err := registry.Execute(ctx, tc.Name, tc.Args)
 		if err != nil {
-			return "error: " + err.Error(), Usage{}
+			return DispatchResult{Content: "error: " + err.Error()}
 		}
 		if result.Error != "" {
-			return "error: " + result.Error, Usage{}
+			return DispatchResult{Content: "error: " + result.Error}
 		}
-		return result.Content, Usage{}
+		return DispatchResult{Content: result.Content}
 	}
 	return dispatch
 }

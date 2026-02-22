@@ -14,8 +14,8 @@ import (
 func TestSubprocessRunner_SimpleCode(t *testing.T) {
 	runner := NewSubprocessRunner("python3")
 
-	dispatch := func(ctx context.Context, tc oasis.ToolCall) (string, oasis.Usage) {
-		return `{"content": "hello world"}`, oasis.Usage{}
+	dispatch := func(ctx context.Context, tc oasis.ToolCall) oasis.DispatchResult {
+		return oasis.DispatchResult{Content: `{"content": "hello world"}`}
 	}
 
 	result, err := runner.Run(context.Background(), oasis.CodeRequest{
@@ -40,15 +40,15 @@ func TestSubprocessRunner_SimpleCode(t *testing.T) {
 func TestSubprocessRunner_CallTool(t *testing.T) {
 	runner := NewSubprocessRunner("python3")
 
-	dispatch := func(ctx context.Context, tc oasis.ToolCall) (string, oasis.Usage) {
+	dispatch := func(ctx context.Context, tc oasis.ToolCall) oasis.DispatchResult {
 		if tc.Name == "greet" {
 			var args struct {
 				Name string `json:"name"`
 			}
 			json.Unmarshal(tc.Args, &args)
-			return fmt.Sprintf(`{"greeting": "hello %s"}`, args.Name), oasis.Usage{}
+			return oasis.DispatchResult{Content: fmt.Sprintf(`{"greeting": "hello %s"}`, args.Name)}
 		}
-		return "error: unknown tool", oasis.Usage{}
+		return oasis.DispatchResult{Content: "error: unknown tool"}
 	}
 
 	result, err := runner.Run(context.Background(), oasis.CodeRequest{
@@ -71,12 +71,12 @@ set_result(result)
 func TestSubprocessRunner_CallToolsParallel(t *testing.T) {
 	runner := NewSubprocessRunner("python3")
 
-	dispatch := func(ctx context.Context, tc oasis.ToolCall) (string, oasis.Usage) {
+	dispatch := func(ctx context.Context, tc oasis.ToolCall) oasis.DispatchResult {
 		var args struct {
 			Path string `json:"path"`
 		}
 		json.Unmarshal(tc.Args, &args)
-		return fmt.Sprintf(`"content of %s"`, args.Path), oasis.Usage{}
+		return oasis.DispatchResult{Content: fmt.Sprintf(`"content of %s"`, args.Path)}
 	}
 
 	result, err := runner.Run(context.Background(), oasis.CodeRequest{
@@ -102,8 +102,8 @@ set_result({"count": len(results), "files": results})
 func TestSubprocessRunner_Timeout(t *testing.T) {
 	runner := NewSubprocessRunner("python3", WithTimeout(2*time.Second))
 
-	dispatch := func(ctx context.Context, tc oasis.ToolCall) (string, oasis.Usage) {
-		return "", oasis.Usage{}
+	dispatch := func(ctx context.Context, tc oasis.ToolCall) oasis.DispatchResult {
+		return oasis.DispatchResult{}
 	}
 
 	result, err := runner.Run(context.Background(), oasis.CodeRequest{
@@ -122,8 +122,8 @@ func TestSubprocessRunner_Timeout(t *testing.T) {
 
 func TestSubprocessRunner_Blocklist(t *testing.T) {
 	runner := NewSubprocessRunner("python3")
-	dispatch := func(ctx context.Context, tc oasis.ToolCall) (string, oasis.Usage) {
-		return "", oasis.Usage{}
+	dispatch := func(ctx context.Context, tc oasis.ToolCall) oasis.DispatchResult {
+		return oasis.DispatchResult{}
 	}
 
 	result, err := runner.Run(context.Background(), oasis.CodeRequest{
@@ -139,8 +139,8 @@ func TestSubprocessRunner_Blocklist(t *testing.T) {
 
 func TestSubprocessRunner_PrintGoesToLogs(t *testing.T) {
 	runner := NewSubprocessRunner("python3")
-	dispatch := func(ctx context.Context, tc oasis.ToolCall) (string, oasis.Usage) {
-		return "", oasis.Usage{}
+	dispatch := func(ctx context.Context, tc oasis.ToolCall) oasis.DispatchResult {
+		return oasis.DispatchResult{}
 	}
 
 	result, err := runner.Run(context.Background(), oasis.CodeRequest{
@@ -165,8 +165,8 @@ set_result({"status": "ok"})
 
 func TestSubprocessRunner_ToolError(t *testing.T) {
 	runner := NewSubprocessRunner("python3")
-	dispatch := func(ctx context.Context, tc oasis.ToolCall) (string, oasis.Usage) {
-		return "error: file not found", oasis.Usage{}
+	dispatch := func(ctx context.Context, tc oasis.ToolCall) oasis.DispatchResult {
+		return oasis.DispatchResult{Content: "error: file not found"}
 	}
 
 	result, err := runner.Run(context.Background(), oasis.CodeRequest{

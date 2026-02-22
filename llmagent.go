@@ -194,14 +194,14 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 // and handles the ask_user and execute_plan special cases.
 func (a *LLMAgent) makeDispatch(registry *ToolRegistry) DispatchFunc {
 	var dispatch DispatchFunc
-	dispatch = func(ctx context.Context, tc ToolCall) (string, Usage) {
+	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		// Special case: ask_user tool
 		if tc.Name == "ask_user" && a.inputHandler != nil {
 			content, err := executeAskUser(ctx, a.inputHandler, a.name, tc)
 			if err != nil {
-				return "error: " + err.Error(), Usage{}
+				return DispatchResult{Content: "error: " + err.Error()}
 			}
-			return content, Usage{}
+			return DispatchResult{Content: content}
 		}
 
 		// Special case: execute_plan tool
@@ -213,9 +213,9 @@ func (a *LLMAgent) makeDispatch(registry *ToolRegistry) DispatchFunc {
 		if tc.Name == "execute_code" && a.codeRunner != nil {
 			// Wrap dispatch to block execute_plan/execute_code calls from within code,
 			// preventing unbounded recursion via execute_code → execute_plan → execute_code.
-			safeDispatch := func(ctx context.Context, tc ToolCall) (string, Usage) {
+			safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
 				if tc.Name == "execute_plan" || tc.Name == "execute_code" {
-					return "error: " + tc.Name + " cannot be called from within execute_code", Usage{}
+					return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code"}
 				}
 				return dispatch(ctx, tc)
 			}
@@ -229,7 +229,7 @@ func (a *LLMAgent) makeDispatch(registry *ToolRegistry) DispatchFunc {
 		} else if result.Error != "" {
 			content = "error: " + result.Error
 		}
-		return content, Usage{}
+		return DispatchResult{Content: content}
 	}
 	return dispatch
 }
@@ -289,20 +289,20 @@ type planStepResult struct {
 // executePlan handles the execute_plan tool call by parsing steps,
 // executing them in parallel via the given dispatch function, and
 // returning aggregated results as JSON. Shared by LLMAgent and Network.
-func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFunc) (string, Usage) {
+func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFunc) DispatchResult {
 	var params planArgs
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "error: invalid execute_plan args: " + err.Error(), Usage{}
+		return DispatchResult{Content: "error: invalid execute_plan args: " + err.Error()}
 	}
 	if len(params.Steps) == 0 {
-		return "error: execute_plan requires at least one step", Usage{}
+		return DispatchResult{Content: "error: execute_plan requires at least one step"}
 	}
 
 	// Build tool calls, preventing recursion.
 	calls := make([]ToolCall, len(params.Steps))
 	for i, step := range params.Steps {
 		if step.Tool == "execute_plan" {
-			return "error: execute_plan steps cannot call execute_plan", Usage{}
+			return DispatchResult{Content: "error: execute_plan steps cannot call execute_plan"}
 		}
 		calls[i] = ToolCall{
 			ID:   fmt.Sprintf("plan_step_%d", i),
@@ -316,10 +316,15 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 
 	// Aggregate results.
 	var totalUsage Usage
+	var allAttachments []Attachment
 	stepResults := make([]planStepResult, len(params.Steps))
 	for i, step := range params.Steps {
 		totalUsage.InputTokens += results[i].usage.InputTokens
 		totalUsage.OutputTokens += results[i].usage.OutputTokens
+
+		if len(results[i].attachments) > 0 {
+			allAttachments = append(allAttachments, results[i].attachments...)
+		}
 
 		sr := planStepResult{Step: i, Tool: step.Tool, Status: "ok", Result: results[i].content}
 		if len(results[i].content) > 7 && results[i].content[:7] == "error: " {
@@ -331,7 +336,7 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 	}
 
 	out, _ := json.Marshal(stepResults)
-	return string(out), totalUsage
+	return DispatchResult{Content: string(out), Usage: totalUsage, Attachments: allAttachments}
 }
 
 // --- execute_code tool ---
@@ -353,20 +358,20 @@ var executeCodeToolDef = ToolDefinition{
 }
 
 // executeCode handles the execute_code tool call by delegating to the CodeRunner.
-func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, dispatch DispatchFunc) (string, Usage) {
+func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, dispatch DispatchFunc) DispatchResult {
 	var params struct {
 		Code string `json:"code"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "error: invalid execute_code args: " + err.Error(), Usage{}
+		return DispatchResult{Content: "error: invalid execute_code args: " + err.Error()}
 	}
 	if params.Code == "" {
-		return "error: execute_code requires non-empty code", Usage{}
+		return DispatchResult{Content: "error: execute_code requires non-empty code"}
 	}
 
 	result, err := runner.Run(ctx, CodeRequest{Code: params.Code}, dispatch)
 	if err != nil {
-		return "error: code execution failed: " + err.Error(), Usage{}
+		return DispatchResult{Content: "error: code execution failed: " + err.Error()}
 	}
 
 	// Build response: prioritize structured output, include logs
@@ -376,7 +381,7 @@ func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, d
 		if result.Logs != "" {
 			response += "\n\nlogs:\n" + result.Logs
 		}
-		return response, Usage{}
+		return DispatchResult{Content: response}
 	}
 
 	if result.Output != "" {
@@ -387,7 +392,7 @@ func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, d
 	if result.Logs != "" {
 		response += "\n\nlogs:\n" + result.Logs
 	}
-	return response, Usage{}
+	return DispatchResult{Content: response}
 }
 
 // --- ask_user tool ---

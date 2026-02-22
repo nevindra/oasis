@@ -387,10 +387,17 @@ func buildConfig(opts []AgentOption) agentConfig {
 
 // --- shared execution loop ---
 
-// DispatchFunc executes a single tool call and returns its content and usage.
+// DispatchResult holds the result of a single tool or agent dispatch.
+type DispatchResult struct {
+	Content     string
+	Usage       Usage
+	Attachments []Attachment
+}
+
+// DispatchFunc executes a single tool call and returns the result.
 // LLMAgent provides one that calls ToolRegistry.Execute + ask_user.
 // Network provides one that also routes to subagents via the agent_* prefix.
-type DispatchFunc func(ctx context.Context, tc ToolCall) (string, Usage)
+type DispatchFunc func(ctx context.Context, tc ToolCall) DispatchResult
 
 // loopConfig holds everything the shared runLoop needs to run.
 type loopConfig struct {
@@ -440,6 +447,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	// pure-routing LLMs that don't synthesize a reply after delegating).
 	// For LLMAgent this is never set (no agent_* tools).
 	var lastAgentOutput string
+	var accumulatedAttachments []Attachment
 
 	for i := 0; i < cfg.maxIter; i++ {
 		// Start an iteration span if tracing is enabled.
@@ -496,6 +504,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			// still run for side effects like logging and validation).
 			if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
 				endIter()
+				close(ch)
 				if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
 					return AgentResult{Usage: totalUsage, Steps: steps}, s
 				}
@@ -504,7 +513,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 			endIter()
 			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, resp.Content, steps)
-			return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
+			return AgentResult{Output: resp.Content, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
 		} else {
 			resp, err = cfg.provider.Chat(iterCtx, req)
 		}
@@ -552,7 +561,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			}
 			endIter()
 			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, content, steps)
-			return AgentResult{Output: content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
+			return AgentResult{Output: content, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
 		}
 
 		if iterSpan != nil {
@@ -596,6 +605,11 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			trace := buildStepTrace(tc, results[j])
 			steps = append(steps, trace)
 
+			// Accumulate attachments from sub-agent results (e.g. image generation).
+			if len(results[j].attachments) > 0 {
+				accumulatedAttachments = append(accumulatedAttachments, results[j].attachments...)
+			}
+
 			result := ToolResult{Content: results[j].content}
 			if err := cfg.processors.RunPostTool(iterCtx, tc, &result); err != nil {
 				endIter()
@@ -622,6 +636,16 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	messages = append(messages, UserMessage(
 		"You have used all available tool calls. Summarize what you found and respond to the user."))
 
+	// Start a synthesis span so the forced-response LLM call is visible in traces.
+	synthCtx := ctx
+	if cfg.tracer != nil {
+		var synthSpan Span
+		synthCtx, synthSpan = cfg.tracer.Start(ctx, "agent.loop.synthesis",
+			IntAttr("iteration", cfg.maxIter),
+			BoolAttr("forced", true))
+		defer synthSpan.End()
+	}
+
 	// Use sync.Once to safely close ch exactly once in the synthesis block.
 	// ChatStream may close ch on success, so we guard against double-close.
 	var closeCh sync.Once
@@ -634,9 +658,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	var resp ChatResponse
 	var err error
 	if ch != nil {
-		resp, err = cfg.provider.ChatStream(ctx, ChatRequest{Messages: messages}, ch)
+		resp, err = cfg.provider.ChatStream(synthCtx, ChatRequest{Messages: messages}, ch)
 	} else {
-		resp, err = cfg.provider.Chat(ctx, ChatRequest{Messages: messages})
+		resp, err = cfg.provider.Chat(synthCtx, ChatRequest{Messages: messages})
 	}
 	if err != nil {
 		safeCloseCh()
@@ -646,7 +670,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	totalUsage.OutputTokens += resp.Usage.OutputTokens
 
 	// PostProcessor hook.
-	if err := cfg.processors.RunPostLLM(ctx, &resp); err != nil {
+	if err := cfg.processors.RunPostLLM(synthCtx, &resp); err != nil {
 		safeCloseCh()
 		if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
 			return AgentResult{Usage: totalUsage, Steps: steps}, s
@@ -655,8 +679,24 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	}
 
 	safeCloseCh()
-	cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content, steps)
-	return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
+	cfg.mem.persistMessages(synthCtx, cfg.name, task, task.Input, resp.Content, steps)
+	return AgentResult{Output: resp.Content, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
+}
+
+// mergeAttachments combines accumulated sub-agent attachments with the final
+// response attachments. Accumulated attachments come first (from tool calls
+// during the loop), followed by any attachments from the final LLM response.
+func mergeAttachments(accumulated, resp []Attachment) []Attachment {
+	if len(accumulated) == 0 {
+		return resp
+	}
+	if len(resp) == 0 {
+		return accumulated
+	}
+	merged := make([]Attachment, 0, len(accumulated)+len(resp))
+	merged = append(merged, accumulated...)
+	merged = append(merged, resp...)
+	return merged
 }
 
 // handleProcessorErrorWithSteps converts a processor error into an AgentResult.
@@ -723,6 +763,10 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 			snapshot[i].Attachments = make([]Attachment, len(m.Attachments))
 			copy(snapshot[i].Attachments, m.Attachments)
 		}
+		if len(m.Metadata) > 0 {
+			snapshot[i].Metadata = make(json.RawMessage, len(m.Metadata))
+			copy(snapshot[i].Metadata, m.Metadata)
+		}
 	}
 
 	return &ErrSuspended{
@@ -743,9 +787,10 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 
 // toolExecResult holds the result of a single parallel tool call.
 type toolExecResult struct {
-	content  string
-	usage    Usage
-	duration time.Duration
+	content     string
+	usage       Usage
+	attachments []Attachment
+	duration    time.Duration
 }
 
 // maxParallelDispatch caps the number of concurrent tool call goroutines
@@ -760,8 +805,8 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 	// Fast path: single call, no goroutine needed.
 	if len(calls) == 1 {
 		start := time.Now()
-		content, usage := dispatch(ctx, calls[0])
-		return []toolExecResult{{content: content, usage: usage, duration: time.Since(start)}}
+		dr := dispatch(ctx, calls[0])
+		return []toolExecResult{{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start)}}
 	}
 
 	results := make([]toolExecResult, len(calls))
@@ -778,8 +823,8 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 					return
 				}
 				start := time.Now()
-				content, usage := dispatch(ctx, tc)
-				results[idx] = toolExecResult{content: content, usage: usage, duration: time.Since(start)}
+				dr := dispatch(ctx, tc)
+				results[idx] = toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start)}
 			}(i, tc)
 		}
 	} else {
@@ -799,8 +844,8 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 					return
 				}
 				start := time.Now()
-				content, usage := dispatch(ctx, tc)
-				results[idx] = toolExecResult{content: content, usage: usage, duration: time.Since(start)}
+				dr := dispatch(ctx, tc)
+				results[idx] = toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start)}
 			}(i, tc)
 		}
 	}

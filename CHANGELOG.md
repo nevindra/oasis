@@ -12,18 +12,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`AutoTitle()` conversation option** — opt-in automatic thread title generation from the first user message; runs in the background alongside message persistence; skipped when thread already has a title. Usage: `WithConversationMemory(store, AutoTitle())`
 - **`WriteSSEEvent` helper** — composable primitive for writing individual Server-Sent Events. Handles JSON marshaling and flushing, letting developers build custom SSE loops with `ExecuteStream` without reimplementing SSE mechanics
 - **Image generation support** — added `gemini.WithResponseModalities()` option to enable image output from Gemini models (e.g. `WithResponseModalities("TEXT", "IMAGE")`). Generated images are returned as `Attachment` structs on `AgentResult.Attachments`. See [image generation guide](docs/guides/image-generation.md)
+- **`DispatchResult` struct** — replaces the `(string, Usage)` tuple return from `DispatchFunc` with a struct that also carries `Attachments`. Sub-agent attachments (e.g. generated images) now propagate through Network dispatch to the final `AgentResult`. **Breaking:** `DispatchFunc` signature changed from `func(ctx, ToolCall) (string, Usage)` to `func(ctx, ToolCall) DispatchResult`
 
 ### Changed
 
 - **`ServeSSE` done event** — the `done` event now sends the full `AgentResult` (output, steps, usage) instead of `[DONE]`, so frontends can access execution metadata without an extra call
 - **KnowledgeTool documentation** — expanded godoc on `KnowledgeTool` and the RAG pipeline guide to clarify that retrieval behavior (score threshold, chunk filters, keyword weight, re-ranking) is configured on the `Retriever` via `WithRetriever`, not on the tool itself. Added examples for custom retrieval, vector-only search, and an options summary table
+- **Synthesis call now traced** — the forced-response LLM call at max-iterations now emits an `agent.loop.synthesis` span when a tracer is configured
+- **Workflow expression operators must be space-bounded** — `evalExpression` now requires operators surrounded by spaces (e.g. `{{x}} == y`). All existing examples already use this format. Prevents false matches when literal values contain operator substrings
 - **Gemini `thinkingConfig` no longer sent by default** — previously `thinkingBudget: 0` was always included in `generationConfig` when thinking was disabled, which caused 400 errors on models that don't support it (e.g. image generation models). Now only sent when `WithThinking(true)` is set
 - **Gemini `mediaResolution` now opt-in** — previously always sent as `"MEDIA_RESOLUTION_MEDIUM"`. Now only included when explicitly set via `WithMediaResolution()`, avoiding 400 errors on models that don't support this parameter
 
 ### Fixed
 
+- **`chunkParentChild` panic on overlapping child chunks** — `RecursiveChunker` adds overlap prefixes from the previous chunk. When such a prefix caused `strings.Index` to return `-1`, `childOffset` advanced by the full chunk length (including overlap), eventually exceeding `len(pt)` and panicking with `slice bounds out of range`. Fixed by clamping `childOffset` to `len(pt)` after each iteration
+- **`chunkFlat` offset corruption on overlapping chunks** — same root cause as the `chunkParentChild` panic: `offset` was set to `endByte` unconditionally, accumulating past `len(text)` when overlap-prefixed chunks were not found via `strings.Index`. Fixed by clamping `offset` to `len(text)`
+- **`getOverlapSuffix` invalid UTF-8 output** — `text[len(text)-n:]` was a raw byte slice that could land in the middle of a multibyte rune, producing an invalid UTF-8 prefix prepended to the next chunk. Fixed by stepping forward to the next valid rune boundary
+- **`splitOnWords` invalid UTF-8 output for long words** — forced word splits stepped by `maxChars` bytes, cutting multibyte runes in half. Fixed with rune-boundary-aware stepping; falls back to stepping one rune at a time when a single rune exceeds `maxChars`
+- **`percentileThreshold` panic when `percentile > 100`** — an out-of-range `breakpointPercentile` (e.g. passed via `WithBreakpointPercentile(200)`) caused `lower` to exceed `len(sorted)-1`, resulting in an index out-of-bounds panic. Fixed by clamping `percentile` to `[0, 100]` at the start of the function
 - **`TestServeSSE` expected stale done format** — test asserted `data: [DONE]` but `ServeSSE` sends JSON-serialized `AgentResult` since the done event change. Updated to parse and verify the `AgentResult` payload
-
+- **Streaming channel leak in no-tools path** — when `ChatStream` succeeded but `PostProcessor` returned an error (or suspend), `ch` was never closed, leaking any `ServeSSE` consumer blocking on `for ev := range ch`
+- **Shallow `Metadata` copy in `checkSuspendLoop`** — `ChatMessage.Metadata` (`json.RawMessage`, a `[]byte`) was not deep-copied in the resume snapshot, sharing the backing array with the original messages. Now deep-copies alongside `ToolCalls`/`Attachments`
+- **Expression evaluator matched operators inside literal values** — `evalExpression` used `strings.Index` to find operators, so a value like `not-equal` would match `!=`. Now requires space-bounded operators (`" == "` instead of `"=="`)
 - **Streaming channel leaks** — synthesis block (max-iterations) and no-tools streaming path could leave `ch` open on error, leaking goroutines. Now uses `sync.Once`-guarded close and defensive recover guard respectively
 - **Network streaming deadlock** — sub-agent event forwarding goroutine blocked on full parent channel. Now context-aware with `select` on `ctx.Done()` and drain on cancellation
 - **Duplicate `EventInputReceived` from sub-agents** — forwarding goroutine now filters `EventInputReceived` (Network's `EventAgentStart` is the canonical signal)

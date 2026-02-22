@@ -248,23 +248,23 @@ func (r *SubprocessRunner) handleToolCall(ctx context.Context, msg protocolMessa
 		}
 	}
 
-	content, _ := dispatch(ctx, oasis.ToolCall{
+	dr := dispatch(ctx, oasis.ToolCall{
 		ID:   msg.ID,
 		Name: msg.Name,
 		Args: msg.Args,
 	})
 
-	if len(content) > 7 && content[:7] == "error: " {
+	if len(dr.Content) > 7 && dr.Content[:7] == "error: " {
 		return protocolResponse{
 			Type:  "tool_error",
 			ID:    msg.ID,
-			Error: content[7:],
+			Error: dr.Content[7:],
 		}
 	}
 	return protocolResponse{
 		Type: "tool_result",
 		ID:   msg.ID,
-		Data: content,
+		Data: dr.Content,
 	}
 }
 
@@ -292,8 +292,8 @@ func (r *SubprocessRunner) handleToolCallsParallel(ctx context.Context, msg prot
 	ch := make(chan indexedResult, len(calls))
 	for i, tc := range calls {
 		go func(idx int, tc oasis.ToolCall) {
-			content, _ := dispatch(ctx, tc)
-			ch <- indexedResult{idx: idx, content: content}
+			dr := dispatch(ctx, tc)
+			ch <- indexedResult{idx: idx, content: dr.Content}
 		}(i, tc)
 	}
 	for range calls {

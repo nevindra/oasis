@@ -374,7 +374,7 @@ Condition nodes evaluate a simple expression and route to `true_branch` or `fals
 },
 ```
 
-Supported operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`. Numeric comparison is attempted first; falls back to string. The `contains` operator is always string-based (`strings.Contains`).
+Supported operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`. Operators must be space-bounded (e.g. `{{x}} == y`, not `{{x}}==y`). Numeric comparison is attempted first; falls back to string. The `contains` operator is always string-based (`strings.Contains`).
 
 For complex logic, register a Go function as an escape hatch:
 

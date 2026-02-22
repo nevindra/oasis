@@ -265,7 +265,7 @@ def := oasis.WorkflowDefinition{
 }
 ```
 
-Supported operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`. For complex logic, register a Go function:
+Supported operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`. Operators must be space-bounded (e.g. `{{x}} == y`, not `{{x}}==y`). For complex logic, register a Go function:
 
 ```go
 reg := oasis.DefinitionRegistry{

@@ -1320,14 +1320,14 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 
 	// The plan result was fed back as a tool result message.
 	// We can verify the format by calling executePlan directly.
-	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
-		return "result_" + tc.Name, Usage{InputTokens: 10}
+	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+		return DispatchResult{Content: "result_" + tc.Name, Usage: Usage{InputTokens: 10}}
 	}
-	content, usage := executePlan(context.Background(), json.RawMessage(`{"steps":[
+	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[
 		{"tool":"greet","args":{}},
 		{"tool":"calc","args":{}}
 	]}`), dispatch)
-	capturedResult = content
+	capturedResult = dr.Content
 
 	var steps []planStepResult
 	if err := json.Unmarshal([]byte(capturedResult), &steps); err != nil {
@@ -1342,28 +1342,28 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 	if steps[1].Tool != "calc" || steps[1].Status != "ok" || steps[1].Result != "result_calc" {
 		t.Errorf("step 1 = %+v, want tool=calc status=ok result=result_calc", steps[1])
 	}
-	if usage.InputTokens != 20 {
-		t.Errorf("usage.InputTokens = %d, want 20", usage.InputTokens)
+	if dr.Usage.InputTokens != 20 {
+		t.Errorf("usage.InputTokens = %d, want 20", dr.Usage.InputTokens)
 	}
 }
 
 func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 	// Verify that a failed step reports error without aborting other steps
-	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
+	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
 		if tc.Name == "fail" {
-			return "error: tool broken", Usage{}
+			return DispatchResult{Content: "error: tool broken"}
 		}
-		return "ok_" + tc.Name, Usage{}
+		return DispatchResult{Content: "ok_" + tc.Name}
 	}
 
-	content, _ := executePlan(context.Background(), json.RawMessage(`{"steps":[
+	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[
 		{"tool":"greet","args":{}},
 		{"tool":"fail","args":{}},
 		{"tool":"calc","args":{}}
 	]}`), dispatch)
 
 	var steps []planStepResult
-	if err := json.Unmarshal([]byte(content), &steps); err != nil {
+	if err := json.Unmarshal([]byte(dr.Content), &steps); err != nil {
 		t.Fatalf("result is not valid JSON: %v", err)
 	}
 	if len(steps) != 3 {
@@ -1381,38 +1381,38 @@ func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 }
 
 func TestLLMAgentPlanExecutionRecursionPrevented(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
-		return "should not reach", Usage{}
+	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+		return DispatchResult{Content: "should not reach"}
 	}
 
-	content, _ := executePlan(context.Background(), json.RawMessage(`{"steps":[
+	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[
 		{"tool":"execute_plan","args":{"steps":[]}}
 	]}`), dispatch)
 
-	if content != "error: execute_plan steps cannot call execute_plan" {
-		t.Errorf("expected recursion error, got %q", content)
+	if dr.Content != "error: execute_plan steps cannot call execute_plan" {
+		t.Errorf("expected recursion error, got %q", dr.Content)
 	}
 }
 
 func TestLLMAgentPlanExecutionEmptySteps(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
-		return "should not reach", Usage{}
+	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+		return DispatchResult{Content: "should not reach"}
 	}
 
-	content, _ := executePlan(context.Background(), json.RawMessage(`{"steps":[]}`), dispatch)
-	if content != "error: execute_plan requires at least one step" {
-		t.Errorf("expected empty steps error, got %q", content)
+	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[]}`), dispatch)
+	if dr.Content != "error: execute_plan requires at least one step" {
+		t.Errorf("expected empty steps error, got %q", dr.Content)
 	}
 }
 
 func TestLLMAgentPlanExecutionInvalidArgs(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) (string, Usage) {
-		return "should not reach", Usage{}
+	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+		return DispatchResult{Content: "should not reach"}
 	}
 
-	content, _ := executePlan(context.Background(), json.RawMessage(`not json`), dispatch)
-	if len(content) < 7 || content[:7] != "error: " {
-		t.Errorf("expected error for invalid args, got %q", content)
+	dr := executePlan(context.Background(), json.RawMessage(`not json`), dispatch)
+	if len(dr.Content) < 7 || dr.Content[:7] != "error: " {
+		t.Errorf("expected error for invalid args, got %q", dr.Content)
 	}
 }
 

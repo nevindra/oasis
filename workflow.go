@@ -858,6 +858,10 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 }
 
 // executeResume continues a suspended workflow from the given step.
+// Only steps that completed successfully (or were skipped by a When() condition)
+// are pre-populated — steps that were skipped due to the suspension (failure-skipped)
+// will re-execute on resume. This is intentional: those steps never ran, so they
+// must run once the suspended step succeeds.
 func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedResults map[string]StepResult, contextValues map[string]any, _ string, data json.RawMessage) (AgentResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1770,23 +1774,25 @@ var expressionOperators = []string{"!=", "==", ">=", "<=", ">", "<", "contains"}
 // Numeric comparison is attempted first; falls back to string comparison.
 // The "contains" operator is always string-based.
 func evalExpression(expr string, wCtx *WorkflowContext) (bool, error) {
-	// Find the operator in the raw expression (before resolving placeholders)
-	// to avoid matching operators inside resolved values.
+	// Find the operator as a space-bounded token in the raw expression
+	// (before resolving placeholders) to avoid matching operators inside
+	// resolved values or literal substrings (e.g. "not-equal" containing "!=").
 	for _, op := range expressionOperators {
-		idx := strings.Index(expr, op)
+		padded := " " + op + " "
+		idx := strings.Index(expr, padded)
 		if idx == -1 {
 			continue
 		}
 
 		left := strings.TrimSpace(wCtx.Resolve(expr[:idx]))
-		right := strings.TrimSpace(wCtx.Resolve(expr[idx+len(op):]))
+		right := strings.TrimSpace(wCtx.Resolve(expr[idx+len(padded):]))
 		left = stripQuotes(left)
 		right = stripQuotes(right)
 
 		return evalCompare(left, right, op)
 	}
 
-	return false, fmt.Errorf("expression: no operator found in %q", expr)
+	return false, fmt.Errorf("expression: no operator found in %q (operators must be space-bounded, e.g. \"x == y\")", expr)
 }
 
 // evalCompare performs the comparison between left and right using the given operator.

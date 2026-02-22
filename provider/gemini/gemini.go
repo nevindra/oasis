@@ -111,8 +111,9 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 	var attachments []oasis.Attachment
 
 	scanner := bufio.NewScanner(resp.Body)
-	// Increase buffer for large SSE payloads.
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	// Large buffer for SSE payloads: image generation returns base64-encoded
+	// image data as a single chunk, which can easily reach 5-10 MB.
+	scanner.Buffer(make([]byte, 0, 16*1024*1024), 16*1024*1024)
 
 	var jsonBuf strings.Builder
 

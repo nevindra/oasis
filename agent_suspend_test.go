@@ -64,7 +64,7 @@ func TestRunLoopPostProcessorSuspend(t *testing.T) {
 		processors: chain,
 		maxIter:    5,
 		mem:        &agentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) (string, Usage) { return "ok", Usage{} },
+		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
@@ -104,7 +104,7 @@ func TestRunLoopSuspendResume(t *testing.T) {
 		processors: chain,
 		maxIter:    5,
 		mem:        &agentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) (string, Usage) { return "deleted", Usage{} },
+		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "deleted"} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "delete item"}, nil)
@@ -140,7 +140,7 @@ func TestRunLoopSuspendClosesStreamChannel(t *testing.T) {
 		processors: chain,
 		maxIter:    5,
 		mem:        &agentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) (string, Usage) { return "ok", Usage{} },
+		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
 	}
 
 	ch := make(chan StreamEvent, 10)
@@ -173,7 +173,7 @@ func TestRunLoopPreProcessorSuspend(t *testing.T) {
 		processors: chain,
 		maxIter:    5,
 		mem:        &agentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) (string, Usage) { return "ok", Usage{} },
+		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
@@ -210,7 +210,7 @@ func TestRunLoopPostToolProcessorSuspend(t *testing.T) {
 		processors: chain,
 		maxIter:    5,
 		mem:        &agentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) (string, Usage) { return "executed", Usage{} },
+		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "executed"} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)

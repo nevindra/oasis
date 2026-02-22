@@ -305,7 +305,7 @@ func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct Conte
 			startByte = offset + idx
 		}
 		endByte := startByte + len(t)
-		offset = endByte
+		offset = min(endByte, len(text))
 
 		chunks[i] = oasis.Chunk{
 			ID:         oasis.NewID(),
@@ -382,7 +382,7 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 				childStart = parentStart + childOffset + cidx
 			}
 			childEnd := childStart + len(childText)
-			childOffset = childStart - parentStart + len(childText)
+			childOffset = min(childStart-parentStart+len(childText), len(pt))
 
 			child := oasis.Chunk{
 				ID:         oasis.NewID(),

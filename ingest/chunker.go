@@ -311,12 +311,24 @@ func splitOnWords(text string, maxChars int) []string {
 				segments = append(segments, strings.TrimSpace(current.String()))
 				current.Reset()
 			}
-			for i := 0; i < len(word); i += maxChars {
+			for i := 0; i < len(word); {
 				end := i + maxChars
-				if end > len(word) {
-					end = len(word)
+				if end >= len(word) {
+					segments = append(segments, word[i:])
+					break
 				}
-				segments = append(segments, word[i:end])
+				// Step back to a valid rune boundary.
+				e := end
+				for e > i && !utf8.RuneStart(word[e]) {
+					e--
+				}
+				if e == i {
+					// Single rune larger than maxChars — step one rune forward.
+					_, sz := utf8.DecodeRuneInString(word[i:])
+					e = i + sz
+				}
+				segments = append(segments, word[i:e])
+				i = e
 			}
 			continue
 		}
@@ -400,7 +412,12 @@ func getOverlapSuffix(text string, n int) string {
 	if len(text) <= n {
 		return text
 	}
-	suffix := text[len(text)-n:]
+	pos := len(text) - n
+	// Step forward to a valid rune boundary if we landed mid-rune.
+	for pos < len(text) && !utf8.RuneStart(text[pos]) {
+		pos++
+	}
+	suffix := text[pos:]
 	if idx := strings.Index(suffix, " "); idx >= 0 {
 		return strings.TrimSpace(suffix[idx+1:])
 	}

@@ -205,6 +205,7 @@ func percentileThreshold(values []float32, percentile int) float32 {
 	if len(values) == 0 {
 		return 0
 	}
+	percentile = max(0, min(percentile, 100))
 	sorted := make([]float32, len(values))
 	copy(sorted, values)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
