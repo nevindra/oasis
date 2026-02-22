@@ -85,9 +85,11 @@ registry.Add(knowledgeTool)
 // Get all definitions (for passing to LLM)
 defs := registry.AllDefinitions()
 
-// Execute a tool call
+// Execute a tool call — O(1) lookup via internal map index
 result, err := registry.Execute(ctx, "web_search", argsJSON)
 ```
+
+`ToolRegistry` maintains a `map[string]Tool` index built during `Add()`, providing O(1) dispatch lookups. When agents use `WithDynamicTools`, they build tool definitions and a lookup index directly from the returned `[]Tool` slice, avoiding intermediate `ToolRegistry` allocation.
 
 ## Built-in Tools
 

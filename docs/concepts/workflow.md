@@ -111,6 +111,16 @@ oasis.DoUntil("poll", pollFn,
 )
 ```
 
+When the loop reaches `MaxIter` (default 10) without the exit condition being met, the step returns `ErrMaxIterExceeded` instead of silently succeeding. Use `errors.Is(err, oasis.ErrMaxIterExceeded)` to distinguish timeout-caused failures from other errors:
+
+```go
+err := wf.Execute(ctx, task)
+var wfErr *oasis.WorkflowError
+if errors.As(err, &wfErr) && errors.Is(wfErr.Err, oasis.ErrMaxIterExceeded) {
+    // loop timed out without meeting exit condition
+}
+```
+
 ## Control Flow Patterns
 
 ### Sequential

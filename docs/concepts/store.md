@@ -43,6 +43,8 @@ SearchMessages(ctx, embedding, topK) ([]ScoredMessage, error)
 
 `SearchMessages` performs cosine similarity search across all messages. Returns `ScoredMessage` with a `Score` field in [0, 1].
 
+Messages within a thread are ordered by `created_at` descending, then by ID descending (UUIDv7). When persisting a conversation turn, the assistant message gets `created_at = now + 1` to ensure consistent ordering even when persistence is fast.
+
 ## Conversation Model
 
 Oasis organizes conversations in a three-level hierarchy:

@@ -119,6 +119,8 @@ agent.execute (agent.name, agent.type, agent.status, tokens)
 ├─ agent.loop.iteration (iteration=1)
 │   └─ ...
 │
+├─ agent.loop.synthesis              ← emitted at max iterations (forced synthesis)
+│
 └─ agent.memory.persist (thread_id)
 ```
 
@@ -134,6 +136,8 @@ workflow.execute (workflow.name, step_count, workflow.status)
 ├─ workflow.step (concurrent)
 └─ workflow.step
 ```
+
+When a step suspends (returns `ErrSuspended`), the `workflow.step` span is marked with status `"suspended"` — not an error. The span's `Error()` method is not called, allowing observability systems to distinguish suspensions (awaiting external input) from actual failures.
 
 ### Retrieval
 

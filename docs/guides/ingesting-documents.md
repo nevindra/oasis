@@ -64,42 +64,28 @@ ingestor := ingest.NewIngestor(store, embedding,
 )
 ```
 
-## PDF Support
+## Supported Formats
 
-PDF extraction is opt-in (separate dependency):
-
-```go
-import ingestpdf "github.com/nevindra/oasis/ingest/pdf"
-
-ingestor := ingest.NewIngestor(store, embedding,
-    ingest.WithExtractor(ingestpdf.TypePDF, ingestpdf.NewExtractor()),
-)
-
-result, _ := ingestor.IngestFile(ctx, pdfBytes, "document.pdf")
-```
-
-## CSV, JSON, and DOCX Support
-
-These extractors are opt-in via separate subpackages:
+All seven extractors are registered by default — no imports or `WithExtractor` calls needed:
 
 ```go
-import (
-    "github.com/nevindra/oasis/ingest"
-    ingestcsv "github.com/nevindra/oasis/ingest/csv"
-    ingestjson "github.com/nevindra/oasis/ingest/json"
-    ingestdocx "github.com/nevindra/oasis/ingest/docx"
-)
+ingestor := ingest.NewIngestor(store, embedding)
 
-ingestor := ingest.NewIngestor(store, embedding,
-    ingest.WithExtractor(ingestcsv.TypeCSV, ingestcsv.NewExtractor()),
-    ingest.WithExtractor(ingestjson.TypeJSON, ingestjson.NewExtractor()),
-    ingest.WithExtractor(ingestdocx.TypeDOCX, ingestdocx.NewExtractor()),
-)
+result, _ := ingestor.IngestFile(ctx, pdfBytes, "report.pdf")
+result, _ := ingestor.IngestFile(ctx, csvBytes, "data.csv")
+result, _ := ingestor.IngestFile(ctx, jsonBytes, "config.json")
+result, _ := ingestor.IngestFile(ctx, docxBytes, "document.docx")
 ```
 
-- **CSV**: First row as headers, subsequent rows become labeled paragraphs (`Header: Value`)
-- **JSON**: Recursive flattening with dotted key paths
-- **DOCX**: Extracts paragraphs, headings, tables, and images (pure Go, no CGO). Implements `MetadataExtractor` for heading-level metadata.
+| Format | Extractor | Behavior |
+|--------|-----------|----------|
+| Plain text, HTML, Markdown | `PlainTextExtractor`, `HTMLExtractor`, `MarkdownExtractor` | Built-in, always available |
+| PDF | `PDFExtractor` | Page-by-page extraction with per-page metadata (pure Go) |
+| CSV | `CSVExtractor` | First row as headers, subsequent rows become labeled paragraphs (`Header: Value`) |
+| JSON | `JSONExtractor` | Recursive flattening with dotted key paths |
+| DOCX | `DOCXExtractor` | Paragraphs, headings, tables, and images (pure Go, no CGO). Implements `MetadataExtractor` for heading-level metadata |
+
+The ingestor recovers from extractor panics and converts them into errors, preventing a misbehaving parser from crashing the process.
 
 ## Custom Extractors
 

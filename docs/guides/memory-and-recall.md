@@ -22,6 +22,8 @@ result, _ := agent.Execute(ctx, oasis.AgentTask{
 
 Without `thread_id`, the agent runs stateless — no history loaded or persisted.
 
+When `WithConversationMemory` is enabled with a `thread_id`, the agent automatically creates the thread row on the first message (if it doesn't exist) and updates the thread's `updated_at` timestamp on subsequent turns. You don't need to call `CreateThread()` manually — `ListThreads()` and `GetThread()` will correctly return threads created via conversation memory.
+
 ## History Limits
 
 Control how much conversation history is loaded before each LLM call. Two options compose — whichever triggers first wins:

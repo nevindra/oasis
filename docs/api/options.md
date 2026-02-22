@@ -127,7 +127,9 @@ Configures `NewHybridRetriever`.
 | `WithParentTokens(n int)` | 1024 | Parent chunk size |
 | `WithChildTokens(n int)` | 256 | Child chunk size |
 | `WithBatchSize(n int)` | 64 | Chunks per Embed() call |
-| `WithExtractor(ct ContentType, e Extractor)` | — | Register custom extractor |
+| `WithExtractor(ct ContentType, e Extractor)` | — | Register or override an extractor for a content type |
+| `WithOnSuccess(fn func(IngestResult))` | nil | Callback invoked after each successful ingestion |
+| `WithOnError(fn func(source string, err error))` | nil | Callback invoked on ingestion failure |
 | `WithIngestorTracer(t oasis.Tracer)` | nil | Enable ingest.document spans |
 | `WithIngestorLogger(l *slog.Logger)` | nil | Enable structured logging for ingestion |
 
@@ -152,7 +154,7 @@ Passed directly to `gemini.New(apiKey, model, ...Option)`.
 | `WithThinking(enabled bool)` | false | Enable thinking mode — sends `thinkingConfig` with dynamic budget (-1) |
 | `WithStructuredOutput(enabled bool)` | true | When enabled, responses with a `ResponseSchema` use `application/json` MIME type |
 | `WithResponseModalities(modalities ...string)` | — (text-only) | Required for image generation — use `WithResponseModalities("TEXT", "IMAGE")` |
-| `WithMediaResolution(r string)` | — (omitted) | Media resolution for multimodal inputs: `"MEDIA_RESOLUTION_LOW"`, `"MEDIA_RESOLUTION_MEDIUM"`, `"MEDIA_RESOLUTION_HIGH"` |
+| `WithMediaResolution(r string)` | — (omitted) | Media resolution for multimodal inputs: `"MEDIA_RESOLUTION_LOW"`, `"MEDIA_RESOLUTION_MEDIUM"`, `"MEDIA_RESOLUTION_HIGH"`. Only sent when explicitly set |
 | `WithCodeExecution(enabled bool)` | false | Enable Gemini's built-in code execution tool |
 | `WithFunctionCalling(enabled bool)` | false | Allow implicit function calling. When false and no tools are provided, `toolConfig` mode is set to `NONE` |
 | `WithGoogleSearch(enabled bool)` | false | Enable grounding with Google Search |

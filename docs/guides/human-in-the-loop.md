@@ -68,6 +68,8 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 //   "OK, I won't delete anything."
 ```
 
+When `ask_user` is called within `execute_plan` steps, requests are serialized even though tool execution runs in parallel. This prevents concurrent `InputHandler` calls, which are typically not designed for concurrent use.
+
 ## Programmatic: Workflow Gate
 
 Use a Step to gate between agent steps:

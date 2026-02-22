@@ -328,10 +328,11 @@ type DispatchResult struct {
     Content     string
     Usage       Usage
     Attachments []Attachment
+    IsError     bool
 }
 ```
 
-Holds the result of a single tool or agent dispatch. `Content` is the text output, `Usage` tracks token consumption, and `Attachments` carries binary data (e.g. images from sub-agent image generation).
+Holds the result of a single tool or agent dispatch. `Content` is the text output, `Usage` tracks token consumption, `Attachments` carries binary data (e.g. images from sub-agent image generation), and `IsError` signals whether `Content` represents an error message rather than successful tool output — enabling structural error detection without string-prefix heuristics.
 
 ---
 

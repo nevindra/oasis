@@ -97,7 +97,7 @@ This ensures memory and human-in-the-loop work correctly inside nested agent hie
 - The subagent tool schema requires a single `task` field (the user's message, passed verbatim)
 - Token usage from subagent executions is accumulated into the Network's total
 - When the router produces an empty final response after delegating, the Network falls back to the last subagent's output
-- Network implements `StreamingAgent` — streaming works the same as LLMAgent
+- Network implements `StreamingAgent` — when a subagent also implements `StreamingAgent`, Network detects this via type assertion and calls `ExecuteStream`, forwarding token-by-token events through the parent channel in real time. `EventInputReceived` events from subagents are filtered to avoid duplicates, and the router's final text-delta is suppressed when a subagent already streamed output (prevents duplication)
 
 ## When to Use Network vs Workflow
 
