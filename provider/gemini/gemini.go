@@ -23,15 +23,16 @@ type Gemini struct {
 	model      string
 	httpClient *http.Client
 
-	temperature      float64
-	topP             float64
-	mediaResolution  string
-	thinkingEnabled  bool
-	structuredOutput bool
-	codeExecution    bool
-	functionCalling  bool
-	googleSearch     bool
-	urlContext       bool
+	temperature        float64
+	topP               float64
+	mediaResolution    string
+	responseModalities []string
+	thinkingEnabled    bool
+	structuredOutput   bool
+	codeExecution      bool
+	functionCalling    bool
+	googleSearch       bool
+	urlContext         bool
 }
 
 // New creates a new Gemini chat provider with functional options.
@@ -42,7 +43,6 @@ func New(apiKey, model string, opts ...Option) *Gemini {
 		httpClient:       &http.Client{},
 		temperature:      0.1,
 		topP:             0.9,
-		mediaResolution:  "MEDIA_RESOLUTION_MEDIUM",
 		structuredOutput: true,
 	}
 	for _, opt := range opts {
@@ -579,14 +579,21 @@ func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefin
 
 	// Generation config.
 	genConfig := map[string]any{
-		"temperature":     g.temperature,
-		"topP":            g.topP,
-		"mediaResolution": g.mediaResolution,
+		"temperature": g.temperature,
+		"topP":        g.topP,
 	}
 
-	if !g.thinkingEnabled {
+	if g.mediaResolution != "" {
+		genConfig["mediaResolution"] = g.mediaResolution
+	}
+
+	if len(g.responseModalities) > 0 {
+		genConfig["responseModalities"] = g.responseModalities
+	}
+
+	if g.thinkingEnabled {
 		genConfig["thinkingConfig"] = map[string]any{
-			"thinkingBudget": 0,
+			"thinkingBudget": -1,
 		}
 	}
 

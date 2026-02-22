@@ -214,7 +214,15 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 
 		// Special case: execute_code tool
 		if tc.Name == "execute_code" && n.codeRunner != nil {
-			return executeCode(ctx, tc.Args, n.codeRunner, dispatch)
+			// Wrap dispatch to block execute_plan/execute_code calls from within code,
+			// preventing unbounded recursion via execute_code → execute_plan → execute_code.
+			safeDispatch := func(ctx context.Context, tc ToolCall) (string, Usage) {
+				if tc.Name == "execute_plan" || tc.Name == "execute_code" {
+					return "error: " + tc.Name + " cannot be called from within execute_code", Usage{}
+				}
+				return dispatch(ctx, tc)
+			}
+			return executeCode(ctx, tc.Args, n.codeRunner, safeDispatch)
 		}
 
 		// Check if it's an agent call (prefixed with "agent_")
@@ -259,7 +267,19 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, regi
 					go func() {
 						defer close(done)
 						for ev := range subCh {
-							ch <- ev
+							// Filter EventInputReceived from sub-agents — Network's
+							// EventAgentStart is the canonical signal for delegation.
+							if ev.Type == EventInputReceived {
+								continue
+							}
+							select {
+							case ch <- ev:
+							case <-ctx.Done():
+								// Drain remaining events to unblock ExecuteStream.
+								for range subCh {
+								}
+								return
+							}
 						}
 					}()
 					result, err = sa.ExecuteStream(ctx, subTask, subCh)

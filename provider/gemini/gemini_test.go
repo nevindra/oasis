@@ -343,19 +343,19 @@ func TestBuildBody_GenerationConfig(t *testing.T) {
 		t.Errorf("expected topP 0.9, got %v", gc["topP"])
 	}
 
-	// Default mediaResolution.
-	mr, ok := gc["mediaResolution"].(string)
-	if !ok || mr != "MEDIA_RESOLUTION_MEDIUM" {
-		t.Errorf("expected mediaResolution MEDIA_RESOLUTION_MEDIUM, got %v", gc["mediaResolution"])
+	// mediaResolution omitted by default.
+	if _, ok := gc["mediaResolution"]; ok {
+		t.Error("expected no mediaResolution when not explicitly set")
 	}
 
-	// Thinking disabled by default.
-	tc, ok := gc["thinkingConfig"].(map[string]any)
-	if !ok {
-		t.Fatal("expected thinkingConfig in generationConfig")
+	// responseModalities omitted by default.
+	if _, ok := gc["responseModalities"]; ok {
+		t.Error("expected no responseModalities when not explicitly set")
 	}
-	if tc["thinkingBudget"] != 0 {
-		t.Errorf("expected thinkingBudget 0, got %v", tc["thinkingBudget"])
+
+	// thinkingConfig omitted by default (thinking disabled).
+	if _, ok := gc["thinkingConfig"]; ok {
+		t.Error("expected no thinkingConfig when thinking is disabled")
 	}
 }
 
@@ -386,9 +386,45 @@ func TestBuildBody_GenerationConfigWithOptions(t *testing.T) {
 		t.Errorf("expected MEDIA_RESOLUTION_HIGH, got %v", gc["mediaResolution"])
 	}
 
-	// Thinking enabled: thinkingConfig should be absent.
+	// Thinking enabled: thinkingConfig should have budget -1.
+	tc, ok := gc["thinkingConfig"].(map[string]any)
+	if !ok {
+		t.Fatal("expected thinkingConfig when thinking is enabled")
+	}
+	if tc["thinkingBudget"] != -1 {
+		t.Errorf("expected thinkingBudget -1, got %v", tc["thinkingBudget"])
+	}
+}
+
+func TestBuildBody_ImageGeneration(t *testing.T) {
+	g := New("key", "gemini-2.0-flash-exp-image-generation",
+		WithResponseModalities("TEXT", "IMAGE"),
+	)
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Generate an image of a sunset"},
+	}
+
+	body, err := g.buildBody(messages, nil, nil)
+	if err != nil {
+		t.Fatalf("buildBody returned error: %v", err)
+	}
+
+	gc := body["generationConfig"].(map[string]any)
+
+	// responseModalities should be set.
+	rm, ok := gc["responseModalities"].([]string)
+	if !ok || len(rm) != 2 || rm[0] != "TEXT" || rm[1] != "IMAGE" {
+		t.Errorf("expected responseModalities [TEXT IMAGE], got %v", gc["responseModalities"])
+	}
+
+	// thinkingConfig should be absent (not supported by image-gen models).
 	if _, ok := gc["thinkingConfig"]; ok {
-		t.Error("expected no thinkingConfig when thinking is enabled")
+		t.Error("expected no thinkingConfig for image generation")
+	}
+
+	// mediaResolution should be absent (not explicitly set).
+	if _, ok := gc["mediaResolution"]; ok {
+		t.Error("expected no mediaResolution for image generation")
 	}
 }
 
@@ -663,8 +699,8 @@ func TestNewConstructors(t *testing.T) {
 	if g.topP != 0.9 {
 		t.Errorf("expected default topP 0.9, got %v", g.topP)
 	}
-	if g.mediaResolution != "MEDIA_RESOLUTION_MEDIUM" {
-		t.Errorf("expected default mediaResolution MEDIA_RESOLUTION_MEDIUM, got %q", g.mediaResolution)
+	if g.mediaResolution != "" {
+		t.Errorf("expected default mediaResolution empty, got %q", g.mediaResolution)
 	}
 	if g.structuredOutput != true {
 		t.Error("expected default structuredOutput true")
@@ -690,6 +726,7 @@ func TestNewWithOptions(t *testing.T) {
 		WithTemperature(0.5),
 		WithTopP(0.8),
 		WithMediaResolution("MEDIA_RESOLUTION_LOW"),
+		WithResponseModalities("TEXT", "IMAGE"),
 		WithThinking(true),
 		WithStructuredOutput(false),
 		WithCodeExecution(true),
@@ -706,6 +743,9 @@ func TestNewWithOptions(t *testing.T) {
 	}
 	if g.mediaResolution != "MEDIA_RESOLUTION_LOW" {
 		t.Errorf("expected MEDIA_RESOLUTION_LOW, got %q", g.mediaResolution)
+	}
+	if len(g.responseModalities) != 2 || g.responseModalities[0] != "TEXT" || g.responseModalities[1] != "IMAGE" {
+		t.Errorf("expected responseModalities [TEXT IMAGE], got %v", g.responseModalities)
 	}
 	if !g.thinkingEnabled {
 		t.Error("expected thinkingEnabled true")

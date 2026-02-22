@@ -477,10 +477,16 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			resp, err = cfg.provider.ChatWithTools(iterCtx, req, cfg.tools)
 		} else if ch != nil {
 			// No tools, streaming — stream the response directly.
-			// ChatStream closes ch on completion or error.
+			// ChatStream should close ch on completion, but we defensively
+			// ensure closure on error in case the provider doesn't.
 			resp, err = cfg.provider.ChatStream(iterCtx, req, ch)
 			if err != nil {
 				endIter()
+				// Defensive: provider may not have closed ch on error.
+				defer func() {
+					defer func() { recover() }() // ignore double-close panic
+					close(ch)
+				}()
 				return AgentResult{Usage: totalUsage, Steps: steps}, err
 			}
 			totalUsage.InputTokens += resp.Usage.InputTokens
@@ -616,6 +622,15 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	messages = append(messages, UserMessage(
 		"You have used all available tool calls. Summarize what you found and respond to the user."))
 
+	// Use sync.Once to safely close ch exactly once in the synthesis block.
+	// ChatStream may close ch on success, so we guard against double-close.
+	var closeCh sync.Once
+	safeCloseCh := func() {
+		if ch != nil {
+			closeCh.Do(func() { close(ch) })
+		}
+	}
+
 	var resp ChatResponse
 	var err error
 	if ch != nil {
@@ -624,6 +639,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		resp, err = cfg.provider.Chat(ctx, ChatRequest{Messages: messages})
 	}
 	if err != nil {
+		safeCloseCh()
 		return AgentResult{Usage: totalUsage, Steps: steps}, err
 	}
 	totalUsage.InputTokens += resp.Usage.InputTokens
@@ -631,12 +647,14 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 	// PostProcessor hook.
 	if err := cfg.processors.RunPostLLM(ctx, &resp); err != nil {
+		safeCloseCh()
 		if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
 			return AgentResult{Usage: totalUsage, Steps: steps}, s
 		}
 		return handleProcessorErrorWithSteps(err, totalUsage, steps)
 	}
 
+	safeCloseCh()
 	cfg.mem.persistMessages(ctx, cfg.name, task, task.Input, resp.Content, steps)
 	return AgentResult{Output: resp.Content, Attachments: resp.Attachments, Usage: totalUsage, Steps: steps}, nil
 }
@@ -692,9 +710,20 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 		return nil
 	}
 
-	// Snapshot messages for resume closure.
+	// Deep-copy messages for resume closure so that ToolCalls, Attachments,
+	// and Metadata slices don't share backing arrays with the original.
 	snapshot := make([]ChatMessage, len(messages))
-	copy(snapshot, messages)
+	for i, m := range messages {
+		snapshot[i] = m
+		if len(m.ToolCalls) > 0 {
+			snapshot[i].ToolCalls = make([]ToolCall, len(m.ToolCalls))
+			copy(snapshot[i].ToolCalls, m.ToolCalls)
+		}
+		if len(m.Attachments) > 0 {
+			snapshot[i].Attachments = make([]Attachment, len(m.Attachments))
+			copy(snapshot[i].Attachments, m.Attachments)
+		}
+	}
 
 	return &ErrSuspended{
 		Step:    cfg.name,
@@ -744,6 +773,10 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 			wg.Add(1)
 			go func(idx int, tc ToolCall) {
 				defer wg.Done()
+				if ctx.Err() != nil {
+					results[idx] = toolExecResult{content: "error: " + ctx.Err().Error()}
+					return
+				}
 				start := time.Now()
 				content, usage := dispatch(ctx, tc)
 				results[idx] = toolExecResult{content: content, usage: usage, duration: time.Since(start)}

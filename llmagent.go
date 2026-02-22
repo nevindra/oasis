@@ -211,7 +211,15 @@ func (a *LLMAgent) makeDispatch(registry *ToolRegistry) DispatchFunc {
 
 		// Special case: execute_code tool
 		if tc.Name == "execute_code" && a.codeRunner != nil {
-			return executeCode(ctx, tc.Args, a.codeRunner, dispatch)
+			// Wrap dispatch to block execute_plan/execute_code calls from within code,
+			// preventing unbounded recursion via execute_code → execute_plan → execute_code.
+			safeDispatch := func(ctx context.Context, tc ToolCall) (string, Usage) {
+				if tc.Name == "execute_plan" || tc.Name == "execute_code" {
+					return "error: " + tc.Name + " cannot be called from within execute_code", Usage{}
+				}
+				return dispatch(ctx, tc)
+			}
+			return executeCode(ctx, tc.Args, a.codeRunner, safeDispatch)
 		}
 
 		result, execErr := registry.Execute(ctx, tc.Name, tc.Args)

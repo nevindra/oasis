@@ -2410,9 +2410,19 @@ func TestServeSSE(t *testing.T) {
 		pos += idx + len(ev)
 	}
 
-	// Verify done event.
-	if !strings.Contains(body, "event: done\ndata: [DONE]") {
-		t.Errorf("missing done event in body:\n%s", body)
+	// Verify done event contains JSON-serialized AgentResult.
+	doneIdx := strings.Index(body, "event: done\ndata: ")
+	if doneIdx < 0 {
+		t.Fatalf("missing done event in body:\n%s", body)
+	}
+	doneData := body[doneIdx+len("event: done\ndata: "):]
+	doneData = strings.TrimRight(strings.SplitN(doneData, "\n", 2)[0], " ")
+	var doneResult AgentResult
+	if err := json.Unmarshal([]byte(doneData), &doneResult); err != nil {
+		t.Fatalf("failed to parse done data as AgentResult: %v\ndata: %s", err, doneData)
+	}
+	if doneResult.Output != "Hello world" {
+		t.Errorf("done result output = %q, want %q", doneResult.Output, "Hello world")
 	}
 }
 

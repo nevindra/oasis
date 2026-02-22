@@ -1295,6 +1295,12 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 				defer wg.Done()
 				defer func() { <-sem }()
 
+				// Check context before executing — if cancelled while waiting
+				// for the semaphore, skip execution immediately.
+				if iterCtx.Err() != nil {
+					return
+				}
+
 				elemCtx := context.WithValue(iterCtx, forEachIterCtxKey{}, forEachIter{
 					item:  elem,
 					index: idx,
@@ -1451,6 +1457,7 @@ func FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, 
 
 	// Build When() conditions for condition branch targets.
 	// Branch targets get a When that checks the condition result before executing.
+	// If multiple conditions route to the same target, compose with OR.
 	branchWhen := make(map[string]func(*WorkflowContext) bool)
 	for _, n := range def.Nodes {
 		if n.Type != NodeCondition {
@@ -1459,16 +1466,32 @@ func FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, 
 		resultKey := n.ID + ".result"
 		for _, target := range n.TrueBranch {
 			rk := resultKey
-			branchWhen[target] = func(wCtx *WorkflowContext) bool {
+			newFn := func(wCtx *WorkflowContext) bool {
 				v, ok := wCtx.Get(rk)
 				return ok && v == "true"
+			}
+			if existing, ok := branchWhen[target]; ok {
+				prev := existing
+				branchWhen[target] = func(wCtx *WorkflowContext) bool {
+					return prev(wCtx) || newFn(wCtx)
+				}
+			} else {
+				branchWhen[target] = newFn
 			}
 		}
 		for _, target := range n.FalseBranch {
 			rk := resultKey
-			branchWhen[target] = func(wCtx *WorkflowContext) bool {
+			newFn := func(wCtx *WorkflowContext) bool {
 				v, ok := wCtx.Get(rk)
 				return ok && v == "false"
+			}
+			if existing, ok := branchWhen[target]; ok {
+				prev := existing
+				branchWhen[target] = func(wCtx *WorkflowContext) bool {
+					return prev(wCtx) || newFn(wCtx)
+				}
+			} else {
+				branchWhen[target] = newFn
 			}
 		}
 	}
@@ -1612,7 +1635,9 @@ func buildToolNode(n NodeDefinition, after []string, reg DefinitionRegistry, whe
 			return nil
 		}, resolverAfter...)
 
-		toolStepOpts := append(stepOpts, After(resolverID), ArgsFrom(resolverID))
+		toolStepOpts := make([]StepOption, len(stepOpts), len(stepOpts)+2)
+		copy(toolStepOpts, stepOpts)
+		toolStepOpts = append(toolStepOpts, After(resolverID), ArgsFrom(resolverID))
 		toolStep := ToolStep(n.ID, tool, toolName, toolStepOpts...)
 
 		return []WorkflowOption{resolver, toolStep}, nil
@@ -1745,16 +1770,16 @@ var expressionOperators = []string{"!=", "==", ">=", "<=", ">", "<", "contains"}
 // Numeric comparison is attempted first; falls back to string comparison.
 // The "contains" operator is always string-based.
 func evalExpression(expr string, wCtx *WorkflowContext) (bool, error) {
-	resolved := wCtx.Resolve(expr)
-
+	// Find the operator in the raw expression (before resolving placeholders)
+	// to avoid matching operators inside resolved values.
 	for _, op := range expressionOperators {
-		idx := strings.Index(resolved, op)
+		idx := strings.Index(expr, op)
 		if idx == -1 {
 			continue
 		}
 
-		left := strings.TrimSpace(resolved[:idx])
-		right := strings.TrimSpace(resolved[idx+len(op):])
+		left := strings.TrimSpace(wCtx.Resolve(expr[:idx]))
+		right := strings.TrimSpace(wCtx.Resolve(expr[idx+len(op):]))
 		left = stripQuotes(left)
 		right = stripQuotes(right)
 

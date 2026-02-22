@@ -15,13 +15,21 @@ func WithTopP(p float64) Option {
 
 // WithMediaResolution sets the media resolution for multimodal inputs.
 // Valid values: "MEDIA_RESOLUTION_LOW", "MEDIA_RESOLUTION_MEDIUM", "MEDIA_RESOLUTION_HIGH".
-// Default is "MEDIA_RESOLUTION_MEDIUM".
+// Only sent when explicitly set; omitted by default.
 func WithMediaResolution(r string) Option {
 	return func(g *Gemini) { g.mediaResolution = r }
 }
 
+// WithResponseModalities sets the response modalities for the model.
+// Required for image generation models — use WithResponseModalities("TEXT", "IMAGE").
+// Only sent when explicitly set; omitted by default (text-only).
+func WithResponseModalities(modalities ...string) Option {
+	return func(g *Gemini) { g.responseModalities = modalities }
+}
+
 // WithThinking enables or disables thinking mode (default false).
-// When disabled, thinkingBudget is set to 0 to avoid consuming tokens.
+// When enabled, sends thinkingConfig with budget -1 (dynamic).
+// When disabled (default), thinkingConfig is omitted entirely.
 func WithThinking(enabled bool) Option {
 	return func(g *Gemini) { g.thinkingEnabled = enabled }
 }

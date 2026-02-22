@@ -11,15 +11,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`Message.Metadata` field** — `map[string]any` on `Message` for flexible per-message metadata, persisted as JSON (SQLite/libSQL) or JSONB (PostgreSQL). When `WithConversationMemory` is enabled, assistant messages automatically include execution traces (`steps` key) from `AgentResult.Steps`, giving any Oasis app persisted execution traces for free. Schema migration is automatic (best-effort `ALTER TABLE` for existing databases)
 - **`AutoTitle()` conversation option** — opt-in automatic thread title generation from the first user message; runs in the background alongside message persistence; skipped when thread already has a title. Usage: `WithConversationMemory(store, AutoTitle())`
 - **`WriteSSEEvent` helper** — composable primitive for writing individual Server-Sent Events. Handles JSON marshaling and flushing, letting developers build custom SSE loops with `ExecuteStream` without reimplementing SSE mechanics
+- **Image generation support** — added `gemini.WithResponseModalities()` option to enable image output from Gemini models (e.g. `WithResponseModalities("TEXT", "IMAGE")`). Generated images are returned as `Attachment` structs on `AgentResult.Attachments`. See [image generation guide](docs/guides/image-generation.md)
 
 ### Changed
 
 - **`ServeSSE` done event** — the `done` event now sends the full `AgentResult` (output, steps, usage) instead of `[DONE]`, so frontends can access execution metadata without an extra call
 - **KnowledgeTool documentation** — expanded godoc on `KnowledgeTool` and the RAG pipeline guide to clarify that retrieval behavior (score threshold, chunk filters, keyword weight, re-ranking) is configured on the `Retriever` via `WithRetriever`, not on the tool itself. Added examples for custom retrieval, vector-only search, and an options summary table
+- **Gemini `thinkingConfig` no longer sent by default** — previously `thinkingBudget: 0` was always included in `generationConfig` when thinking was disabled, which caused 400 errors on models that don't support it (e.g. image generation models). Now only sent when `WithThinking(true)` is set
+- **Gemini `mediaResolution` now opt-in** — previously always sent as `"MEDIA_RESOLUTION_MEDIUM"`. Now only included when explicitly set via `WithMediaResolution()`, avoiding 400 errors on models that don't support this parameter
 
 ### Fixed
 
-- **Conversation history message ordering corruption** — user and assistant messages persisted with `NowUnix()` (second-level resolution) could share the same `created_at` timestamp, causing non-deterministic ordering in `GetMessages` across all store implementations (SQLite, libSQL, PostgreSQL). When the assistant message appeared before the user message in history, the LLM would repeat/summarize the previous answer. Fixed with two layers: (1) assistant message now gets `created_at = now + 1` so timestamps are always distinct, (2) added UUIDv7 `id` as a secondary sort key (`ORDER BY created_at DESC, id DESC`) as a safety net for legacy data
+- **`TestServeSSE` expected stale done format** — test asserted `data: [DONE]` but `ServeSSE` sends JSON-serialized `AgentResult` since the done event change. Updated to parse and verify the `AgentResult` payload
+
+- **Streaming channel leaks** — synthesis block (max-iterations) and no-tools streaming path could leave `ch` open on error, leaking goroutines. Now uses `sync.Once`-guarded close and defensive recover guard respectively
+- **Network streaming deadlock** — sub-agent event forwarding goroutine blocked on full parent channel. Now context-aware with `select` on `ctx.Done()` and drain on cancellation
+- **Duplicate `EventInputReceived` from sub-agents** — forwarding goroutine now filters `EventInputReceived` (Network's `EventAgentStart` is the canonical signal)
+- **Workflow expression evaluator false matches** — operators found inside resolved values caused incorrect splits. Now splits on the raw expression before resolving placeholders
+- **`FromDefinition` branch target overwrite** — multiple condition nodes routing to the same target silently dropped earlier conditions. Now composes with OR
+- **Shallow snapshot in `checkSuspendLoop`** — `ToolCalls`/`Attachments` slices shared backing arrays. Now deep-copies
+- **`buildToolNode` slice aliasing** — `append(stepOpts, ...)` could alias the backing array. Now uses explicit `make`+`copy`
+- **`execute_code` recursion bypass** — code could call `execute_plan`/`execute_code` via `call_tool`. Dispatch passed to code runner now blocks both
+- **`dispatchParallel` ignored context cancellation** — goroutines now check `ctx.Err()` before dispatching
+- **ForEach ignored cancelled context** — iterations now check `iterCtx.Err()` before executing the step function
+- **Conversation history ordering corruption** — user/assistant messages could share timestamps. Assistant now gets `created_at = now + 1`; added UUIDv7 `id` as secondary sort key
 - **`WithConversationMemory` never created thread rows** — `persistMessages` only called `StoreMessage` but never `CreateThread`, leaving the `threads` table empty. Added `ensureThread` to create the thread row on first message and bump `updated_at` on subsequent turns, so `ListThreads`/`GetThread` work correctly for memory-managed threads
 - **Network streaming arrived as single chunk** — when a subagent implemented `StreamingAgent`, Network still called `Execute()` (blocking), collecting the entire response before emitting it as one `text-delta`. Network now detects `StreamingAgent` via type assertion and calls `ExecuteStream`, forwarding token-by-token events through the parent channel in real time
 - **Network streaming duplicated sub-agent output** — when a Network delegated to a streaming sub-agent, the sub-agent's text-delta events were forwarded correctly, but the router's final response (echo, paraphrase, or empty) emitted a second text-delta, causing consumers to see the response doubled. The router's final text-delta is now suppressed entirely when a sub-agent already streamed; `AgentResult.Output` still carries the router's final text for programmatic use
