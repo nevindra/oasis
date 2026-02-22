@@ -42,6 +42,10 @@ type Ingestor struct {
 	// observability
 	tracer oasis.Tracer
 	logger *slog.Logger
+
+	// lifecycle hooks
+	onSuccess func(IngestResult)
+	onError   func(source string, err error)
 }
 
 // NewIngestor creates an Ingestor with sensible defaults.
@@ -54,6 +58,10 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 			TypePlainText: PlainTextExtractor{},
 			TypeHTML:      HTMLExtractor{},
 			TypeMarkdown:  MarkdownExtractor{},
+			TypeCSV:       NewCSVExtractor(),
+			TypeJSON:      NewJSONExtractor(),
+			TypeDOCX:      NewDOCXExtractor(),
+			TypePDF:       NewPDFExtractor(),
 		},
 		strategy:      StrategyFlat,
 		batchSize:     64,
@@ -105,22 +113,31 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 
 	chunks, err := ing.chunkAndEmbed(ctx, text, docID, TypePlainText, source, nil)
 	if err != nil {
+		ing.notifyError(source, err)
 		return IngestResult{}, err
 	}
 
 	if err := ing.store.StoreDocument(ctx, doc, chunks); err != nil {
-		return IngestResult{}, fmt.Errorf("store: %w", err)
+		err = fmt.Errorf("store: %w", err)
+		ing.notifyError(source, err)
+		return IngestResult{}, err
 	}
 
 	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
-		return IngestResult{}, fmt.Errorf("graph extraction: %w", err)
+		err = fmt.Errorf("graph extraction: %w", err)
+		ing.notifyError(source, err)
+		return IngestResult{}, err
 	}
 
-	return IngestResult{
+	result := IngestResult{
 		DocumentID: docID,
 		Document:   doc,
 		ChunkCount: len(chunks),
-	}, nil
+	}
+	if ing.onSuccess != nil {
+		ing.onSuccess(result)
+	}
+	return result, nil
 }
 
 // IngestFile ingests file content, detecting the content type from the filename extension.
@@ -153,9 +170,6 @@ func (ing *Ingestor) IngestFile(ctx context.Context, content []byte, filename st
 func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename string, ct ContentType) (IngestResult, error) {
 	extractor, ok := ing.extractors[ct]
 	if !ok {
-		if isBinaryContentType(ct) {
-			return IngestResult{}, fmt.Errorf("no extractor registered for %s; import the corresponding subpackage and use WithExtractor()", ct)
-		}
 		extractor = PlainTextExtractor{}
 	}
 
@@ -164,17 +178,21 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 
 	// Use MetadataExtractor if available.
 	if me, ok := extractor.(MetadataExtractor); ok {
-		result, err := me.ExtractWithMeta(content)
+		result, err := safeExtractWithMeta(me, content)
 		if err != nil {
-			return IngestResult{}, fmt.Errorf("extract %s: %w", ct, err)
+			err = fmt.Errorf("extract %s: %w", ct, err)
+			ing.notifyError(filename, err)
+			return IngestResult{}, err
 		}
 		text = result.Text
 		pageMeta = result.Meta
 	} else {
 		var err error
-		text, err = extractor.Extract(content)
+		text, err = safeExtract(extractor, content)
 		if err != nil {
-			return IngestResult{}, fmt.Errorf("extract %s: %w", ct, err)
+			err = fmt.Errorf("extract %s: %w", ct, err)
+			ing.notifyError(filename, err)
+			return IngestResult{}, err
 		}
 	}
 
@@ -191,22 +209,31 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 
 	chunks, err := ing.chunkAndEmbed(ctx, text, docID, ct, filename, pageMeta)
 	if err != nil {
+		ing.notifyError(filename, err)
 		return IngestResult{}, err
 	}
 
 	if err := ing.store.StoreDocument(ctx, doc, chunks); err != nil {
-		return IngestResult{}, fmt.Errorf("store: %w", err)
+		err = fmt.Errorf("store: %w", err)
+		ing.notifyError(filename, err)
+		return IngestResult{}, err
 	}
 
 	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
-		return IngestResult{}, fmt.Errorf("graph extraction: %w", err)
+		err = fmt.Errorf("graph extraction: %w", err)
+		ing.notifyError(filename, err)
+		return IngestResult{}, err
 	}
 
-	return IngestResult{
+	result := IngestResult{
 		DocumentID: docID,
 		Document:   doc,
 		ChunkCount: len(chunks),
-	}, nil
+	}
+	if ing.onSuccess != nil {
+		ing.onSuccess(result)
+	}
+	return result, nil
 }
 
 // IngestReader reads all content from r and ingests it, detecting content type from filename.
@@ -253,6 +280,33 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 	}
 
 	return gs.StoreEdges(ctx, edges)
+}
+
+// notifyError fires the onError hook if set.
+func (ing *Ingestor) notifyError(source string, err error) {
+	if ing.onError != nil {
+		ing.onError(source, err)
+	}
+}
+
+// safeExtract calls e.Extract, recovering any panic into an error.
+func safeExtract(e Extractor, content []byte) (text string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("extractor panicked: %v", r)
+		}
+	}()
+	return e.Extract(content)
+}
+
+// safeExtractWithMeta calls me.ExtractWithMeta, recovering any panic into an error.
+func safeExtractWithMeta(me MetadataExtractor, content []byte) (result ExtractResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("extractor panicked: %v", r)
+		}
+	}()
+	return me.ExtractWithMeta(content)
 }
 
 // strategyName returns a human-readable name for a ChunkStrategy.

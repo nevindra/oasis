@@ -1,16 +1,4 @@
-// Package docx provides a DOCX text extractor for the ingest pipeline.
-//
-// It parses the ZIP-based OOXML format to extract paragraphs, tables, headings,
-// and embedded images. Pure Go, no CGO.
-//
-// Usage:
-//
-//	import "github.com/nevindra/oasis/ingest/docx"
-//
-//	ingestor := ingest.NewIngestor(store, embedding,
-//	    ingest.WithExtractor(ingest.TypeDOCX, docx.NewExtractor()),
-//	)
-package docx
+package ingest
 
 import (
 	"archive/zip"
@@ -23,26 +11,22 @@ import (
 	"strings"
 
 	oasis "github.com/nevindra/oasis"
-	"github.com/nevindra/oasis/ingest"
 )
 
 // Compile-time interface checks.
-var _ ingest.Extractor = (*Extractor)(nil)
-var _ ingest.MetadataExtractor = (*Extractor)(nil)
+var _ Extractor = (*DOCXExtractor)(nil)
+var _ MetadataExtractor = (*DOCXExtractor)(nil)
 
-// TypeDOCX is the content type for DOCX documents.
-const TypeDOCX = ingest.TypeDOCX
+// DOCXExtractor implements Extractor and MetadataExtractor for DOCX documents.
+// It streams OOXML tokens to extract text, headings, tables, and embedded images
+// without loading the full DOM tree into memory.
+type DOCXExtractor struct{}
 
-// Extractor implements ingest.Extractor and ingest.MetadataExtractor for
-// DOCX documents. It streams OOXML tokens to extract text, headings, tables,
-// and embedded images without loading the full DOM tree into memory.
-type Extractor struct{}
-
-// NewExtractor creates a DOCX extractor.
-func NewExtractor() *Extractor { return &Extractor{} }
+// NewDOCXExtractor creates a DOCX extractor.
+func NewDOCXExtractor() *DOCXExtractor { return &DOCXExtractor{} }
 
 // Extract extracts plain text from a DOCX document.
-func (e *Extractor) Extract(content []byte) (string, error) {
+func (e *DOCXExtractor) Extract(content []byte) (string, error) {
 	result, err := e.ExtractWithMeta(content)
 	if err != nil {
 		return "", err
@@ -53,20 +37,18 @@ func (e *Extractor) Extract(content []byte) (string, error) {
 // ExtractWithMeta extracts text and structured metadata (headings, images)
 // from a DOCX document. Tables are converted to labeled "Header: Value" format.
 // Headings produce PageMeta entries with byte offsets into the returned text.
-func (e *Extractor) ExtractWithMeta(content []byte) (ingest.ExtractResult, error) {
+func (e *DOCXExtractor) ExtractWithMeta(content []byte) (ExtractResult, error) {
 	if len(content) == 0 {
-		return ingest.ExtractResult{}, fmt.Errorf("empty docx content")
+		return ExtractResult{}, fmt.Errorf("empty docx content")
 	}
 
 	zr, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
 	if err != nil {
-		return ingest.ExtractResult{}, fmt.Errorf("open zip: %w", err)
+		return ExtractResult{}, fmt.Errorf("open zip: %w", err)
 	}
 
-	// Load images from word/media/.
-	images := loadImages(zr)
+	images := docxLoadImages(zr)
 
-	// Find and parse word/document.xml.
 	var docFile *zip.File
 	for _, f := range zr.File {
 		if f.Name == "word/document.xml" {
@@ -75,26 +57,24 @@ func (e *Extractor) ExtractWithMeta(content []byte) (ingest.ExtractResult, error
 		}
 	}
 	if docFile == nil {
-		return ingest.ExtractResult{}, fmt.Errorf("missing word/document.xml")
+		return ExtractResult{}, fmt.Errorf("missing word/document.xml")
 	}
 
-	docData, err := readZipFile(docFile)
+	docData, err := docxReadZipFile(docFile)
 	if err != nil {
-		return ingest.ExtractResult{}, fmt.Errorf("read document.xml: %w", err)
+		return ExtractResult{}, fmt.Errorf("read document.xml: %w", err)
 	}
 
-	return parseDocument(docData, images)
+	return docxParseDocument(docData, images)
 }
 
-// loadImages reads all files under word/media/ and returns them keyed by
-// filename (without the word/media/ prefix).
-func loadImages(zr *zip.Reader) map[string]oasis.Image {
+func docxLoadImages(zr *zip.Reader) map[string]oasis.Image {
 	images := make(map[string]oasis.Image)
 	for _, f := range zr.File {
 		if !strings.HasPrefix(f.Name, "word/media/") {
 			continue
 		}
-		data, err := readZipFile(f)
+		data, err := docxReadZipFile(f)
 		if err != nil {
 			continue
 		}
@@ -107,7 +87,7 @@ func loadImages(zr *zip.Reader) map[string]oasis.Image {
 	return images
 }
 
-func readZipFile(f *zip.File) ([]byte, error) {
+func docxReadZipFile(f *zip.File) ([]byte, error) {
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
@@ -116,35 +96,30 @@ func readZipFile(f *zip.File) ([]byte, error) {
 	return io.ReadAll(rc)
 }
 
-// parseState tracks the streaming XML decoder state.
-type parseState struct {
+// docxParseState tracks the streaming XML decoder state.
+type docxParseState struct {
 	text    strings.Builder
-	meta    []ingest.PageMeta
+	meta    []PageMeta
 	decoder *xml.Decoder
 
-	// heading tracking
 	currentHeading   string
 	headingStartByte int
 
-	// paragraph tracking
 	inParagraph    bool
 	inRun          bool
 	currentStyle   string
 	paragraphTexts []string
 
-	// table tracking
-	inTable       bool
-	inTableRow    bool
-	tableHeaders  []string
-	tableRowIdx   int
-	cellTexts     []string
-	currentCell   strings.Builder
+	inTable      bool
+	inTableRow   bool
+	tableHeaders []string
+	tableRowIdx  int
+	cellTexts    []string
+	currentCell  strings.Builder
 }
 
-// parseDocument streams through the OOXML tokens in document.xml and builds
-// text output with metadata. Tables use "Header: Value" labeled format.
-func parseDocument(data []byte, images map[string]oasis.Image) (ingest.ExtractResult, error) {
-	s := &parseState{
+func docxParseDocument(data []byte, images map[string]oasis.Image) (ExtractResult, error) {
+	s := &docxParseState{
 		decoder: xml.NewDecoder(bytes.NewReader(data)),
 	}
 
@@ -154,7 +129,7 @@ func parseDocument(data []byte, images map[string]oasis.Image) (ingest.ExtractRe
 			break
 		}
 		if err != nil {
-			return ingest.ExtractResult{}, fmt.Errorf("parse xml: %w", err)
+			return ExtractResult{}, fmt.Errorf("parse xml: %w", err)
 		}
 
 		switch t := tok.(type) {
@@ -167,16 +142,14 @@ func parseDocument(data []byte, images map[string]oasis.Image) (ingest.ExtractRe
 		}
 	}
 
-	// Close the last heading section if one is open.
 	if s.currentHeading != "" {
-		s.meta = append(s.meta, ingest.PageMeta{
+		s.meta = append(s.meta, PageMeta{
 			Heading:   s.currentHeading,
 			StartByte: s.headingStartByte,
 			EndByte:   s.text.Len(),
 		})
 	}
 
-	// Attach images to metadata.
 	if len(images) > 0 {
 		var imgList []oasis.Image
 		for _, img := range images {
@@ -185,7 +158,7 @@ func parseDocument(data []byte, images map[string]oasis.Image) (ingest.ExtractRe
 		if len(s.meta) > 0 {
 			s.meta[0].Images = imgList
 		} else {
-			s.meta = append(s.meta, ingest.PageMeta{
+			s.meta = append(s.meta, PageMeta{
 				StartByte: 0,
 				EndByte:   s.text.Len(),
 				Images:    imgList,
@@ -193,13 +166,13 @@ func parseDocument(data []byte, images map[string]oasis.Image) (ingest.ExtractRe
 		}
 	}
 
-	return ingest.ExtractResult{
+	return ExtractResult{
 		Text: strings.TrimSpace(s.text.String()),
 		Meta: s.meta,
 	}, nil
 }
 
-func (s *parseState) handleStart(t xml.StartElement) {
+func (s *docxParseState) handleStart(t xml.StartElement) {
 	switch t.Name.Local {
 	case "p":
 		s.inParagraph = true
@@ -225,7 +198,7 @@ func (s *parseState) handleStart(t xml.StartElement) {
 	}
 }
 
-func (s *parseState) handleEnd(t xml.EndElement) {
+func (s *docxParseState) handleEnd(t xml.EndElement) {
 	switch t.Name.Local {
 	case "r":
 		s.inRun = false
@@ -250,7 +223,7 @@ func (s *parseState) handleEnd(t xml.EndElement) {
 	}
 }
 
-func (s *parseState) handleCharData(data xml.CharData) {
+func (s *docxParseState) handleCharData(data xml.CharData) {
 	content := string(data)
 	if s.inTable && s.inTableRow {
 		s.currentCell.WriteString(content)
@@ -261,8 +234,7 @@ func (s *parseState) handleCharData(data xml.CharData) {
 	}
 }
 
-// emitTableRow writes a data row in "Header: Value" labeled format.
-func (s *parseState) emitTableRow() {
+func (s *docxParseState) emitTableRow() {
 	var fields []string
 	for i, val := range s.cellTexts {
 		val = strings.TrimSpace(val)
@@ -288,11 +260,8 @@ func (s *parseState) emitTableRow() {
 	s.text.WriteString(strings.Join(fields, ", "))
 }
 
-// endParagraph finalizes a paragraph, emitting its text and tracking headings.
-func (s *parseState) endParagraph() {
+func (s *docxParseState) endParagraph() {
 	s.inParagraph = false
-
-	// Table cell paragraphs are handled by the table logic.
 	if s.inTable {
 		return
 	}
@@ -307,9 +276,8 @@ func (s *parseState) endParagraph() {
 
 	isHeading := strings.HasPrefix(s.currentStyle, "Heading")
 
-	// Close previous heading section when a new heading starts.
 	if isHeading && s.currentHeading != "" {
-		s.meta = append(s.meta, ingest.PageMeta{
+		s.meta = append(s.meta, PageMeta{
 			Heading:   s.currentHeading,
 			StartByte: s.headingStartByte,
 			EndByte:   s.text.Len(),

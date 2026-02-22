@@ -69,16 +69,6 @@ func ContentTypeFromExtension(ext string) ContentType {
 	}
 }
 
-// isBinaryContentType returns true for content types that require a dedicated
-// extractor and cannot be meaningfully processed as plain text.
-func isBinaryContentType(ct ContentType) bool {
-	switch ct {
-	case TypePDF, TypeDOCX:
-		return true
-	}
-	return false
-}
-
 // --- Built-in extractors ---
 
 // PlainTextExtractor returns content as-is.

@@ -1,17 +1,13 @@
-package csv
+package ingest
 
 import (
 	"strings"
 	"testing"
-
-	"github.com/nevindra/oasis/ingest"
 )
 
-var _ ingest.Extractor = (*Extractor)(nil)
-
-func TestExtractBasic(t *testing.T) {
+func TestCSVExtractBasic(t *testing.T) {
 	input := "Name,Age,City\nJohn,30,NYC\nJane,25,LA\n"
-	e := NewExtractor()
+	e := NewCSVExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -22,28 +18,26 @@ func TestExtractBasic(t *testing.T) {
 	if !strings.Contains(out, "Age: 30") {
 		t.Errorf("expected labeled field, got %q", out)
 	}
-	// Two rows should produce two paragraphs separated by blank line
 	if strings.Count(out, "\n\n") < 1 {
 		t.Errorf("expected paragraph separation, got %q", out)
 	}
 }
 
-func TestExtractEmptyCells(t *testing.T) {
+func TestCSVExtractEmptyCells(t *testing.T) {
 	input := "Name,Age\nJohn,\n,25\n"
-	e := NewExtractor()
+	e := NewCSVExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Empty cells should be omitted from output
 	if strings.Contains(out, "Age: ,") || strings.Contains(out, "Age: \n") {
 		t.Errorf("empty cell not handled: %q", out)
 	}
 }
 
-func TestExtractQuotedFields(t *testing.T) {
+func TestCSVExtractQuotedFields(t *testing.T) {
 	input := "Name,Description\n\"John\",\"Has a comma, here\"\n"
-	e := NewExtractor()
+	e := NewCSVExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -53,9 +47,9 @@ func TestExtractQuotedFields(t *testing.T) {
 	}
 }
 
-func TestExtractSingleColumn(t *testing.T) {
+func TestCSVExtractSingleColumn(t *testing.T) {
 	input := "Value\n42\n99\n"
-	e := NewExtractor()
+	e := NewCSVExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -65,9 +59,9 @@ func TestExtractSingleColumn(t *testing.T) {
 	}
 }
 
-func TestExtractBOM(t *testing.T) {
+func TestCSVExtractBOM(t *testing.T) {
 	input := "\xef\xbb\xbfName,Age\nJohn,30\n"
-	e := NewExtractor()
+	e := NewCSVExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -77,8 +71,8 @@ func TestExtractBOM(t *testing.T) {
 	}
 }
 
-func TestExtractEmpty(t *testing.T) {
-	e := NewExtractor()
+func TestCSVExtractEmpty(t *testing.T) {
+	e := NewCSVExtractor()
 	out, err := e.Extract([]byte(""))
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +82,8 @@ func TestExtractEmpty(t *testing.T) {
 	}
 }
 
-func TestExtractHeaderOnly(t *testing.T) {
-	e := NewExtractor()
+func TestCSVExtractHeaderOnly(t *testing.T) {
+	e := NewCSVExtractor()
 	out, err := e.Extract([]byte("Name,Age\n"))
 	if err != nil {
 		t.Fatal(err)

@@ -96,3 +96,15 @@ func WithIngestorTracer(t oasis.Tracer) Option {
 func WithIngestorLogger(l *slog.Logger) Option {
 	return func(ing *Ingestor) { ing.logger = l }
 }
+
+// WithOnSuccess registers a callback invoked after each successful ingestion.
+// The callback receives the full IngestResult.
+func WithOnSuccess(fn func(IngestResult)) Option {
+	return func(ing *Ingestor) { ing.onSuccess = fn }
+}
+
+// WithOnError registers a callback invoked when ingestion fails.
+// source is the filename (IngestFile) or source string (IngestText).
+func WithOnError(fn func(source string, err error)) Option {
+	return func(ing *Ingestor) { ing.onError = fn }
+}

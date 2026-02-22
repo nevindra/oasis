@@ -138,17 +138,13 @@ func TestIngestorIngestFile(t *testing.T) {
 	}
 }
 
-func TestIngestFileBinaryWithoutExtractor(t *testing.T) {
+func TestIngestFilePDFIsAutoRegistered(t *testing.T) {
 	store := &mockStore{}
 	emb := &mockEmbedding{}
-	ing := NewIngestor(store, emb) // no PDF extractor registered
+	ing := NewIngestor(store, emb) // PDF extractor auto-registered
 
-	_, err := ing.IngestFile(context.Background(), []byte("%PDF-1.4 binary"), "report.pdf")
-	if err == nil {
-		t.Fatal("expected error for unregistered PDF extractor")
-	}
-	if !strings.Contains(err.Error(), "no extractor registered") {
-		t.Errorf("unexpected error: %v", err)
+	if _, ok := ing.extractors[TypePDF]; !ok {
+		t.Error("PDF extractor should be auto-registered")
 	}
 }
 
@@ -262,6 +258,53 @@ func TestIngestorWithChunker(t *testing.T) {
 	}
 }
 
+// --- panic recovery tests ---
+
+type panicExtractor struct{}
+
+func (panicExtractor) Extract(_ []byte) (string, error) {
+	panic("third-party parser exploded")
+}
+
+func TestIngestorExtractorPanicRecovered(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	ing := NewIngestor(store, emb,
+		WithExtractor(TypePlainText, panicExtractor{}),
+	)
+
+	_, err := ing.IngestFile(context.Background(), []byte("content"), "file.txt")
+	if err == nil {
+		t.Fatal("expected error from panicking extractor")
+	}
+	if !strings.Contains(err.Error(), "extractor panicked") {
+		t.Errorf("expected panic message, got: %v", err)
+	}
+}
+
+type panicMetadataExtractor struct{}
+
+func (panicMetadataExtractor) Extract(_ []byte) (string, error) { return "", nil }
+func (panicMetadataExtractor) ExtractWithMeta(_ []byte) (ExtractResult, error) {
+	panic("metadata extractor exploded")
+}
+
+func TestIngestorMetadataExtractorPanicRecovered(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	ing := NewIngestor(store, emb,
+		WithExtractor(TypePlainText, panicMetadataExtractor{}),
+	)
+
+	_, err := ing.IngestFile(context.Background(), []byte("content"), "file.txt")
+	if err == nil {
+		t.Fatal("expected error from panicking metadata extractor")
+	}
+	if !strings.Contains(err.Error(), "extractor panicked") {
+		t.Errorf("expected panic message, got: %v", err)
+	}
+}
+
 // --- integration tests: metadata flow ---
 
 // metadataExtractorMock implements both Extractor and MetadataExtractor.
@@ -321,13 +364,7 @@ func TestIngestorMetadataExtractor(t *testing.T) {
 func TestIngestorCSVEndToEnd(t *testing.T) {
 	store := &mockStore{}
 	emb := &mockEmbedding{}
-
-	// Register plain text extractor for CSV type (CSV extractor is in a
-	// sub-package we can't import due to cycle, but the metadata wiring
-	// is the same regardless of extractor).
-	ing := NewIngestor(store, emb,
-		WithExtractor(TypeCSV, PlainTextExtractor{}),
-	)
+	ing := NewIngestor(store, emb) // CSVExtractor auto-registered
 
 	csvData := []byte("Name,Age\nJohn,30\nJane,25\n")
 	r, err := ing.IngestFile(context.Background(), csvData, "data.csv")
@@ -337,11 +374,74 @@ func TestIngestorCSVEndToEnd(t *testing.T) {
 	if r.ChunkCount == 0 {
 		t.Fatal("expected chunks")
 	}
-
-	// Verify source URL is set on chunks via metadata.
+	// Verify labeled CSV output was produced.
+	found := false
 	for _, c := range store.chunks {
-		if c.Metadata == nil || c.Metadata.SourceURL != "data.csv" {
-			t.Errorf("expected source URL data.csv on chunk metadata, got %+v", c.Metadata)
+		if strings.Contains(c.Content, "Name: John") {
+			found = true
 		}
+	}
+	if !found {
+		t.Error("expected labeled CSV output in chunks")
+	}
+}
+
+// --- lifecycle hook tests ---
+
+func TestIngestorOnSuccessHook(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+
+	var called IngestResult
+	ing := NewIngestor(store, emb,
+		WithOnSuccess(func(r IngestResult) { called = r }),
+	)
+
+	r, err := ing.IngestText(context.Background(), "hello world", "src", "Title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called.DocumentID == "" {
+		t.Error("onSuccess hook not called")
+	}
+	if called.DocumentID != r.DocumentID {
+		t.Errorf("hook got wrong result: %v", called)
+	}
+}
+
+func TestIngestorOnErrorHook(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+
+	var hookSource string
+	var hookErr error
+	ing := NewIngestor(store, emb,
+		WithExtractor(TypePlainText, panicExtractor{}),
+		WithOnError(func(source string, err error) {
+			hookSource = source
+			hookErr = err
+		}),
+	)
+
+	_, err := ing.IngestFile(context.Background(), []byte("content"), "file.txt")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if hookSource != "file.txt" {
+		t.Errorf("expected source 'file.txt', got %q", hookSource)
+	}
+	if hookErr == nil {
+		t.Error("onError hook not called with error")
+	}
+}
+
+func TestIngestorNoHooksNilSafe(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	ing := NewIngestor(store, emb) // no hooks — must not panic
+
+	_, err := ing.IngestText(context.Background(), "hello", "src", "Title")
+	if err != nil {
+		t.Fatal(err)
 	}
 }

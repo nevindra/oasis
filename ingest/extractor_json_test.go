@@ -1,17 +1,13 @@
-package json
+package ingest
 
 import (
 	"strings"
 	"testing"
-
-	"github.com/nevindra/oasis/ingest"
 )
 
-var _ ingest.Extractor = (*Extractor)(nil)
-
-func TestExtractFlatObject(t *testing.T) {
+func TestJSONExtractFlatObject(t *testing.T) {
 	input := `{"name": "John", "age": 30}`
-	e := NewExtractor()
+	e := NewJSONExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -24,9 +20,9 @@ func TestExtractFlatObject(t *testing.T) {
 	}
 }
 
-func TestExtractNestedObject(t *testing.T) {
+func TestJSONExtractNestedObject(t *testing.T) {
 	input := `{"user": {"name": "John", "address": {"city": "NYC"}}}`
-	e := NewExtractor()
+	e := NewJSONExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -39,9 +35,9 @@ func TestExtractNestedObject(t *testing.T) {
 	}
 }
 
-func TestExtractArray(t *testing.T) {
+func TestJSONExtractArray(t *testing.T) {
 	input := `{"tags": ["go", "ai", "rag"]}`
-	e := NewExtractor()
+	e := NewJSONExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -51,9 +47,9 @@ func TestExtractArray(t *testing.T) {
 	}
 }
 
-func TestExtractArrayOfObjects(t *testing.T) {
+func TestJSONExtractArrayOfObjects(t *testing.T) {
 	input := `{"users": [{"name": "John"}, {"name": "Jane"}]}`
-	e := NewExtractor()
+	e := NewJSONExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -66,9 +62,9 @@ func TestExtractArrayOfObjects(t *testing.T) {
 	}
 }
 
-func TestExtractTopLevelArray(t *testing.T) {
+func TestJSONExtractTopLevelArray(t *testing.T) {
 	input := `[{"name": "John"}, {"name": "Jane"}]`
-	e := NewExtractor()
+	e := NewJSONExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)
@@ -78,8 +74,8 @@ func TestExtractTopLevelArray(t *testing.T) {
 	}
 }
 
-func TestExtractEmpty(t *testing.T) {
-	e := NewExtractor()
+func TestJSONExtractEmpty(t *testing.T) {
+	e := NewJSONExtractor()
 	out, err := e.Extract([]byte("{}"))
 	if err != nil {
 		t.Fatal(err)
@@ -89,17 +85,17 @@ func TestExtractEmpty(t *testing.T) {
 	}
 }
 
-func TestExtractInvalid(t *testing.T) {
-	e := NewExtractor()
+func TestJSONExtractInvalid(t *testing.T) {
+	e := NewJSONExtractor()
 	_, err := e.Extract([]byte("not json"))
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
 }
 
-func TestExtractBoolAndNull(t *testing.T) {
+func TestJSONExtractBoolAndNull(t *testing.T) {
 	input := `{"active": true, "deleted": false, "note": null}`
-	e := NewExtractor()
+	e := NewJSONExtractor()
 	out, err := e.Extract([]byte(input))
 	if err != nil {
 		t.Fatal(err)

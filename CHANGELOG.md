@@ -8,6 +8,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Ingest: all extractors auto-registered** — `NewIngestor` now registers all seven extractors by default (`PlainTextExtractor`, `HTMLExtractor`, `MarkdownExtractor`, `CSVExtractor`, `JSONExtractor`, `DOCXExtractor`, `PDFExtractor`). No import or `WithExtractor` call required for standard formats
+- **Ingest: extractor panic recovery** — panics from extractor calls are caught and returned as errors (`"extractor panicked: …"`), preventing a misbehaving parser from crashing the process
+- **Ingest: lifecycle hooks** — two new options: `WithOnSuccess(func(IngestResult))` fires after each successful ingestion; `WithOnError(func(source string, err error))` fires on any failure
+
+### Changed
+
+- **Ingest: extractors merged into `ingest` package** — `CSVExtractor`, `JSONExtractor`, `DOCXExtractor`, and `PDFExtractor` are now defined in the main `ingest` package (constructors `NewCSVExtractor`, `NewJSONExtractor`, `NewDOCXExtractor`, `NewPDFExtractor`). The `ingest/csv`, `ingest/json`, `ingest/docx`, and `ingest/pdf` subpackages are removed
+
+### Removed
+
+- **`ingest/csv`, `ingest/json`, `ingest/docx`, `ingest/pdf` subpackages** — merged into the `ingest` package. Use `ingest.NewCSVExtractor()` etc. instead of the old subpackage constructors
+
 - **`Message.Metadata` field** — `map[string]any` on `Message` for flexible per-message metadata, persisted as JSON (SQLite/libSQL) or JSONB (PostgreSQL). When `WithConversationMemory` is enabled, assistant messages automatically include execution traces (`steps` key) from `AgentResult.Steps`, giving any Oasis app persisted execution traces for free. Schema migration is automatic (best-effort `ALTER TABLE` for existing databases)
 - **`AutoTitle()` conversation option** — opt-in automatic thread title generation from the first user message; runs in the background alongside message persistence; skipped when thread already has a title. Usage: `WithConversationMemory(store, AutoTitle())`
 - **`WriteSSEEvent` helper** — composable primitive for writing individual Server-Sent Events. Handles JSON marshaling and flushing, letting developers build custom SSE loops with `ExecuteStream` without reimplementing SSE mechanics

@@ -55,20 +55,16 @@ Convert raw bytes to plain text:
 | `PlainTextExtractor` | `text/plain` |
 | `HTMLExtractor` | `text/html` — strips tags, scripts, styles |
 | `MarkdownExtractor` | `text/markdown` |
-| `pdf.NewExtractor()` | PDF (opt-in, `ingest/pdf` subpackage) |
-| `csv.NewExtractor()` | CSV (opt-in, `ingest/csv` subpackage) |
-| `json.NewExtractor()` | JSON (opt-in, `ingest/json` subpackage) |
-| `docx.NewExtractor()` | DOCX (opt-in, `ingest/docx` subpackage) |
+| `NewCSVExtractor()` | CSV — first row as headers, rows as labeled paragraphs |
+| `NewJSONExtractor()` | JSON — recursive key flattening with dotted paths |
+| `NewDOCXExtractor()` | DOCX — paragraphs, headings, tables, images (pure Go) |
+| `NewPDFExtractor()` | PDF — page-by-page text extraction (pure Go) |
 
-Content type is detected from file extension via `ContentTypeFromExtension()`.
-
-**Binary formats (PDF, DOCX) require explicit registration.** If you call `IngestFile` with a `.pdf` or `.docx` file without registering the corresponding extractor, it returns an error. Import the subpackage and register with `WithExtractor()`:
+All extractors are registered by default in `NewIngestor`. Content type is detected from file extension via `ContentTypeFromExtension()`. Use `WithExtractor` to override a built-in or add a custom extractor:
 
 ```go
-import ingestpdf "github.com/nevindra/oasis/ingest/pdf"
-
 ingestor := ingest.NewIngestor(store, embedding,
-    ingest.WithExtractor(ingest.TypePDF, ingestpdf.NewExtractor()),
+    ingest.WithExtractor(ingest.TypePDF, myCustomPDFExtractor{}),
 )
 ```
 
@@ -76,7 +72,11 @@ ingestor := ingest.NewIngestor(store, embedding,
 
 Extractors may optionally implement `MetadataExtractor` to return structured metadata alongside text. When an extractor provides `ExtractWithMeta()`, the ingestor uses it instead of `Extract()` and assigns page-level metadata (page number, section heading, images) to each chunk via byte-range overlap matching.
 
-Built-in metadata extractors: `pdf.Extractor`, `docx.Extractor`.
+Built-in metadata extractors: `PDFExtractor`, `DOCXExtractor`.
+
+### Panic Recovery
+
+The ingestor recovers panics from extractor calls and converts them into errors (wrapped with "extractor panicked: …"). This prevents a misbehaving third-party parser from crashing the entire process.
 
 ## Chunk Metadata
 
@@ -222,7 +222,9 @@ Graph extraction runs after embedding and storage. The Store must implement `Gra
 | `WithParentTokens(n)` | 1024 | Parent chunk size |
 | `WithChildTokens(n)` | 256 | Child chunk size |
 | `WithBatchSize(n)` | 64 | Chunks per `Embed()` call |
-| `WithExtractor(ct, e)` | — | Register custom extractor for content type |
+| `WithExtractor(ct, e)` | — | Override or add a custom extractor for a content type |
+| `WithOnSuccess(fn)` | nil | Callback invoked after each successful ingestion with the `IngestResult` |
+| `WithOnError(fn)` | nil | Callback invoked when ingestion fails with `(source string, err error)` |
 | `WithGraphExtraction(p)` | disabled | Enable LLM-based graph edge extraction |
 | `WithMinEdgeWeight(w)` | 0.0 | Minimum weight threshold for storing edges |
 | `WithMaxEdgesPerChunk(n)` | unlimited | Cap on edges extracted per chunk |

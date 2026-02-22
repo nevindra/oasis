@@ -7,7 +7,6 @@ import (
 
 	oasis "github.com/nevindra/oasis"
 	"github.com/nevindra/oasis/ingest"
-	ingestpdf "github.com/nevindra/oasis/ingest/pdf"
 	"github.com/nevindra/oasis/observer"
 	"github.com/nevindra/oasis/provider/gemini"
 	"github.com/nevindra/oasis/store/sqlite"
@@ -95,7 +94,7 @@ func main() {
 	// Note: observer wrapping is on individual providers/tools.
 	// ObservedAgent doesn't support StreamingAgent yet.
 	ingestor := ingest.NewIngestor(store, embedding,
-		ingest.WithExtractor(ingestpdf.TypePDF, ingestpdf.NewExtractor()),
+		ingest.WithExtractor(ingest.TypePDF, ingest.NewPDFExtractor()),
 	)
 	app := New(&cfg, frontend, network, store, memStore, inputHandler, ingestor)
 	log.Fatal(app.RunWithSignal())

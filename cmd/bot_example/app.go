@@ -11,7 +11,6 @@ import (
 
 	oasis "github.com/nevindra/oasis"
 	"github.com/nevindra/oasis/ingest"
-	ingestpdf "github.com/nevindra/oasis/ingest/pdf"
 )
 
 // App is a thin orchestration layer that connects a Frontend to a StreamingAgent.
@@ -175,7 +174,7 @@ func (a *App) handle(ctx context.Context, msg IncomingMessage) {
 // PDFs are extracted via the PDF extractor; other files are treated as plain text.
 // Runs in a goroutine — errors are logged and do not affect the main response flow.
 func (a *App) autoIngest(ctx context.Context, docs []RawDoc) {
-	pdfExtractor := ingestpdf.NewExtractor()
+	pdfExtractor := ingest.NewPDFExtractor()
 	for _, doc := range docs {
 		var text string
 		var err error

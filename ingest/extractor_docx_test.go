@@ -1,4 +1,4 @@
-package docx
+package ingest
 
 import (
 	"archive/zip"
@@ -6,37 +6,31 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/nevindra/oasis/ingest"
 )
 
-// Compile-time interface checks.
-var _ ingest.Extractor = (*Extractor)(nil)
-var _ ingest.MetadataExtractor = (*Extractor)(nil)
-
-func TestExtractEmpty(t *testing.T) {
-	e := NewExtractor()
+func TestDOCXExtractEmpty(t *testing.T) {
+	e := NewDOCXExtractor()
 	_, err := e.Extract(nil)
 	if err == nil {
 		t.Error("expected error for nil content")
 	}
 }
 
-func TestExtractInvalid(t *testing.T) {
-	e := NewExtractor()
+func TestDOCXExtractInvalid(t *testing.T) {
+	e := NewDOCXExtractor()
 	_, err := e.Extract([]byte("not a zip"))
 	if err == nil {
 		t.Error("expected error for invalid content")
 	}
 }
 
-func TestExtractMinimalDocx(t *testing.T) {
+func TestDOCXExtractMinimalDocx(t *testing.T) {
 	content := buildTestDocx(t, []testParagraph{
 		{text: "Hello World", style: ""},
 		{text: "Second paragraph", style: ""},
 	})
 
-	e := NewExtractor()
+	e := NewDOCXExtractor()
 	out, err := e.Extract(content)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +43,7 @@ func TestExtractMinimalDocx(t *testing.T) {
 	}
 }
 
-func TestExtractWithHeadings(t *testing.T) {
+func TestDOCXExtractWithHeadings(t *testing.T) {
 	content := buildTestDocx(t, []testParagraph{
 		{text: "Chapter 1", style: "Heading1"},
 		{text: "Some content", style: ""},
@@ -57,7 +51,7 @@ func TestExtractWithHeadings(t *testing.T) {
 		{text: "More content", style: ""},
 	})
 
-	e := NewExtractor()
+	e := NewDOCXExtractor()
 	result, err := e.ExtractWithMeta(content)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +71,7 @@ func TestExtractWithHeadings(t *testing.T) {
 	}
 }
 
-func TestExtractHeadingByteOffsets(t *testing.T) {
+func TestDOCXExtractHeadingByteOffsets(t *testing.T) {
 	content := buildTestDocx(t, []testParagraph{
 		{text: "Intro", style: "Heading1"},
 		{text: "Body text here", style: ""},
@@ -85,7 +79,7 @@ func TestExtractHeadingByteOffsets(t *testing.T) {
 		{text: "More body", style: ""},
 	})
 
-	e := NewExtractor()
+	e := NewDOCXExtractor()
 	result, err := e.ExtractWithMeta(content)
 	if err != nil {
 		t.Fatal(err)
@@ -101,13 +95,13 @@ func TestExtractHeadingByteOffsets(t *testing.T) {
 	}
 }
 
-func TestExtractWithTable(t *testing.T) {
+func TestDOCXExtractWithTable(t *testing.T) {
 	content := buildTestDocxWithTable(t,
 		[]string{"Name", "Age"},
 		[][]string{{"John", "30"}, {"Jane", "25"}},
 	)
 
-	e := NewExtractor()
+	e := NewDOCXExtractor()
 	out, err := e.Extract(content)
 	if err != nil {
 		t.Fatal(err)
@@ -120,27 +114,26 @@ func TestExtractWithTable(t *testing.T) {
 	}
 }
 
-func TestExtractTableEmptyCells(t *testing.T) {
+func TestDOCXExtractTableEmptyCells(t *testing.T) {
 	content := buildTestDocxWithTable(t,
 		[]string{"Name", "Age"},
 		[][]string{{"John", ""}, {"", "25"}},
 	)
 
-	e := NewExtractor()
+	e := NewDOCXExtractor()
 	out, err := e.Extract(content)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Empty cells should be omitted from labeled output.
 	if strings.Contains(out, "Age: ,") || strings.Contains(out, "Name: ,") {
 		t.Errorf("empty cell not handled: %q", out)
 	}
 }
 
-func TestExtractWithImage(t *testing.T) {
+func TestDOCXExtractWithImage(t *testing.T) {
 	content := buildTestDocxWithImage(t, "image1.png", []byte{0x89, 0x50, 0x4E, 0x47})
 
-	e := NewExtractor()
+	e := NewDOCXExtractor()
 	result, err := e.ExtractWithMeta(content)
 	if err != nil {
 		t.Fatal(err)
@@ -159,15 +152,14 @@ func TestExtractWithImage(t *testing.T) {
 	}
 }
 
-func TestExtractMissingDocumentXML(t *testing.T) {
+func TestDOCXExtractMissingDocumentXML(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	// Write a dummy file instead of word/document.xml.
 	w, _ := zw.Create("word/styles.xml")
 	w.Write([]byte("<styles/>"))
 	zw.Close()
 
-	e := NewExtractor()
+	e := NewDOCXExtractor()
 	_, err := e.Extract(buf.Bytes())
 	if err == nil {
 		t.Error("expected error for missing document.xml")
@@ -228,14 +220,12 @@ func buildTestDocxWithTable(t *testing.T, headers []string, rows [][]string) []b
 	body.WriteString(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">`)
 	body.WriteString("\n<w:body><w:tbl>")
 
-	// Header row.
 	body.WriteString("<w:tr>")
 	for _, h := range headers {
 		body.WriteString(fmt.Sprintf("<w:tc><w:p><w:r><w:t>%s</w:t></w:r></w:p></w:tc>", h))
 	}
 	body.WriteString("</w:tr>")
 
-	// Data rows.
 	for _, row := range rows {
 		body.WriteString("<w:tr>")
 		for _, cell := range row {
@@ -264,7 +254,6 @@ func buildTestDocxWithImage(t *testing.T, imageName string, imageData []byte) []
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
-	// Write a simple document.xml with a paragraph.
 	var body strings.Builder
 	body.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
 	body.WriteString("\n")
@@ -281,7 +270,6 @@ func buildTestDocxWithImage(t *testing.T, imageName string, imageData []byte) []
 		t.Fatal(err)
 	}
 
-	// Write the image file.
 	iw, err := zw.Create("word/media/" + imageName)
 	if err != nil {
 		t.Fatal(err)

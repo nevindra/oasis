@@ -1,41 +1,32 @@
-// Package json provides a JSON text extractor for the ingest pipeline.
-// Recursively walks arbitrary JSON structures producing readable key-value text.
-package json
+package ingest
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/nevindra/oasis/ingest"
 )
 
-// TypeJSON is the content type for JSON documents.
-const TypeJSON = ingest.TypeJSON
+// Compile-time interface check.
+var _ Extractor = (*JSONExtractor)(nil)
 
-// Extractor implements ingest.Extractor for JSON documents.
-type Extractor struct{}
+// JSONExtractor implements Extractor for JSON documents.
+// Recursively walks arbitrary JSON structures producing readable key-value text.
+type JSONExtractor struct{}
 
-// NewExtractor creates a JSON extractor.
-func NewExtractor() *Extractor {
-	return &Extractor{}
-}
+// NewJSONExtractor creates a JSON extractor.
+func NewJSONExtractor() *JSONExtractor { return &JSONExtractor{} }
 
 // Extract converts JSON content to readable key-value text.
-// Objects produce "key: value" lines with dotted paths for nesting.
-// Arrays of primitives are comma-joined. Arrays of objects are iterated.
-func (e *Extractor) Extract(content []byte) (string, error) {
+func (e *JSONExtractor) Extract(content []byte) (string, error) {
 	content = bytes.TrimSpace(content)
 	if len(content) == 0 {
 		return "", nil
 	}
-
 	var data any
 	if err := json.Unmarshal(content, &data); err != nil {
 		return "", fmt.Errorf("parse json: %w", err)
 	}
-
 	var lines []string
 	flatten("", data, &lines)
 	return strings.Join(lines, "\n"), nil
@@ -55,7 +46,7 @@ func flatten(prefix string, v any, lines *[]string) {
 		if allPrimitive(val) {
 			strs := make([]string, len(val))
 			for i, item := range val {
-				strs[i] = formatValue(item)
+				strs[i] = formatJSONValue(item)
 			}
 			*lines = append(*lines, fmt.Sprintf("%s: %s", prefix, strings.Join(strs, ", ")))
 		} else {
@@ -70,7 +61,7 @@ func flatten(prefix string, v any, lines *[]string) {
 		if label == "" {
 			label = "value"
 		}
-		*lines = append(*lines, fmt.Sprintf("%s: %s", label, formatValue(val)))
+		*lines = append(*lines, fmt.Sprintf("%s: %s", label, formatJSONValue(val)))
 	}
 }
 
@@ -84,7 +75,8 @@ func allPrimitive(arr []any) bool {
 	return true
 }
 
-func formatValue(v any) string {
+// formatJSONValue formats a primitive JSON value as a string.
+func formatJSONValue(v any) string {
 	switch val := v.(type) {
 	case string:
 		return val
