@@ -32,6 +32,7 @@ Passed to `WithConversationMemory`.
 | `MaxHistory(n int)` | 10 | Max recent messages loaded into LLM context |
 | `MaxTokens(n int)` | 0 (disabled) | Token budget for history — trim oldest-first until total fits within n |
 | `CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption)` | — | Enable cross-thread semantic recall |
+| `AutoTitle()` | disabled | Generate a short title from the first user message. Runs in background, idempotent (skipped if thread already has a title) |
 
 ## SemanticOption
 

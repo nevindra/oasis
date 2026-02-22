@@ -128,7 +128,7 @@ http.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
 1. Validates that the `ResponseWriter` supports flushing
 2. Sets `Content-Type: text/event-stream`, `Cache-Control`, and `Connection` headers
 3. Runs the agent in a goroutine, writes each `StreamEvent` as an SSE event
-4. Sends `event: done` on completion, or `event: error` on failure
+4. Sends `event: done` with the full `AgentResult` (output, steps, usage) on completion, or `event: error` on failure
 5. Propagates client disconnection via context cancellation
 
 Each SSE event is formatted as:
@@ -141,6 +141,48 @@ data: {"type":"text-delta","content":"Hello"}
 Works with any router (Echo, Chi, Gin) since they all expose `http.ResponseWriter`.
 
 > **Note:** `ServeSSE` handles real-time streaming only. If `WithConversationMemory` is configured on the agent, messages and execution traces are persisted to the database automatically by the memory pipeline — you don't need to store them separately in your handler.
+
+## Custom SSE Loops
+
+For full control over the SSE lifecycle (custom done payloads, app-specific metadata, filtering events), use `WriteSSEEvent` with `ExecuteStream` directly:
+
+```go
+http.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "text/event-stream")
+    w.Header().Set("Cache-Control", "no-cache")
+    w.Header().Set("Connection", "keep-alive")
+
+    task := oasis.AgentTask{Input: r.URL.Query().Get("q")}
+    ch := make(chan oasis.StreamEvent, 64)
+
+    var result oasis.AgentResult
+    var execErr error
+    done := make(chan struct{})
+    go func() {
+        result, execErr = agent.(oasis.StreamingAgent).ExecuteStream(r.Context(), task, ch)
+        close(done)
+    }()
+
+    for ev := range ch {
+        oasis.WriteSSEEvent(w, string(ev.Type), ev)
+    }
+    <-done
+
+    if execErr != nil {
+        oasis.WriteSSEEvent(w, "error", map[string]string{"error": execErr.Error()})
+        return
+    }
+
+    // Custom done payload with app-specific metadata
+    oasis.WriteSSEEvent(w, "done", map[string]any{
+        "conversationId": convID,
+        "result":         result,
+        "sources":        sources,
+    })
+})
+```
+
+`WriteSSEEvent` handles JSON marshaling and flushing — you compose the loop, it handles the SSE mechanics.
 
 ## Processors and Streaming
 

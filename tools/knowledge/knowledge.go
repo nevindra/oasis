@@ -10,6 +10,21 @@ import (
 )
 
 // KnowledgeTool searches the knowledge base and past conversations.
+//
+// By default, New creates a HybridRetriever internally with default settings.
+// To configure retrieval behavior (score threshold, filters, keyword weight,
+// re-ranking), construct a Retriever with the options you need and inject it:
+//
+//	retriever := oasis.NewHybridRetriever(store, embedding,
+//	    oasis.WithMinRetrievalScore(0.05),
+//	    oasis.WithKeywordWeight(0.4),
+//	    oasis.WithFilters(oasis.ByDocument("doc-123")),
+//	    oasis.WithReranker(oasis.NewScoreReranker(0.1)),
+//	)
+//	tool := knowledge.New(store, embedding,
+//	    knowledge.WithRetriever(retriever),
+//	    knowledge.WithTopK(10),
+//	)
 type KnowledgeTool struct {
 	retriever oasis.Retriever
 	store     oasis.Store

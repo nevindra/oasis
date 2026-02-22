@@ -510,22 +510,62 @@ agent := oasis.NewLLMAgent("assistant", "Answer using your knowledge base.", llm
 
 ### Using KnowledgeTool
 
-The simplest integration — `KnowledgeTool` wraps a `Retriever` and exposes it as an agent tool:
+`KnowledgeTool` wraps a `Retriever` and exposes it as an agent tool. The tool itself is intentionally thin — retrieval configuration belongs on the `Retriever`, not the tool.
+
+#### Minimal setup
+
+With no options, `KnowledgeTool` creates a default `HybridRetriever` internally:
 
 ```go
-// Default: creates HybridRetriever automatically
 knowledgeTool := knowledge.New(store, embedding)
+```
 
-// Custom retriever
+This gives you hybrid search (vector + keyword) with default settings (top-5 results, keyword weight 0.3, no score threshold, no filters).
+
+#### Configuring retrieval behavior
+
+To control top-K, score thresholds, chunk filters, keyword weight, or re-ranking, construct a `Retriever` with the options you need and inject it via `WithRetriever`:
+
+```go
 retriever := oasis.NewHybridRetriever(store, embedding,
-    oasis.WithReranker(oasis.NewLLMReranker(llm)),
-    oasis.WithMinRetrievalScore(0.05),
+    oasis.WithMinRetrievalScore(0.05),            // drop low-relevance results
+    oasis.WithKeywordWeight(0.4),                 // 40% keyword, 60% vector
+    oasis.WithFilters(oasis.BySource("legal/")),  // scope to specific documents
+    oasis.WithReranker(oasis.NewLLMReranker(llm)), // LLM re-ranking for precision
 )
 knowledgeTool := knowledge.New(store, embedding,
     knowledge.WithRetriever(retriever),
     knowledge.WithTopK(10),
 )
+```
 
+The same pattern works with `GraphRetriever` or any custom `Retriever` implementation — the tool doesn't need to know which retriever it's using.
+
+#### Vector-only search (no keyword/FTS)
+
+To disable keyword search, set keyword weight to zero:
+
+```go
+retriever := oasis.NewHybridRetriever(store, embedding,
+    oasis.WithKeywordWeight(0), // vector-only, no FTS
+)
+knowledgeTool := knowledge.New(store, embedding,
+    knowledge.WithRetriever(retriever),
+)
+```
+
+#### KnowledgeTool options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithRetriever(r)` | auto-created `HybridRetriever` | Inject a custom `Retriever` |
+| `WithTopK(n)` | 5 | Number of results to retrieve |
+
+All other retrieval behavior (score threshold, filters, keyword weight, re-ranking, overfetch) is configured on the `Retriever` — see the [Retrieval Options Summary](#retrieval-options-summary) above.
+
+#### Wiring to an agent
+
+```go
 agent := oasis.NewLLMAgent("assistant", "Knowledge-augmented assistant", llm,
     oasis.WithTools(knowledgeTool),
 )

@@ -48,6 +48,18 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 
 Token estimation uses a ~4 characters per token heuristic with a small overhead for message framing. This is a rough estimate suitable for budget control — not exact tokenizer output.
 
+## Auto-Generated Thread Titles
+
+Automatically generate a short title for each conversation thread:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store, oasis.AutoTitle()),
+)
+```
+
+When the first user message arrives, the agent uses its own LLM to generate a title (max 8 words) and stores it on the thread. Titles are only generated once per thread — if a title already exists, it's skipped. This runs in a background goroutine and never blocks the conversation.
+
 ## Cross-Thread Recall
 
 Search past conversations for relevant context:

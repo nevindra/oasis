@@ -1084,8 +1084,36 @@ func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, 
 		return res.result, res.err
 	}
 
-	fmt.Fprintf(w, "event: done\ndata: [DONE]\n\n")
+	doneData, _ := json.Marshal(res.result)
+	fmt.Fprintf(w, "event: done\ndata: %s\n\n", doneData)
 	flusher.Flush()
 
 	return res.result, nil
+}
+
+// WriteSSEEvent writes a single Server-Sent Event to w and flushes.
+// It validates that w implements [http.Flusher], JSON-marshals data into
+// the SSE data field, and flushes immediately. eventType is the SSE event
+// name (e.g. "text-delta", "done").
+//
+// Use this to compose custom SSE loops with [StreamingAgent.ExecuteStream]:
+//
+//	ch := make(chan oasis.StreamEvent, 64)
+//	go agent.ExecuteStream(ctx, task, ch)
+//	for ev := range ch {
+//	    oasis.WriteSSEEvent(w, string(ev.Type), ev)
+//	}
+//	oasis.WriteSSEEvent(w, "done", customPayload)
+func WriteSSEEvent(w http.ResponseWriter, eventType string, data any) error {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("ResponseWriter does not implement http.Flusher")
+	}
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal sse data: %w", err)
+	}
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, encoded)
+	flusher.Flush()
+	return nil
 }

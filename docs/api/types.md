@@ -282,11 +282,22 @@ type StepTrace struct {
     Input    string        `json:"input"`    // args/task, truncated to 200 chars
     Output   string        `json:"output"`   // result, truncated to 500 chars
     Usage    Usage         `json:"usage"`    // tokens for this step
-    Duration time.Duration `json:"duration"` // wall-clock time
+    Duration time.Duration `json:"duration"` // wall-clock time (see note below)
 }
 ```
 
 `Steps` is populated by LLMAgent (tool calls), Network (tool + agent delegations), and Workflow (step results). Nil when no tools were called.
+
+**StepTrace fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Name` | `string` | Tool or agent name. For agent delegations, the `agent_` prefix is stripped |
+| `Type` | `string` | `"tool"` (tool call), `"agent"` (network delegation), or `"step"` (workflow) |
+| `Input` | `string` | Tool arguments JSON or agent task text, truncated to 200 characters |
+| `Output` | `string` | Result content, truncated to 500 characters |
+| `Usage` | `Usage` | Token counts (`InputTokens`, `OutputTokens`) for this individual step |
+| `Duration` | `time.Duration` | Wall-clock time. **Serializes as nanoseconds** in JSON (Go `time.Duration` default). Divide by `1_000_000` for milliseconds |
 
 Context key constants: `ContextThreadID`, `ContextUserID`, `ContextChatID`
 
