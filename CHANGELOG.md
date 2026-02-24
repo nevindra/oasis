@@ -9,10 +9,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ### Added
 
 - **`provider/resolve` package** — config-driven provider creation via `resolve.Provider(Config)` and `resolve.EmbeddingProvider(EmbeddingConfig)`. Maps provider-agnostic config (provider name, API key, model, optional Temperature/TopP/Thinking) to concrete `gemini` or `openaicompat` instances. Supports Gemini, OpenAI, Groq, DeepSeek, Together, Mistral, and Ollama with auto-filled base URLs
+- **`ScanAllMessages()` injection guard option** — opt-in scanning of all user messages in conversation history, not just the last one. Detects injection placed in earlier messages via multi-turn context poisoning
 
 ### Fixed
 
 - **`chunkParentChild` slice-bounds panic** — when chunk overlap caused `strings.Index` to return `-1`, `parentStart` was left at the previous `parentEnd`, making `parentEnd = parentStart + len(pt)` exceed `len(text)`. The next iteration then panicked with `slice bounds out of range`. Fixed by capping the offset with `min(parentEnd, len(text))`, matching the existing behaviour in `chunkFlat`
+- **`InjectionGuard` Unicode homoglyph bypass** — added NFKC normalization before phrase matching. Fullwidth Latin (`ｉｇｎｏｒｅ`), mathematical alphanumerics, and ligatures are now normalized before detection
+- **`InjectionGuard` incomplete zero-width char stripping** — added word joiner (U+2060), Mongolian vowel separator (U+180E), and soft hyphen (U+00AD) to the obfuscation character set
+- **`InjectionGuard` base64 false positives** — base64 candidates whose length is not a multiple of 4 are now skipped, filtering out false matches from UUIDs, hashes, and other alphanumeric strings
+- **`ProcessorChain` per-call type assertions** — processors are now pre-bucketed by interface at `Add()` time, eliminating type assertions in `RunPreLLM`/`RunPostLLM`/`RunPostTool` hot paths
 
 ## [0.7.0] - 2026-02-23
 

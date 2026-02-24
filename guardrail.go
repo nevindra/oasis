@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"regexp"
 	"strings"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // --- InjectionGuard ---
@@ -91,22 +93,30 @@ var (
 	injectionBase64Block = regexp.MustCompile(`[A-Za-z0-9+/]{20,}={0,2}`)
 )
 
-// zeroWidthChars are Unicode zero-width characters used for obfuscation.
+// zeroWidthChars are Unicode zero-width and invisible characters used for obfuscation.
 var zeroWidthChars = strings.NewReplacer(
 	"\u200b", " ", // zero-width space
 	"\u200c", " ", // zero-width non-joiner
 	"\u200d", " ", // zero-width joiner
 	"\ufeff", " ", // zero-width no-break space (BOM)
+	"\u2060", " ", // word joiner
+	"\u180e", " ", // Mongolian vowel separator
+	"\u00ad", "",  // soft hyphen (removed, not replaced)
 )
 
 // InjectionGuard is a PreProcessor that detects prompt injection attempts
-// in the last user message using multi-layer heuristics:
+// in user messages using multi-layer heuristics:
 //
 //   - Layer 1: Known injection phrases (~55 patterns, case-insensitive substring)
-//   - Layer 2: Role override detection (role prefixes, markdown headers, XML tags)
+//   - Layer 2: Role override detection (role prefixes, markdown headers, XML tags).
+//     Note: this layer may flag legitimate content containing patterns like "user:"
+//     at the start of a line. Use SkipLayers(2) if this causes false positives.
 //   - Layer 3: Delimiter injection (fake message boundaries, separator abuse)
-//   - Layer 4: Encoding/obfuscation (zero-width chars, base64-encoded payloads)
+//   - Layer 4: Encoding/obfuscation (zero-width chars, NFKC normalization, base64-encoded payloads)
 //   - Layer 5: User-supplied custom patterns and regex
+//
+// By default only the last user message is checked. Use ScanAllMessages()
+// to scan all user messages in the conversation history.
 //
 // Returns ErrHalt when injection is detected. Safe for concurrent use.
 type InjectionGuard struct {
@@ -114,6 +124,7 @@ type InjectionGuard struct {
 	custom     []*regexp.Regexp
 	response   string
 	skipLayers map[int]bool
+	scanAll    bool
 }
 
 // NewInjectionGuard creates a guard with built-in multi-layer injection detection.
@@ -156,6 +167,14 @@ func InjectionRegex(patterns ...*regexp.Regexp) InjectionOption {
 	}
 }
 
+// ScanAllMessages enables scanning all user messages in the conversation,
+// not just the last one. Use this to detect injection placed in earlier
+// messages (e.g., via multi-turn context poisoning).
+// Default: only the last user message is scanned.
+func ScanAllMessages() InjectionOption {
+	return func(g *InjectionGuard) { g.scanAll = true }
+}
+
 // SkipLayers disables specific detection layers (1-5).
 // Use when a layer produces false positives for your use case.
 func SkipLayers(layers ...int) InjectionOption {
@@ -166,15 +185,25 @@ func SkipLayers(layers ...int) InjectionOption {
 	}
 }
 
-// PreLLM checks the last user message for injection patterns.
+// PreLLM checks user messages for injection patterns.
+// By default only the last user message is checked; enable ScanAllMessages()
+// to check all user messages in the conversation history.
 func (g *InjectionGuard) PreLLM(_ context.Context, req *ChatRequest) error {
-	content := lastUserContent(req.Messages)
-	if content == "" {
-		return nil
+	contents := userContents(req.Messages, g.scanAll)
+	for _, content := range contents {
+		if err := g.checkContent(content); err != nil {
+			return err
+		}
 	}
+	return nil
+}
 
-	// Pre-pass: strip zero-width characters for all layers.
+// checkContent runs all enabled detection layers against a single message.
+func (g *InjectionGuard) checkContent(content string) error {
+	// Pre-pass: strip zero-width characters, normalize unicode (NFKC handles
+	// fullwidth Latin, mathematical alphanumerics, ligatures, etc.).
 	cleaned := zeroWidthChars.Replace(content)
+	cleaned = norm.NFKC.String(cleaned)
 	lower := strings.ToLower(cleaned)
 
 	// Layer 1: Known phrases
@@ -206,10 +235,13 @@ func (g *InjectionGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 	// Layer 4: Encoding/obfuscation
 	if !g.skipLayers[4] {
 		// Check base64 blocks — decode and re-check against Layer 1 phrases.
+		// Skip candidates whose length is not a multiple of 4 (invalid base64).
 		for _, match := range injectionBase64Block.FindAllString(cleaned, 5) {
+			if len(match)%4 != 0 {
+				continue
+			}
 			decoded, err := base64.StdEncoding.DecodeString(match)
 			if err != nil {
-				// Try URL-safe or raw encoding
 				decoded, err = base64.RawStdEncoding.DecodeString(match)
 			}
 			if err == nil {
@@ -233,6 +265,27 @@ func (g *InjectionGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 	}
 
 	return nil
+}
+
+// userContents returns user message content to scan. When scanAll is false,
+// returns only the last user message. When true, returns all user messages.
+// Returns nil if no user messages exist.
+func userContents(messages []ChatMessage, scanAll bool) []string {
+	if !scanAll {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				return []string{messages[i].Content}
+			}
+		}
+		return nil
+	}
+	var out []string
+	for _, m := range messages {
+		if m.Role == "user" && m.Content != "" {
+			out = append(out, m.Content)
+		}
+	}
+	return out
 }
 
 // lastUserContent returns the content of the last message with role "user".

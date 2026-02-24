@@ -43,10 +43,13 @@ type ErrHalt struct {
 func (e *ErrHalt) Error() string { return "processor halted: " + e.Response }
 
 // ProcessorChain holds an ordered list of processors and runs them
-// at each hook point. Processors are type-asserted at each phase —
-// a processor only participates in phases whose interface it implements.
+// at each hook point. Processors are pre-bucketed by interface at Add()
+// time, eliminating per-call type assertions in the hot path.
 type ProcessorChain struct {
 	processors []any
+	pre        []PreProcessor
+	post       []PostProcessor
+	postTool   []PostToolProcessor
 }
 
 // NewProcessorChain creates an empty chain.
@@ -58,23 +61,30 @@ func NewProcessorChain() *ProcessorChain {
 // one of PreProcessor, PostProcessor, or PostToolProcessor.
 // Panics if p implements none of the three interfaces.
 func (c *ProcessorChain) Add(p any) {
-	_, isPre := p.(PreProcessor)
-	_, isPost := p.(PostProcessor)
-	_, isPostTool := p.(PostToolProcessor)
+	pre, isPre := p.(PreProcessor)
+	post, isPost := p.(PostProcessor)
+	pt, isPostTool := p.(PostToolProcessor)
 	if !isPre && !isPost && !isPostTool {
 		panic(fmt.Sprintf("oasis: processor %T implements none of PreProcessor, PostProcessor, PostToolProcessor", p))
 	}
 	c.processors = append(c.processors, p)
+	if isPre {
+		c.pre = append(c.pre, pre)
+	}
+	if isPost {
+		c.post = append(c.post, post)
+	}
+	if isPostTool {
+		c.postTool = append(c.postTool, pt)
+	}
 }
 
 // RunPreLLM runs all PreProcessor hooks in registration order.
 // Stops and returns the first non-nil error.
 func (c *ProcessorChain) RunPreLLM(ctx context.Context, req *ChatRequest) error {
-	for _, p := range c.processors {
-		if pre, ok := p.(PreProcessor); ok {
-			if err := pre.PreLLM(ctx, req); err != nil {
-				return err
-			}
+	for _, p := range c.pre {
+		if err := p.PreLLM(ctx, req); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -83,11 +93,9 @@ func (c *ProcessorChain) RunPreLLM(ctx context.Context, req *ChatRequest) error 
 // RunPostLLM runs all PostProcessor hooks in registration order.
 // Stops and returns the first non-nil error.
 func (c *ProcessorChain) RunPostLLM(ctx context.Context, resp *ChatResponse) error {
-	for _, p := range c.processors {
-		if post, ok := p.(PostProcessor); ok {
-			if err := post.PostLLM(ctx, resp); err != nil {
-				return err
-			}
+	for _, p := range c.post {
+		if err := p.PostLLM(ctx, resp); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -96,11 +104,9 @@ func (c *ProcessorChain) RunPostLLM(ctx context.Context, resp *ChatResponse) err
 // RunPostTool runs all PostToolProcessor hooks in registration order.
 // Stops and returns the first non-nil error.
 func (c *ProcessorChain) RunPostTool(ctx context.Context, call ToolCall, result *ToolResult) error {
-	for _, p := range c.processors {
-		if pt, ok := p.(PostToolProcessor); ok {
-			if err := pt.PostTool(ctx, call, result); err != nil {
-				return err
-			}
+	for _, p := range c.postTool {
+		if err := p.PostTool(ctx, call, result); err != nil {
+			return err
 		}
 	}
 	return nil

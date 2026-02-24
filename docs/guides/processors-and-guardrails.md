@@ -11,13 +11,15 @@ Oasis ships four guardrail types that cover common safety patterns. All implemen
 Multi-layer prompt injection detection (PreProcessor). Five detection layers:
 
 1. **Known phrases** — ~55 patterns covering instruction override, role hijacking, system prompt extraction, and policy bypass
-2. **Role override** — role prefixes (`system:`, `assistant:`), markdown headers (`## System`), XML tags (`<system>`)
+2. **Role override** — role prefixes (`system:`, `assistant:`), markdown headers (`## System`), XML tags (`<system>`). May flag legitimate content with patterns like `user:` at line start — use `SkipLayers(2)` if this causes false positives
 3. **Delimiter injection** — fake message boundaries (`--- system`), separator abuse (`==== begin`)
-4. **Encoding/obfuscation** — zero-width character stripping, base64-encoded payload detection
+4. **Encoding/obfuscation** — NFKC Unicode normalization (catches fullwidth Latin, mathematical alphanumerics, ligatures), zero-width/invisible character stripping (7 character types), base64-encoded payload detection with length validation
 5. **Custom patterns** — user-supplied string patterns and regex
 
+By default only the last user message is checked. Use `ScanAllMessages()` to scan all user messages in the conversation history (detects injection placed in earlier messages via multi-turn context poisoning).
+
 ```go
-// Default — all layers enabled
+// Default — all layers enabled, last message only
 guard := oasis.NewInjectionGuard()
 
 // With custom patterns and regex
@@ -26,6 +28,9 @@ guard := oasis.NewInjectionGuard(
     oasis.InjectionRegex(regexp.MustCompile(`(?i)\bsudo\s+mode\b`)),
     oasis.InjectionResponse("Request blocked."),
 )
+
+// Scan all user messages in conversation history
+guard := oasis.NewInjectionGuard(oasis.ScanAllMessages())
 
 // Skip layers that cause false positives
 guard := oasis.NewInjectionGuard(oasis.SkipLayers(2, 3))

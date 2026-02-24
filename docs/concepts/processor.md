@@ -103,7 +103,7 @@ Processors run in registration order at each hook point. An empty chain is a no-
 
 | Use Case | Interface | What it does |
 |----------|-----------|-------------|
-| Injection detection | PreProcessor | **Built-in:** `InjectionGuard` — multi-layer prompt injection detection (phrases, role override, delimiters, encoding, custom regex) |
+| Injection detection | PreProcessor | **Built-in:** `InjectionGuard` — multi-layer prompt injection detection (phrases, role override, delimiters, encoding with NFKC normalization, custom regex). Supports `ScanAllMessages()` for full-history scanning |
 | Content length limits | PreProcessor + PostProcessor | **Built-in:** `ContentGuard` — enforce max rune count on input and output |
 | Keyword blocking | PreProcessor | **Built-in:** `KeywordGuard` — block messages containing specified keywords or regex patterns |
 | Tool call limiting | PostProcessor | **Built-in:** `MaxToolCallsGuard` — cap tool calls per LLM response (trims, doesn't halt) |
@@ -143,6 +143,7 @@ err := chain.RunPostTool(ctx, toolCall, &result)
 - Processors receive pointers and modify in place (`*ChatRequest`, `*ChatResponse`, `*ToolResult`)
 - Must be safe for concurrent use — multiple agent executions may share instances
 - A processor that implements none of the three interfaces causes a panic at registration
+- Processors are pre-bucketed by interface at `Add()` time — no per-call type assertions in the hot path
 - The chain skips processors that don't implement a given phase
 
 ## See Also
