@@ -24,7 +24,7 @@ import (
 func main() {
     ctx := context.Background()
 
-    // Providers
+    // Providers (or use resolve.Provider for config-driven setup — see Provider Resolution)
     llm := gemini.New("your-api-key", "gemini-2.5-flash")
     embedding := gemini.NewEmbedding("your-api-key", "gemini-embedding-001", 1536)
 

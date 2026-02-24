@@ -56,7 +56,13 @@ func (s *MemoryStore) hnswWithClause() string {
 
 // Init creates the pgvector extension, user_facts table, and HNSW index.
 // Safe to call multiple times (all statements are idempotent).
+//
+// Requires WithEmbeddingDimension to be set — pgvector HNSW indexes need
+// typed vector(N) columns.
 func (s *MemoryStore) Init(ctx context.Context) error {
+	if s.cfg.embeddingDimension <= 0 {
+		return fmt.Errorf("postgres: memory init: embedding dimension is required (use WithEmbeddingDimension)")
+	}
 	vtype := s.vectorType()
 	hnswWith := s.hnswWithClause()
 

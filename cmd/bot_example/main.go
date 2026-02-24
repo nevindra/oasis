@@ -8,7 +8,7 @@ import (
 	oasis "github.com/nevindra/oasis"
 	"github.com/nevindra/oasis/ingest"
 	"github.com/nevindra/oasis/observer"
-	"github.com/nevindra/oasis/provider/gemini"
+	"github.com/nevindra/oasis/provider/resolve"
 	"github.com/nevindra/oasis/store/sqlite"
 	"github.com/nevindra/oasis/tools/file"
 	httptool "github.com/nevindra/oasis/tools/http"
@@ -24,10 +24,39 @@ func main() {
 	cfg := LoadConfig(os.Getenv("OASIS_CONFIG"))
 
 	// 2. Create providers
-	var routerLLM oasis.Provider = gemini.New(cfg.Intent.APIKey, cfg.Intent.Model)
-	var chatLLM oasis.Provider = gemini.New(cfg.LLM.APIKey, cfg.LLM.Model)
-	var actionLLM oasis.Provider = gemini.New(cfg.Action.APIKey, cfg.Action.Model)
-	var embedding oasis.EmbeddingProvider = gemini.NewEmbedding(cfg.Embedding.APIKey, cfg.Embedding.Model, cfg.Embedding.Dimensions)
+	routerLLM, err := resolve.Provider(resolve.Config{
+		Provider: cfg.Intent.Provider,
+		APIKey:   cfg.Intent.APIKey,
+		Model:    cfg.Intent.Model,
+	})
+	if err != nil {
+		log.Fatalf("router provider: %v", err)
+	}
+	chatLLM, err := resolve.Provider(resolve.Config{
+		Provider: cfg.LLM.Provider,
+		APIKey:   cfg.LLM.APIKey,
+		Model:    cfg.LLM.Model,
+	})
+	if err != nil {
+		log.Fatalf("chat provider: %v", err)
+	}
+	actionLLM, err := resolve.Provider(resolve.Config{
+		Provider: cfg.Action.Provider,
+		APIKey:   cfg.Action.APIKey,
+		Model:    cfg.Action.Model,
+	})
+	if err != nil {
+		log.Fatalf("action provider: %v", err)
+	}
+	embedding, err := resolve.EmbeddingProvider(resolve.EmbeddingConfig{
+		Provider:   cfg.Embedding.Provider,
+		APIKey:     cfg.Embedding.APIKey,
+		Model:      cfg.Embedding.Model,
+		Dimensions: cfg.Embedding.Dimensions,
+	})
+	if err != nil {
+		log.Fatalf("embedding provider: %v", err)
+	}
 
 	// 3. Observer (opt-in via config)
 	var inst *observer.Instruments

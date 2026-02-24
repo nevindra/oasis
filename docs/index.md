@@ -350,6 +350,7 @@ graph LR
 
     GEM["gemini.New()"] --> P
     OAI["openaicompat.NewProvider()"] --> P
+    RES["resolve.Provider(cfg)"] --> P
 
     style P fill:#ede7f6,stroke:#512da8
     style RETRY fill:#fff3e0

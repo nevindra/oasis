@@ -63,6 +63,11 @@ func main() {
 
 That's it — no config files, no database, no frontend. Just an LLM provider and an agent.
 
+> **Tip:** When your provider choice comes from config, use the [provider resolver](../concepts/provider.md#provider-resolution) instead of importing provider packages directly:
+> ```go
+> llm, err := resolve.Provider(resolve.Config{Provider: "gemini", APIKey: "...", Model: "gemini-2.5-flash"})
+> ```
+
 ## What's Next
 
 - [Quick Start](quick-start.md) — add tools, memory, and streaming

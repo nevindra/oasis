@@ -30,6 +30,8 @@ flowchart TB
 
 ## Quick Start
 
+**SQLite:**
+
 ```go
 import (
     "github.com/nevindra/oasis"
@@ -54,6 +56,38 @@ retriever := oasis.NewHybridRetriever(store, embedding)
 results, _ := retriever.Retrieve(ctx, "what is the main idea?", 5)
 
 // 4. Give it to an agent via KnowledgeTool
+knowledgeTool := knowledge.New(store, embedding)
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithTools(knowledgeTool),
+)
+```
+
+**PostgreSQL (pgvector):**
+
+```go
+import (
+    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/ingest"
+    "github.com/nevindra/oasis/tools/knowledge"
+    "github.com/nevindra/oasis/store/postgres"
+    "github.com/nevindra/oasis/provider/gemini"
+    "github.com/jackc/pgx/v5/pgxpool"
+)
+
+// 1. Set up dependencies — WithEmbeddingDimension is required for pgvector HNSW indexes
+pool, _ := pgxpool.New(ctx, "postgres://user:pass@localhost:5432/mydb")
+defer pool.Close()
+
+store := postgres.New(pool,
+    postgres.WithEmbeddingDimension(768), // must match your embedding model
+)
+store.Init(ctx)
+embedding := gemini.NewEmbedding(apiKey, "text-embedding-004", 768)
+
+// 2–4: same as SQLite — ingest, retrieve, wire to agent
+ingestor := ingest.NewIngestor(store, embedding)
+result, _ := ingestor.IngestText(ctx, content, "https://example.com", "My Document")
+retriever := oasis.NewHybridRetriever(store, embedding)
 knowledgeTool := knowledge.New(store, embedding)
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithTools(knowledgeTool),

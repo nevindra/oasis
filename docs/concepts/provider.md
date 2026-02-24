@@ -134,6 +134,76 @@ llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1",
 
 See [API Reference: Options — OpenAI-Compatible Options](../api/options.md#openai-compatible-options) for the full option list.
 
+## Provider Resolution
+
+**Package:** `provider/resolve`
+
+The `resolve` package creates providers from provider-agnostic configuration, eliminating hard-coded provider constructors. Useful when the provider choice comes from config files or environment variables.
+
+```go
+import "github.com/nevindra/oasis/provider/resolve"
+
+// Create a chat provider from config
+llm, err := resolve.Provider(resolve.Config{
+    Provider: "openai",       // "gemini", "openai", "groq", "deepseek", "together", "mistral", "ollama"
+    APIKey:   "sk-xxx",
+    Model:    "gpt-4o",
+})
+
+// With options
+llm, err := resolve.Provider(resolve.Config{
+    Provider:    "gemini",
+    APIKey:      apiKey,
+    Model:       "gemini-2.5-flash",
+    Temperature: ptr(0.7),
+    TopP:        ptr(0.95),
+    Thinking:    ptr(true),
+})
+
+// Create an embedding provider
+embed, err := resolve.EmbeddingProvider(resolve.EmbeddingConfig{
+    Provider:   "gemini",
+    APIKey:     apiKey,
+    Model:      "gemini-embedding-001",
+    Dimensions: 768,
+})
+```
+
+### Config
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Provider` | `string` | Required. Provider name (see table below) |
+| `APIKey` | `string` | API key |
+| `Model` | `string` | Model identifier |
+| `BaseURL` | `string` | Override base URL (auto-filled for known providers) |
+| `Temperature` | `*float64` | Sampling temperature (nil = provider default) |
+| `TopP` | `*float64` | Nucleus sampling (nil = provider default) |
+| `Thinking` | `*bool` | Thinking mode — Gemini only, silently ignored for others |
+
+### Supported Providers and Default Base URLs
+
+| Provider | Default Base URL |
+|----------|-----------------|
+| `"gemini"` | Uses Gemini API directly |
+| `"openai"` | `https://api.openai.com/v1` |
+| `"groq"` | `https://api.groq.com/openai/v1` |
+| `"deepseek"` | `https://api.deepseek.com/v1` |
+| `"together"` | `https://api.together.xyz/v1` |
+| `"mistral"` | `https://api.mistral.ai/v1` |
+| `"ollama"` | `http://localhost:11434/v1` |
+
+For unlisted OpenAI-compatible providers, use one of the known names with a custom `BaseURL`, or use `openaicompat.NewProvider` directly.
+
+### EmbeddingConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Provider` | `string` | Currently only `"gemini"` is supported |
+| `APIKey` | `string` | API key |
+| `Model` | `string` | Embedding model identifier |
+| `Dimensions` | `int` | Output vector dimensions |
+
 ## WithRetry Middleware
 
 Wraps any Provider with automatic retry on transient HTTP errors (429, 503):

@@ -206,7 +206,24 @@ llm := oasis.WithRateLimit(
 )
 ```
 
+## Using the Provider Resolver
+
+If your provider is OpenAI-compatible, you can use it with the `resolve` package by specifying a custom `BaseURL`:
+
+```go
+import "github.com/nevindra/oasis/provider/resolve"
+
+llm, err := resolve.Provider(resolve.Config{
+    Provider: "openai",                          // any openai-compat name
+    APIKey:   "sk-xxx",
+    Model:    "custom-model",
+    BaseURL:  "https://my-custom-api.com/v1",    // override default URL
+})
+```
+
+For providers with non-OpenAI API formats, call your custom constructor directly — the resolver only handles built-in providers.
+
 ## See Also
 
-- [Provider Concept](../concepts/provider.md) — full interface reference
+- [Provider Concept](../concepts/provider.md) — full interface reference and resolver documentation
 - [Observability](../concepts/observability.md) — wrapping providers with tracing

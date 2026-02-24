@@ -18,7 +18,8 @@ type Provider interface {
 | Implementation | Constructor |
 |----------------|------------|
 | `provider/gemini` | `gemini.New(apiKey, model string)` |
-| `provider/openaicompat` | `openaicompat.New(apiKey, model, baseURL string)` |
+| `provider/openaicompat` | `openaicompat.NewProvider(apiKey, model, baseURL string)` |
+| `provider/resolve` | `resolve.Provider(cfg resolve.Config)` — config-driven, returns any of the above |
 
 Middleware: `oasis.WithRetry(p Provider, opts ...RetryOption) Provider`
 
@@ -39,6 +40,7 @@ type EmbeddingProvider interface {
 | Implementation | Constructor |
 |----------------|------------|
 | `provider/gemini` | `gemini.NewEmbedding(apiKey, model string, dimensions int)` |
+| `provider/resolve` | `resolve.EmbeddingProvider(cfg resolve.EmbeddingConfig)` — config-driven (Gemini only) |
 
 ---
 

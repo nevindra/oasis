@@ -165,7 +165,8 @@ All three packages also ship a `MemoryStore` implementation in the same package 
 - Accepts an externally-owned `*pgxpool.Pool` — share one pool across Store, MemoryStore, and your app
 - Also implements `MemoryStore` in the same package (`postgres.NewMemoryStore(pool, opts...)`)
 - Requires PostgreSQL with the `pgvector` extension installed
-- Options: `WithEmbeddingDimension(dim)`, `WithHNSWM(m)`, `WithEFConstruction(ef)`, `WithEFSearch(ef)`
+- **`WithEmbeddingDimension(dim)` is required** — pgvector HNSW indexes need typed `vector(N)` columns. `Init()` returns an error if not set.
+- Tuning options: `WithHNSWM(m)`, `WithEFConstruction(ef)`, `WithEFSearch(ef)`
 
 ## Vector Search
 
@@ -294,7 +295,7 @@ CREATE TABLE IF NOT EXISTS messages (
     thread_id  TEXT NOT NULL,
     role       TEXT NOT NULL,
     content    TEXT NOT NULL,
-    embedding  vector,          -- vector(N) when WithEmbeddingDimension is set
+    embedding  vector(N),       -- N from WithEmbeddingDimension (required)
     metadata   JSONB,
     created_at BIGINT NOT NULL
 );
@@ -316,7 +317,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     document_id  TEXT NOT NULL,
     content      TEXT NOT NULL,
     chunk_index  INTEGER NOT NULL,
-    embedding    vector,        -- vector(N) when WithEmbeddingDimension is set
+    embedding    vector(N),     -- N from WithEmbeddingDimension (required)
     parent_id    TEXT,
     metadata     JSONB
 );
@@ -354,7 +355,7 @@ CREATE TABLE IF NOT EXISTS skills (
     tags         TEXT NOT NULL DEFAULT '',
     created_by   TEXT NOT NULL DEFAULT '',
     refs         TEXT NOT NULL DEFAULT '',
-    embedding    vector,        -- vector(N) when WithEmbeddingDimension is set
+    embedding    vector(N),     -- N from WithEmbeddingDimension (required)
     created_at   BIGINT NOT NULL,
     updated_at   BIGINT NOT NULL
 );
@@ -378,7 +379,7 @@ CREATE TABLE IF NOT EXISTS user_facts (
     fact              TEXT NOT NULL,
     category          TEXT NOT NULL,
     confidence        REAL DEFAULT 1.0,
-    embedding         vector,  -- vector(N) when WithEmbeddingDimension is set
+    embedding         vector(N),  -- N from WithEmbeddingDimension (required)
     source_message_id TEXT,
     created_at        BIGINT NOT NULL,
     updated_at        BIGINT NOT NULL
@@ -390,7 +391,7 @@ CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (em
 
 | Topic | Detail |
 | ----- | ------ |
-| **Vector columns** | Untyped `vector` by default. Use `WithEmbeddingDimension(N)` to get `vector(N)` — enables dimension mismatch detection at insert time and better index optimization. Only affects new tables. |
+| **Vector columns** | `WithEmbeddingDimension(N)` is **required** — creates `vector(N)` columns needed for HNSW indexes. `Init()` returns an error if not set. Common values: 768 (Gemini), 1536 (OpenAI ada-002), 3072 (OpenAI text-embedding-3-large). Only affects new tables. |
 | **HNSW indexes** | Created on `messages.embedding`, `chunks.embedding`, `skills.embedding`, and `user_facts.embedding`. Tunable via `WithHNSWM(m)` and `WithEFConstruction(ef)` — appended as `WITH (m = M, ef_construction = EF)` on `CREATE INDEX`. |
 | **ef_search** | Set via `WithEFSearch(ef)`. Applied as `SET hnsw.ef_search = N` (session-level) during `Init()`. Higher values improve recall at the cost of latency. |
 | **Full-text search** | GIN expression index on `to_tsvector('english', content)` — no separate FTS table (unlike SQLite's FTS5 virtual table). Queries use `plainto_tsquery`. |

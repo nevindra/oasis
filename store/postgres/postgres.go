@@ -28,7 +28,7 @@ type Store struct {
 
 // pgConfig holds store configuration set via Option functions.
 type pgConfig struct {
-	embeddingDimension int // 0 = untyped vector (current behavior)
+	embeddingDimension int // required — pgvector HNSW indexes need vector(N)
 	hnswM              int // 0 = pgvector default (16)
 	hnswEFConstruction int // 0 = pgvector default (64)
 	hnswEFSearch       int // 0 = pgvector default (40)
@@ -107,7 +107,13 @@ func (s *Store) hnswWithClause() string {
 
 // Init creates the pgvector extension, all required tables, and indexes.
 // Safe to call multiple times (all statements are idempotent).
+//
+// Requires WithEmbeddingDimension to be set — pgvector HNSW indexes need
+// typed vector(N) columns.
 func (s *Store) Init(ctx context.Context) error {
+	if s.cfg.embeddingDimension <= 0 {
+		return fmt.Errorf("postgres: init: embedding dimension is required (use WithEmbeddingDimension)")
+	}
 	vtype := s.vectorType()
 	hnswWith := s.hnswWithClause()
 
