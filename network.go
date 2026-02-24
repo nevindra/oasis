@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -15,25 +16,25 @@ import (
 // Optionally supports conversation memory, user memory, and cross-thread search
 // when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
 type Network struct {
-	name          string
-	description   string
-	router        Provider
-	agents            map[string]Agent // keyed by name
-	sortedAgentNames  []string         // pre-sorted for deterministic tool ordering
-	tools         *ToolRegistry
-	processors    *ProcessorChain
-	systemPrompt  string
-	maxIter       int
-	inputHandler  InputHandler
-	planExecution  bool
-	codeRunner     CodeRunner
-	responseSchema *ResponseSchema
-	dynamicPrompt  PromptFunc
-	dynamicModel   ModelFunc
-	dynamicTools   ToolsFunc
-	tracer         Tracer
-	logger         *slog.Logger
-	mem            agentMemory
+	name             string
+	description      string
+	router           Provider
+	agents           map[string]Agent // keyed by name
+	sortedAgentNames []string         // pre-sorted for deterministic tool ordering
+	tools            *ToolRegistry
+	processors       *ProcessorChain
+	systemPrompt     string
+	maxIter          int
+	inputHandler     InputHandler
+	planExecution    bool
+	codeRunner       CodeRunner
+	responseSchema   *ResponseSchema
+	dynamicPrompt    PromptFunc
+	dynamicModel     ModelFunc
+	dynamicTools     ToolsFunc
+	tracer           Tracer
+	logger           *slog.Logger
+	mem              agentMemory
 }
 
 // NewNetwork creates a Network with the given router provider and options.
@@ -114,7 +115,11 @@ func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- S
 func (n *Network) executeWithSpan(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	// Emit input-received event so consumers know a task arrived.
 	if ch != nil {
-		ch <- StreamEvent{Type: EventInputReceived, Name: n.name, Content: task.Input}
+		select {
+		case ch <- StreamEvent{Type: EventInputReceived, Name: n.name, Content: task.Input}:
+		case <-ctx.Done():
+			return AgentResult{}, ctx.Err()
+		}
 	}
 
 	if n.tracer != nil {
@@ -246,8 +251,9 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 		}
 
 		// Check if it's an agent call (prefixed with "agent_")
-		if len(tc.Name) > 6 && tc.Name[:6] == "agent_" {
-			agentName := tc.Name[6:]
+		const agentPrefix = "agent_"
+		if strings.HasPrefix(tc.Name, agentPrefix) {
+			agentName := tc.Name[len(agentPrefix):]
 			agent, ok := n.agents[agentName]
 			if !ok {
 				return DispatchResult{Content: fmt.Sprintf("error: unknown agent %q", agentName), IsError: true}

@@ -133,7 +133,7 @@ oasis.Step("c", fnC, oasis.After("b")),
 
 ### Parallel
 
-Steps without dependencies run concurrently:
+Steps without dependencies run concurrently. The DAG engine uses reactive scheduling: each step completion immediately unblocks its dependents. This means a step that depends on only one fast parent starts as soon as that parent finishes — it does not wait for unrelated siblings to complete.
 
 ```mermaid
 graph LR

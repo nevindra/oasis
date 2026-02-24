@@ -63,7 +63,8 @@ func (r *retryProvider) Name() string { return r.inner.Name() }
 
 // Chat implements Provider with retry.
 func (r *retryProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
-	ctx = r.withTimeout(ctx)
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
 	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), func() (ChatResponse, error) {
 		return r.inner.Chat(ctx, req)
 	})
@@ -71,7 +72,8 @@ func (r *retryProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse
 
 // ChatWithTools implements Provider with retry.
 func (r *retryProvider) ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error) {
-	ctx = r.withTimeout(ctx)
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
 	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), func() (ChatResponse, error) {
 		return r.inner.ChatWithTools(ctx, req, tools)
 	})
@@ -82,7 +84,8 @@ func (r *retryProvider) ChatWithTools(ctx context.Context, req ChatRequest, tool
 // through immediately to avoid sending duplicate content.
 // ch is always closed before returning.
 func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
-	ctx = r.withTimeout(ctx)
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
 	var lastErr error
 	for i := 0; i < r.maxAttempts; i++ {
 		mid := make(chan StreamEvent, 64)
@@ -112,11 +115,13 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 		log.Printf("[retry] %s: transient %d (attempt %d/%d), retrying", r.inner.Name(), statusOf(streamErr), i+1, r.maxAttempts)
 		if i < r.maxAttempts-1 {
 			delay := retryDelay(r.baseDelay, i, streamErr)
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				close(ch)
 				return ChatResponse{}, ctx.Err()
-			case <-time.After(delay):
+			case <-timer.C:
 			}
 		}
 	}
@@ -126,16 +131,16 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 
 // withTimeout returns a child context with a deadline if r.timeout is set.
 // If timeout is zero or ctx already has an earlier deadline, returns ctx unchanged.
-func (r *retryProvider) withTimeout(ctx context.Context) context.Context {
+// The caller must call the returned CancelFunc when done.
+func (r *retryProvider) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if r.timeout <= 0 {
-		return ctx
+		return ctx, func() {}
 	}
 	deadline := time.Now().Add(r.timeout)
 	if existing, ok := ctx.Deadline(); ok && existing.Before(deadline) {
-		return ctx
+		return ctx, func() {}
 	}
-	ctx, _ = context.WithDeadline(ctx, deadline)
-	return ctx
+	return context.WithDeadline(ctx, deadline)
 }
 
 // isTransient reports whether err is a retryable HTTP error (429 or 503).
@@ -186,10 +191,12 @@ func retryCall[T any](ctx context.Context, maxAttempts int, base time.Duration, 
 		log.Printf("[retry] %s: transient %d (attempt %d/%d), retrying", name, statusOf(err), i+1, maxAttempts)
 		if i < maxAttempts-1 {
 			delay := retryDelay(base, i, err)
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return zero, ctx.Err()
-			case <-time.After(delay):
+			case <-timer.C:
 			}
 		}
 	}

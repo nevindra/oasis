@@ -12,6 +12,23 @@ import (
 	"time"
 )
 
+// Context key conventions for step output/result naming.
+const (
+	usageKey         = "_usage"
+	outputSuffix     = ".output"
+	resultSuffix     = ".result"
+	argResolverSuffix = "._args"
+)
+
+// stringifyValue converts a context value to a string. Uses a type-switch fast
+// path for string values to avoid the allocation from fmt.Sprintf("%v", v).
+func stringifyValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
 // --- Workflow context ---
 
 // WorkflowContext is the shared state that flows between workflow steps.
@@ -64,19 +81,25 @@ func (c *WorkflowContext) Input() string {
 func (c *WorkflowContext) addUsage(u Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if existing, ok := c.values["_usage"]; ok {
+	if existing, ok := c.values[usageKey]; ok {
 		if eu, ok := existing.(Usage); ok {
 			u.InputTokens += eu.InputTokens
 			u.OutputTokens += eu.OutputTokens
 		}
 	}
-	c.values["_usage"] = u
+	c.values[usageKey] = u
 }
 
 // Resolve replaces {{key}} placeholders in template with values from the
 // context's values map. Unknown keys resolve to empty strings. Values are
-// converted via fmt.Sprintf("%v", v). If the template contains no placeholders,
-// it is returned as-is.
+// converted to strings via stringifyValue. If the template contains no
+// placeholders, it is returned as-is.
+//
+// Security: Resolve performs a single pass — resolved values are NOT
+// re-expanded even if they contain "{{...}}". However, callers must not
+// build templates by concatenating untrusted input, as that could inject
+// arbitrary placeholders before Resolve runs. Use Set/Get for untrusted
+// data and keep templates as compile-time constants or definition-time strings.
 func (c *WorkflowContext) Resolve(template string) string {
 	if !strings.Contains(template, "{{") {
 		return template
@@ -86,6 +109,7 @@ func (c *WorkflowContext) Resolve(template string) string {
 	defer c.mu.RUnlock()
 
 	var b strings.Builder
+	b.Grow(len(template))
 	s := template
 	for {
 		start := strings.Index(s, "{{")
@@ -103,7 +127,7 @@ func (c *WorkflowContext) Resolve(template string) string {
 		b.WriteString(s[:start])
 		key := strings.TrimSpace(s[start+2 : end])
 		if v, ok := c.values[key]; ok {
-			b.WriteString(fmt.Sprintf("%v", v))
+			b.WriteString(stringifyValue(v))
 		}
 		s = s[end+2:]
 	}
@@ -517,7 +541,7 @@ func agentStepFunc(agent Agent, cfg *stepConfig) StepFunc {
 		input := wCtx.Input()
 		if cfg.inputFrom != "" {
 			if v, ok := wCtx.Get(cfg.inputFrom); ok {
-				input = fmt.Sprintf("%v", v)
+				input = stringifyValue(v)
 			}
 		}
 
@@ -530,7 +554,7 @@ func agentStepFunc(agent Agent, cfg *stepConfig) StepFunc {
 			return err
 		}
 
-		outputKey := cfg.name + ".output"
+		outputKey := cfg.name + outputSuffix
 		if cfg.outputTo != "" {
 			outputKey = cfg.outputTo
 		}
@@ -573,10 +597,10 @@ func toolStepFunc(tool Tool, toolName string, cfg *stepConfig) StepFunc {
 			return err
 		}
 		if result.Error != "" {
-			return fmt.Errorf("tool %s: %s", toolName, result.Error)
+			return fmt.Errorf("step %s: tool %s returned error: %s", cfg.name, toolName, result.Error)
 		}
 
-		outputKey := cfg.name + ".result"
+		outputKey := cfg.name + resultSuffix
 		if cfg.outputTo != "" {
 			outputKey = cfg.outputTo
 		}
@@ -602,6 +626,7 @@ type Workflow struct {
 	steps        map[string]*stepConfig  // all steps by name
 	stepOrder    []string                // declaration order (for deterministic iteration)
 	edges        map[string][]string     // step -> its dependencies (After)
+	dependents   map[string][]string     // forward adjacency: dep -> steps that depend on it
 	roots        []string                // steps with no dependencies
 	onFinish     func(WorkflowResult)
 	onError      func(string, error)
@@ -690,7 +715,8 @@ func NewWorkflow(name, description string, opts ...WorkflowOption) (*Workflow, e
 		}
 	}
 
-	// Detect cycles via topological sort (Kahn's algorithm).
+	// Build forward adjacency (dep -> dependents) and detect cycles.
+	w.dependents = w.buildDependents()
 	if err := w.detectCycle(); err != nil {
 		return nil, err
 	}
@@ -713,22 +739,29 @@ func NewWorkflow(name, description string, opts ...WorkflowOption) (*Workflow, e
 	return w, nil
 }
 
-// detectCycle uses Kahn's algorithm for topological sorting to detect cycles.
-func (w *Workflow) detectCycle() error {
-	// Build in-degree map and adjacency list (dep -> dependents).
-	inDegree := make(map[string]int)
-	dependents := make(map[string][]string) // dep -> steps that depend on it
-	for name := range w.steps {
-		inDegree[name] = 0
-	}
+// buildDependents constructs the forward adjacency map (dep -> steps that
+// depend on it) from the edges map. Computed once at construction time and
+// reused by detectCycle, findReachable, and runDAG.
+func (w *Workflow) buildDependents() map[string][]string {
+	dependents := make(map[string][]string, len(w.steps))
 	for name, deps := range w.edges {
-		inDegree[name] = len(deps)
 		for _, dep := range deps {
 			dependents[dep] = append(dependents[dep], name)
 		}
 	}
+	return dependents
+}
 
-	// Start with zero in-degree nodes.
+// detectCycle uses Kahn's algorithm for topological sorting to detect cycles.
+// Requires w.dependents to be populated (via buildDependents) before calling.
+func (w *Workflow) detectCycle() error {
+	inDegree := make(map[string]int, len(w.steps))
+	for name := range w.steps {
+		inDegree[name] = len(w.edges[name])
+	}
+
+	// Start with zero in-degree nodes. Use an index-based queue to avoid
+	// retaining popped elements in the backing array.
 	var queue []string
 	for name, deg := range inDegree {
 		if deg == 0 {
@@ -737,11 +770,10 @@ func (w *Workflow) detectCycle() error {
 	}
 
 	visited := 0
-	for len(queue) > 0 {
-		node := queue[0]
-		queue = queue[1:]
+	for head := 0; head < len(queue); head++ {
+		node := queue[head]
 		visited++
-		for _, dep := range dependents[node] {
+		for _, dep := range w.dependents[node] {
 			inDegree[dep]--
 			if inDegree[dep] == 0 {
 				queue = append(queue, dep)
@@ -756,24 +788,16 @@ func (w *Workflow) detectCycle() error {
 }
 
 // findReachable returns the set of step names reachable from root steps
-// by following dependency edges forward (dep -> dependent).
+// by following the pre-computed forward adjacency (w.dependents).
 func (w *Workflow) findReachable() map[string]bool {
-	// Build forward adjacency: dep -> steps that depend on it.
-	dependents := make(map[string][]string)
-	for name, deps := range w.edges {
-		for _, dep := range deps {
-			dependents[dep] = append(dependents[dep], name)
-		}
-	}
-
-	reachable := make(map[string]bool)
+	reachable := make(map[string]bool, len(w.steps))
 	var visit func(string)
 	visit = func(name string) {
 		if reachable[name] {
 			return
 		}
 		reachable[name] = true
-		for _, next := range dependents[name] {
+		for _, next := range w.dependents[name] {
 			visit(next)
 		}
 	}
@@ -816,26 +840,28 @@ func (s *executionState) getResult(name string) (StepResult, bool) {
 // and marks downstream steps as StepSkipped.
 // Returns an AgentResult with the last successful step's output.
 func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var span Span
 	if w.tracer != nil {
-		var span Span
 		ctx, span = w.tracer.Start(ctx, "workflow.execute",
 			StringAttr("workflow.name", w.name),
 			IntAttr("step_count", len(w.stepOrder)))
-		defer func() { span.End() }()
+		defer span.End()
+	}
 
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
+	state := &executionState{
+		wCtx:           newWorkflowContext(task),
+		results:        make(map[string]StepResult),
+		failureSkipped: make(map[string]bool),
+		cancel:         cancel,
+	}
 
-		state := &executionState{
-			wCtx:           newWorkflowContext(task),
-			results:        make(map[string]StepResult),
-			failureSkipped: make(map[string]bool),
-			cancel:         cancel,
-		}
+	w.runDAG(ctx, state)
 
-		w.runDAG(ctx, state)
-
-		result, err := w.buildResult(state, task)
+	result, err := w.buildResult(state, task)
+	if span != nil {
 		if err != nil {
 			var suspended *ErrSuspended
 			if errors.As(err, &suspended) {
@@ -847,23 +873,8 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 		} else {
 			span.SetAttr(StringAttr("workflow.status", "ok"))
 		}
-		return result, err
 	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	state := &executionState{
-		wCtx:           newWorkflowContext(task),
-		results:        make(map[string]StepResult),
-		failureSkipped: make(map[string]bool),
-		cancel:         cancel,
-	}
-
-	// Run the DAG.
-	w.runDAG(ctx, state)
-
-	return w.buildResult(state, task)
+	return result, err
 }
 
 // executeResume continues a suspended workflow from the given step.
@@ -871,7 +882,7 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 // are pre-populated — steps that were skipped due to the suspension (failure-skipped)
 // will re-execute on resume. This is intentional: those steps never ran, so they
 // must run once the suspended step succeeds.
-func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedResults map[string]StepResult, contextValues map[string]any, _ string, data json.RawMessage) (AgentResult, error) {
+func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedResults map[string]StepResult, contextValues map[string]any, data json.RawMessage) (AgentResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -898,8 +909,10 @@ func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedR
 	// Re-run the DAG — completed steps are skipped, suspended step re-executes.
 	w.runDAG(ctx, state)
 
-	// Clear resume data after execution.
-	wCtx.Set(resumeDataKey, nil)
+	// Clear resume data after execution to avoid retaining the payload.
+	wCtx.mu.Lock()
+	delete(wCtx.values, resumeDataKey)
+	wCtx.mu.Unlock()
 
 	return w.buildResult(state, task)
 }
@@ -930,14 +943,14 @@ func (w *Workflow) buildResult(state *executionState, task AgentTask) (AgentResu
 			Step:    suspendedStep,
 			Payload: suspendPayload,
 			resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
-				return w.executeResume(ctx, task, snapshotResults, snapshotValues, suspendedStep, data)
+				return w.executeResume(ctx, task, snapshotResults, snapshotValues, data)
 			},
 		}
 	}
 
 	// Build WorkflowResult.
 	var totalUsage Usage
-	if u, ok := state.wCtx.Get("_usage"); ok {
+	if u, ok := state.wCtx.Get(usageKey); ok {
 		if usage, ok := u.(Usage); ok {
 			totalUsage = usage
 		}
@@ -1010,76 +1023,99 @@ func workflowStepsToTraces(order []string, results map[string]StepResult) []Step
 	return traces
 }
 
-// runDAG executes the step graph using a wave-based approach. Each wave
-// launches all steps whose dependencies are satisfied, waits for them to
-// complete, then repeats until no more steps are ready.
+// runDAG executes the step graph reactively. Each step completion immediately
+// triggers evaluation of its dependents, avoiding the latency penalty of
+// wave-based batching where fast steps must wait for slow siblings to finish.
+// Uses the pre-computed w.dependents forward adjacency built at construction time.
 func (w *Workflow) runDAG(ctx context.Context, state *executionState) {
-	completed := make(map[string]bool) // includes success and skipped
+	// Track completed steps and remaining in-degree for each step.
+	// All access is serialized through the coordinator goroutine via done channel,
+	// so no mutex is needed for these maps.
+	completed := make(map[string]bool, len(w.steps))
+	remaining := make(map[string]int, len(w.steps))
+	for name := range w.steps {
+		remaining[name] = len(w.edges[name])
+	}
 
-	for {
-		// Find ready steps: not yet completed, all deps satisfied.
-		var ready []*stepConfig
-		for _, name := range w.stepOrder {
-			if completed[name] {
-				continue
+	// Mark pre-populated results (from resume) as completed and adjust in-degrees.
+	for name := range w.steps {
+		if _, has := state.getResult(name); has {
+			completed[name] = true
+		}
+	}
+	for name := range completed {
+		for _, dep := range w.dependents[name] {
+			if !completed[dep] {
+				remaining[dep]--
 			}
-			// If already has a result (e.g., marked skipped), skip.
-			if _, has := state.getResult(name); has {
-				completed[name] = true
-				continue
-			}
+		}
+	}
 
-			allSatisfied := true
-			for _, dep := range w.edges[name] {
-				if !completed[dep] {
-					allSatisfied = false
-					break
+	// done receives step names as goroutines complete (success or fail).
+	// Skipped steps are handled synchronously and never sent to this channel.
+	done := make(chan string, len(w.steps))
+	inflight := 0
+
+	// skipStep marks a step as skipped due to upstream failure and recursively
+	// propagates to any dependents that become ready (they'll also be skipped
+	// since they have a failed upstream). Recursion depth is bounded by the
+	// validated-acyclic DAG depth.
+	var skipStep func(string)
+	skipStep = func(name string) {
+		state.setResult(name, StepResult{Name: name, Status: StepSkipped})
+		state.mu.Lock()
+		state.failureSkipped[name] = true
+		state.mu.Unlock()
+		completed[name] = true
+		for _, dep := range w.dependents[name] {
+			if !completed[dep] {
+				remaining[dep]--
+				if remaining[dep] == 0 {
+					// Dependent is ready — it will also be skipped (failed upstream).
+					skipStep(dep)
 				}
 			}
-			if allSatisfied {
-				ready = append(ready, w.steps[name])
+		}
+	}
+
+	// launch starts a step goroutine, or skips it synchronously if upstream failed.
+	launch := func(name string) {
+		if completed[name] {
+			return
+		}
+		s := w.steps[name]
+		if w.hasFailedUpstream(s, state) {
+			skipStep(name)
+			return
+		}
+		completed[name] = true
+		inflight++
+		go func() {
+			w.executeStep(ctx, s, state)
+			done <- name
+		}()
+	}
+
+	// Seed: launch all root steps (zero remaining dependencies).
+	for _, name := range w.stepOrder {
+		if remaining[name] == 0 && !completed[name] {
+			launch(name)
+		}
+	}
+
+	// React to completions: each finished step immediately unblocks dependents.
+	// Propagation and readiness check are merged into a single pass.
+	for inflight > 0 {
+		name := <-done
+		inflight--
+
+		for _, dep := range w.dependents[name] {
+			if !completed[dep] {
+				remaining[dep]--
+				if remaining[dep] == 0 {
+					launch(dep)
+				}
 			}
-		}
-
-		if len(ready) == 0 {
-			break
-		}
-
-		// Check if any upstream failed — if so, skip downstream steps.
-		var toRun []*stepConfig
-		for _, s := range ready {
-			if w.hasFailedUpstream(s, state) {
-				state.setResult(s.name, StepResult{
-					Name:   s.name,
-					Status: StepSkipped,
-				})
-				state.mu.Lock()
-				state.failureSkipped[s.name] = true
-				state.mu.Unlock()
-				completed[s.name] = true
-			} else {
-				toRun = append(toRun, s)
-			}
-		}
-
-		if len(toRun) == 0 {
-			continue
-		}
-
-		// Launch ready steps in parallel.
-		var wg sync.WaitGroup
-		for _, s := range toRun {
-			wg.Add(1)
-			go func(step *stepConfig) {
-				defer wg.Done()
-				w.executeStep(ctx, step, state)
-			}(s)
-		}
-		wg.Wait()
-
-		// Mark completed.
-		for _, s := range toRun {
-			completed[s.name] = true
 		}
 	}
 }
@@ -1165,8 +1201,13 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 	}
 	err := w.executeWithRetry(ctx, s, run)
 
-	duration := time.Since(start)
+	w.recordStepOutcome(s, state, err, stepSpan, time.Since(start), endSpan)
+}
 
+// recordStepOutcome records the final step result (suspend, failure, or success)
+// into the execution state. Handles span annotation, logging, onError callbacks,
+// and fail-fast cancellation for failures.
+func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err error, stepSpan Span, duration time.Duration, endSpan func(string)) {
 	// Check for suspend (before error handling — suspend is not a failure).
 	var suspend *errSuspend
 	if errors.As(err, &suspend) {
@@ -1201,7 +1242,6 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 
 		w.logger.Error("step failed", "workflow", w.name, "step", s.name, "error", err)
 
-		// Call onError callback.
 		if w.onError != nil {
 			w.safeCallback(func() { w.onError(s.name, err) })
 		}
@@ -1215,7 +1255,7 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 		return
 	}
 
-	// Read output from context for the result.
+	// Success — read output from context for the result.
 	output := w.readStepOutput(s, state.wCtx)
 	state.setResult(s.name, StepResult{
 		Name:     s.name,
@@ -1299,9 +1339,14 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	errCh := make(chan error, concurrency)
+	var firstErr error
+	var errOnce sync.Once
 
 	for i, item := range items {
+		// The select races context cancellation against semaphore acquisition.
+		// On cancellation the zero-value case fires, falls through past the
+		// continue, and hits the break to exit the loop. On semaphore
+		// acquisition the goroutine is launched and continue skips the break.
 		select {
 		case <-iterCtx.Done():
 		case sem <- struct{}{}:
@@ -1310,8 +1355,6 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 				defer wg.Done()
 				defer func() { <-sem }()
 
-				// Check context before executing — if cancelled while waiting
-				// for the semaphore, skip execution immediately.
 				if iterCtx.Err() != nil {
 					return
 				}
@@ -1322,23 +1365,17 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 				})
 
 				if err := s.fn(elemCtx, state.wCtx); err != nil {
-					errCh <- err
+					errOnce.Do(func() { firstErr = err })
 					iterCancel()
 				}
 			}(item, i)
 			continue
 		}
-		break // iterCtx cancelled — stop launching new iterations
+		break
 	}
 
 	wg.Wait()
-	close(errCh)
-
-	// Return the first error, if any.
-	for err := range errCh {
-		return err
-	}
-	return nil
+	return firstErr
 }
 
 // executeDoUntil repeats a step function until the condition returns true,
@@ -1407,16 +1444,17 @@ func (w *Workflow) readStepOutput(s *stepConfig, wCtx *WorkflowContext) string {
 	// Try the explicit output key first.
 	key := s.outputTo
 	if key == "" {
-		// Try common conventions.
-		for _, suffix := range []string{".output", ".result"} {
-			if v, ok := wCtx.Get(s.name + suffix); ok {
-				return fmt.Sprintf("%v", v)
-			}
+		// Try common conventions (explicit checks avoid per-call slice allocation).
+		if v, ok := wCtx.Get(s.name + outputSuffix); ok {
+			return stringifyValue(v)
+		}
+		if v, ok := wCtx.Get(s.name + resultSuffix); ok {
+			return stringifyValue(v)
 		}
 		return ""
 	}
 	if v, ok := wCtx.Get(key); ok {
-		return fmt.Sprintf("%v", v)
+		return stringifyValue(v)
 	}
 	return ""
 }
@@ -1478,7 +1516,7 @@ func FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, 
 		if n.Type != NodeCondition {
 			continue
 		}
-		resultKey := n.ID + ".result"
+		resultKey := n.ID + resultSuffix
 		for _, target := range n.TrueBranch {
 			rk := resultKey
 			newFn := func(wCtx *WorkflowContext) bool {
@@ -1572,7 +1610,7 @@ func buildLLMNode(n NodeDefinition, after []string, reg DefinitionRegistry, when
 				if err != nil {
 					return err
 				}
-				outputKey := n.ID + ".output"
+				outputKey := n.ID + outputSuffix
 				if n.OutputTo != "" {
 					outputKey = n.OutputTo
 				}
@@ -1611,83 +1649,105 @@ func buildToolNode(n NodeDefinition, after []string, reg DefinitionRegistry, whe
 		}
 	}
 
-	var stepOpts []StepOption
-	if n.OutputTo != "" {
-		stepOpts = append(stepOpts, OutputTo(n.OutputTo))
-	}
-	if n.Retry > 0 {
-		stepOpts = append(stepOpts, Retry(n.Retry, time.Second))
-	}
-	if when != nil {
-		stepOpts = append(stepOpts, When(when))
-	}
+	baseOpts := toolNodeBaseOpts(n, when)
 
 	if hasTemplates {
-		// Two steps: resolver + tool call.
-		resolverID := n.ID + "._args"
-		var resolverAfter []StepOption
-		if len(after) > 0 {
-			resolverAfter = append(resolverAfter, After(after...))
-		}
-		if when != nil {
-			resolverAfter = append(resolverAfter, When(when))
-		}
-
-		resolver := Step(resolverID, func(_ context.Context, wCtx *WorkflowContext) error {
-			resolved := make(map[string]any, len(n.Args))
-			for k, v := range n.Args {
-				if s, ok := v.(string); ok && strings.Contains(s, "{{") {
-					resolved[k] = wCtx.Resolve(s)
-				} else {
-					resolved[k] = v
-				}
-			}
-			b, err := json.Marshal(resolved)
-			if err != nil {
-				return fmt.Errorf("node %s: marshal resolved args: %w", n.ID, err)
-			}
-			wCtx.Set(resolverID, json.RawMessage(b))
-			return nil
-		}, resolverAfter...)
-
-		toolStepOpts := make([]StepOption, len(stepOpts), len(stepOpts)+2)
-		copy(toolStepOpts, stepOpts)
-		toolStepOpts = append(toolStepOpts, After(resolverID), ArgsFrom(resolverID))
-		toolStep := ToolStep(n.ID, tool, toolName, toolStepOpts...)
-
-		return []WorkflowOption{resolver, toolStep}, nil
-	}
-
-	// No templates — static args.
-	if len(after) > 0 {
-		stepOpts = append(stepOpts, After(after...))
+		return buildToolNodeTemplateArgs(n, tool, toolName, after, when, baseOpts)
 	}
 	if len(n.Args) > 0 {
-		// Store static args in a key and use ArgsFrom.
-		argsKey := n.ID + "._args"
-		staticArgs := Step(argsKey, func(_ context.Context, wCtx *WorkflowContext) error {
-			b, err := json.Marshal(n.Args)
-			if err != nil {
-				return fmt.Errorf("node %s: marshal args: %w", n.ID, err)
-			}
-			wCtx.Set(argsKey, json.RawMessage(b))
-			return nil
-		}, stepOpts...)
-
-		toolStepOpts := []StepOption{After(argsKey), ArgsFrom(argsKey)}
-		if when != nil {
-			toolStepOpts = append(toolStepOpts, When(when))
-		}
-		if n.OutputTo != "" {
-			toolStepOpts = append(toolStepOpts, OutputTo(n.OutputTo))
-		}
-		if n.Retry > 0 {
-			toolStepOpts = append(toolStepOpts, Retry(n.Retry, time.Second))
-		}
-		return []WorkflowOption{staticArgs, ToolStep(n.ID, tool, toolName, toolStepOpts...)}, nil
+		return buildToolNodeStaticArgs(n, tool, toolName, after, baseOpts)
 	}
 
-	return []WorkflowOption{ToolStep(n.ID, tool, toolName, stepOpts...)}, nil
+	// No args — direct tool call.
+	if len(after) > 0 {
+		baseOpts = append(baseOpts, After(after...))
+	}
+	return []WorkflowOption{ToolStep(n.ID, tool, toolName, baseOpts...)}, nil
+}
+
+// toolNodeBaseOpts builds the common StepOption set shared by all tool node variants.
+func toolNodeBaseOpts(n NodeDefinition, when func(*WorkflowContext) bool) []StepOption {
+	var opts []StepOption
+	if n.OutputTo != "" {
+		opts = append(opts, OutputTo(n.OutputTo))
+	}
+	if n.Retry > 0 {
+		opts = append(opts, Retry(n.Retry, time.Second))
+	}
+	if when != nil {
+		opts = append(opts, When(when))
+	}
+	return opts
+}
+
+// buildToolNodeTemplateArgs generates a resolver step (resolves {{}} placeholders)
+// followed by the tool call step.
+func buildToolNodeTemplateArgs(n NodeDefinition, tool Tool, toolName string, after []string, when func(*WorkflowContext) bool, baseOpts []StepOption) ([]WorkflowOption, error) {
+	resolverID := n.ID + argResolverSuffix
+	var resolverAfter []StepOption
+	if len(after) > 0 {
+		resolverAfter = append(resolverAfter, After(after...))
+	}
+	if when != nil {
+		resolverAfter = append(resolverAfter, When(when))
+	}
+
+	resolver := Step(resolverID, func(_ context.Context, wCtx *WorkflowContext) error {
+		resolved := make(map[string]any, len(n.Args))
+		for k, v := range n.Args {
+			if s, ok := v.(string); ok && strings.Contains(s, "{{") {
+				resolved[k] = wCtx.Resolve(s)
+			} else {
+				resolved[k] = v
+			}
+		}
+		b, err := json.Marshal(resolved)
+		if err != nil {
+			return fmt.Errorf("node %s: marshal resolved args: %w", n.ID, err)
+		}
+		wCtx.Set(resolverID, json.RawMessage(b))
+		return nil
+	}, resolverAfter...)
+
+	toolOpts := make([]StepOption, len(baseOpts), len(baseOpts)+2)
+	copy(toolOpts, baseOpts)
+	toolOpts = append(toolOpts, After(resolverID), ArgsFrom(resolverID))
+
+	return []WorkflowOption{resolver, ToolStep(n.ID, tool, toolName, toolOpts...)}, nil
+}
+
+// buildToolNodeStaticArgs generates an arg-setter step (marshals static args)
+// followed by the tool call step.
+func buildToolNodeStaticArgs(n NodeDefinition, tool Tool, toolName string, after []string, baseOpts []StepOption) ([]WorkflowOption, error) {
+	argsKey := n.ID + argResolverSuffix
+
+	// The arg-setter inherits After + base opts so it runs at the right time.
+	setterOpts := make([]StepOption, len(baseOpts))
+	copy(setterOpts, baseOpts)
+	if len(after) > 0 {
+		setterOpts = append(setterOpts, After(after...))
+	}
+
+	setter := Step(argsKey, func(_ context.Context, wCtx *WorkflowContext) error {
+		b, err := json.Marshal(n.Args)
+		if err != nil {
+			return fmt.Errorf("node %s: marshal args: %w", n.ID, err)
+		}
+		wCtx.Set(argsKey, json.RawMessage(b))
+		return nil
+	}, setterOpts...)
+
+	// The tool step runs after the setter (which already gates on When),
+	// so only After + ArgsFrom + OutputTo/Retry are needed here.
+	toolOpts := []StepOption{After(argsKey), ArgsFrom(argsKey)}
+	if n.OutputTo != "" {
+		toolOpts = append(toolOpts, OutputTo(n.OutputTo))
+	}
+	if n.Retry > 0 {
+		toolOpts = append(toolOpts, Retry(n.Retry, time.Second))
+	}
+
+	return []WorkflowOption{setter, ToolStep(n.ID, tool, toolName, toolOpts...)}, nil
 }
 
 // buildConditionNode generates a Step that evaluates the condition expression
@@ -1716,7 +1776,7 @@ func buildConditionNode(n NodeDefinition, nodes map[string]*NodeDefinition, afte
 		stepOpts = append(stepOpts, After(after...))
 	}
 
-	resultKey := n.ID + ".result"
+	resultKey := n.ID + resultSuffix
 	expr := n.Expression
 
 	condStep := Step(n.ID, func(_ context.Context, wCtx *WorkflowContext) error {
@@ -1759,7 +1819,7 @@ func buildTemplateNode(n NodeDefinition, after []string, when func(*WorkflowCont
 		stepOpts = append(stepOpts, When(when))
 	}
 
-	outputKey := n.ID + ".output"
+	outputKey := n.ID + outputSuffix
 	if n.OutputTo != "" {
 		outputKey = n.OutputTo
 		stepOpts = append(stepOpts, OutputTo(n.OutputTo))
@@ -1787,6 +1847,11 @@ var expressionOperators = []string{"!=", "==", ">=", "<=", ">", "<", "contains"}
 // Supported operators: ==, !=, >, <, >=, <=, contains.
 // Numeric comparison is attempted first; falls back to string comparison.
 // The "contains" operator is always string-based.
+//
+// Security: the operator is located in the raw expression (before placeholder
+// resolution) to prevent resolved values from injecting operators. Each side
+// of the expression is then resolved and compared independently. Expression
+// strings should come from workflow definitions, not from untrusted input.
 func evalExpression(expr string, wCtx *WorkflowContext) (bool, error) {
 	// Find the operator as a space-bounded token in the raw expression
 	// (before resolving placeholders) to avoid matching operators inside
@@ -1850,7 +1915,7 @@ func evalCompare(left, right, op string) (bool, error) {
 	case "<=":
 		return left <= right, nil
 	default:
-		return false, nil
+		return false, fmt.Errorf("expression: unsupported operator %q", op)
 	}
 }
 

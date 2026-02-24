@@ -988,6 +988,12 @@ func Suspend(payload json.RawMessage) error {
 // ErrSuspended is returned by Execute() when a workflow step or network
 // processor suspends execution to await external input.
 // Inspect Payload for context, then call Resume() with the human's response.
+//
+// Retention: ErrSuspended holds a closure that captures the Workflow, the
+// original AgentTask, and snapshots of completed step results and context
+// values. This data remains in memory until Resume() is called or the
+// ErrSuspended value is garbage-collected. Callers should not hold
+// ErrSuspended beyond the resume window to avoid retaining stale state.
 type ErrSuspended struct {
 	// Step is the name of the step or processor hook that suspended.
 	Step string

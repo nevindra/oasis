@@ -12,8 +12,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`ScanAllMessages()` injection guard option** — opt-in scanning of all user messages in conversation history, not just the last one. Detects injection placed in earlier messages via multi-turn context poisoning
 - **`LLMAgent.Drain()` / `Network.Drain()`** — waits for all in-flight background persist goroutines to finish. Call during shutdown to ensure the last messages are written to the store
 
+### Changed
+
+- **Reactive DAG engine in Workflow** — replaced wave-based `runDAG` (which waited for an entire wave of steps to finish before launching the next batch) with a channel-based reactive scheduler. Each step completion immediately unblocks its dependents, eliminating latency penalties in heterogeneous DAGs where fast steps previously waited for slow siblings
+
 ### Fixed
 
+- **`executeForEach` goroutine leak on concurrent failures** — error channel was buffered to `concurrency`, but if more goroutines failed simultaneously than the buffer size, `errCh <- err` blocked forever, preventing `wg.Wait()` from completing. Replaced channel-based error collection with `sync.Once` to capture the first error without blocking
+- **`Resolve` repeated builder allocations** — `strings.Builder` was not pre-sized, causing multiple re-allocations for templates with many placeholders. Now pre-grows to `len(template)`
+- **Unused parameter in `executeResume`** — the suspended step name was passed as `_ string` but never used. Removed from the unexported method signature
+- **Redundant `When` gate on tool step in `buildToolNodeStaticArgs`** — the tool step re-applied `When()` even though it only runs after the setter step (which already gates on the condition). Removed the redundant check and cleaned up the unused `when` parameter from the function signature
+- **Per-call slice allocation in `readStepOutput`** — suffix lookup iterated over a `[]string` literal allocated on every step completion. Replaced with two explicit checks
+- **Workflow resume data retained after execution** — `executeResume` set the `_resume_data` context key to `nil` instead of deleting it, keeping the key (and its payload reference) in the values map indefinitely. Now uses `delete()` to remove the key entirely
+- **`Network` blocking channel send** — `executeWithSpan` sent the initial `EventInputReceived` event with a bare channel send that could block indefinitely if the consumer was slow or the context was cancelled. Now uses `select` with `ctx.Done()` to return early on cancellation
+- **`retryProvider` context leak** — `withTimeout` discarded the `CancelFunc` from `context.WithDeadline`, leaking the derived context's resources until the deadline expired. All callers now `defer cancel()`
+- **`retryProvider` timer leak on cancellation** — replaced `time.After` with `time.NewTimer` in retry backoff loops. Previously, context cancellation during backoff left the timer allocated until its full delay elapsed
 - **Unbounded persist goroutines** — `persistMessages` now uses a bounded semaphore (cap 16) with backpressure. When all slots are occupied, new persist requests are dropped with a warning instead of spawning unlimited goroutines
 - **Stored prompt injection via fact extraction** — extracted facts are now validated against an allowed category enum (`personal`, `preference`, `work`, `habit`, `relationship`) and truncated to 200 runes. Facts with invalid categories or empty text are dropped
 - **Redundant `GetThread` call** — `ensureThread` now returns whether the thread was newly created, and title generation skips the redundant `GetThread` fetch for new threads
