@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Fixed
+
+- **`chunkParentChild` slice-bounds panic** — when chunk overlap caused `strings.Index` to return `-1`, `parentStart` was left at the previous `parentEnd`, making `parentEnd = parentStart + len(pt)` exceed `len(text)`. The next iteration then panicked with `slice bounds out of range`. Fixed by capping the offset with `min(parentEnd, len(text))`, matching the existing behaviour in `chunkFlat`
+
 ## [0.7.0] - 2026-02-23
 
 ### Changed

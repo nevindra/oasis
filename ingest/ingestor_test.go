@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -383,6 +384,37 @@ func TestIngestorCSVEndToEnd(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected labeled CSV output in chunks")
+	}
+}
+
+// TestParentChildOffsetOverflow reproduces the slice-bounds panic that occurred
+// when chunk overlap caused strings.Index to return -1, making parentStart equal
+// to the previous parentEnd, and parentEnd = parentStart + len(pt) exceed len(text).
+func TestParentChildOffsetOverflow(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	ing := NewIngestor(store, emb,
+		WithStrategy(StrategyParentChild),
+		// Use defaults (overlap=50 tokens) to trigger the overlap-based offset issue.
+		// Unique numbered sentences prevent strings.Index from finding an alternative
+		// match after offset, ensuring idx == -1 reliably.
+	)
+
+	// Build unique, non-repetitive text large enough to produce multiple
+	// parent chunks with the default 1024-token (~4096-char) parent chunker.
+	var sb strings.Builder
+	for i := 0; i < 400; i++ {
+		sb.WriteString(fmt.Sprintf("Sentence number %05d contains unique content that does not repeat anywhere else in the document so the chunker cannot find it at an offset past the previous chunk boundary. ", i))
+	}
+	text := sb.String()
+
+	// Must not panic.
+	r, err := ing.IngestText(context.Background(), text, "test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ChunkCount == 0 {
+		t.Fatal("expected chunks")
 	}
 }
 

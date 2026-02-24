@@ -410,7 +410,7 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 			parentStart = offset + idx
 		}
 		parentEnd := parentStart + len(pt)
-		offset = parentEnd
+		offset = min(parentEnd, len(text))
 
 		// Store parent chunk (no embedding).
 		parent := oasis.Chunk{
