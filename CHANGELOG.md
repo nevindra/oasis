@@ -10,9 +10,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 - **`provider/resolve` package** — config-driven provider creation via `resolve.Provider(Config)` and `resolve.EmbeddingProvider(EmbeddingConfig)`. Maps provider-agnostic config (provider name, API key, model, optional Temperature/TopP/Thinking) to concrete `gemini` or `openaicompat` instances. Supports Gemini, OpenAI, Groq, DeepSeek, Together, Mistral, and Ollama with auto-filled base URLs
 - **`ScanAllMessages()` injection guard option** — opt-in scanning of all user messages in conversation history, not just the last one. Detects injection placed in earlier messages via multi-turn context poisoning
+- **`LLMAgent.Drain()` / `Network.Drain()`** — waits for all in-flight background persist goroutines to finish. Call during shutdown to ensure the last messages are written to the store
 
 ### Fixed
 
+- **Unbounded persist goroutines** — `persistMessages` now uses a bounded semaphore (cap 16) with backpressure. When all slots are occupied, new persist requests are dropped with a warning instead of spawning unlimited goroutines
+- **Stored prompt injection via fact extraction** — extracted facts are now validated against an allowed category enum (`personal`, `preference`, `work`, `habit`, `relationship`) and truncated to 200 runes. Facts with invalid categories or empty text are dropped
+- **Redundant `GetThread` call** — `ensureThread` now returns whether the thread was newly created, and title generation skips the redundant `GetThread` fetch for new threads
+- **Sequential supersedes embedding calls** — superseded fact texts are now batch-embedded in a single `Embed()` call instead of one call per superseded fact
+- **Byte-count token estimation for non-ASCII** — `estimateTokens` now uses `utf8.RuneCountInString` instead of `len()`, preventing systematic over-trimming of conversation history for CJK, emoji, and other multi-byte content
+- **No size limit on persisted messages** — user and assistant messages are now truncated to 50,000 runes before storage, preventing unbounded DB growth
+- **`DeleteMatchingFacts` injection surface** — godoc now specifies that implementations must treat the pattern as a plain substring match, never SQL LIKE or regex
 - **`chunkParentChild` slice-bounds panic** — when chunk overlap caused `strings.Index` to return `-1`, `parentStart` was left at the previous `parentEnd`, making `parentEnd = parentStart + len(pt)` exceed `len(text)`. The next iteration then panicked with `slice bounds out of range`. Fixed by capping the offset with `min(parentEnd, len(text))`, matching the existing behaviour in `chunkFlat`
 - **`InjectionGuard` Unicode homoglyph bypass** — added NFKC normalization before phrase matching. Fullwidth Latin (`ｉｇｎｏｒｅ`), mathematical alphanumerics, and ligatures are now normalized before detection
 - **`InjectionGuard` incomplete zero-width char stripping** — added word joiner (U+2060), Mongolian vowel separator (U+180E), and soft hyphen (U+00AD) to the obfuscation character set

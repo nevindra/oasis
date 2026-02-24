@@ -28,6 +28,7 @@ registry.Execute(ctx, name string, args json.RawMessage) (ToolResult, error)
 
 ```go
 agent := oasis.NewLLMAgent(name, description string, provider Provider, opts ...AgentOption)
+agent.Drain()  // wait for in-flight background persist goroutines
 ```
 
 ## Network
@@ -36,6 +37,7 @@ agent := oasis.NewLLMAgent(name, description string, provider Provider, opts ...
 
 ```go
 network := oasis.NewNetwork(name, description string, router Provider, opts ...AgentOption)
+network.Drain()  // wait for in-flight background persist goroutines
 ```
 
 ## Workflow

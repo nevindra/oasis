@@ -91,6 +91,10 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 func (n *Network) Name() string        { return n.name }
 func (n *Network) Description() string { return n.description }
 
+// Drain waits for all in-flight background persist goroutines to finish.
+// Call during shutdown to ensure the last messages are written to the store.
+func (n *Network) Drain() { n.mem.drain() }
+
 // Execute runs the network's routing loop.
 func (n *Network) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)

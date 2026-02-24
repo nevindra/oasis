@@ -153,6 +153,7 @@ type MemoryStore interface {
     SearchFacts(ctx context.Context, embedding []float32, topK int) ([]ScoredFact, error)
     BuildContext(ctx context.Context, queryEmbedding []float32) (string, error)
     DeleteFact(ctx context.Context, factID string) error
+    // pattern is a plain substring match — never SQL LIKE or regex.
     DeleteMatchingFacts(ctx context.Context, pattern string) error
     DecayOldFacts(ctx context.Context) error
     Init(ctx context.Context) error

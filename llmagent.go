@@ -81,6 +81,10 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 func (a *LLMAgent) Name() string        { return a.name }
 func (a *LLMAgent) Description() string { return a.description }
 
+// Drain waits for all in-flight background persist goroutines to finish.
+// Call during shutdown to ensure the last messages are written to the store.
+func (a *LLMAgent) Drain() { a.mem.drain() }
+
 // Execute runs the tool-calling loop until the LLM produces a final text response.
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)

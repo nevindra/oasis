@@ -48,7 +48,7 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 )
 ```
 
-Token estimation uses a ~4 characters per token heuristic with a small overhead for message framing. This is a rough estimate suitable for budget control — not exact tokenizer output.
+Token estimation uses a ~4 characters (runes) per token heuristic with a small overhead for message framing. This is a rough estimate suitable for budget control — not exact tokenizer output. Multi-byte characters (CJK, emoji) are counted correctly as single characters.
 
 ## Auto-Generated Thread Titles
 
@@ -140,6 +140,23 @@ agent := oasis.NewLLMAgent("assistant", "Personal assistant", llm,
 5. Run the tool-calling loop
 6. Persist the user message and assistant response
 7. (Background) Extract user facts and upsert to MemoryStore
+
+## Graceful Shutdown
+
+Background persist goroutines run after `Execute` returns. Call `Drain()` during shutdown to wait for them:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store),
+)
+
+// ... use agent ...
+
+// On shutdown: wait for in-flight persists to finish.
+agent.Drain()
+```
+
+Both `LLMAgent` and `Network` expose `Drain()`. If you don't call it, in-flight persist goroutines will be killed on process exit (the 30-second timeout still prevents true leaks).
 
 ## Without Memory
 

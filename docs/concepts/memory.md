@@ -97,6 +97,7 @@ type MemoryStore interface {
     SearchFacts(ctx, embedding []float32, topK int) ([]ScoredFact, error)
     BuildContext(ctx, queryEmbedding []float32) (string, error)
     DeleteFact(ctx, factID string) error
+    // pattern is a plain substring match — never SQL LIKE or regex.
     DeleteMatchingFacts(ctx, pattern string) error
     DecayOldFacts(ctx) error
     Init(ctx) error
@@ -142,6 +143,26 @@ flowchart TD
 ```
 
 This runs in a background goroutine using the agent's own LLM. No extra configuration needed.
+
+### Fact Validation
+
+Extracted facts are validated before persistence:
+
+- **Category check** — only `personal`, `preference`, `work`, `habit`, and `relationship` are accepted. Facts with other categories are dropped.
+- **Length limit** — facts are truncated to 200 runes to prevent bloated system prompts.
+- **Empty check** — facts with empty text are dropped.
+
+This prevents a malicious user from injecting arbitrary content into the memory store via prompt injection in the extraction pipeline.
+
+### Backpressure and Graceful Shutdown
+
+Background persist goroutines are bounded by a semaphore (cap 16). When the store or embedding provider is slow and all slots are occupied, new persist requests are dropped with a warning log — preventing unbounded goroutine growth under load.
+
+Call `Drain()` on the agent or network during shutdown to wait for in-flight persist goroutines to finish:
+
+```go
+agent.Drain() // blocks until all background persists complete
+```
 
 ## Semantic Deduplication
 

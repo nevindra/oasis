@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // ExtractedFact is a user fact extracted from a conversation turn.
@@ -28,6 +30,9 @@ type MemoryStore interface {
 	BuildContext(ctx context.Context, queryEmbedding []float32) (string, error)
 	// DeleteFact removes a single fact by its ID.
 	DeleteFact(ctx context.Context, factID string) error
+	// DeleteMatchingFacts removes facts whose text contains the given substring.
+	// Implementations must treat pattern as a plain substring match — never as
+	// SQL LIKE, regex, or any other pattern language — to prevent injection.
 	DeleteMatchingFacts(ctx context.Context, pattern string) error
 	DecayOldFacts(ctx context.Context) error
 	Init(ctx context.Context) error
@@ -42,12 +47,21 @@ const defaultSemanticRecallMinScore float32 = 0.60
 // history when MaxHistory is not passed to WithConversationMemory.
 const defaultMaxHistory = 10
 
+// maxPersistContentLen is the maximum rune length for persisted message content.
+// Prevents unbounded DB growth from very large user or assistant messages.
+const maxPersistContentLen = 50_000
+
 // estimateTokens returns a rough token count for a chat message.
 // Uses the ~4 characters per token heuristic, plus a small overhead
 // for role markers and message framing.
 func estimateTokens(msg ChatMessage) int {
-	return len(msg.Content)/4 + 4
+	return utf8.RuneCountInString(msg.Content)/4 + 4
 }
+
+// maxPersistGoroutines is the maximum number of concurrent background
+// persist goroutines. Provides backpressure when the store or embedding
+// provider is slow, preventing unbounded goroutine growth.
+const maxPersistGoroutines = 16
 
 // agentMemory provides shared memory wiring for LLMAgent and Network.
 // All fields are optional — nil means the feature is disabled.
@@ -63,6 +77,22 @@ type agentMemory struct {
 	provider          Provider          // for auto-extraction when memory != nil
 	tracer            Tracer            // nil = no tracing
 	logger            *slog.Logger      // never nil (nopLogger fallback)
+	sem               chan struct{}     // bounded concurrency for background goroutines
+	wg                sync.WaitGroup   // tracks in-flight persist goroutines
+}
+
+// initSem lazily initializes the semaphore. Safe to call multiple times;
+// only the first call allocates the channel.
+func (m *agentMemory) initSem() {
+	if m.sem == nil {
+		m.sem = make(chan struct{}, maxPersistGoroutines)
+	}
+}
+
+// drain waits for all in-flight persist goroutines to finish.
+// Called during agent/network shutdown to prevent data loss.
+func (m *agentMemory) drain() {
+	m.wg.Wait()
 }
 
 // buildMessages constructs the message list: system prompt + user memory + conversation history + user input.
@@ -200,8 +230,8 @@ func (m *agentMemory) buildSystemPrompt(ctx context.Context, basePrompt string, 
 // ensureThread creates the thread row if it doesn't exist yet, and updates
 // its updated_at timestamp. Called before persisting messages so that
 // ListThreads / GetThread work correctly for threads created via
-// WithConversationMemory.
-func (m *agentMemory) ensureThread(ctx context.Context, agentName string, task AgentTask) {
+// WithConversationMemory. Returns true if the thread was newly created.
+func (m *agentMemory) ensureThread(ctx context.Context, agentName string, task AgentTask) bool {
 	threadID := task.TaskThreadID()
 	now := NowUnix()
 
@@ -221,7 +251,7 @@ func (m *agentMemory) ensureThread(ctx context.Context, agentName string, task A
 			// May fail if another goroutine just created it (race) — log and continue.
 			m.logger.Debug("create thread failed (may already exist)", "agent", agentName, "thread_id", threadID, "error", createErr)
 		}
-		return
+		return true
 	}
 
 	// Thread exists — bump updated_at so ListThreads ordering stays current.
@@ -231,6 +261,7 @@ func (m *agentMemory) ensureThread(ctx context.Context, agentName string, task A
 	}); updateErr != nil {
 		m.logger.Error("update thread timestamp failed", "agent", agentName, "thread_id", threadID, "error", updateErr)
 	}
+	return false
 }
 
 // persistMessages stores user and assistant messages in the background.
@@ -243,7 +274,22 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 		return
 	}
 
+	m.initSem()
+
+	// Backpressure: if all slots are occupied, drop this persist to avoid
+	// unbounded goroutine growth when the store is slow.
+	select {
+	case m.sem <- struct{}{}:
+	default:
+		m.logger.Warn("persist backpressure: dropping message persist", "agent", agentName, "thread_id", threadID)
+		return
+	}
+
+	m.wg.Add(1)
 	go func() {
+		defer m.wg.Done()
+		defer func() { <-m.sem }()
+
 		// Detach from parent cancellation so persist + extraction can finish
 		// even after the handler returns. Inherits context values (trace IDs).
 		// Timeout prevents goroutine leaks if store or embedding hangs.
@@ -257,8 +303,12 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 			defer span.End()
 		}
 
+		// Truncate to prevent unbounded DB growth.
+		userText = truncateStr(userText, maxPersistContentLen)
+		assistantText = truncateStr(assistantText, maxPersistContentLen)
+
 		// Ensure thread row exists and updated_at is current.
-		m.ensureThread(bgCtx, agentName, task)
+		created := m.ensureThread(bgCtx, agentName, task)
 
 		now := NowUnix()
 		userMsg := Message{
@@ -290,8 +340,10 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 		}
 
 		// Auto-generate thread title from the first user message.
-		if m.autoTitle && m.provider != nil {
-			m.generateTitle(bgCtx, agentName, userText, threadID)
+		// Only attempt on newly created threads — existing threads already have
+		// titles or had their chance. This avoids a redundant GetThread call.
+		if m.autoTitle && m.provider != nil && created {
+			m.generateTitleNewThread(bgCtx, agentName, userText, threadID)
 		}
 
 		// Auto-extract user facts from this conversation turn.
@@ -311,14 +363,10 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 // generateTitlePrompt is the system prompt for thread title generation.
 const generateTitlePrompt = `Generate a short title (max 8 words) for this conversation based on the user's message. Return ONLY the title text, nothing else. No quotes, no prefix.`
 
-// generateTitle generates a thread title from the user message using the LLM
-// and updates the thread. Skipped if the thread already has a title.
-func (m *agentMemory) generateTitle(ctx context.Context, agentName, userText, threadID string) {
-	thread, err := m.store.GetThread(ctx, threadID)
-	if err != nil || thread.Title != "" {
-		return
-	}
-
+// generateTitleNewThread generates a thread title from the user message using
+// the LLM and updates the thread. Called only for newly created threads, so it
+// skips the GetThread check — a new thread always has an empty title.
+func (m *agentMemory) generateTitleNewThread(ctx context.Context, agentName, userText, threadID string) {
 	resp, err := m.provider.Chat(ctx, ChatRequest{
 		Messages: []ChatMessage{
 			SystemMessage(generateTitlePrompt),
@@ -420,15 +468,25 @@ func (m *agentMemory) extractAndPersistFacts(ctx context.Context, agentName, use
 		return
 	}
 
-	facts := parseExtractedFacts(resp.Content)
+	facts := sanitizeFacts(parseExtractedFacts(resp.Content))
 	if len(facts) == 0 {
 		return
 	}
 
-	// Handle supersedes first.
+	// Handle supersedes: batch-embed all superseded texts in a single call,
+	// then search+delete with the pre-computed embeddings.
+	var supersededTexts []string
 	for _, f := range facts {
 		if f.Supersedes != nil {
-			m.deleteSupersededFact(ctx, agentName, *f.Supersedes)
+			supersededTexts = append(supersededTexts, *f.Supersedes)
+		}
+	}
+	if len(supersededTexts) > 0 {
+		supersededEmbs, embErr := m.embedding.Embed(ctx, supersededTexts)
+		if embErr == nil && len(supersededEmbs) == len(supersededTexts) {
+			for _, emb := range supersededEmbs {
+				m.deleteSupersededFactByEmbedding(ctx, agentName, emb)
+			}
 		}
 	}
 
@@ -448,19 +506,45 @@ func (m *agentMemory) extractAndPersistFacts(ctx context.Context, agentName, use
 	}
 }
 
+// maxFactLength is the maximum rune length for an extracted fact.
+// Prevents attacker-controlled content from bloating the memory store
+// and being injected into future system prompts.
+const maxFactLength = 200
+
+// validFactCategories is the set of allowed category values for extracted facts.
+// Facts with categories outside this set are dropped to prevent injection of
+// arbitrary content through the extraction pipeline.
+var validFactCategories = map[string]bool{
+	"personal":     true,
+	"preference":   true,
+	"work":         true,
+	"habit":        true,
+	"relationship": true,
+}
+
+// sanitizeFacts filters and cleans extracted facts. It drops facts with invalid
+// categories or empty text, and truncates facts exceeding maxFactLength.
+func sanitizeFacts(facts []ExtractedFact) []ExtractedFact {
+	valid := make([]ExtractedFact, 0, len(facts))
+	for _, f := range facts {
+		if f.Fact == "" || !validFactCategories[f.Category] {
+			continue
+		}
+		f.Fact = truncateStr(f.Fact, maxFactLength)
+		valid = append(valid, f)
+	}
+	return valid
+}
+
 // supersedesMinScore is the cosine similarity threshold for matching
 // a superseded fact. Lower than the dedup threshold (0.85) because
 // supersedes targets contradictions that are semantically similar but different.
 const supersedesMinScore float32 = 0.80
 
-// deleteSupersededFact embeds the superseded text, searches for semantically
-// similar facts, and deletes matches above the threshold.
-func (m *agentMemory) deleteSupersededFact(ctx context.Context, agentName, supersededText string) {
-	embs, err := m.embedding.Embed(ctx, []string{supersededText})
-	if err != nil || len(embs) == 0 {
-		return
-	}
-	results, err := m.memory.SearchFacts(ctx, embs[0], 5)
+// deleteSupersededFactByEmbedding searches for semantically similar facts
+// using a pre-computed embedding and deletes matches above the threshold.
+func (m *agentMemory) deleteSupersededFactByEmbedding(ctx context.Context, agentName string, embedding []float32) {
+	results, err := m.memory.SearchFacts(ctx, embedding, 5)
 	if err != nil {
 		return
 	}

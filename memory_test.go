@@ -3,6 +3,7 @@ package oasis
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -1122,6 +1123,182 @@ func TestEstimateTokens(t *testing.T) {
 				t.Errorf("estimateTokens() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+// P3: estimateTokens should count runes, not bytes (CJK/emoji).
+func TestEstimateTokensMultibyte(t *testing.T) {
+	// 4 CJK characters = 12 bytes in UTF-8, but only 4 runes.
+	msg := ChatMessage{Content: "你好世界"} // 4 runes
+	got := estimateTokens(msg)
+	want := 4/4 + 4 // 1 + 4 = 5
+	if got != want {
+		t.Errorf("estimateTokens(CJK) = %d, want %d (rune-based)", got, want)
+	}
+}
+
+// S1: sanitizeFacts drops invalid categories and truncates long facts.
+func TestSanitizeFacts(t *testing.T) {
+	longFact := string(make([]rune, 300))
+	superseded := "old fact"
+	tests := []struct {
+		name  string
+		input []ExtractedFact
+		want  int
+	}{
+		{"valid", []ExtractedFact{{Fact: "likes Go", Category: "preference"}}, 1},
+		{"invalid category", []ExtractedFact{{Fact: "test", Category: "bogus"}}, 0},
+		{"empty fact", []ExtractedFact{{Fact: "", Category: "personal"}}, 0},
+		{"mixed", []ExtractedFact{
+			{Fact: "valid", Category: "work"},
+			{Fact: "bad", Category: "invalid"},
+			{Fact: "also valid", Category: "habit"},
+		}, 2},
+		{"preserves supersedes", []ExtractedFact{
+			{Fact: "new fact", Category: "personal", Supersedes: &superseded},
+		}, 1},
+		{"truncates long", []ExtractedFact{{Fact: longFact, Category: "personal"}}, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeFacts(tt.input)
+			if len(got) != tt.want {
+				t.Errorf("sanitizeFacts() returned %d facts, want %d", len(got), tt.want)
+			}
+		})
+	}
+
+	// Verify truncation length.
+	t.Run("truncation length", func(t *testing.T) {
+		facts := sanitizeFacts([]ExtractedFact{{Fact: longFact, Category: "personal"}})
+		if len([]rune(facts[0].Fact)) != maxFactLength {
+			t.Errorf("truncated fact length = %d runes, want %d", len([]rune(facts[0].Fact)), maxFactLength)
+		}
+	})
+}
+
+// M1+M2: drain waits for in-flight persist goroutines.
+func TestDrainWaitsForPersist(t *testing.T) {
+	store := &recordingStore{}
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "ok"}},
+	}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+	)
+
+	task := AgentTask{
+		Input:   "hello",
+		Context: map[string]any{ContextThreadID: "t-drain"},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain instead of time.Sleep — should block until persist completes.
+	agent.Drain()
+
+	stored := store.storedMessages()
+	if len(stored) < 2 {
+		t.Fatalf("expected at least 2 stored messages after Drain, got %d", len(stored))
+	}
+}
+
+// S3: persisted messages are truncated to maxPersistContentLen.
+func TestPersistTruncatesLargeContent(t *testing.T) {
+	store := &recordingStore{}
+	provider := &mockProvider{
+		name: "test",
+		// Return a very large response.
+		responses: []ChatResponse{{Content: string(make([]rune, maxPersistContentLen+1000))}},
+	}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store),
+	)
+
+	// Use a large input.
+	largeInput := string(make([]rune, maxPersistContentLen+500))
+	task := AgentTask{
+		Input:   largeInput,
+		Context: map[string]any{ContextThreadID: "t-trunc"},
+	}
+	_, err := agent.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	agent.Drain()
+
+	stored := store.storedMessages()
+	if len(stored) < 2 {
+		t.Fatalf("expected 2 stored messages, got %d", len(stored))
+	}
+	for _, msg := range stored {
+		if len([]rune(msg.Content)) > maxPersistContentLen {
+			t.Errorf("stored %s message length = %d runes, want <= %d",
+				msg.Role, len([]rune(msg.Content)), maxPersistContentLen)
+		}
+	}
+}
+
+// P2: ensureThread returns true for new threads, false for existing.
+func TestEnsureThreadReturnValue(t *testing.T) {
+	store := &recordingStore{}
+	m := &agentMemory{
+		store:  store,
+		logger: slog.Default(),
+	}
+
+	task := AgentTask{
+		Input:   "hi",
+		Context: map[string]any{ContextThreadID: "t-new", ContextChatID: "c1"},
+	}
+
+	// First call: thread doesn't exist — should return true.
+	created := m.ensureThread(context.Background(), "test", task)
+	if !created {
+		t.Error("ensureThread should return true for new thread")
+	}
+
+	// Second call: thread exists — should return false.
+	created = m.ensureThread(context.Background(), "test", task)
+	if created {
+		t.Error("ensureThread should return false for existing thread")
+	}
+}
+
+// M1: backpressure drops persist when semaphore is full.
+func TestPersistBackpressure(t *testing.T) {
+	store := &recordingStore{}
+	m := &agentMemory{
+		store:  store,
+		logger: slog.Default(),
+		sem:    make(chan struct{}, 1), // capacity of 1
+	}
+
+	// Fill the semaphore.
+	m.sem <- struct{}{}
+
+	task := AgentTask{
+		Input:   "should be dropped",
+		Context: map[string]any{ContextThreadID: "t-bp"},
+	}
+
+	// This should be dropped (non-blocking) because sem is full.
+	m.persistMessages(context.Background(), "test", task, "user", "assistant", nil)
+
+	// Release the semaphore.
+	<-m.sem
+
+	// Wait briefly and verify nothing was stored.
+	m.wg.Wait()
+	stored := store.storedMessages()
+	if len(stored) != 0 {
+		t.Errorf("expected 0 stored messages (backpressure drop), got %d", len(stored))
 	}
 }
 
