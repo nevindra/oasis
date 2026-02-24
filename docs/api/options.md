@@ -127,6 +127,7 @@ Configures `NewHybridRetriever`.
 | `WithParentTokens(n int)` | 1024 | Parent chunk size |
 | `WithChildTokens(n int)` | 256 | Child chunk size |
 | `WithBatchSize(n int)` | 64 | Chunks per Embed() call |
+| `WithMaxContentSize(n int)` | 50 MB | Max input content size in bytes (0 to disable) |
 | `WithExtractor(ct ContentType, e Extractor)` | — | Register or override an extractor for a content type |
 | `WithOnSuccess(fn func(IngestResult))` | nil | Callback invoked after each successful ingestion |
 | `WithOnError(fn func(source string, err error))` | nil | Callback invoked on ingestion failure |

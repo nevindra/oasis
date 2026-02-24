@@ -13,7 +13,7 @@ import (
 // falls below the Nth percentile become chunk boundaries.
 type SemanticChunker struct {
 	embed      EmbedFunc
-	maxChars   int
+	maxBytes   int
 	percentile int
 	fallback   *RecursiveChunker
 }
@@ -31,7 +31,7 @@ func NewSemanticChunker(embed EmbedFunc, opts ...ChunkerOption) *SemanticChunker
 	}
 	return &SemanticChunker{
 		embed:      embed,
-		maxChars:   cfg.maxTokens * 4,
+		maxBytes:   cfg.maxTokens * 4,
 		percentile: cfg.breakpointPercentile,
 		fallback:   NewRecursiveChunker(opts...),
 	}
@@ -52,7 +52,7 @@ func (sc *SemanticChunker) ChunkContext(ctx context.Context, text string) ([]str
 	if text == "" {
 		return nil, nil
 	}
-	if len(text) <= sc.maxChars {
+	if len(text) <= sc.maxBytes {
 		return []string{text}, nil
 	}
 
@@ -99,13 +99,13 @@ func (sc *SemanticChunker) ChunkContext(ctx context.Context, text string) ([]str
 	return sc.mergeAndSplit(groups), nil
 }
 
-// mergeAndSplit merges small groups up to maxChars and splits oversized ones.
+// mergeAndSplit merges small groups up to maxBytes and splits oversized ones.
 func (sc *SemanticChunker) mergeAndSplit(groups []string) []string {
 	var chunks []string
 	var current strings.Builder
 
 	for _, g := range groups {
-		if len(g) > sc.maxChars {
+		if len(g) > sc.maxBytes {
 			if current.Len() > 0 {
 				chunks = append(chunks, current.String())
 				current.Reset()
@@ -119,7 +119,7 @@ func (sc *SemanticChunker) mergeAndSplit(groups []string) []string {
 			needed = current.Len() + 1 + len(g)
 		}
 
-		if needed <= sc.maxChars {
+		if needed <= sc.maxBytes {
 			if current.Len() > 0 {
 				current.WriteByte(' ')
 			}
@@ -153,7 +153,9 @@ func splitSentences(text string) []string {
 			if p == "" {
 				continue
 			}
-			if i < len(parts)-1 {
+			// Re-append the period consumed by Split for all non-last parts,
+			// and for the last part if the original text ended with ". ".
+			if i < len(parts)-1 || strings.HasSuffix(text, ". ") {
 				p += "."
 			}
 			out = append(out, p)

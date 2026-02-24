@@ -126,7 +126,7 @@ reranker := oasis.NewLLMReranker(llmProvider)
 
 ## GraphRetriever (Graph RAG)
 
-`GraphRetriever` combines vector search with knowledge graph traversal. It performs an initial vector search to find seed chunks, then walks stored chunk edges to discover contextually related content that vector similarity alone would miss.
+`GraphRetriever` combines vector search with knowledge graph traversal. It performs an initial vector search to find seed chunks, then walks stored chunk edges via multi-hop BFS to discover contextually related content that vector similarity alone would miss.
 
 ```go
 retriever := oasis.NewGraphRetriever(store, embedding,
@@ -148,35 +148,7 @@ retriever := oasis.NewGraphRetriever(store, embedding,
 
 If the Store doesn't implement `GraphStore`, `GraphRetriever` falls back to vector-only search — no error.
 
-### GraphStore Interface
-
-```go
-type GraphStore interface {
-    StoreEdges(ctx context.Context, edges []ChunkEdge) error
-    GetEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
-    GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
-    PruneOrphanEdges(ctx context.Context) (int, error)
-}
-```
-
-`GraphStore` is an optional Store capability discovered via type assertion. All three store implementations (`store/sqlite`, `store/postgres`, `store/libsql`) implement this interface.
-
-### Relationship Types
-
-```go
-type RelationType string
-
-const (
-    RelReferences  RelationType = "references"   // chunk A cites content from chunk B
-    RelElaborates  RelationType = "elaborates"    // chunk A provides more detail on chunk B
-    RelDependsOn   RelationType = "depends_on"    // chunk A assumes knowledge from chunk B
-    RelContradicts RelationType = "contradicts"   // chunk A conflicts with chunk B
-    RelPartOf      RelationType = "part_of"       // chunk A is a subset of chunk B
-    RelSimilarTo   RelationType = "similar_to"    // chunks cover overlapping topics
-    RelSequence    RelationType = "sequence"      // chunk A follows chunk B in order
-    RelCausedBy    RelationType = "caused_by"     // chunk A is a consequence of chunk B
-)
-```
+For the full deep-dive — extraction internals, relationship types, score blending math, decision guides, and end-to-end examples — see **[Graph RAG](graph-rag.md)**.
 
 ### GraphRetriever Options
 
@@ -244,6 +216,7 @@ See [Store: Chunk Filtering](store.md#chunk-filtering) for the full list of filt
 
 ## See Also
 
+- [Graph RAG](graph-rag.md) — graph extraction internals, edge types, score blending, decision guides
 - [Ingest](ingest.md) — the ingestion pipeline that creates searchable chunks
 - [Store](store.md) — persistence and vector search
 - [RAG Pipeline Guide](../guides/rag-pipeline.md) — end-to-end walkthrough

@@ -40,7 +40,7 @@ func defaultChunkerConfig() chunkerConfig {
 	return chunkerConfig{maxTokens: 512, overlapTokens: 50, breakpointPercentile: 25}
 }
 
-// WithMaxTokens sets the maximum tokens per chunk (approximated as tokens*4 chars).
+// WithMaxTokens sets the maximum tokens per chunk (approximated as tokens*4 bytes).
 func WithMaxTokens(n int) ChunkerOption {
 	return func(c *chunkerConfig) { c.maxTokens = n }
 }
@@ -65,8 +65,8 @@ func WithBreakpointPercentile(p int) ChunkerOption {
 // (Mr., Dr., vs., etc., e.g., i.e.), decimal numbers (3.14, $1.50),
 // and handling CJK sentence-ending punctuation (。！？).
 type RecursiveChunker struct {
-	maxChars     int
-	overlapChars int
+	maxBytes     int
+	overlapBytes int
 }
 
 // NewRecursiveChunker creates a RecursiveChunker with the given options.
@@ -76,37 +76,37 @@ func NewRecursiveChunker(opts ...ChunkerOption) *RecursiveChunker {
 		o(&cfg)
 	}
 	return &RecursiveChunker{
-		maxChars:     cfg.maxTokens * 4,
-		overlapChars: cfg.overlapTokens * 4,
+		maxBytes:     cfg.maxTokens * 4,
+		overlapBytes: cfg.overlapTokens * 4,
 	}
 }
 
 // Chunk splits text into overlapping chunks.
 func (rc *RecursiveChunker) Chunk(text string) []string {
-	return chunkText(text, rc.maxChars, rc.overlapChars)
+	return chunkText(text, rc.maxBytes, rc.overlapBytes)
 }
 
 // chunkText splits text into overlapping chunks using recursive splitting.
 // Strategy: split on paragraphs (\n\n), then sentences, then words.
-func chunkText(text string, maxChars, overlapChars int) []string {
+func chunkText(text string, maxBytes, overlapBytes int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
-	if len(text) <= maxChars {
+	if len(text) <= maxBytes {
 		return []string{text}
 	}
 
-	segments := splitRecursive(text, maxChars)
-	return mergeWithOverlap(segments, maxChars, overlapChars)
+	segments := splitRecursive(text, maxBytes)
+	return mergeWithOverlap(segments, maxBytes, overlapBytes)
 }
 
-func splitRecursive(text string, maxChars int) []string {
+func splitRecursive(text string, maxBytes int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
-	if len(text) <= maxChars {
+	if len(text) <= maxBytes {
 		return []string{text}
 	}
 
@@ -119,29 +119,36 @@ func splitRecursive(text string, maxChars int) []string {
 			if p == "" {
 				continue
 			}
-			if len(p) <= maxChars {
+			if len(p) <= maxBytes {
 				segments = append(segments, p)
 			} else {
-				segments = append(segments, splitOnSentences(p, maxChars)...)
+				segments = append(segments, splitOnSentences(p, maxBytes)...)
 			}
 		}
 		return segments
 	}
 
 	// Level 2: sentence boundaries
-	sentenceSegments := splitOnSentences(text, maxChars)
+	sentenceSegments := splitOnSentences(text, maxBytes)
 	if len(sentenceSegments) > 1 {
 		return sentenceSegments
 	}
 
 	// Level 3: word boundaries
-	return splitOnWords(text, maxChars)
+	return splitOnWords(text, maxBytes)
 }
 
-func splitOnSentences(text string, maxChars int) []string {
+// splitOnSentences greedily groups sentences up to maxBytes.
+//
+// Algorithm: scan sentence boundaries left-to-right, extending the current
+// segment as long as text[start:boundary] fits in maxBytes. When adding the
+// next boundary would exceed the limit, flush text[start:lastGood] as a
+// segment and advance start. If no intermediate boundary fits (lastGood == -1),
+// the oversized span is word-split as a fallback.
+func splitOnSentences(text string, maxBytes int) []string {
 	boundaries := findSentenceBoundaries(text)
 	if len(boundaries) == 0 {
-		return splitOnWords(text, maxChars)
+		return splitOnWords(text, maxBytes)
 	}
 
 	var segments []string
@@ -150,58 +157,52 @@ func splitOnSentences(text string, maxChars int) []string {
 
 	for _, boundary := range boundaries {
 		candidate := text[start:boundary]
-		if len(candidate) <= maxChars {
+		if len(candidate) <= maxBytes {
 			lastGood = boundary
-		} else {
-			if lastGood > start {
-				seg := strings.TrimSpace(text[start:lastGood])
-				if seg != "" {
-					if len(seg) <= maxChars {
-						segments = append(segments, seg)
-					} else {
-						segments = append(segments, splitOnWords(seg, maxChars)...)
-					}
-				}
-				start = lastGood
-				candidate = text[start:boundary]
-				if len(strings.TrimSpace(candidate)) <= maxChars {
-					lastGood = boundary
-				} else {
-					lastGood = -1
-				}
+			continue
+		}
+
+		// Candidate exceeds maxBytes — flush what we can.
+		if lastGood > start {
+			segments = appendSegment(segments, text[start:lastGood], maxBytes)
+			start = lastGood
+			// Re-check remaining span against the current boundary.
+			if len(strings.TrimSpace(text[start:boundary])) <= maxBytes {
+				lastGood = boundary
 			} else {
-				seg := strings.TrimSpace(text[start:boundary])
-				if seg != "" {
-					segments = append(segments, splitOnWords(seg, maxChars)...)
-				}
-				start = boundary
 				lastGood = -1
 			}
+		} else {
+			// No intermediate boundary fits — word-split the oversized span.
+			segments = appendSegment(segments, text[start:boundary], maxBytes)
+			start = boundary
+			lastGood = -1
 		}
 	}
 
+	// Flush remaining buffered segment.
 	if lastGood > start {
-		seg := strings.TrimSpace(text[start:lastGood])
-		if seg != "" {
-			if len(seg) <= maxChars {
-				segments = append(segments, seg)
-			} else {
-				segments = append(segments, splitOnWords(seg, maxChars)...)
-			}
-		}
+		segments = appendSegment(segments, text[start:lastGood], maxBytes)
 		start = lastGood
 	}
 
-	remaining := strings.TrimSpace(text[start:])
-	if remaining != "" {
-		if len(remaining) <= maxChars {
-			segments = append(segments, remaining)
-		} else {
-			segments = append(segments, splitOnWords(remaining, maxChars)...)
-		}
-	}
+	// Flush any trailing text after the last boundary.
+	segments = appendSegment(segments, text[start:], maxBytes)
 
 	return segments
+}
+
+// appendSegment trims seg and appends it to segments. If the trimmed segment
+// exceeds maxBytes, it is word-split instead.
+func appendSegment(segments []string, seg string, maxBytes int) []string {
+	seg = strings.TrimSpace(seg)
+	if seg == "" {
+		return segments
+	}
+	if len(seg) <= maxBytes {
+		return append(segments, seg)
+	}
+	return append(segments, splitOnWords(seg, maxBytes)...)
 }
 
 // abbreviations that should NOT be treated as sentence boundaries.
@@ -296,7 +297,7 @@ func findSentenceBoundaries(text string) []int {
 	return boundaries
 }
 
-func splitOnWords(text string, maxChars int) []string {
+func splitOnWords(text string, maxBytes int) []string {
 	words := strings.Fields(text)
 	if len(words) == 0 {
 		return nil
@@ -306,13 +307,13 @@ func splitOnWords(text string, maxChars int) []string {
 	var current strings.Builder
 
 	for _, word := range words {
-		if len(word) > maxChars {
+		if len(word) > maxBytes {
 			if current.Len() > 0 {
 				segments = append(segments, strings.TrimSpace(current.String()))
 				current.Reset()
 			}
 			for i := 0; i < len(word); {
-				end := i + maxChars
+				end := i + maxBytes
 				if end >= len(word) {
 					segments = append(segments, word[i:])
 					break
@@ -323,7 +324,7 @@ func splitOnWords(text string, maxChars int) []string {
 					e--
 				}
 				if e == i {
-					// Single rune larger than maxChars — step one rune forward.
+					// Single rune larger than maxBytes — step one rune forward.
 					_, sz := utf8.DecodeRuneInString(word[i:])
 					e = i + sz
 				}
@@ -338,7 +339,7 @@ func splitOnWords(text string, maxChars int) []string {
 			needed = current.Len() + 1 + len(word)
 		}
 
-		if needed > maxChars {
+		if needed > maxBytes {
 			if current.Len() > 0 {
 				segments = append(segments, strings.TrimSpace(current.String()))
 				current.Reset()
@@ -359,7 +360,7 @@ func splitOnWords(text string, maxChars int) []string {
 	return segments
 }
 
-func mergeWithOverlap(segments []string, maxChars, overlapChars int) []string {
+func mergeWithOverlap(segments []string, maxBytes, overlapBytes int) []string {
 	if len(segments) == 0 {
 		return nil
 	}
@@ -373,7 +374,7 @@ func mergeWithOverlap(segments []string, maxChars, overlapChars int) []string {
 			needed = current.Len() + 1 + len(seg)
 		}
 
-		if needed <= maxChars {
+		if needed <= maxBytes {
 			if current.Len() > 0 {
 				current.WriteByte('\n')
 			}
@@ -383,9 +384,9 @@ func mergeWithOverlap(segments []string, maxChars, overlapChars int) []string {
 				chunk := current.String()
 				chunks = append(chunks, chunk)
 
-				overlap := getOverlapSuffix(chunk, overlapChars)
+				overlap := getOverlapSuffix(chunk, overlapBytes)
 				current.Reset()
-				if overlap != "" && len(overlap)+1+len(seg) <= maxChars {
+				if overlap != "" && len(overlap)+1+len(seg) <= maxBytes {
 					current.WriteString(overlap)
 					current.WriteByte('\n')
 				}

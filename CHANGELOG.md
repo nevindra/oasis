@@ -11,6 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`provider/resolve` package** — config-driven provider creation via `resolve.Provider(Config)` and `resolve.EmbeddingProvider(EmbeddingConfig)`. Maps provider-agnostic config (provider name, API key, model, optional Temperature/TopP/Thinking) to concrete `gemini` or `openaicompat` instances. Supports Gemini, OpenAI, Groq, DeepSeek, Together, Mistral, and Ollama with auto-filled base URLs
 - **`ScanAllMessages()` injection guard option** — opt-in scanning of all user messages in conversation history, not just the last one. Detects injection placed in earlier messages via multi-turn context poisoning
 - **`LLMAgent.Drain()` / `Network.Drain()`** — waits for all in-flight background persist goroutines to finish. Call during shutdown to ensure the last messages are written to the store
+- **`ingest.WithMaxContentSize(n)` option** — rejects content exceeding the byte limit before extraction (default 50 MB, set to 0 to disable). Prevents memory exhaustion from oversized input
 
 ### Changed
 
@@ -18,6 +19,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Fixed
 
+- **Graph extraction infinite loop on `graphBatchSize <= 0`** — `extractGraphEdges` used the caller-supplied batch size directly as the loop increment. If set to 0 via `WithGraphBatchSize(0)`, the loop never advanced, burning LLM credits indefinitely. Now defaults to 5 when `batchSize <= 0`
+- **Graph extraction ignores context cancellation** — `extractGraphEdges` never checked `ctx.Err()` between batches, continuing to issue LLM calls after the context was cancelled (e.g., timeout, client disconnect). Now breaks the batch loop on context cancellation
+- **Graph extraction silently swallows errors** — LLM call failures and JSON parse errors in `extractGraphEdges` were silently discarded via `continue`. Now logs warnings via `*slog.Logger` when `WithIngestorLogger` is configured
+- **`validRelations` map rebuilt on every `parseEdgeResponse` call** — the constant relation-type lookup map was allocated inside the function body on each invocation. Hoisted to a package-level `var` to avoid repeated allocation
+- **`buildSequenceEdges` nested conditional hard to reason about** — the parent-child linking logic used a confusing three-level nested `if` to decide whether two adjacent chunks should be linked. Simplified to a single `ParentID != ParentID` check, which is semantically equivalent: flat chunks (both `""`) link, same-parent children link, everything else skips
+- **DOCX zip bomb vulnerability** — `docxReadZipFile` used `io.ReadAll` with no size limit on decompressed zip entries, allowing crafted DOCX files to exhaust memory. Now uses `io.LimitReader` capped at 100 MB per entry
+- **JSON extractor stack overflow on deep nesting** — `flatten` recursed without depth limit, allowing deeply nested JSON (e.g., 10,000 levels) to overflow the goroutine stack. Now capped at 100 levels, emitting `<truncated>` beyond that
+- **`StripHTML` doubled memory via `[]rune` conversion** — replaced full `[]rune(content)` copy with `utf8.DecodeRuneInString` iteration, eliminating the ~4x memory overhead for large HTML documents
+- **DOCX `Extract()` loaded images unnecessarily** — `Extract()` delegated to `ExtractWithMeta()` which eagerly loaded and base64-encoded all embedded images. `Extract()` now uses a text-only path that skips image loading
+- **`StripHTML` dead code block** — removed unreachable `collectingTagName` check inside the `>` handler (the `>` rune was already handled by the tag-name collection branch above)
+- **`StripHTML` limited entity decoding** — `decodeEntity` only handled 6 named entities and no numeric references. Now supports 25 named entities (`&mdash;`, `&copy;`, `&euro;`, etc.) and numeric entities (`&#123;`, `&#x7B;`)
+- **`collapseWhitespace` redundant state** — removed redundant `lastWasEmpty` boolean; `emptyCount > 0` captures the same condition
+- **Repeated `MarkdownChunker` allocation in `Ingestor`** — `selectChunker` and `chunkParentChild` created a new `MarkdownChunker` (plus its internal `RecursiveChunker`) on every markdown ingest call. Now cached on the `Ingestor` at construction time
+- **Fragile type assertion in `selectChunker`** — `selectChunker` used `(*RecursiveChunker)` type assertion to detect whether a custom chunker was set, which broke if the default chunker was wrapped. Replaced with an explicit `customChunker` flag set by `WithChunker`
+- **Misleading field names in chunkers** — `maxChars`/`overlapChars` fields compared against `len(text)` (byte count), not character count. Renamed to `maxBytes`/`overlapBytes` across `RecursiveChunker`, `SemanticChunker`, and `MarkdownChunker`
+- **Missing compile-time interface check for `MarkdownChunker`** — added `var _ Chunker = (*MarkdownChunker)(nil)`
+- **`splitSentences` naive fallback lost trailing period** — when `findSentenceBoundaries` returned no results, `strings.Split(text, ". ")` consumed the delimiter but only re-appended the period to non-last parts. The last sentence lost its trailing period when the input ended with `". "`. Now checks `strings.HasSuffix(text, ". ")` for the last part
+- **`splitOnSentences` deep nesting** — extracted `appendSegment` helper and added algorithm comment to reduce nesting depth and improve readability
 - **`executeForEach` goroutine leak on concurrent failures** — error channel was buffered to `concurrency`, but if more goroutines failed simultaneously than the buffer size, `errCh <- err` blocked forever, preventing `wg.Wait()` from completing. Replaced channel-based error collection with `sync.Once` to capture the first error without blocking
 - **`Resolve` repeated builder allocations** — `strings.Builder` was not pre-sized, causing multiple re-allocations for templates with many placeholders. Now pre-grows to `len(template)`
 - **Unused parameter in `executeResume`** — the suspended step name was passed as `_ string` but never used. Removed from the unexported method signature

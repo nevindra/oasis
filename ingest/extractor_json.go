@@ -17,6 +17,10 @@ type JSONExtractor struct{}
 // NewJSONExtractor creates a JSON extractor.
 func NewJSONExtractor() *JSONExtractor { return &JSONExtractor{} }
 
+// maxJSONDepth limits recursion in flatten to prevent stack overflow
+// from deeply nested JSON input.
+const maxJSONDepth = 100
+
 // Extract converts JSON content to readable key-value text.
 func (e *JSONExtractor) Extract(content []byte) (string, error) {
 	content = bytes.TrimSpace(content)
@@ -28,11 +32,19 @@ func (e *JSONExtractor) Extract(content []byte) (string, error) {
 		return "", fmt.Errorf("parse json: %w", err)
 	}
 	var lines []string
-	flatten("", data, &lines)
+	flatten("", data, &lines, 0)
 	return strings.Join(lines, "\n"), nil
 }
 
-func flatten(prefix string, v any, lines *[]string) {
+func flatten(prefix string, v any, lines *[]string, depth int) {
+	if depth >= maxJSONDepth {
+		label := prefix
+		if label == "" {
+			label = "value"
+		}
+		*lines = append(*lines, fmt.Sprintf("%s: <truncated>", label))
+		return
+	}
 	switch val := v.(type) {
 	case map[string]any:
 		for k, child := range val {
@@ -40,7 +52,7 @@ func flatten(prefix string, v any, lines *[]string) {
 			if prefix != "" {
 				key = prefix + "." + k
 			}
-			flatten(key, child, lines)
+			flatten(key, child, lines, depth+1)
 		}
 	case []any:
 		if allPrimitive(val) {
@@ -51,7 +63,7 @@ func flatten(prefix string, v any, lines *[]string) {
 			*lines = append(*lines, fmt.Sprintf("%s: %s", prefix, strings.Join(strs, ", ")))
 		} else {
 			for _, item := range val {
-				flatten(prefix, item, lines)
+				flatten(prefix, item, lines, depth+1)
 			}
 		}
 	case nil:

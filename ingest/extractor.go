@@ -1,8 +1,10 @@
 package ingest
 
 import (
+	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	oasis "github.com/nevindra/oasis"
 )
@@ -103,20 +105,21 @@ func StripHTML(content string) string {
 	var tagName strings.Builder
 	collectingTagName := false
 
-	runes := []rune(content)
-	n := len(runes)
+	i := 0
+	for i < len(content) {
+		r, size := utf8.DecodeRuneInString(content[i:])
 
-	for i := 0; i < n; i++ {
-		if runes[i] == '<' {
+		if r == '<' {
 			inTag = true
 			tagName.Reset()
 			collectingTagName = true
+			i += size
 			continue
 		}
 
 		if inTag {
 			if collectingTagName {
-				if unicode.IsSpace(runes[i]) || runes[i] == '>' || (runes[i] == '/' && tagName.Len() > 0) {
+				if unicode.IsSpace(r) || r == '>' || (r == '/' && tagName.Len() > 0) {
 					collectingTagName = false
 					lower := strings.ToLower(tagName.String())
 					switch lower {
@@ -133,45 +136,31 @@ func StripHTML(content string) string {
 						result.WriteByte('\n')
 					}
 				} else {
-					tagName.WriteRune(runes[i])
+					tagName.WriteRune(r)
 				}
 			}
-			if runes[i] == '>' {
+			if r == '>' {
 				inTag = false
-				if collectingTagName {
-					collectingTagName = false
-					lower := strings.ToLower(tagName.String())
-					switch lower {
-					case "script":
-						inScript = true
-					case "/script":
-						inScript = false
-					case "style":
-						inStyle = true
-					case "/style":
-						inStyle = false
-					}
-					if isBlockTag(lower) {
-						result.WriteByte('\n')
-					}
-				}
 			}
+			i += size
 			continue
 		}
 
 		if inScript || inStyle {
+			i += size
 			continue
 		}
 
-		if runes[i] == '&' {
-			if decoded, skip := decodeEntity(runes, i); skip > 0 {
+		if r == '&' {
+			if decoded, skip := decodeEntity(content, i); skip > 0 {
 				result.WriteString(decoded)
-				i += skip - 1
+				i += skip
 				continue
 			}
 		}
 
-		result.WriteRune(runes[i])
+		result.WriteRune(r)
+		i += size
 	}
 
 	return collapseWhitespace(result.String())
@@ -188,40 +177,72 @@ func isBlockTag(tag string) bool {
 	return false
 }
 
-func decodeEntity(runes []rune, start int) (string, int) {
-	if start >= len(runes) || runes[start] != '&' {
+func decodeEntity(content string, start int) (string, int) {
+	if start >= len(content) || content[start] != '&' {
 		return "", 0
 	}
-	maxLen := 10
+	maxLen := 12
 	end := start + maxLen
-	if end > len(runes) {
-		end = len(runes)
+	if end > len(content) {
+		end = len(content)
 	}
 	for j := start + 1; j < end; j++ {
-		if runes[j] == ';' {
-			entity := string(runes[start : j+1])
-			switch entity {
-			case "&amp;":
-				return "&", j - start + 1
-			case "&lt;":
-				return "<", j - start + 1
-			case "&gt;":
-				return ">", j - start + 1
-			case "&quot;":
-				return "\"", j - start + 1
-			case "&#39;", "&apos;":
-				return "'", j - start + 1
-			case "&nbsp;":
-				return " ", j - start + 1
-			default:
-				return "", 0
+		ch := content[j]
+		if ch == ';' {
+			entity := content[start : j+1]
+			consumed := j - start + 1
+			if decoded, ok := namedEntities[entity]; ok {
+				return decoded, consumed
 			}
+			// Numeric entities: &#123; or &#x7B;
+			if len(entity) > 3 && entity[1] == '#' {
+				inner := entity[2 : len(entity)-1]
+				var codepoint int64
+				var err error
+				if inner[0] == 'x' || inner[0] == 'X' {
+					codepoint, err = strconv.ParseInt(inner[1:], 16, 32)
+				} else {
+					codepoint, err = strconv.ParseInt(inner, 10, 32)
+				}
+				if err == nil && codepoint > 0 && codepoint <= 0x10FFFF {
+					return string(rune(codepoint)), consumed
+				}
+			}
+			return "", 0
 		}
-		if unicode.IsSpace(runes[j]) || runes[j] == '&' {
+		// Only ASCII letters, digits, and '#' are valid in entity references.
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '#') {
 			return "", 0
 		}
 	}
 	return "", 0
+}
+
+var namedEntities = map[string]string{
+	"&amp;":    "&",
+	"&lt;":     "<",
+	"&gt;":     ">",
+	"&quot;":   "\"",
+	"&#39;":    "'",
+	"&apos;":   "'",
+	"&nbsp;":   " ",
+	"&mdash;":  "\u2014",
+	"&ndash;":  "\u2013",
+	"&copy;":   "\u00A9",
+	"&reg;":    "\u00AE",
+	"&trade;":  "\u2122",
+	"&hellip;": "\u2026",
+	"&laquo;":  "\u00AB",
+	"&raquo;":  "\u00BB",
+	"&bull;":   "\u2022",
+	"&middot;": "\u00B7",
+	"&times;":  "\u00D7",
+	"&divide;": "\u00F7",
+	"&deg;":    "\u00B0",
+	"&euro;":   "\u20AC",
+	"&pound;":  "\u00A3",
+	"&yen;":    "\u00A5",
+	"&cent;":   "\u00A2",
 }
 
 func stripMarkdown(content string) string {
@@ -327,18 +348,16 @@ func stripMarkdownLinks(s string) string {
 func collapseWhitespace(text string) string {
 	var result strings.Builder
 	lines := strings.Split(text, "\n")
-	lastWasEmpty := false
 	emptyCount := 0
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
-			emptyCount++
-			if emptyCount <= 2 && result.Len() > 0 {
-				lastWasEmpty = true
+			if result.Len() > 0 {
+				emptyCount++
 			}
 		} else {
-			if lastWasEmpty {
+			if emptyCount > 0 {
 				result.WriteByte('\n')
 				if emptyCount > 1 {
 					result.WriteByte('\n')
@@ -347,7 +366,6 @@ func collapseWhitespace(text string) string {
 				result.WriteByte('\n')
 			}
 			result.WriteString(trimmed)
-			lastWasEmpty = false
 			emptyCount = 0
 		}
 	}

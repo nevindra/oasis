@@ -18,14 +18,23 @@ type IngestResult struct {
 	ChunkCount int
 }
 
+// defaultMaxContentSize is the default maximum content size for extraction (50 MB).
+const defaultMaxContentSize = 50 << 20
+
 // Ingestor provides end-to-end ingestion: extract → chunk → embed → store.
 type Ingestor struct {
-	store      oasis.Store
-	embedding  oasis.EmbeddingProvider
-	chunker    Chunker
-	extractors map[ContentType]Extractor
-	strategy   ChunkStrategy
-	batchSize  int
+	store          oasis.Store
+	embedding      oasis.EmbeddingProvider
+	chunker        Chunker
+	customChunker  bool // true when chunker was set via WithChunker
+	extractors     map[ContentType]Extractor
+	strategy       ChunkStrategy
+	batchSize      int
+	maxContentSize int
+
+	// cached auto-select chunkers (avoid allocation per call)
+	mdChunker       *MarkdownChunker
+	mdParentChunker *MarkdownChunker
 
 	// parent-child config
 	parentChunker Chunker
@@ -63,11 +72,14 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 			TypeDOCX:      NewDOCXExtractor(),
 			TypePDF:       NewPDFExtractor(),
 		},
-		strategy:      StrategyFlat,
-		batchSize:     64,
-		parentChunker:  NewRecursiveChunker(WithMaxTokens(1024)),
-		childChunker:   NewRecursiveChunker(WithMaxTokens(256)),
-		graphBatchSize: 5,
+		strategy:        StrategyFlat,
+		batchSize:       64,
+		maxContentSize:  defaultMaxContentSize,
+		mdChunker:       NewMarkdownChunker(),
+		mdParentChunker: NewMarkdownChunker(WithMaxTokens(1024)),
+		parentChunker:   NewRecursiveChunker(WithMaxTokens(1024)),
+		childChunker:    NewRecursiveChunker(WithMaxTokens(256)),
+		graphBatchSize:  5,
 	}
 	for _, o := range opts {
 		o(ing)
@@ -168,6 +180,12 @@ func (ing *Ingestor) IngestFile(ctx context.Context, content []byte, filename st
 }
 
 func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename string, ct ContentType) (IngestResult, error) {
+	if ing.maxContentSize > 0 && len(content) > ing.maxContentSize {
+		err := fmt.Errorf("content size %d exceeds limit %d", len(content), ing.maxContentSize)
+		ing.notifyError(filename, err)
+		return IngestResult{}, err
+	}
+
 	extractor, ok := ing.extractors[ct]
 	if !ok {
 		extractor = PlainTextExtractor{}
@@ -265,10 +283,11 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 
 	// LLM-based extraction.
 	if ing.graphProvider != nil {
-		llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize)
-		if err == nil {
-			edges = append(edges, llmEdges...)
+		llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.logger)
+		if err != nil && ing.logger != nil {
+			ing.logger.Warn("graph extraction failed", "err", err)
 		}
+		edges = append(edges, llmEdges...)
 	}
 
 	if ing.minEdgeWeight > 0 || ing.maxEdgesPerChunk > 0 {
@@ -383,8 +402,7 @@ func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct Conte
 func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, ct ContentType, source string, pageMeta []PageMeta) ([]oasis.Chunk, error) {
 	parentChunker := ing.parentChunker
 	if ct == TypeMarkdown {
-		// Use MarkdownChunker for parent level on markdown content.
-		parentChunker = NewMarkdownChunker(WithMaxTokens(1024))
+		parentChunker = ing.mdParentChunker
 	}
 
 	parentTexts, err := chunkWith(ctx, parentChunker, text)
@@ -507,13 +525,11 @@ func assignMeta(startByte, endByte int, source string, pageMeta []PageMeta) *oas
 // selectChunker returns the appropriate chunker based on content type.
 // If an explicit chunker was set via WithChunker, it is always used.
 func (ing *Ingestor) selectChunker(ct ContentType) Chunker {
-	// Explicit chunker always wins.
-	if _, isDefault := ing.chunker.(*RecursiveChunker); !isDefault {
+	if ing.customChunker {
 		return ing.chunker
 	}
-	// Auto-select based on content type.
 	if ct == TypeMarkdown {
-		return NewMarkdownChunker()
+		return ing.mdChunker
 	}
 	return ing.chunker
 }

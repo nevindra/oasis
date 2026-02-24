@@ -104,3 +104,25 @@ func TestJSONExtractBoolAndNull(t *testing.T) {
 		t.Errorf("expected bool, got %q", out)
 	}
 }
+
+func TestJSONExtractDepthLimit(t *testing.T) {
+	// Build JSON nested beyond maxJSONDepth.
+	var b strings.Builder
+	depth := maxJSONDepth + 10
+	for i := 0; i < depth; i++ {
+		b.WriteString(`{"a":`)
+	}
+	b.WriteString(`"leaf"`)
+	for i := 0; i < depth; i++ {
+		b.WriteString(`}`)
+	}
+
+	e := NewJSONExtractor()
+	out, err := e.Extract([]byte(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "<truncated>") {
+		t.Errorf("expected <truncated> for deeply nested JSON, got %q", out)
+	}
+}

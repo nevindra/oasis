@@ -4,11 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
 	oasis "github.com/nevindra/oasis"
 )
+
+// validRelations maps LLM-output relation strings to typed constants.
+var validRelations = map[string]oasis.RelationType{
+	"references":  oasis.RelReferences,
+	"elaborates":  oasis.RelElaborates,
+	"depends_on":  oasis.RelDependsOn,
+	"contradicts": oasis.RelContradicts,
+	"part_of":     oasis.RelPartOf,
+	"similar_to":  oasis.RelSimilarTo,
+	"sequence":    oasis.RelSequence,
+	"caused_by":   oasis.RelCausedBy,
+}
 
 const graphExtractionPrompt = `You are a knowledge graph extractor. Analyze the following text chunks and identify relationships between them.
 
@@ -37,14 +50,21 @@ Chunks:
 `
 
 // extractGraphEdges sends chunks to an LLM in batches and extracts relationship edges.
-func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize int) ([]oasis.ChunkEdge, error) {
+func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize int, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
 	if len(chunks) < 2 {
 		return nil, nil
+	}
+	if batchSize <= 0 {
+		batchSize = 5
 	}
 
 	var allEdges []oasis.ChunkEdge
 
 	for i := 0; i < len(chunks); i += batchSize {
+		if ctx.Err() != nil {
+			break
+		}
+
 		end := min(i+batchSize, len(chunks))
 		batch := chunks[i:end]
 
@@ -64,11 +84,17 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 			},
 		})
 		if err != nil {
-			continue // degrade gracefully
+			if logger != nil {
+				logger.Warn("graph extraction: LLM call failed", "batch", i, "err", err)
+			}
+			continue
 		}
 
 		edges, err := parseEdgeResponse(resp.Content, batch)
 		if err != nil {
+			if logger != nil {
+				logger.Warn("graph extraction: parse failed", "batch", i, "err", err)
+			}
 			continue
 		}
 		allEdges = append(allEdges, edges...)
@@ -98,17 +124,6 @@ func parseEdgeResponse(content string, chunks []oasis.Chunk) ([]oasis.ChunkEdge,
 		validIDs[c.ID] = true
 	}
 
-	validRelations := map[string]oasis.RelationType{
-		"references":  oasis.RelReferences,
-		"elaborates":  oasis.RelElaborates,
-		"depends_on":  oasis.RelDependsOn,
-		"contradicts": oasis.RelContradicts,
-		"part_of":     oasis.RelPartOf,
-		"similar_to":  oasis.RelSimilarTo,
-		"sequence":    oasis.RelSequence,
-		"caused_by":   oasis.RelCausedBy,
-	}
-
 	var edges []oasis.ChunkEdge
 	for _, e := range parsed.Edges {
 		if !validIDs[e.Source] || !validIDs[e.Target] || e.Source == e.Target {
@@ -134,7 +149,9 @@ func parseEdgeResponse(content string, chunks []oasis.Chunk) ([]oasis.ChunkEdge,
 }
 
 // buildSequenceEdges creates sequence edges between consecutive chunks
-// (sorted by ChunkIndex) within the same document.
+// (sorted by ChunkIndex). Only chunks that share the same ParentID are
+// linked — this covers both flat chunks (ParentID == "") and children
+// within the same parent group.
 func buildSequenceEdges(chunks []oasis.Chunk) []oasis.ChunkEdge {
 	if len(chunks) < 2 {
 		return nil
@@ -149,16 +166,9 @@ func buildSequenceEdges(chunks []oasis.Chunk) []oasis.ChunkEdge {
 
 	edges := make([]oasis.ChunkEdge, 0, len(sorted)-1)
 	for i := 0; i < len(sorted)-1; i++ {
-		// Skip parent chunks in parent-child strategy (they have no embedding).
-		if sorted[i].ParentID != "" || sorted[i+1].ParentID != "" {
-			// Only link leaf chunks (children or flat chunks).
-			if sorted[i].ParentID == "" || sorted[i+1].ParentID == "" {
-				continue
-			}
-			// Only link children that share the same parent for sequence continuity.
-			if sorted[i].ParentID != sorted[i+1].ParentID {
-				continue
-			}
+		// Only link chunks that share the same parent (or both are flat/root).
+		if sorted[i].ParentID != sorted[i+1].ParentID {
+			continue
 		}
 		edges = append(edges, oasis.ChunkEdge{
 			ID:       oasis.NewID(),

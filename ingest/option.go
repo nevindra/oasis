@@ -10,8 +10,12 @@ import (
 type Option func(*Ingestor)
 
 // WithChunker sets the chunker used for flat strategy.
+// When set, auto-selection based on content type is disabled.
 func WithChunker(c Chunker) Option {
-	return func(ing *Ingestor) { ing.chunker = c }
+	return func(ing *Ingestor) {
+		ing.chunker = c
+		ing.customChunker = true
+	}
 }
 
 // WithParentChunker sets the parent-level chunker for StrategyParentChild.
@@ -46,6 +50,12 @@ func WithChildTokens(n int) Option {
 // WithBatchSize sets the number of chunks per Embed() call (default 64).
 func WithBatchSize(n int) Option {
 	return func(ing *Ingestor) { ing.batchSize = n }
+}
+
+// WithMaxContentSize sets the maximum allowed content size in bytes for extraction
+// (default 50 MB). Set to 0 to disable the limit.
+func WithMaxContentSize(n int) Option {
+	return func(ing *Ingestor) { ing.maxContentSize = n }
 }
 
 // WithExtractor registers an Extractor for a given ContentType.

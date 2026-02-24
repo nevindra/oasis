@@ -138,6 +138,7 @@ Both implement `Agent`, so they compose with each other — a Network can contai
 | ---- | ----------------- | ------------ |
 | [Ingest](ingest.md) | `ingest` | Document chunking, embedding, and graph extraction pipeline |
 | [Retrieval](retrieval.md) | `Retriever`, `Reranker`, `GraphRetriever` | Hybrid search, RRF, graph traversal, re-ranking |
+| [Graph RAG](graph-rag.md) | `GraphStore`, `GraphRetriever` | Knowledge graph extraction, edge types, multi-hop traversal, score blending |
 
 ### Infrastructure
 

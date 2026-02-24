@@ -183,7 +183,10 @@ ingestor := ingest.NewIngestor(store, embedding,
 
 ## Graph Extraction
 
-When enabled, the ingestor uses an LLM to discover relationships between chunks during ingestion. Extracted edges are stored in the `GraphStore` and used by the [GraphRetriever](retrieval.md) for multi-hop traversal at query time.
+When enabled, the ingestor discovers relationships between chunks and stores them as weighted edges for [GraphRetriever](retrieval.md) traversal at query time. Two independent edge sources are available:
+
+- **LLM-based extraction** (`WithGraphExtraction`) — sends chunks to an LLM in batches, discovers 8 relationship types with confidence weights
+- **Sequence edges** (`WithSequenceEdges`) — deterministic, links consecutive chunks with no LLM cost
 
 ```go
 ingestor := ingest.NewIngestor(store, embedding,
@@ -191,37 +194,27 @@ ingestor := ingest.NewIngestor(store, embedding,
     ingest.WithMinEdgeWeight(0.5),            // minimum confidence for edges
     ingest.WithMaxEdgesPerChunk(10),          // cap edges per chunk
     ingest.WithGraphBatchSize(5),             // chunks per LLM call
-    ingest.WithCrossDocumentEdges(true),      // discover cross-document relations
     ingest.WithSequenceEdges(true),           // add sequence edges between consecutive chunks
+    ingest.WithIngestorLogger(slog.Default()), // log extraction warnings
 )
 ```
 
-The LLM analyzes pairs of chunks and discovers 8 relationship types:
+Graph extraction runs after embedding and storage. The Store must implement `GraphStore` (all three shipped backends do). Extraction degrades gracefully — individual batch failures are logged and skipped, stores without `GraphStore` skip silently.
 
-| Relation | Meaning |
-| -------- | ------- |
-| `references` | One chunk cites or refers to another |
-| `elaborates` | One chunk expands on another's topic |
-| `depends_on` | One chunk requires another for context |
-| `contradicts` | Chunks present conflicting information |
-| `part_of` | One chunk is a component of another's topic |
-| `similar_to` | Chunks cover closely related content |
-| `sequence` | Chunks appear consecutively in the source |
-| `caused_by` | One chunk describes a cause/effect of another |
-
-Graph extraction runs after embedding and storage. The Store must implement `GraphStore` (all three shipped backends do). See [Store](store.md) for the `GraphStore` interface.
+For the full deep-dive — extraction internals, relationship types, edge pruning, score blending, `GraphRetriever` configuration, and decision guides — see **[Graph RAG](graph-rag.md)**.
 
 ## Ingestor Options
 
 | Option | Default | Description |
 | ------ | ------- | ----------- |
-| `WithChunker(c)` | RecursiveChunker | Custom chunker for flat strategy |
+| `WithChunker(c)` | RecursiveChunker | Custom chunker for flat strategy (disables auto-selection by content type) |
 | `WithParentChunker(c)` | — | Parent-level chunker |
 | `WithChildChunker(c)` | — | Child-level chunker |
 | `WithStrategy(s)` | `StrategyFlat` | `StrategyFlat` or `StrategyParentChild` |
 | `WithParentTokens(n)` | 1024 | Parent chunk size |
 | `WithChildTokens(n)` | 256 | Child chunk size |
 | `WithBatchSize(n)` | 64 | Chunks per `Embed()` call |
+| `WithMaxContentSize(n)` | 50 MB | Max input content size in bytes (0 to disable) |
 | `WithExtractor(ct, e)` | — | Override or add a custom extractor for a content type |
 | `WithOnSuccess(fn)` | nil | Callback invoked after each successful ingestion with the `IngestResult` |
 | `WithOnError(fn)` | nil | Callback invoked when ingestion fails with `(source string, err error)` |
@@ -238,7 +231,7 @@ Chunker options (shared by all chunker constructors):
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `WithMaxTokens(n)` | 512 | Max tokens per chunk (approximated as n*4 chars) |
+| `WithMaxTokens(n)` | 512 | Max tokens per chunk (approximated as n*4 bytes) |
 | `WithOverlapTokens(n)` | 50 | Overlap between consecutive chunks |
 | `WithBreakpointPercentile(p)` | 25 | Similarity percentile for semantic split detection (SemanticChunker only) |
 
@@ -248,6 +241,7 @@ Large documents are embedded in configurable batches (default 64 chunks per `Emb
 
 ## See Also
 
+- [Graph RAG](graph-rag.md) — graph extraction internals, `GraphRetriever`, score blending
 - [Retrieval](retrieval.md) — the search pipeline that reads ingested chunks
 - [Store](store.md) — where documents and chunks are stored
 - [RAG Pipeline Guide](../guides/rag-pipeline.md) — end-to-end walkthrough

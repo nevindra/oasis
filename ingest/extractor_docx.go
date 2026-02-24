@@ -17,6 +17,10 @@ import (
 var _ Extractor = (*DOCXExtractor)(nil)
 var _ MetadataExtractor = (*DOCXExtractor)(nil)
 
+// maxZipEntrySize limits decompressed size of individual zip entries
+// to prevent zip bomb attacks (100 MB).
+const maxZipEntrySize = 100 << 20
+
 // DOCXExtractor implements Extractor and MetadataExtractor for DOCX documents.
 // It streams OOXML tokens to extract text, headings, tables, and embedded images
 // without loading the full DOM tree into memory.
@@ -26,8 +30,13 @@ type DOCXExtractor struct{}
 func NewDOCXExtractor() *DOCXExtractor { return &DOCXExtractor{} }
 
 // Extract extracts plain text from a DOCX document.
+// Unlike ExtractWithMeta, this skips image loading for efficiency.
 func (e *DOCXExtractor) Extract(content []byte) (string, error) {
-	result, err := e.ExtractWithMeta(content)
+	docData, err := docxReadDocumentXML(content)
+	if err != nil {
+		return "", err
+	}
+	result, err := docxParseDocument(docData, nil)
 	if err != nil {
 		return "", err
 	}
@@ -49,23 +58,38 @@ func (e *DOCXExtractor) ExtractWithMeta(content []byte) (ExtractResult, error) {
 
 	images := docxLoadImages(zr)
 
-	var docFile *zip.File
-	for _, f := range zr.File {
-		if f.Name == "word/document.xml" {
-			docFile = f
-			break
-		}
-	}
-	if docFile == nil {
-		return ExtractResult{}, fmt.Errorf("missing word/document.xml")
-	}
-
-	docData, err := docxReadZipFile(docFile)
+	docData, err := docxFindAndRead(zr)
 	if err != nil {
-		return ExtractResult{}, fmt.Errorf("read document.xml: %w", err)
+		return ExtractResult{}, err
 	}
 
 	return docxParseDocument(docData, images)
+}
+
+// docxReadDocumentXML opens a DOCX zip and reads word/document.xml (text-only path).
+func docxReadDocumentXML(content []byte) ([]byte, error) {
+	if len(content) == 0 {
+		return nil, fmt.Errorf("empty docx content")
+	}
+	zr, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		return nil, fmt.Errorf("open zip: %w", err)
+	}
+	return docxFindAndRead(zr)
+}
+
+// docxFindAndRead locates and reads word/document.xml from a zip reader.
+func docxFindAndRead(zr *zip.Reader) ([]byte, error) {
+	for _, f := range zr.File {
+		if f.Name == "word/document.xml" {
+			data, err := docxReadZipFile(f)
+			if err != nil {
+				return nil, fmt.Errorf("read document.xml: %w", err)
+			}
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("missing word/document.xml")
 }
 
 func docxLoadImages(zr *zip.Reader) map[string]oasis.Image {
@@ -93,7 +117,15 @@ func docxReadZipFile(f *zip.File) ([]byte, error) {
 		return nil, err
 	}
 	defer rc.Close()
-	return io.ReadAll(rc)
+	lr := io.LimitReader(rc, maxZipEntrySize+1)
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxZipEntrySize {
+		return nil, fmt.Errorf("zip entry %s exceeds %d byte limit", f.Name, maxZipEntrySize)
+	}
+	return data, nil
 }
 
 // docxParseState tracks the streaming XML decoder state.

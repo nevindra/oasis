@@ -19,7 +19,7 @@ func TestExtractGraphEdges(t *testing.T) {
 		response: `{"edges":[{"source":"c2","target":"c1","relation":"references","weight":0.9},{"source":"c3","target":"c2","relation":"elaborates","weight":0.8}]}`,
 	}
 
-	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5)
+	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5, nil)
 	if err != nil {
 		t.Fatalf("extractGraphEdges: %v", err)
 	}

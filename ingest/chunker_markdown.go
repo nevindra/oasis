@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+var _ Chunker = (*MarkdownChunker)(nil)
+
 var headingRe = regexp.MustCompile(`(?m)^#{1,6}\s`)
 
 // MarkdownChunker splits text at markdown heading boundaries.
@@ -14,9 +16,9 @@ var headingRe = regexp.MustCompile(`(?m)^#{1,6}\s`)
 //  1. Split on heading boundaries (^#{1,6} )
 //  2. Heading + content = candidate chunk
 //  3. If too large → fall back to RecursiveChunker for that section
-//  4. If too small → merge with next section up to maxChars
+//  4. If too small → merge with next section up to maxBytes
 type MarkdownChunker struct {
-	maxChars  int
+	maxBytes  int
 	fallback  *RecursiveChunker
 }
 
@@ -28,7 +30,7 @@ func NewMarkdownChunker(opts ...ChunkerOption) *MarkdownChunker {
 		o(&cfg)
 	}
 	return &MarkdownChunker{
-		maxChars: cfg.maxTokens * 4,
+		maxBytes: cfg.maxTokens * 4,
 		fallback: NewRecursiveChunker(opts...),
 	}
 }
@@ -39,7 +41,7 @@ func (mc *MarkdownChunker) Chunk(text string) []string {
 	if text == "" {
 		return nil
 	}
-	if len(text) <= mc.maxChars {
+	if len(text) <= mc.maxBytes {
 		return []string{text}
 	}
 
@@ -84,7 +86,7 @@ func (mc *MarkdownChunker) mergeSections(sections []string) []string {
 
 	for _, section := range sections {
 		// Section too large on its own — split with fallback chunker.
-		if len(section) > mc.maxChars {
+		if len(section) > mc.maxBytes {
 			// Flush current buffer first.
 			if current.Len() > 0 {
 				chunks = append(chunks, current.String())
@@ -99,7 +101,7 @@ func (mc *MarkdownChunker) mergeSections(sections []string) []string {
 			needed = current.Len() + 2 + len(section) // "\n\n" separator
 		}
 
-		if needed <= mc.maxChars {
+		if needed <= mc.maxBytes {
 			if current.Len() > 0 {
 				current.WriteString("\n\n")
 			}
