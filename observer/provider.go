@@ -87,8 +87,13 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 	start := time.Now()
 
 	// Wrap channel to count chunks.
-	// Use a done channel to wait for the goroutine before reading chunks.
-	wrappedCh := make(chan oasis.StreamEvent, cap(ch))
+	// The goroutine forwards events from wrappedCh to the caller's ch.
+	// We use select with ctx.Done to avoid hanging if the context is cancelled.
+	// Buffer wrappedCh generously so the inner provider never blocks on send,
+	// preventing a deadlock where the goroutine can't drain wrappedCh because
+	// ch is full and nobody reads ch until ChatStream returns.
+	bufSize := max(cap(ch), 64)
+	wrappedCh := make(chan oasis.StreamEvent, bufSize)
 	chunks := 0
 	done := make(chan struct{})
 	go func() {
@@ -96,7 +101,11 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 		defer close(done)
 		for ev := range wrappedCh {
 			chunks++
-			ch <- ev
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 

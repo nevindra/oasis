@@ -34,6 +34,32 @@ func (m *mockProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, ch cha
 	return m.chatResp, m.chatErr
 }
 
+// mockProviderManyEvents sends count events then closes the channel.
+type mockProviderManyEvents struct {
+	name     string
+	chatResp oasis.ChatResponse
+	count    int
+}
+
+func (m *mockProviderManyEvents) Name() string { return m.name }
+func (m *mockProviderManyEvents) Chat(_ context.Context, _ oasis.ChatRequest) (oasis.ChatResponse, error) {
+	return m.chatResp, nil
+}
+func (m *mockProviderManyEvents) ChatWithTools(_ context.Context, _ oasis.ChatRequest, _ []oasis.ToolDefinition) (oasis.ChatResponse, error) {
+	return m.chatResp, nil
+}
+func (m *mockProviderManyEvents) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+	for i := range m.count {
+		select {
+		case ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: string(rune('a' + i%26))}:
+		default:
+			// Channel full — stop sending to avoid blocking forever in tests.
+		}
+	}
+	close(ch)
+	return m.chatResp, nil
+}
+
 // mockTool for observer tests.
 type mockTool struct {
 	defs   []oasis.ToolDefinition
@@ -180,6 +206,73 @@ func TestObservedProviderChatStream(t *testing.T) {
 	if got.Usage != want.Usage {
 		t.Errorf("Usage = %+v, want %+v", got.Usage, want.Usage)
 	}
+}
+
+func TestObservedProviderChatStreamUnbuffered(t *testing.T) {
+	want := oasis.ChatResponse{
+		Content: "hello world",
+		Usage:   oasis.Usage{InputTokens: 8, OutputTokens: 2},
+	}
+	inner := &mockProvider{name: "p", chatResp: want}
+	op := WrapProvider(inner, "m", testInstruments(t))
+
+	// Use an unbuffered channel — previously this would deadlock because the
+	// forwarding goroutine blocked on ch <- ev while ChatStream waited on <-done.
+	ch := make(chan oasis.StreamEvent)
+
+	// Must read from ch concurrently since it's unbuffered.
+	var events []oasis.StreamEvent
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for ev := range ch {
+			events = append(events, ev)
+		}
+	}()
+
+	got, err := op.ChatStream(context.Background(), oasis.ChatRequest{}, ch)
+	if err != nil {
+		t.Fatalf("ChatStream returned unexpected error: %v", err)
+	}
+	<-readDone
+
+	if len(events) != 2 {
+		t.Fatalf("received %d events, want 2", len(events))
+	}
+	if got.Content != want.Content {
+		t.Errorf("Content = %q, want %q", got.Content, want.Content)
+	}
+}
+
+func TestObservedProviderChatStreamContextCancel(t *testing.T) {
+	// mockStreamMany sends more events than the channel buffer can hold.
+	manyEvents := &mockProviderManyEvents{
+		name:     "p",
+		chatResp: oasis.ChatResponse{Content: "partial"},
+		count:    200,
+	}
+	op := WrapProvider(manyEvents, "m", testInstruments(t))
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Small buffer — goroutine will need to select on ctx.Done.
+	ch := make(chan oasis.StreamEvent, 2)
+
+	// Read a couple events then cancel.
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		n := 0
+		for range ch {
+			n++
+			if n == 2 {
+				cancel()
+			}
+		}
+	}()
+
+	_, _ = op.ChatStream(ctx, oasis.ChatRequest{}, ch)
+	<-readDone
 }
 
 // ---------------------------------------------------------------------------

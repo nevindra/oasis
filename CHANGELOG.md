@@ -6,6 +6,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ObservedProvider.ChatStream` deadlock on small/unbuffered channels** — the forwarding goroutine wrote to the caller's `ch` while `ChatStream` synchronously waited on `<-done`, deadlocking when `ch` had insufficient buffer. Now buffers the internal `wrappedCh` to `max(cap(ch), 64)` so the inner provider never blocks on send
+- **`ObservedProvider.ChatStream` goroutine ignores context cancellation** — the forwarding goroutine used a bare `ch <- ev` that blocked indefinitely if the consumer stopped reading or the context was cancelled. Now uses `select` with `ctx.Done()` to exit cleanly on cancellation
+
+- **`agentMemory.initSem` data race** — `initSem` used a bare `nil` check to lazily allocate the persist semaphore. Under concurrent `Execute` calls on the same agent, two goroutines could both observe `nil` and allocate separate channels, orphaning one semaphore and breaking the backpressure invariant. Replaced with `sync.Once`
+- **`LLMAgent` blocking channel send** — `executeWithSpan` sent the initial `EventInputReceived` event with a bare `ch <-` that could block indefinitely if the consumer stopped reading or the context was cancelled. Now uses `select` with `ctx.Done()`, matching Network's existing pattern
+- **`runLoop` double-close panic in streaming no-tools path** — when `ChatStream` succeeded (closing `ch`) and `RunPostLLM` subsequently returned an error, the error handler called `close(ch)` again, panicking with "close of closed channel". Replaced per-path `close(ch)` calls with a unified `sync.Once` + `recover` guard across all exit paths
+
 ## [0.8.0] - 2026-02-24
 
 ### Added

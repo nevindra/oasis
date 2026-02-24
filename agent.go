@@ -493,16 +493,22 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			resp, err = cfg.provider.ChatWithTools(iterCtx, req, cfg.tools)
 		} else if ch != nil {
 			// No tools, streaming — stream the response directly.
-			// ChatStream should close ch on completion, but we defensively
-			// ensure closure on error in case the provider doesn't.
+			// ChatStream may or may not close ch depending on success/failure
+			// and provider implementation. Use sync.Once to attempt closing
+			// exactly once across all exit paths, with recover to handle the
+			// case where the provider already closed the channel.
+			var closeCh sync.Once
+			safeCloseCh := func() {
+				closeCh.Do(func() {
+					defer func() { recover() }()
+					close(ch)
+				})
+			}
+
 			resp, err = cfg.provider.ChatStream(iterCtx, req, ch)
 			if err != nil {
 				endIter()
-				// Defensive: provider may not have closed ch on error.
-				defer func() {
-					defer func() { recover() }() // ignore double-close panic
-					close(ch)
-				}()
+				safeCloseCh()
 				return AgentResult{Usage: totalUsage, Steps: steps}, err
 			}
 			totalUsage.InputTokens += resp.Usage.InputTokens
@@ -512,7 +518,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			// still run for side effects like logging and validation).
 			if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
 				endIter()
-				close(ch)
+				safeCloseCh()
 				if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
 					return AgentResult{Usage: totalUsage, Steps: steps}, s
 				}
@@ -520,6 +526,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			}
 
 			endIter()
+			safeCloseCh()
 			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, resp.Content, steps)
 			return AgentResult{Output: resp.Content, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
 		} else {

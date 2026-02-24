@@ -104,7 +104,11 @@ func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- 
 func (a *LLMAgent) executeWithSpan(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	// Emit input-received event so consumers know a task arrived.
 	if ch != nil {
-		ch <- StreamEvent{Type: EventInputReceived, Name: a.name, Content: task.Input}
+		select {
+		case ch <- StreamEvent{Type: EventInputReceived, Name: a.name, Content: task.Input}:
+		case <-ctx.Done():
+			return AgentResult{}, ctx.Err()
+		}
 	}
 
 	if a.tracer != nil {

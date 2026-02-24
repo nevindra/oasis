@@ -77,16 +77,19 @@ type agentMemory struct {
 	provider          Provider          // for auto-extraction when memory != nil
 	tracer            Tracer            // nil = no tracing
 	logger            *slog.Logger      // never nil (nopLogger fallback)
+	semOnce           sync.Once        // guards sem initialization
 	sem               chan struct{}     // bounded concurrency for background goroutines
 	wg                sync.WaitGroup   // tracks in-flight persist goroutines
 }
 
-// initSem lazily initializes the semaphore. Safe to call multiple times;
-// only the first call allocates the channel.
+// initSem lazily initializes the semaphore. Safe for concurrent callers.
+// If sem was pre-set (e.g. in tests), the existing channel is preserved.
 func (m *agentMemory) initSem() {
-	if m.sem == nil {
-		m.sem = make(chan struct{}, maxPersistGoroutines)
-	}
+	m.semOnce.Do(func() {
+		if m.sem == nil {
+			m.sem = make(chan struct{}, maxPersistGoroutines)
+		}
+	})
 }
 
 // drain waits for all in-flight persist goroutines to finish.
