@@ -86,7 +86,7 @@ if errors.As(err, &suspended) {
 }
 ```
 
-`Suspend` works in `LLMAgent`, `Network`, and `Workflow`. Conversation history and DAG state are preserved across suspend/resume cycles. See [InputHandler](input-handler.md) for the related `ask_user` pattern.
+`Suspend` works in `LLMAgent`, `Network`, and `Workflow`. Conversation history and DAG state are preserved across suspend/resume cycles. `Resume` is single-use; call `Release()` to free the captured snapshot when the suspend will not be resumed (timeout, user abandonment). See [InputHandler](input-handler.md) for the related `ask_user` pattern.
 
 ## Registration
 

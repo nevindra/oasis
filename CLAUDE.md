@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Documentation
 
-**Always read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) before making changes or in brainstrom session** — engineering principles, coding conventions, error handling, naming, extensibility, and things to never do.
+**Always read [docs/ENGINEERING.md](docs/ENGINEERING.md) before making changes or in brainstorming session** — engineering principles, production engineering, extensibility, and things to never do.
 
 **Read the relevant doc before modifying a component:**
 

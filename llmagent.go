@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 )
 
 const defaultMaxIter = 10
@@ -27,9 +28,17 @@ type LLMAgent struct {
 	dynamicPrompt  PromptFunc
 	dynamicModel   ModelFunc
 	dynamicTools   ToolsFunc
-	tracer         Tracer
-	logger         *slog.Logger
-	mem            agentMemory
+	tracer             Tracer
+	logger             *slog.Logger
+	mem                agentMemory
+	cachedToolDefs      []ToolDefinition // computed once at construction for the non-dynamic path
+	maxAttachmentBytes  int64
+	suspendCount        atomic.Int64
+	suspendBytes        atomic.Int64
+	maxSuspendSnapshots int
+	maxSuspendBytes     int64
+	compressModel       ModelFunc
+	compressThreshold   int
 }
 
 // NewLLMAgent creates an LLMAgent with the given provider and options.
@@ -73,8 +82,29 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	a.dynamicTools = cfg.dynamicTools
 	a.tracer = cfg.tracer
 	a.logger = cfg.logger
+	a.maxAttachmentBytes = cfg.maxAttachmentBytes
+	a.maxSuspendSnapshots = cfg.maxSuspendSnapshots
+	a.maxSuspendBytes = cfg.maxSuspendBytes
+	a.compressModel = cfg.compressModel
+	a.compressThreshold = cfg.compressThreshold
 	a.mem.tracer = cfg.tracer
 	a.mem.logger = cfg.logger
+
+	// Pre-compute tool definitions for the non-dynamic path.
+	// Avoids rebuilding the slice on every Execute call.
+	if a.dynamicTools == nil {
+		a.cachedToolDefs = a.tools.AllDefinitions()
+		if a.inputHandler != nil {
+			a.cachedToolDefs = append(a.cachedToolDefs, askUserToolDef)
+		}
+		if a.planExecution {
+			a.cachedToolDefs = append(a.cachedToolDefs, executePlanToolDef)
+		}
+		if a.codeRunner != nil {
+			a.cachedToolDefs = append(a.cachedToolDefs, executeCodeToolDef)
+		}
+	}
+
 	return a
 }
 
@@ -164,8 +194,8 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 	}
 
 	// Resolve tools: dynamic replaces static.
-	// When dynamicTools is set, build definitions and an index directly
-	// from the returned tools, avoiding an intermediate ToolRegistry allocation.
+	// When dynamicTools is set, build definitions and an index per-request.
+	// Otherwise, use the cached definitions computed at construction time.
 	var toolDefs []ToolDefinition
 	var executeTool toolExecFunc
 	if a.dynamicTools != nil {
@@ -183,79 +213,52 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 			}
 			return ToolResult{Error: "unknown tool: " + name}, nil
 		}
+		if a.inputHandler != nil {
+			toolDefs = append(toolDefs, askUserToolDef)
+		}
+		if a.planExecution {
+			toolDefs = append(toolDefs, executePlanToolDef)
+		}
+		if a.codeRunner != nil {
+			toolDefs = append(toolDefs, executeCodeToolDef)
+		}
 	} else {
-		toolDefs = a.tools.AllDefinitions()
+		toolDefs = a.cachedToolDefs
 		executeTool = a.tools.Execute
 	}
-
-	if a.inputHandler != nil {
-		toolDefs = append(toolDefs, askUserToolDef)
-	}
-	if a.planExecution {
-		toolDefs = append(toolDefs, executePlanToolDef)
-	}
-	if a.codeRunner != nil {
-		toolDefs = append(toolDefs, executeCodeToolDef)
-	}
 	return loopConfig{
-		name:           "agent:" + a.name,
-		provider:       provider,
-		tools:          toolDefs,
-		processors:     a.processors,
-		maxIter:        a.maxIter,
-		mem:            &a.mem,
-		inputHandler:   a.inputHandler,
-		dispatch:       a.makeDispatch(executeTool),
-		systemPrompt:   prompt,
-		responseSchema: a.responseSchema,
-		tracer:         a.tracer,
-		logger:         a.logger,
+		name:               "agent:" + a.name,
+		provider:           provider,
+		tools:              toolDefs,
+		processors:         a.processors,
+		maxIter:            a.maxIter,
+		mem:                &a.mem,
+		inputHandler:       a.inputHandler,
+		dispatch:           a.makeDispatch(executeTool),
+		systemPrompt:       prompt,
+		responseSchema:     a.responseSchema,
+		tracer:              a.tracer,
+		logger:              a.logger,
+		maxAttachmentBytes:  a.maxAttachmentBytes,
+		suspendCount:        &a.suspendCount,
+		suspendBytes:        &a.suspendBytes,
+		maxSuspendSnapshots: a.maxSuspendSnapshots,
+		maxSuspendBytes:     a.maxSuspendBytes,
+		compressModel:       a.compressModel,
+		compressThreshold:   a.compressThreshold,
 	}
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
-// executor function and handles the ask_user and execute_plan special cases.
+// executor function and handles the ask_user, execute_plan, and execute_code
+// special cases via the shared dispatchBuiltins helper.
 func (a *LLMAgent) makeDispatch(executeTool toolExecFunc) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
-		// Special case: ask_user tool
-		if tc.Name == "ask_user" && a.inputHandler != nil {
-			content, err := executeAskUser(ctx, a.inputHandler, a.name, tc)
-			if err != nil {
-				return DispatchResult{Content: "error: " + err.Error(), IsError: true}
-			}
-			return DispatchResult{Content: content}
+		if r, ok := dispatchBuiltins(ctx, tc, dispatch, a.inputHandler, a.name, a.planExecution, a.codeRunner); ok {
+			return r
 		}
-
-		// Special case: execute_plan tool
-		if tc.Name == "execute_plan" && a.planExecution {
-			return executePlan(ctx, tc.Args, dispatch)
-		}
-
-		// Special case: execute_code tool
-		if tc.Name == "execute_code" && a.codeRunner != nil {
-			// Wrap dispatch to block execute_plan/execute_code calls from within code,
-			// preventing unbounded recursion via execute_code → execute_plan → execute_code.
-			safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
-				if tc.Name == "execute_plan" || tc.Name == "execute_code" {
-					return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code", IsError: true}
-				}
-				return dispatch(ctx, tc)
-			}
-			return executeCode(ctx, tc.Args, a.codeRunner, safeDispatch)
-		}
-
-		result, execErr := executeTool(ctx, tc.Name, tc.Args)
-		content := result.Content
-		isErr := false
-		if execErr != nil {
-			content = "error: " + execErr.Error()
-			isErr = true
-		} else if result.Error != "" {
-			content = "error: " + result.Error
-			isErr = true
-		}
-		return DispatchResult{Content: content, IsError: isErr}
+		return dispatchTool(ctx, executeTool, tc.Name, tc.Args)
 	}
 	return dispatch
 }

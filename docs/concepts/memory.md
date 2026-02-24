@@ -70,6 +70,8 @@ oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7))
 
 Messages below the minimum score are silently dropped.
 
+Recalled messages are labeled as user-generated context with explicit trust framing to reduce prompt injection risk. When a `chat_id` is present in the task context, recall is scoped to threads belonging to the same chat, preventing cross-user contamination in multi-tenant deployments.
+
 ### 3. User Memory
 
 Long-term semantic memory for user facts. Two paths:
@@ -151,12 +153,18 @@ Extracted facts are validated before persistence:
 - **Category check** — only `personal`, `preference`, `work`, `habit`, and `relationship` are accepted. Facts with other categories are dropped.
 - **Length limit** — facts are truncated to 200 runes to prevent bloated system prompts.
 - **Empty check** — facts with empty text are dropped.
+- **Injection pattern filter** — facts containing known prompt injection markers (role markers like `[SYSTEM]`, ChatML tokens, instruction overrides like "ignore previous") are silently dropped. This is a narrow, high-confidence heuristic — the extraction LLM prompt also includes anti-injection guardrails.
 
-This prevents a malicious user from injecting arbitrary content into the memory store via prompt injection in the extraction pipeline.
+These validations prevent malicious content from being persisted into the memory store and injected into future system prompts via the extraction pipeline.
 
 ### Backpressure and Graceful Shutdown
 
-Background persist goroutines are bounded by a semaphore (cap 16). When the store or embedding provider is slow and all slots are occupied, new persist requests are dropped with a warning log — preventing unbounded goroutine growth under load.
+Background persist goroutines are bounded by a semaphore (cap 16). When the store or embedding provider is slow and all slots are occupied, the persist pipeline degrades gracefully:
+
+1. **Lightweight persist (first fallback)** — skips embedding, fact extraction, and title generation. Only writes the user and assistant messages to the database. Conversation history is preserved; cross-thread search quality degrades temporarily. Waits up to 2 seconds for a semaphore slot.
+2. **Drop (last resort)** — if no slot becomes available within 2 seconds, the persist is dropped with an Error-level log. This only happens when the store itself is unresponsive.
+
+This two-tier approach prevents silent data loss under normal backpressure (slow embedding API) while still bounding goroutine growth when the store is truly overloaded.
 
 Call `Drain()` on the agent or network during shutdown to wait for in-flight persist goroutines to finish:
 
@@ -192,13 +200,12 @@ result, _ := agent.Execute(ctx, oasis.AgentTask{
 
 What happens during `Execute`:
 
-1. Embed the input once (reused by both user memory and cross-thread search)
+1. Embed the input and load recent conversation history — when both are needed, these run **concurrently** (embedding API call + database query in parallel via `sync.WaitGroup`). When only one is active, it runs sequentially with no goroutine overhead
 2. Retrieve relevant user facts from MemoryStore, inject into system prompt
-3. Load recent conversation history from Store
-4. Search for relevant messages across all threads (reuses embedding from step 1)
-5. Run the tool-calling loop
-6. Persist user and assistant messages
-7. (Background) Extract and upsert user facts from the conversation turn
+3. Search for relevant messages across all threads (reuses embedding from step 1)
+4. Run the tool-calling loop
+5. Persist user and assistant messages
+6. (Background) Extract and upsert user facts from the conversation turn
 
 ## Execution Trace Persistence
 

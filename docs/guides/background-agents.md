@@ -86,6 +86,10 @@ for _, h := range handles {
 }
 ```
 
+## Panic Safety
+
+`Spawn` recovers from panics in the agent's `Execute` method. If the agent panics, the handle transitions to `StateFailed` with an error message containing the panic value, and the `Done` channel is closed normally. Callers of `Await` and `Result` will see the error without deadlocking.
+
 ## Cancellation
 
 Cancel propagates via context. The agent receives a cancelled context and should return promptly:
@@ -100,6 +104,8 @@ fmt.Println(handle.State())  // Cancelled
 ```
 
 The parent `ctx` also controls lifetime — cancelling it cancels the agent.
+
+For Network streaming, internal event-forwarding goroutines drain with a 60-second timeout after cancellation. If a subagent ignores cancellation, the drain goroutine exits cleanly after the timeout.
 
 ## See Also
 

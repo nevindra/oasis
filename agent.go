@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -136,9 +138,14 @@ type agentConfig struct {
 	responseSchema    *ResponseSchema // set by WithResponseSchema option
 	dynamicPrompt     PromptFunc      // set by WithDynamicPrompt option
 	dynamicModel      ModelFunc       // set by WithDynamicModel option
-	dynamicTools      ToolsFunc       // set by WithDynamicTools option
-	tracer            Tracer          // set by WithTracer option
-	logger            *slog.Logger    // set by WithLogger option
+	dynamicTools       ToolsFunc       // set by WithDynamicTools option
+	tracer             Tracer          // set by WithTracer option
+	logger             *slog.Logger    // set by WithLogger option
+	maxAttachmentBytes  int64          // set by WithMaxAttachmentBytes option
+	maxSuspendSnapshots int            // set by WithSuspendBudget
+	maxSuspendBytes     int64          // set by WithSuspendBudget
+	compressModel       ModelFunc      // set by WithCompressModel
+	compressThreshold   int            // set by WithCompressThreshold
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -175,6 +182,41 @@ func WithPrompt(s string) AgentOption {
 // WithMaxIter sets the maximum tool-calling iterations.
 func WithMaxIter(n int) AgentOption {
 	return func(c *agentConfig) { c.maxIter = n }
+}
+
+// WithMaxAttachmentBytes sets the maximum total bytes of attachments
+// accumulated from tool results during the execution loop. Default is 50 MB.
+// Zero means use the default.
+func WithMaxAttachmentBytes(n int64) AgentOption {
+	return func(c *agentConfig) { c.maxAttachmentBytes = n }
+}
+
+// WithSuspendBudget sets per-agent limits on concurrent suspended snapshots.
+// maxSnapshots caps the number of active suspensions. maxBytes caps total
+// estimated memory held by snapshot closures. Defaults: 20 snapshots, 256 MB.
+// When either limit is exceeded, new suspensions are rejected (the underlying
+// processor error is returned instead of ErrSuspended).
+func WithSuspendBudget(maxSnapshots int, maxBytes int64) AgentOption {
+	return func(c *agentConfig) {
+		c.maxSuspendSnapshots = maxSnapshots
+		c.maxSuspendBytes = maxBytes
+	}
+}
+
+// WithCompressModel sets a per-request provider for context compression.
+// When the message history exceeds the compress threshold, older tool results
+// are summarized using this provider. Falls back to the agent's main provider
+// when nil.
+func WithCompressModel(fn ModelFunc) AgentOption {
+	return func(c *agentConfig) { c.compressModel = fn }
+}
+
+// WithCompressThreshold sets the rune count at which context compression
+// triggers. When the total message content exceeds this threshold, older
+// tool results are summarized via an LLM call. Default is 200,000 runes
+// (~50K tokens). Negative value disables compression.
+func WithCompressThreshold(n int) AgentOption {
+	return func(c *agentConfig) { c.compressThreshold = n }
 }
 
 // WithAgents adds subagents to a Network. Ignored by LLMAgent.
@@ -407,6 +449,47 @@ type DispatchFunc func(ctx context.Context, tc ToolCall) DispatchResult
 // dispatch functions work without an intermediate registry allocation.
 type toolExecFunc = func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error)
 
+// dispatchBuiltins handles the built-in special-case tools (ask_user, execute_plan,
+// execute_code). Returns (result, true) if the call was handled, or (zero, false)
+// if the caller should proceed with its own routing (agent delegation, direct tools).
+func dispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, ih InputHandler, agentName string, planExec bool, codeRunner CodeRunner) (DispatchResult, bool) {
+	if tc.Name == "ask_user" && ih != nil {
+		content, err := executeAskUser(ctx, ih, agentName, tc)
+		if err != nil {
+			return DispatchResult{Content: "error: " + err.Error(), IsError: true}, true
+		}
+		return DispatchResult{Content: content}, true
+	}
+	if tc.Name == "execute_plan" && planExec {
+		return executePlan(ctx, tc.Args, dispatch), true
+	}
+	if tc.Name == "execute_code" && codeRunner != nil {
+		// Wrap dispatch to block execute_plan/execute_code calls from within code,
+		// preventing unbounded recursion via execute_code → execute_plan → execute_code.
+		safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
+			if tc.Name == "execute_plan" || tc.Name == "execute_code" {
+				return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code", IsError: true}
+			}
+			return dispatch(ctx, tc)
+		}
+		return executeCode(ctx, tc.Args, codeRunner, safeDispatch), true
+	}
+	return DispatchResult{}, false
+}
+
+// dispatchTool executes a tool via the given executor and converts the result
+// to a DispatchResult. Shared by LLMAgent and Network for the common tool path.
+func dispatchTool(ctx context.Context, executeTool toolExecFunc, name string, args json.RawMessage) DispatchResult {
+	result, err := executeTool(ctx, name, args)
+	if err != nil {
+		return DispatchResult{Content: "error: " + err.Error(), IsError: true}
+	}
+	if result.Error != "" {
+		return DispatchResult{Content: "error: " + result.Error, IsError: true}
+	}
+	return DispatchResult{Content: result.Content}
+}
+
 // loopConfig holds everything the shared runLoop needs to run.
 type loopConfig struct {
 	name           string           // for logging (e.g. "agent:foo", "network:bar")
@@ -420,8 +503,15 @@ type loopConfig struct {
 	systemPrompt   string
 	resumeMessages []ChatMessage    // if set, replaces buildMessages (used by suspend/resume)
 	responseSchema *ResponseSchema  // if set, attached to every ChatRequest
-	tracer         Tracer           // nil = no tracing
-	logger         *slog.Logger     // never nil (nopLogger fallback)
+	tracer              Tracer           // nil = no tracing
+	logger              *slog.Logger     // never nil (nopLogger fallback)
+	maxAttachmentBytes  int64            // attachment size budget (0 = default 50MB)
+	suspendCount        *atomic.Int64    // nil = no budget tracking
+	suspendBytes        *atomic.Int64
+	maxSuspendSnapshots int
+	maxSuspendBytes     int64
+	compressModel       ModelFunc
+	compressThreshold   int // 0 = default (200K runes), negative = disabled
 }
 
 // runLoop is the shared tool-calling loop used by both LLMAgent and Network.
@@ -430,6 +520,19 @@ type loopConfig struct {
 func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	var totalUsage Usage
 	var steps []StepTrace
+
+	// safeCloseCh closes the streaming channel exactly once. All exit paths
+	// use this instead of raw close(ch), preventing double-close panics if
+	// a provider's ChatStream also closes the channel internally.
+	var closeOnce sync.Once
+	safeCloseCh := func() {
+		if ch != nil {
+			closeOnce.Do(func() {
+				defer func() { recover() }()
+				close(ch)
+			})
+		}
+	}
 
 	// Inject InputHandler into context for processors.
 	if cfg.inputHandler != nil {
@@ -447,15 +550,36 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 	// Emit processing-start event after context is built, before the loop.
 	if ch != nil {
-		ch <- StreamEvent{Type: EventProcessingStart, Name: cfg.name}
+		select {
+		case ch <- StreamEvent{Type: EventProcessingStart, Name: cfg.name}:
+		case <-ctx.Done():
+			safeCloseCh()
+			return AgentResult{Usage: totalUsage}, ctx.Err()
+		}
 	}
 
 	// lastAgentOutput tracks the most recent sub-agent result so we can fall
 	// back to it when the router produces an empty final response (common for
 	// pure-routing LLMs that don't synthesize a reply after delegating).
 	// For LLMAgent this is never set (no agent_* tools).
+	attachByteBudget := cfg.maxAttachmentBytes
+	if attachByteBudget <= 0 {
+		attachByteBudget = maxAccumulatedAttachmentBytes
+	}
+
+	// Track message rune count for compression.
+	var messageRuneCount int
+	for _, m := range messages {
+		messageRuneCount += len([]rune(m.Content))
+	}
+	compressThreshold := cfg.compressThreshold
+	if compressThreshold == 0 {
+		compressThreshold = defaultCompressThreshold
+	}
+
 	var lastAgentOutput string
 	var accumulatedAttachments []Attachment
+	var accumulatedAttachmentBytes int64
 
 	for i := 0; i < cfg.maxIter; i++ {
 		// Start an iteration span if tracing is enabled.
@@ -477,9 +601,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		// PreProcessor hook.
 		if err := cfg.processors.RunPreLLM(iterCtx, &req); err != nil {
 			endIter()
-			if ch != nil {
-				close(ch)
-			}
+			safeCloseCh()
 			if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
 				return AgentResult{Usage: totalUsage, Steps: steps}, s
 			}
@@ -493,18 +615,6 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			resp, err = cfg.provider.ChatWithTools(iterCtx, req, cfg.tools)
 		} else if ch != nil {
 			// No tools, streaming — stream the response directly.
-			// ChatStream may or may not close ch depending on success/failure
-			// and provider implementation. Use sync.Once to attempt closing
-			// exactly once across all exit paths, with recover to handle the
-			// case where the provider already closed the channel.
-			var closeCh sync.Once
-			safeCloseCh := func() {
-				closeCh.Do(func() {
-					defer func() { recover() }()
-					close(ch)
-				})
-			}
-
 			resp, err = cfg.provider.ChatStream(iterCtx, req, ch)
 			if err != nil {
 				endIter()
@@ -535,9 +645,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 		if err != nil {
 			endIter()
-			if ch != nil {
-				close(ch)
-			}
+			safeCloseCh()
 			return AgentResult{Usage: totalUsage, Steps: steps}, err
 		}
 		totalUsage.InputTokens += resp.Usage.InputTokens
@@ -546,9 +654,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		// PostProcessor hook.
 		if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
 			endIter()
-			if ch != nil {
-				close(ch)
-			}
+			safeCloseCh()
 			if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
 				return AgentResult{Usage: totalUsage, Steps: steps}, s
 			}
@@ -570,10 +676,13 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				// received. Skip the delta entirely; AgentResult.Output
 				// still carries the correct final text for non-streaming use.
 				if lastAgentOutput == "" {
-					ch <- StreamEvent{Type: EventTextDelta, Content: content}
+					select {
+					case ch <- StreamEvent{Type: EventTextDelta, Content: content}:
+					case <-ctx.Done():
+					}
 				}
-				close(ch)
 			}
+			safeCloseCh()
 			endIter()
 			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, content, steps)
 			return AgentResult{Output: content, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
@@ -589,11 +698,15 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
 		})
+		messageRuneCount += len([]rune(resp.Content))
 
 		// Emit tool-call-start events before dispatch.
 		if ch != nil {
 			for _, tc := range resp.ToolCalls {
-				ch <- StreamEvent{Type: EventToolCallStart, Name: tc.Name, Args: tc.Args}
+				select {
+				case ch <- StreamEvent{Type: EventToolCallStart, Name: tc.Name, Args: tc.Args}:
+				case <-ctx.Done():
+				}
 			}
 		}
 
@@ -607,12 +720,15 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 			// Emit tool-call-result event.
 			if ch != nil {
-				ch <- StreamEvent{
+				select {
+				case ch <- StreamEvent{
 					Type:     EventToolCallResult,
 					Name:     tc.Name,
 					Content:  results[j].content,
 					Usage:    results[j].usage,
 					Duration: results[j].duration,
+				}:
+				case <-ctx.Done():
 				}
 			}
 
@@ -621,29 +737,47 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			steps = append(steps, trace)
 
 			// Accumulate attachments from sub-agent results (e.g. image generation).
-			if len(results[j].attachments) > 0 {
-				accumulatedAttachments = append(accumulatedAttachments, results[j].attachments...)
+			// Capped by both count and total byte size to prevent unbounded memory growth.
+			for _, a := range results[j].attachments {
+				aSize := int64(len(a.Data))
+				if len(accumulatedAttachments) >= maxAccumulatedAttachments ||
+					accumulatedAttachmentBytes+aSize > attachByteBudget {
+					break
+				}
+				accumulatedAttachments = append(accumulatedAttachments, a)
+				accumulatedAttachmentBytes += aSize
 			}
 
 			result := ToolResult{Content: results[j].content}
 			if err := cfg.processors.RunPostTool(iterCtx, tc, &result); err != nil {
 				endIter()
-				if ch != nil {
-					close(ch)
-				}
+				safeCloseCh()
 				if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
 					return AgentResult{Usage: totalUsage, Steps: steps}, s
 				}
 				return handleProcessorErrorWithSteps(err, totalUsage, steps)
 			}
-			messages = append(messages, ToolResultMessage(tc.ID, result.Content))
+			// Truncate large tool results before appending to message history
+			// to prevent unbounded memory growth across iterations. Stream
+			// events and step traces retain the full content (transient).
+			msgContent := result.Content
+			if len([]rune(msgContent)) > maxToolResultMessageLen {
+				msgContent = truncateStr(msgContent, maxToolResultMessageLen) + "\n\n[output truncated — original was longer]"
+			}
+			messages = append(messages, ToolResultMessage(tc.ID, msgContent))
+			messageRuneCount += len([]rune(msgContent))
 
 			// Track the last sub-agent output for fallback.
-			if len(tc.Name) > 6 && tc.Name[:6] == "agent_" {
+			if strings.HasPrefix(tc.Name, "agent_") {
 				lastAgentOutput = result.Content
 			}
 		}
 		endIter()
+
+		// Compress context if over budget.
+		if compressThreshold > 0 && messageRuneCount > compressThreshold {
+			messages, messageRuneCount = compressMessages(ctx, cfg, task, messages, 2)
+		}
 	}
 
 	// Max iterations — force synthesis.
@@ -659,15 +793,6 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			IntAttr("iteration", cfg.maxIter),
 			BoolAttr("forced", true))
 		defer synthSpan.End()
-	}
-
-	// Use sync.Once to safely close ch exactly once in the synthesis block.
-	// ChatStream may close ch on success, so we guard against double-close.
-	var closeCh sync.Once
-	safeCloseCh := func() {
-		if ch != nil {
-			closeCh.Do(func() { close(ch) })
-		}
 	}
 
 	var resp ChatResponse
@@ -714,6 +839,118 @@ func mergeAttachments(accumulated, resp []Attachment) []Attachment {
 	return merged
 }
 
+// runeCount returns the total rune count of all message content.
+func runeCount(messages []ChatMessage) int {
+	var n int
+	for _, m := range messages {
+		n += len([]rune(m.Content))
+	}
+	return n
+}
+
+// compressMessages summarizes old tool-result messages via an LLM call.
+// Keeps the last preserveIters iterations of tool results intact.
+// Returns the compressed message slice and new rune count, or the
+// original slice on error (degrade, don't die).
+func compressMessages(ctx context.Context, cfg loopConfig, task AgentTask, messages []ChatMessage, preserveIters int) ([]ChatMessage, int) {
+	// Pick compression provider.
+	provider := cfg.provider
+	if cfg.compressModel != nil {
+		if p := cfg.compressModel(ctx, task); p != nil {
+			provider = p
+		}
+	}
+
+	// Identify tool-result messages to compress.
+	// Walk backwards to find the boundary of the last preserveIters iterations.
+	// An "iteration" is one assistant message (with tool calls) followed by
+	// its tool-result messages.
+	iterCount := 0
+	preserveFrom := len(messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			iterCount++
+			if iterCount >= preserveIters {
+				preserveFrom = i
+				break
+			}
+		}
+	}
+
+	// Collect old tool-result content and prior summaries (before preserveFrom).
+	// Prior summaries are re-compressed so successive passes fold together.
+	const summaryPrefix = "[Summary of earlier tool results]\n"
+	var oldContent strings.Builder
+	var toRemove []int
+	for i := 0; i < preserveFrom; i++ {
+		m := messages[i]
+		switch {
+		case m.ToolCallID != "" && m.Content != "":
+			// Tool result message.
+			oldContent.WriteString(m.Content)
+			oldContent.WriteString("\n---\n")
+			toRemove = append(toRemove, i)
+		case m.Role == "user" && strings.HasPrefix(m.Content, summaryPrefix) && i > 0:
+			// Prior summary from an earlier compression pass (skip the initial user message at i=0).
+			oldContent.WriteString(m.Content)
+			oldContent.WriteString("\n---\n")
+			toRemove = append(toRemove, i)
+		}
+	}
+	if len(toRemove) == 0 {
+		return messages, runeCount(messages)
+	}
+
+	// Start compression span if tracing.
+	compressCtx := ctx
+	if cfg.tracer != nil {
+		var span Span
+		compressCtx, span = cfg.tracer.Start(ctx, "agent.loop.compress",
+			IntAttr("original_runes", runeCount(messages)),
+			IntAttr("messages_compressed", len(toRemove)))
+		defer span.End()
+	}
+
+	// Call compression provider.
+	summaryResp, err := provider.Chat(compressCtx, ChatRequest{
+		Messages: []ChatMessage{
+			SystemMessage("Summarize the following tool execution results concisely. Preserve key facts, data values, decisions, and errors. Omit redundant details."),
+			UserMessage(oldContent.String()),
+		},
+	})
+	if err != nil {
+		cfg.logger.Warn("context compression failed, continuing uncompressed", "error", err)
+		return messages, runeCount(messages)
+	}
+
+	// Build new message slice: keep non-removed messages, insert summary.
+	removeSet := make(map[int]bool, len(toRemove))
+	for _, idx := range toRemove {
+		removeSet[idx] = true
+	}
+	var compressed []ChatMessage
+	summaryInserted := false
+	for i, m := range messages {
+		if removeSet[i] {
+			if !summaryInserted {
+				compressed = append(compressed, UserMessage("[Summary of earlier tool results]\n"+summaryResp.Content))
+				summaryInserted = true
+			}
+			continue
+		}
+		compressed = append(compressed, m)
+	}
+
+	newRuneCount := runeCount(compressed)
+	cfg.logger.Info("context compressed",
+		"agent", cfg.name,
+		"before_runes", runeCount(messages),
+		"after_runes", newRuneCount,
+		"messages_removed", len(toRemove))
+
+	return compressed, newRuneCount
+}
+
 // handleProcessorErrorWithSteps converts a processor error into an AgentResult.
 // ErrHalt produces a graceful result; other errors propagate as failures.
 // Any step traces collected before the error are preserved in the result.
@@ -733,8 +970,8 @@ func buildStepTrace(tc ToolCall, res toolExecResult) StepTrace {
 	traceType := "tool"
 	input := string(tc.Args)
 
-	if len(name) > 6 && name[:6] == "agent_" {
-		name = name[6:]
+	if after, ok := strings.CutPrefix(name, "agent_"); ok {
+		name = after
 		traceType = "agent"
 		// Extract the task field from agent call args for a cleaner trace.
 		var params struct {
@@ -755,25 +992,90 @@ func buildStepTrace(tc ToolCall, res toolExecResult) StepTrace {
 	}
 }
 
+// defaultSuspendTTL is the default time-to-live for ErrSuspended snapshots.
+// When the TTL elapses without Resume(), the resume closure and captured
+// message snapshot are released automatically, preventing memory leaks.
+// Callers can override with WithSuspendTTL after receiving ErrSuspended.
+const defaultSuspendTTL = 30 * time.Minute
+
+// estimateSnapshotSize returns a rough byte count for a message slice.
+// Counts Content, ToolCall Args/Metadata, and message-level Metadata.
+// Attachment.Data is shared (not deep-copied), so excluded.
+func estimateSnapshotSize(messages []ChatMessage) int64 {
+	var size int64
+	for _, m := range messages {
+		size += int64(len(m.Content))
+		for _, tc := range m.ToolCalls {
+			size += int64(len(tc.Args))
+			size += int64(len(tc.Metadata))
+		}
+		size += int64(len(m.Metadata))
+	}
+	return size
+}
+
 // checkSuspendLoop checks if a processor error is a suspend signal.
 // Returns a fully-wired ErrSuspended (with resume closure) if it is, nil otherwise.
 // The resume closure captures the current conversation messages, appends the
 // human's response, and re-enters runLoop.
+//
+// A default TTL of 30 minutes is applied automatically. Callers can override
+// with WithSuspendTTL or call Release() explicitly.
 func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task AgentTask) *ErrSuspended {
 	var suspend *errSuspend
 	if !errors.As(err, &suspend) {
 		return nil
 	}
 
+	// Enforce per-agent suspend budget.
+	if cfg.suspendCount != nil {
+		maxSnap := cfg.maxSuspendSnapshots
+		if maxSnap <= 0 {
+			maxSnap = defaultMaxSuspendSnapshots
+		}
+		maxBytes := cfg.maxSuspendBytes
+		if maxBytes <= 0 {
+			maxBytes = defaultMaxSuspendBytes
+		}
+		snapSize := estimateSnapshotSize(messages)
+		if cfg.suspendCount.Load() >= int64(maxSnap) ||
+			cfg.suspendBytes.Load()+snapSize > maxBytes {
+			cfg.logger.Warn("suspend budget exceeded, skipping suspension",
+				"agent", cfg.name,
+				"count", cfg.suspendCount.Load(),
+				"bytes", cfg.suspendBytes.Load())
+			return nil // caller propagates the original processor error
+		}
+		cfg.suspendCount.Add(1)
+		cfg.suspendBytes.Add(snapSize)
+	}
+
 	// Deep-copy messages for resume closure so that ToolCalls, Attachments,
 	// and Metadata slices don't share backing arrays with the original.
+	// Inner byte slices (ToolCall.Args/Metadata, Attachment.Data) are also
+	// deep-copied to prevent shared mutable state across the snapshot boundary.
 	snapshot := make([]ChatMessage, len(messages))
 	for i, m := range messages {
 		snapshot[i] = m
 		if len(m.ToolCalls) > 0 {
 			snapshot[i].ToolCalls = make([]ToolCall, len(m.ToolCalls))
-			copy(snapshot[i].ToolCalls, m.ToolCalls)
+			for j, tc := range m.ToolCalls {
+				snapshot[i].ToolCalls[j] = tc
+				if len(tc.Args) > 0 {
+					snapshot[i].ToolCalls[j].Args = make(json.RawMessage, len(tc.Args))
+					copy(snapshot[i].ToolCalls[j].Args, tc.Args)
+				}
+				if len(tc.Metadata) > 0 {
+					snapshot[i].ToolCalls[j].Metadata = make(json.RawMessage, len(tc.Metadata))
+					copy(snapshot[i].ToolCalls[j].Metadata, tc.Metadata)
+				}
+			}
 		}
+		// Isolate the Attachments slice header so mutations to the original
+		// (append, reorder) don't affect the snapshot. Attachment.Data is
+		// treated as immutable throughout the framework, so sharing the
+		// backing byte slice is safe and avoids duplicating large binary
+		// content (images, PDFs, audio).
 		if len(m.Attachments) > 0 {
 			snapshot[i].Attachments = make([]Attachment, len(m.Attachments))
 			copy(snapshot[i].Attachments, m.Attachments)
@@ -784,9 +1086,16 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 		}
 	}
 
-	return &ErrSuspended{
-		Step:    cfg.name,
-		Payload: suspend.payload,
+	// Capture snapshot size for budget tracking.
+	var snapSize int64
+	if cfg.suspendCount != nil {
+		snapSize = estimateSnapshotSize(messages)
+	}
+
+	suspended := &ErrSuspended{
+		Step:         cfg.name,
+		Payload:      suspend.payload,
+		snapshotSize: snapSize,
 		resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
 			resumed := make([]ChatMessage, len(snapshot)+1)
 			copy(resumed, snapshot)
@@ -796,7 +1105,28 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 			return runLoop(ctx, resumeCfg, task, nil)
 		},
 	}
+	if cfg.suspendCount != nil {
+		suspended.onRelease = func(size int64) {
+			cfg.suspendCount.Add(-1)
+			cfg.suspendBytes.Add(-size)
+		}
+	}
+	// Apply default TTL to prevent memory leaks from abandoned suspensions.
+	// Callers can override with WithSuspendTTL or disable by calling
+	// suspended.WithSuspendTTL(0) (though that re-enables the leak risk).
+	suspended.WithSuspendTTL(defaultSuspendTTL)
+	return suspended
 }
+
+// maxToolResultMessageLen is the maximum rune length for a tool result stored
+// in the conversation message history during the tool-calling loop. Results
+// exceeding this limit are truncated with a marker so the LLM knows content
+// was trimmed. This prevents unbounded memory growth from tools that return
+// very large outputs (e.g. web scraping, file reads).
+//
+// Stream events and step traces retain the full content since they are
+// transient and not accumulated across iterations.
+const maxToolResultMessageLen = 100_000 // ~25K tokens
 
 // --- parallel tool dispatch ---
 
@@ -809,6 +1139,22 @@ type toolExecResult struct {
 	isError     bool
 }
 
+// maxAccumulatedAttachments caps the number of attachments collected from
+// tool/agent results during the execution loop. Prevents unbounded memory
+// growth when subagents produce large binary content (images, audio, etc.).
+const maxAccumulatedAttachments = 50
+
+// maxAccumulatedAttachmentBytes is the default size budget (bytes) for
+// attachments collected from tool/agent results during the execution loop.
+const maxAccumulatedAttachmentBytes int64 = 50 * 1024 * 1024 // 50 MB
+
+const defaultMaxSuspendSnapshots = 20
+const defaultMaxSuspendBytes int64 = 256 * 1024 * 1024 // 256 MB
+
+// defaultCompressThreshold is the default rune count at which context
+// compression triggers in the tool-calling loop. ~50K tokens.
+const defaultCompressThreshold = 200_000
+
 // maxParallelDispatch caps the number of concurrent tool call goroutines
 // to avoid overwhelming external services with unbounded parallelism.
 const maxParallelDispatch = 10
@@ -818,6 +1164,19 @@ const maxParallelDispatch = 10
 type indexedResult struct {
 	idx    int
 	result toolExecResult
+}
+
+// safeDispatch wraps a dispatch call with panic recovery. If the dispatched
+// tool panics, the panic is caught and converted to an error result instead
+// of crashing the process. Matches the recovery pattern used for subagent
+// dispatch in Network.makeDispatch.
+func safeDispatch(ctx context.Context, tc ToolCall, dispatch DispatchFunc) (dr DispatchResult) {
+	defer func() {
+		if p := recover(); p != nil {
+			dr = DispatchResult{Content: fmt.Sprintf("error: tool %q panic: %v", tc.Name, p), IsError: true}
+		}
+	}()
+	return dispatch(ctx, tc)
 }
 
 // dispatchParallel runs all tool calls concurrently via the dispatch function
@@ -833,7 +1192,7 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 	// Fast path: single call, no goroutine needed.
 	if len(calls) == 1 {
 		start := time.Now()
-		dr := dispatch(ctx, calls[0])
+		dr := safeDispatch(ctx, calls[0], dispatch)
 		return []toolExecResult{{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
 	}
 
@@ -863,7 +1222,7 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 					continue
 				}
 				start := time.Now()
-				dr := dispatch(ctx, w.tc)
+				dr := safeDispatch(ctx, w.tc, dispatch)
 				resultCh <- indexedResult{w.idx, toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
 			}
 		}()
@@ -878,11 +1237,12 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 	// Collect results, bailing out if ctx is cancelled while calls are in-flight.
 	results := make([]toolExecResult, len(calls))
 	seen := make([]bool, len(calls))
+collect:
 	for received := 0; received < len(calls); received++ {
 		select {
 		case r, ok := <-resultCh:
 			if !ok {
-				break
+				break collect
 			}
 			results[r.idx] = r.result
 			seen[r.idx] = true
@@ -894,6 +1254,12 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 				}
 			}
 			return results
+		}
+	}
+	// Fill any unseen results (e.g. channel closed early) with error markers.
+	for i := range results {
+		if !seen[i] {
+			results[i] = toolExecResult{content: "error: result not received", isError: true}
 		}
 	}
 	return results
@@ -996,18 +1362,33 @@ func Suspend(payload json.RawMessage) error {
 // processor suspends execution to await external input.
 // Inspect Payload for context, then call Resume() with the human's response.
 //
-// Retention: ErrSuspended holds a closure that captures the Workflow, the
-// original AgentTask, and snapshots of completed step results and context
-// values. This data remains in memory until Resume() is called or the
-// ErrSuspended value is garbage-collected. Callers should not hold
-// ErrSuspended beyond the resume window to avoid retaining stale state.
+// Retention: ErrSuspended holds a closure that captures the full conversation
+// message history (including tool call arguments, results, and attachments).
+// This data remains in memory until Resume() is called, Release() is called,
+// the TTL expires, or the ErrSuspended value is garbage-collected.
+//
+// To prevent memory leaks in server environments, use WithSuspendTTL to set
+// an automatic expiry. When the TTL elapses without Resume(), the snapshot
+// is released automatically. Without a TTL, callers must call Release()
+// explicitly when the resume window has passed (e.g. timeout, user abandonment).
+// After release (manual or automatic), Resume() returns an error.
 type ErrSuspended struct {
 	// Step is the name of the step or processor hook that suspended.
 	Step string
 	// Payload carries context for the human (what to show, what to decide).
 	Payload json.RawMessage
 	// resume is the closure that continues execution with human input.
+	// Guarded by mu when a TTL timer is active (timer callback writes from
+	// a separate goroutine). Without a TTL, single-goroutine access is safe.
 	resume func(ctx context.Context, data json.RawMessage) (AgentResult, error)
+	// mu guards resume against concurrent access from the TTL timer goroutine.
+	mu sync.Mutex
+	// ttlTimer is the auto-release timer. Nil when no TTL is set.
+	ttlTimer *time.Timer
+	// snapshotSize is the estimated bytes of the captured snapshot.
+	snapshotSize int64
+	// onRelease decrements the agent's suspend budget counters.
+	onRelease func(size int64)
 }
 
 func (e *ErrSuspended) Error() string {
@@ -1017,12 +1398,71 @@ func (e *ErrSuspended) Error() string {
 // Resume continues execution with the human's response data.
 // The data is made available to the step via ResumeData().
 // Resume is single-use: calling it more than once is undefined behavior.
-// Returns an error if called on an ErrSuspended not produced by the engine.
+// Returns an error if called on a released, expired, or externally constructed ErrSuspended.
 func (e *ErrSuspended) Resume(ctx context.Context, data json.RawMessage) (AgentResult, error) {
-	if e.resume == nil {
-		return AgentResult{}, fmt.Errorf("ErrSuspended: resume closure is nil (constructed outside engine)")
+	e.mu.Lock()
+	if e.ttlTimer != nil {
+		e.ttlTimer.Stop()
 	}
-	return e.resume(ctx, data)
+	fn := e.resume
+	onRel := e.onRelease
+	e.resume = nil // single-use: free the captured snapshot after resume
+	e.onRelease = nil
+	e.mu.Unlock()
+
+	if fn == nil {
+		return AgentResult{}, fmt.Errorf("ErrSuspended: resume closure is nil (released, expired, or constructed outside engine)")
+	}
+	if onRel != nil {
+		onRel(e.snapshotSize)
+	}
+	return fn(ctx, data)
+}
+
+// Release nils out the resume closure, eagerly freeing the captured message
+// snapshot and all referenced data (tool arguments, attachments, etc.).
+// Call this when the suspend will not be resumed (timeout, user abandonment).
+// After Release(), Resume() returns an error. Safe to call multiple times.
+func (e *ErrSuspended) Release() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ttlTimer != nil {
+		e.ttlTimer.Stop()
+	}
+	if e.resume != nil && e.onRelease != nil {
+		e.onRelease(e.snapshotSize)
+		e.onRelease = nil // prevent double-decrement
+	}
+	e.resume = nil
+}
+
+// WithSuspendTTL sets an automatic expiry on the suspended state.
+// When the TTL elapses without Resume() being called, the resume closure
+// is released automatically, freeing the captured message snapshot.
+//
+// A default TTL of 30 minutes is applied automatically when ErrSuspended
+// is created by the framework. Call this to override with a custom duration.
+//
+//	var suspended *oasis.ErrSuspended
+//	if errors.As(err, &suspended) {
+//	    suspended.WithSuspendTTL(5 * time.Minute)
+//	    // ... store suspended for later resume ...
+//	}
+func (e *ErrSuspended) WithSuspendTTL(d time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ttlTimer != nil {
+		e.ttlTimer.Stop()
+	}
+	e.ttlTimer = time.AfterFunc(d, func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.resume != nil && e.onRelease != nil {
+			e.onRelease(e.snapshotSize)
+			e.onRelease = nil
+		}
+		e.resume = nil
+	})
 }
 
 // StepSuspended indicates a step that paused execution to await external input.

@@ -98,6 +98,8 @@ This ensures memory and human-in-the-loop work correctly inside nested agent hie
 - Token usage from subagent executions is accumulated into the Network's total
 - When the router produces an empty final response after delegating, the Network falls back to the last subagent's output
 - Network implements `StreamingAgent` — when a subagent also implements `StreamingAgent`, Network detects this via type assertion and calls `ExecuteStream`, forwarding token-by-token events through the parent channel in real time. `EventInputReceived` events from subagents are filtered to avoid duplicates, and the router's final text-delta is suppressed when a subagent already streamed output (prevents duplication)
+- **Panic safety** — all subagent `Execute`/`ExecuteStream` calls are wrapped with `recover()`. A panicking subagent returns an error to the router instead of crashing the parent Network. For streaming subagents, the internal forwarding channel is closed on panic to prevent goroutine leaks
+- **Drain timeout** — when a streaming subagent's context is cancelled, the event-forwarding goroutine drains any remaining events with a 60-second timeout. If the subagent ignores cancellation and never closes its channel, the drain goroutine closes `subCh` after the timeout, causing the subagent's next send to panic and get caught by the existing `recover` wrapper — converting a potential permanent goroutine leak into a clean error
 
 ## When to Use Network vs Workflow
 

@@ -135,11 +135,41 @@ if errors.As(err, &suspended) {
 
 Processors in LLMAgent/Network can also call `Suspend()` — the agent returns `*ErrSuspended` with the same resume pattern.
 
+### Cleanup on Timeout
+
+`ErrSuspended` captures the full conversation history in a closure. If the human never responds, the snapshot must be released to avoid retaining stale state. The recommended approach is `WithSuspendTTL`, which auto-releases after a deadline:
+
+```go
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    suspended.WithSuspendTTL(5 * time.Minute) // auto-release if not resumed
+    store[suspended.Step] = suspended          // store for later resume
+}
+```
+
+For manual control (e.g. when you own the select loop), use `Release()` directly:
+
+```go
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    select {
+    case resp := <-humanInput:
+        result, err = suspended.Resume(ctx, resp)
+    case <-time.After(5 * time.Minute):
+        suspended.Release() // free captured conversation snapshot
+        log.Println("suspend timed out, snapshot released")
+    }
+}
+```
+
+`Resume` is single-use — the closure is freed after the call. `Release` and `WithSuspendTTL` are safe to call multiple times. All methods are goroutine-safe when a TTL is active.
+
 ## Tips
 
 - No handler = no-op. Processors that call `InputHandlerFromContext` should skip gracefully.
 - Use `context.WithTimeout` for deadlines — the handler blocks until response or cancellation.
 - Networks propagate the handler to all subagents automatically.
+- Use `WithSuspendTTL` on all `ErrSuspended` values in server environments to prevent memory leaks from abandoned suspensions.
 
 ## See Also
 

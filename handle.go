@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 )
 
@@ -72,6 +73,14 @@ func Spawn(ctx context.Context, agent Agent, task AgentTask) *AgentHandle {
 
 	go func() {
 		defer cancel() // release context resources on completion
+		defer func() {
+			if p := recover(); p != nil {
+				h.result = AgentResult{}
+				h.err = fmt.Errorf("agent panic: %v", p)
+				h.state.Store(int32(StateFailed))
+				close(h.done)
+			}
+		}()
 		h.state.Store(int32(StateRunning))
 		result, err := agent.Execute(ctx, task)
 

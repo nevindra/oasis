@@ -59,8 +59,13 @@ flowchart TD
 
 - **Parallel tool execution** — when the LLM returns multiple tool calls in one response, they run concurrently via a fixed worker pool of `min(len(calls), 10)` goroutines pulling from a shared work channel. The dispatch is context-aware: if `ctx` is cancelled while tool calls are in-flight, the function returns immediately with error results for incomplete calls. Single calls run inline without goroutine overhead
 - **Max iterations** — defaults to 10. When reached, the agent appends a synthesis prompt and makes one final LLM call
-- **Streaming** — LLMAgent implements `StreamingAgent`. Emits `StreamEvent` values throughout execution: tool call start/result events during tool iterations, text-delta events during the final response
+- **Streaming** — LLMAgent implements `StreamingAgent`. Emits `StreamEvent` values throughout execution: tool call start/result events during tool iterations, text-delta events during the final response. All channel sends are context-guarded — if the consumer stops reading or the context is cancelled, the agent loop exits cleanly instead of blocking
 - **Memory** — stateless by default. Enable with `WithConversationMemory` and `WithUserMemory`
+- **Cached tool definitions** — when using static tools (no `WithDynamicTools`), tool definitions are computed once at construction time and reused across `Execute` calls. Dynamic tools still rebuild per-request
+- **Bounded attachments** — tool-result attachments are accumulated up to a cap of 50 per execution and a byte budget (default 50 MB, configurable via `WithMaxAttachmentBytes`). This prevents unbounded memory growth in long-running loops with attachment-heavy tools
+- **Tool result truncation** — tool results exceeding 100,000 runes (~25K tokens) are truncated in the message history with an `[output truncated]` marker. Stream events and step traces retain the full content. This prevents unbounded memory growth from tools returning very large outputs
+- **Suspend snapshot budget** — per-agent limits on concurrent suspended states: max snapshots (default 20) and max bytes (default 256 MB), configurable via `WithSuspendBudget`. When the budget is exceeded, suspension is rejected with an error instead of leaking memory. Counters are decremented when `Resume()` or `Release()` is called
+- **Context compression** — when message rune count exceeds a threshold (default 200K runes, configurable via `WithCompressThreshold`), old tool results are summarized via an LLM call and replaced with a compact summary. Uses a dedicated provider when configured via `WithCompressModel`, falling back to the main provider. The last 2 iterations are always preserved intact. Degrades gracefully on error (continues uncompressed)
 
 ## AgentTask
 
@@ -138,6 +143,10 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithDynamicTools(fn ToolsFunc)` | Per-request tool set (replaces static tools) |
 | `WithConversationMemory(s Store, opts...)` | Enable history load/persist per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact injection + auto-extraction |
+| `WithMaxAttachmentBytes(n int64)` | Max accumulated attachment bytes per execution (default 50 MB) |
+| `WithSuspendBudget(maxSnapshots int, maxBytes int64)` | Per-agent suspend snapshot limits (default 20 snapshots, 256 MB) |
+| `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven context compression (falls back to main provider) |
+| `WithCompressThreshold(n int)` | Rune count threshold for triggering compression (default 200K, negative disables) |
 | `WithTracer(t Tracer)` | Attach a tracer for span creation (`agent.execute` → `agent.loop.iteration`, etc.) |
 | `WithLogger(l *slog.Logger)` | Attach a structured logger (replaces `log.Printf`) |
 
@@ -263,11 +272,21 @@ handle.Await(ctx) // block until done
 handle.Cancel()   // request cancellation
 ```
 
-See [Background Agents Guide](../guides/background-agents.md) for patterns.
+`Spawn` is panic-safe: if the agent panics, the handle transitions to `StateFailed` and the `Done` channel closes normally. See [Background Agents Guide](../guides/background-agents.md) for patterns.
 
 ## Suspend/Resume
 
 Agents support pausing execution to await external input. A processor can return `Suspend(payload)` to pause the agent — `Execute` returns `ErrSuspended`, which carries a `Resume(ctx, data)` method to continue from where it left off. Conversation history is preserved across suspend/resume cycles.
+
+`Resume` is single-use — the captured message snapshot is freed after the call. A **default TTL of 30 minutes** is applied automatically — abandoned suspensions are auto-released to prevent memory leaks. Override with `WithSuspendTTL` or call `Release()` manually:
+
+```go
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    suspended.WithSuspendTTL(5 * time.Minute) // override default 30m TTL
+    // ... store for later resume ...
+}
+```
 
 See [Workflow](workflow.md) for DAG-level suspend/resume and [Processors](processor.md) for processor-triggered gates.
 

@@ -64,7 +64,7 @@ Returned (wrapped) by `DoUntil`/`DoWhile` steps when the loop cap is reached wit
 
 ## ErrSuspended
 
-**File:** `suspend.go`
+**File:** `agent.go`
 
 ```go
 // ErrSuspended is returned by Execute() when a workflow step or
@@ -75,12 +75,39 @@ type ErrSuspended struct {
 }
 ```
 
-Call `Resume(ctx, data)` to continue execution with the human's response. Resume is single-use.
+Call `Resume(ctx, data)` to continue execution with the human's response. Resume is single-use — the closure is nilled after the call.
 
 ```go
 var suspended *oasis.ErrSuspended
 if errors.As(err, &suspended) {
     result, err = suspended.Resume(ctx, json.RawMessage(`"approved"`))
+}
+```
+
+A **default TTL of 30 minutes** is applied automatically — abandoned suspensions are auto-released to prevent memory leaks. Call `WithSuspendTTL(d)` to override with a custom duration:
+
+```go
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    suspended.WithSuspendTTL(5 * time.Minute) // override default 30m TTL
+    // ... store suspended for later resume ...
+}
+```
+
+Per-agent suspend budgets are enforced via `WithSuspendBudget(maxSnapshots, maxBytes)`. When the budget is exceeded, `Execute` returns an error instead of `ErrSuspended`. Counters are decremented when `Resume()`, `Release()`, or the TTL timer fires.
+
+For manual control, call `Release()` to eagerly free the snapshot. After release (manual or TTL), `Resume()` returns an error. Both are safe to call multiple times.
+
+```go
+// Manual timeout pattern (when you can't use WithSuspendTTL).
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    select {
+    case response := <-humanInput:
+        result, err = suspended.Resume(ctx, response)
+    case <-time.After(5 * time.Minute):
+        suspended.Release() // free captured conversation snapshot
+    }
 }
 ```
 

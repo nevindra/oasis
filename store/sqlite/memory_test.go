@@ -289,11 +289,12 @@ func TestMemoryStoreBuildContextWithEmbedding(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimSpace(result), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	// Line 0: header, line 1: trust framing, line 2: blank, line 3+: facts
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines, got %d", len(lines))
 	}
-	if !strings.Contains(lines[1], "likes Go") {
-		t.Errorf("first fact should be 'likes Go' (best match), got: %s", lines[1])
+	if !strings.Contains(lines[3], "likes Go") {
+		t.Errorf("first fact should be 'likes Go' (best match), got: %s", lines[3])
 	}
 }
 
@@ -314,11 +315,12 @@ func TestMemoryStoreBuildContextWithoutEmbedding(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimSpace(result), "\n")
-	if len(lines) < 3 {
-		t.Fatalf("expected at least 3 lines, got %d", len(lines))
+	// Line 0: header, line 1: trust framing, line 2: blank, line 3+: facts
+	if len(lines) < 5 {
+		t.Fatalf("expected at least 5 lines, got %d", len(lines))
 	}
-	if !strings.Contains(lines[1], "high confidence fact") {
-		t.Errorf("first fact should be 'high confidence fact', got: %s", lines[1])
+	if !strings.Contains(lines[3], "high confidence fact") {
+		t.Errorf("first fact should be 'high confidence fact', got: %s", lines[3])
 	}
 }
 

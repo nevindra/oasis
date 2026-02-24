@@ -2477,3 +2477,228 @@ func TestServeSSE_NoFlusher(t *testing.T) {
 		t.Errorf("err = %q, want mention of Flusher", err.Error())
 	}
 }
+
+// --- Attachment byte budget tests ---
+
+func TestAccumulatedAttachmentsByteBudget(t *testing.T) {
+	// Subagent that returns a 600KB attachment per call.
+	bigAgent := &stubAgent{
+		name: "imager",
+		desc: "Returns large attachments",
+		fn: func(_ AgentTask) (AgentResult, error) {
+			return AgentResult{
+				Output:      "image generated",
+				Attachments: []Attachment{{MimeType: "image/png", Data: make([]byte, 600*1024)}},
+			}, nil
+		},
+	}
+
+	// Router calls the subagent 3 times, then gives a final response.
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "agent_imager", Args: json.RawMessage(`{"task":"img1"}`)}}},
+			{ToolCalls: []ToolCall{{ID: "2", Name: "agent_imager", Args: json.RawMessage(`{"task":"img2"}`)}}},
+			{ToolCalls: []ToolCall{{ID: "3", Name: "agent_imager", Args: json.RawMessage(`{"task":"img3"}`)}}},
+			{Content: "done"},
+		},
+	}
+
+	// Set byte budget to 1MB — only first attachment (600KB) fits; second
+	// would push total to 1200KB which exceeds 1MB.
+	net := NewNetwork("net", "test", router,
+		WithAgents(bigAgent),
+		WithMaxAttachmentBytes(1<<20),
+	)
+
+	result, err := net.Execute(context.Background(), AgentTask{Input: "generate images"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// With 1MB budget and 600KB per attachment, only 1 should fit.
+	if len(result.Attachments) != 1 {
+		t.Errorf("got %d attachments, want 1 (byte budget should cap at 1MB)", len(result.Attachments))
+	}
+}
+
+// --- Suspend budget tests ---
+
+// suspendProcessor is a PostProcessor that returns Suspend on every call.
+type suspendProcessor struct{}
+
+func (suspendProcessor) PostLLM(_ context.Context, _ *ChatResponse) error {
+	return Suspend(json.RawMessage(`{"action":"approve"}`))
+}
+
+func TestSuspendBudgetExceeded(t *testing.T) {
+	// Provider returns a final text response (no tool calls), triggering
+	// the PostProcessor hook each time. The processor suspends every time.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{Content: "response1"},
+			{Content: "response2"},
+			{Content: "response3"},
+		},
+	}
+
+	agent := NewLLMAgent("suspender", "Suspends a lot", provider,
+		WithProcessors(suspendProcessor{}),
+		WithSuspendBudget(2, 1<<30), // max 2 snapshots, generous byte limit
+	)
+
+	// First suspension — should succeed.
+	_, err1 := agent.Execute(context.Background(), AgentTask{Input: "one"})
+	var s1 *ErrSuspended
+	if !errors.As(err1, &s1) {
+		t.Fatalf("call 1: expected ErrSuspended, got %v", err1)
+	}
+
+	// Second suspension — should succeed (count=2 now).
+	_, err2 := agent.Execute(context.Background(), AgentTask{Input: "two"})
+	var s2 *ErrSuspended
+	if !errors.As(err2, &s2) {
+		t.Fatalf("call 2: expected ErrSuspended, got %v", err2)
+	}
+
+	// Third suspension — budget exceeded, should NOT be ErrSuspended.
+	// It should propagate the underlying processor error instead.
+	_, err3 := agent.Execute(context.Background(), AgentTask{Input: "three"})
+	var s3 *ErrSuspended
+	if errors.As(err3, &s3) {
+		t.Fatal("call 3: should NOT get ErrSuspended when budget is exceeded")
+	}
+	// The error should be the raw errSuspend (not wrapped as ErrSuspended).
+	if err3 == nil {
+		t.Fatal("call 3: expected an error when budget is exceeded")
+	}
+
+	// Release first snapshot — frees one slot.
+	s1.Release()
+
+	// Fourth suspension — should succeed now (count back to 1).
+	_, err4 := agent.Execute(context.Background(), AgentTask{Input: "four"})
+	var s4 *ErrSuspended
+	if !errors.As(err4, &s4) {
+		t.Fatalf("call 4: expected ErrSuspended after release, got %v", err4)
+	}
+	s2.Release()
+	s4.Release()
+}
+
+// --- Context compression tests ---
+
+// bigResultTool returns a large string result (500 runes per call).
+type bigResultTool struct{}
+
+func (bigResultTool) Definitions() []ToolDefinition {
+	return []ToolDefinition{{Name: "big", Description: "Returns big content"}}
+}
+func (bigResultTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{Content: strings.Repeat("x", 500)}, nil
+}
+
+func TestContextCompression(t *testing.T) {
+	// Track message counts per ChatWithTools call.
+	var messageCounts []int
+
+	// Responses: 4 rounds of 2 tool calls each + 1 final text.
+	// Without compression, final call sees 1 + 4*(1 asst + 2 tool) = 13 messages.
+	responses := []ChatResponse{
+		{ToolCalls: []ToolCall{
+			{ID: "1a", Name: "big", Args: json.RawMessage(`{}`)},
+			{ID: "1b", Name: "big", Args: json.RawMessage(`{}`)},
+		}},
+		{ToolCalls: []ToolCall{
+			{ID: "2a", Name: "big", Args: json.RawMessage(`{}`)},
+			{ID: "2b", Name: "big", Args: json.RawMessage(`{}`)},
+		}},
+		{ToolCalls: []ToolCall{
+			{ID: "3a", Name: "big", Args: json.RawMessage(`{}`)},
+			{ID: "3b", Name: "big", Args: json.RawMessage(`{}`)},
+		}},
+		{ToolCalls: []ToolCall{
+			{ID: "4a", Name: "big", Args: json.RawMessage(`{}`)},
+			{ID: "4b", Name: "big", Args: json.RawMessage(`{}`)},
+		}},
+		{Content: "done"},
+	}
+
+	trackingProvider := &sequentialCallbackProvider{
+		name:      "tracker",
+		responses: responses,
+		onChat: func(req ChatRequest) {
+			messageCounts = append(messageCounts, len(req.Messages))
+		},
+	}
+
+	// Separate compression provider — always returns a short summary.
+	compressResponses := make([]ChatResponse, 10)
+	for i := range compressResponses {
+		compressResponses[i] = ChatResponse{Content: "summary"}
+	}
+	compressProvider := &mockProvider{
+		name:      "compress",
+		responses: compressResponses,
+	}
+
+	// Threshold of 1500 runes. With 500 runes per tool result and 2 calls
+	// per iteration (1000/iter), compression triggers after iteration 2
+	// (~2002 runes) and starts compressing old iterations from iteration 3.
+	agent := NewLLMAgent("compressor", "Tests compression", trackingProvider,
+		WithTools(bigResultTool{}),
+		WithCompressThreshold(1500),
+		WithCompressModel(func(_ context.Context, _ AgentTask) Provider { return compressProvider }),
+		WithMaxIter(10),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "go"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Output != "done" {
+		t.Errorf("Output = %q, want %q", result.Output, "done")
+	}
+
+	t.Logf("message counts per call: %v", messageCounts)
+
+	// Without compression, the final call (5th) sees 13 messages.
+	// With compression, old tool results get collapsed into summaries,
+	// so the count must be lower.
+	lastCount := messageCounts[len(messageCounts)-1]
+	if lastCount >= 13 {
+		t.Errorf("expected fewer than 13 messages after compression, got %d", lastCount)
+	}
+}
+
+// sequentialCallbackProvider returns different responses per call and runs a callback.
+type sequentialCallbackProvider struct {
+	name      string
+	responses []ChatResponse
+	idx       int
+	onChat    func(ChatRequest)
+}
+
+func (s *sequentialCallbackProvider) Name() string { return s.name }
+func (s *sequentialCallbackProvider) next(req ChatRequest) ChatResponse {
+	if s.onChat != nil {
+		s.onChat(req)
+	}
+	if s.idx >= len(s.responses) {
+		return ChatResponse{Content: "exhausted"}
+	}
+	resp := s.responses[s.idx]
+	s.idx++
+	return resp
+}
+func (s *sequentialCallbackProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
+	return s.next(req), nil
+}
+func (s *sequentialCallbackProvider) ChatWithTools(_ context.Context, req ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
+	return s.next(req), nil
+}
+func (s *sequentialCallbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	defer close(ch)
+	return s.next(req), nil
+}

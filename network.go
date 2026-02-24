@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,9 +34,17 @@ type Network struct {
 	dynamicPrompt    PromptFunc
 	dynamicModel     ModelFunc
 	dynamicTools     ToolsFunc
-	tracer           Tracer
-	logger           *slog.Logger
-	mem              agentMemory
+	tracer             Tracer
+	logger             *slog.Logger
+	mem                agentMemory
+	cachedToolDefs      []ToolDefinition // computed once at construction for the non-dynamic path
+	maxAttachmentBytes  int64
+	suspendCount        atomic.Int64
+	suspendBytes        atomic.Int64
+	maxSuspendSnapshots int
+	maxSuspendBytes     int64
+	compressModel       ModelFunc
+	compressThreshold   int
 }
 
 // NewNetwork creates a Network with the given router provider and options.
@@ -84,8 +94,29 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	n.dynamicTools = cfg.dynamicTools
 	n.tracer = cfg.tracer
 	n.logger = cfg.logger
+	n.maxAttachmentBytes = cfg.maxAttachmentBytes
+	n.maxSuspendSnapshots = cfg.maxSuspendSnapshots
+	n.maxSuspendBytes = cfg.maxSuspendBytes
+	n.compressModel = cfg.compressModel
+	n.compressThreshold = cfg.compressThreshold
 	n.mem.tracer = cfg.tracer
 	n.mem.logger = cfg.logger
+
+	// Pre-compute tool definitions for the non-dynamic path.
+	// Includes agent tools + direct tools + built-in tools.
+	if n.dynamicTools == nil {
+		n.cachedToolDefs = n.buildToolDefs(n.tools.AllDefinitions())
+		if n.inputHandler != nil {
+			n.cachedToolDefs = append(n.cachedToolDefs, askUserToolDef)
+		}
+		if n.planExecution {
+			n.cachedToolDefs = append(n.cachedToolDefs, executePlanToolDef)
+		}
+		if n.codeRunner != nil {
+			n.cachedToolDefs = append(n.cachedToolDefs, executeCodeToolDef)
+		}
+	}
+
 	return n
 }
 
@@ -167,12 +198,13 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 	}
 
 	// Resolve tools: dynamic replaces static.
-	// When dynamicTools is set, build definitions and an index directly
-	// from the returned tools, avoiding an intermediate ToolRegistry allocation.
-	var rawToolDefs []ToolDefinition
+	// When dynamicTools is set, build definitions and an index per-request.
+	// Otherwise, use the cached definitions computed at construction time.
+	var toolDefs []ToolDefinition
 	var executeTool toolExecFunc
 	if n.dynamicTools != nil {
 		dynTools := n.dynamicTools(ctx, task)
+		var rawToolDefs []ToolDefinition
 		index := make(map[string]Tool, len(dynTools))
 		for _, t := range dynTools {
 			for _, d := range t.Definitions() {
@@ -186,68 +218,52 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 			}
 			return ToolResult{Error: "unknown tool: " + name}, nil
 		}
+		toolDefs = n.buildToolDefs(rawToolDefs)
+		if n.inputHandler != nil {
+			toolDefs = append(toolDefs, askUserToolDef)
+		}
+		if n.planExecution {
+			toolDefs = append(toolDefs, executePlanToolDef)
+		}
+		if n.codeRunner != nil {
+			toolDefs = append(toolDefs, executeCodeToolDef)
+		}
 	} else {
-		rawToolDefs = n.tools.AllDefinitions()
+		toolDefs = n.cachedToolDefs
 		executeTool = n.tools.Execute
 	}
-
-	toolDefs := n.buildToolDefs(rawToolDefs)
-	if n.inputHandler != nil {
-		toolDefs = append(toolDefs, askUserToolDef)
-	}
-	if n.planExecution {
-		toolDefs = append(toolDefs, executePlanToolDef)
-	}
-	if n.codeRunner != nil {
-		toolDefs = append(toolDefs, executeCodeToolDef)
-	}
 	return loopConfig{
-		name:           "network:" + n.name,
-		provider:       router,
-		tools:          toolDefs,
-		processors:     n.processors,
-		maxIter:        n.maxIter,
-		mem:            &n.mem,
-		inputHandler:   n.inputHandler,
-		dispatch:       n.makeDispatch(task, ch, executeTool),
-		systemPrompt:   prompt,
-		responseSchema: n.responseSchema,
-		tracer:         n.tracer,
-		logger:         n.logger,
+		name:               "network:" + n.name,
+		provider:           router,
+		tools:              toolDefs,
+		processors:         n.processors,
+		maxIter:            n.maxIter,
+		mem:                &n.mem,
+		inputHandler:       n.inputHandler,
+		dispatch:           n.makeDispatch(task, ch, executeTool),
+		systemPrompt:       prompt,
+		responseSchema:     n.responseSchema,
+		tracer:              n.tracer,
+		logger:              n.logger,
+		maxAttachmentBytes:  n.maxAttachmentBytes,
+		suspendCount:        &n.suspendCount,
+		suspendBytes:        &n.suspendBytes,
+		maxSuspendSnapshots: n.maxSuspendSnapshots,
+		maxSuspendBytes:     n.maxSuspendBytes,
+		compressModel:       n.compressModel,
+		compressThreshold:   n.compressThreshold,
 	}
 }
 
 // makeDispatch returns a DispatchFunc that routes tool calls to subagents,
-// the ask_user handler, or direct tools. When ch is non-nil, agent-start
+// the shared built-in tools, or direct tools. When ch is non-nil, agent-start
 // and agent-finish events are emitted for subagent delegation.
 func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, executeTool toolExecFunc) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
-		// Special case: ask_user tool
-		if tc.Name == "ask_user" && n.inputHandler != nil {
-			content, err := executeAskUser(ctx, n.inputHandler, n.name, tc)
-			if err != nil {
-				return DispatchResult{Content: "error: " + err.Error(), IsError: true}
-			}
-			return DispatchResult{Content: content}
-		}
-
-		// Special case: execute_plan tool
-		if tc.Name == "execute_plan" && n.planExecution {
-			return executePlan(ctx, tc.Args, dispatch)
-		}
-
-		// Special case: execute_code tool
-		if tc.Name == "execute_code" && n.codeRunner != nil {
-			// Wrap dispatch to block execute_plan/execute_code calls from within code,
-			// preventing unbounded recursion via execute_code → execute_plan → execute_code.
-			safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
-				if tc.Name == "execute_plan" || tc.Name == "execute_code" {
-					return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code", IsError: true}
-				}
-				return dispatch(ctx, tc)
-			}
-			return executeCode(ctx, tc.Args, n.codeRunner, safeDispatch)
+		// Built-in tools: ask_user, execute_plan, execute_code.
+		if r, ok := dispatchBuiltins(ctx, tc, dispatch, n.inputHandler, n.name, n.planExecution, n.codeRunner); ok {
+			return r
 		}
 
 		// Check if it's an agent call (prefixed with "agent_")
@@ -294,6 +310,13 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 				if sa, ok := agent.(StreamingAgent); ok {
 					subCh := make(chan StreamEvent, 64)
 					done := make(chan struct{})
+					var subChOnce sync.Once
+					safeCloseSubCh := func() {
+						subChOnce.Do(func() {
+							defer func() { recover() }()
+							close(subCh)
+						})
+					}
 					go func() {
 						defer close(done)
 						for ev := range subCh {
@@ -308,21 +331,65 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 								// Drain in background so this goroutine releases
 								// references to ch and done promptly, even if
 								// ExecuteStream is slow to close subCh.
+								// Timeout prevents the drain goroutine from leaking
+								// if the subagent ignores context cancellation.
 								go func() {
-									for range subCh {
+									timeout := time.NewTimer(60 * time.Second)
+									defer timeout.Stop()
+									for {
+										select {
+										case _, ok := <-subCh:
+											if !ok {
+												return
+											}
+										case <-timeout.C:
+											n.logger.Warn("subagent stream drain timed out, closing subCh", "network", n.name, "agent", agentName)
+											// Close subCh so a misbehaving ExecuteStream
+											// that ignores context cancellation panics on
+											// its next send. The panic is caught by the
+											// recover wrapper around ExecuteStream,
+											// preventing a permanent goroutine leak.
+											safeCloseSubCh()
+											return
+										}
 									}
 								}()
 								return
 							}
 						}
 					}()
-					result, err = sa.ExecuteStream(ctx, subTask, subCh)
+					func() {
+						defer func() {
+							if p := recover(); p != nil {
+								safeCloseSubCh() // unblock forwarding goroutine (safe if already closed)
+								result = AgentResult{}
+								err = fmt.Errorf("subagent %q panic: %v", agentName, p)
+							}
+						}()
+						result, err = sa.ExecuteStream(ctx, subTask, subCh)
+					}()
 					<-done // wait for all forwarded events
 				} else {
-					result, err = agent.Execute(ctx, subTask)
+					func() {
+						defer func() {
+							if p := recover(); p != nil {
+								result = AgentResult{}
+								err = fmt.Errorf("subagent %q panic: %v", agentName, p)
+							}
+						}()
+						result, err = agent.Execute(ctx, subTask)
+					}()
 				}
 			} else {
-				result, err = agent.Execute(ctx, subTask)
+				func() {
+					defer func() {
+						if p := recover(); p != nil {
+							result = AgentResult{}
+							err = fmt.Errorf("subagent %q panic: %v", agentName, p)
+						}
+					}()
+					result, err = agent.Execute(ctx, subTask)
+				}()
 			}
 
 			elapsed := time.Since(start)
@@ -350,15 +417,8 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 			return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
 		}
 
-		// Regular tool call
-		result, err := executeTool(ctx, tc.Name, tc.Args)
-		if err != nil {
-			return DispatchResult{Content: "error: " + err.Error(), IsError: true}
-		}
-		if result.Error != "" {
-			return DispatchResult{Content: "error: " + result.Error, IsError: true}
-		}
-		return DispatchResult{Content: result.Content}
+		// Regular tool call.
+		return dispatchTool(ctx, executeTool, tc.Name, tc.Args)
 	}
 	return dispatch
 }

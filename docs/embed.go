@@ -5,7 +5,7 @@ package docs
 import "embed"
 
 // FS contains all documentation files (concepts, guides, api, configuration,
-// getting-started, and CONTRIBUTING.md). Use embed.FS methods to read files.
+// getting-started, and ENGINEERING.md). Use embed.FS methods to read files.
 //
-//go:embed concepts guides api configuration getting-started CONTRIBUTING.md
+//go:embed concepts guides api configuration getting-started ENGINEERING.md
 var FS embed.FS

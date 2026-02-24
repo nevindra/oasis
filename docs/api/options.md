@@ -20,6 +20,10 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithDynamicTools(fn ToolsFunc)` | Per-request tool set. **Replaces** (not merges with) `WithTools` |
 | `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable history per thread |
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact read/write |
+| `WithMaxAttachmentBytes(n int64)` | Max accumulated attachment bytes per execution (default 50 MB) |
+| `WithSuspendBudget(maxSnapshots int, maxBytes int64)` | Per-agent suspend snapshot limits (default 20 snapshots, 256 MB) |
+| `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven context compression (falls back to main provider) |
+| `WithCompressThreshold(n int)` | Rune count threshold for triggering compression (default 200K, negative disables) |
 | `WithTracer(t Tracer)` | Enable deep tracing (agent.execute, loop, memory spans) |
 | `WithLogger(l *slog.Logger)` | Enable structured logging (defaults to no-op) |
 
