@@ -1,6 +1,9 @@
 package openaicompat
 
-import "net/http"
+import (
+	"log/slog"
+	"net/http"
+)
 
 // ProviderOption configures a Provider instance.
 type ProviderOption func(*Provider)
@@ -20,4 +23,11 @@ func WithHTTPClient(c *http.Client) ProviderOption {
 // that are applied to every request made by this provider.
 func WithOptions(opts ...Option) ProviderOption {
 	return func(p *Provider) { p.opts = append(p.opts, opts...) }
+}
+
+// WithLogger sets a structured logger for the provider.
+// When set, the provider emits warnings for unsupported GenerationParams fields
+// (e.g. TopK). If not set, no warnings are emitted.
+func WithLogger(l *slog.Logger) ProviderOption {
+	return func(p *Provider) { p.logger = l }
 }

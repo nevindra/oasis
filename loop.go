@@ -97,6 +97,7 @@ type loopConfig struct {
 	maxSuspendBytes     int64
 	compressModel       ModelFunc
 	compressThreshold   int // 0 = default (200K runes), negative = disabled
+	generationParams    *GenerationParams // nil = use provider defaults
 }
 
 // maxToolResultMessageLen is the maximum rune length for a tool result stored
@@ -190,6 +191,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	}
 
 	var lastAgentOutput string
+	var lastThinking string
 	var accumulatedAttachments []Attachment
 	var accumulatedAttachmentBytes int64
 
@@ -208,7 +210,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			}
 		}
 
-		req := ChatRequest{Messages: messages, ResponseSchema: cfg.responseSchema}
+		req := ChatRequest{Messages: messages, ResponseSchema: cfg.responseSchema, GenerationParams: cfg.generationParams}
 
 		// PreProcessor hook.
 		if err := cfg.processors.RunPreLLM(iterCtx, &req); err != nil {
@@ -250,7 +252,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			endIter()
 			safeCloseCh()
 			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, resp.Content, steps)
-			return AgentResult{Output: resp.Content, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
+			return AgentResult{Output: resp.Content, Thinking: resp.Thinking, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
 		} else {
 			resp, err = cfg.provider.Chat(iterCtx, req)
 		}
@@ -271,6 +273,17 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				return AgentResult{Usage: totalUsage, Steps: steps}, s
 			}
 			return handleProcessorErrorWithSteps(err, totalUsage, steps)
+		}
+
+		// Capture and emit thinking content from this LLM call.
+		if resp.Thinking != "" {
+			lastThinking = resp.Thinking
+			if ch != nil {
+				select {
+				case ch <- StreamEvent{Type: EventThinking, Content: resp.Thinking}:
+				case <-ctx.Done():
+				}
+			}
 		}
 
 		// No tool calls — final response.
@@ -297,7 +310,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			safeCloseCh()
 			endIter()
 			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, content, steps)
-			return AgentResult{Output: content, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
+			return AgentResult{Output: content, Thinking: lastThinking, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
 		}
 
 		if iterSpan != nil {
@@ -409,10 +422,11 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 	var resp ChatResponse
 	var err error
+	synthReq := ChatRequest{Messages: messages, GenerationParams: cfg.generationParams}
 	if ch != nil {
-		resp, err = cfg.provider.ChatStream(synthCtx, ChatRequest{Messages: messages}, ch)
+		resp, err = cfg.provider.ChatStream(synthCtx, synthReq, ch)
 	} else {
-		resp, err = cfg.provider.Chat(synthCtx, ChatRequest{Messages: messages})
+		resp, err = cfg.provider.Chat(synthCtx, synthReq)
 	}
 	if err != nil {
 		safeCloseCh()
@@ -430,9 +444,14 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		return handleProcessorErrorWithSteps(err, totalUsage, steps)
 	}
 
+	// Capture thinking from the synthesis response.
+	if resp.Thinking != "" {
+		lastThinking = resp.Thinking
+	}
+
 	safeCloseCh()
 	cfg.mem.persistMessages(synthCtx, cfg.name, task, task.Input, resp.Content, steps)
-	return AgentResult{Output: resp.Content, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
+	return AgentResult{Output: resp.Content, Thinking: lastThinking, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
 }
 
 // mergeAttachments combines accumulated sub-agent attachments with the final

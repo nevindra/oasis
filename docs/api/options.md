@@ -24,6 +24,10 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithSuspendBudget(maxSnapshots int, maxBytes int64)` | Per-agent suspend snapshot limits (default 20 snapshots, 256 MB) |
 | `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven context compression (falls back to main provider) |
 | `WithCompressThreshold(n int)` | Rune count threshold for triggering compression (default 200K, negative disables) |
+| `WithTemperature(t float64)` | Set LLM sampling temperature for this agent (nil = provider default) |
+| `WithTopP(p float64)` | Set nucleus sampling probability for this agent (nil = provider default) |
+| `WithTopK(k int)` | Set top-K sampling parameter for this agent (nil = provider default) |
+| `WithMaxTokens(n int)` | Set maximum output tokens for this agent (nil = provider default) |
 | `WithTracer(t Tracer)` | Enable deep tracing (agent.execute, loop, memory spans) |
 | `WithLogger(l *slog.Logger)` | Enable structured logging (defaults to no-op) |
 
@@ -36,6 +40,7 @@ Passed to `WithConversationMemory`.
 | `MaxHistory(n int)` | 10 | Max recent messages loaded into LLM context |
 | `MaxTokens(n int)` | 0 (disabled) | Token budget for history — trim oldest-first until total fits within n |
 | `CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption)` | — | Enable cross-thread semantic recall |
+| `WithSemanticTrimming(e EmbeddingProvider, opts ...SemanticTrimmingOption)` | — | Enable relevance-based history trimming (cosine similarity to current query). Falls back to oldest-first on embedding failure |
 | `AutoTitle()` | disabled | Generate a short title from the first user message. Runs in background, idempotent (skipped if thread already has a title) |
 
 ## SemanticOption
@@ -45,6 +50,14 @@ Passed to `CrossThreadSearch`.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `MinScore(score float32)` | 0.60 | Minimum cosine similarity for recall |
+
+## SemanticTrimmingOption
+
+Passed to `WithSemanticTrimming`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `KeepRecent(n int)` | 3 | Number of most recent messages always preserved during trimming |
 
 ## StepOption
 
@@ -164,6 +177,7 @@ Passed directly to `gemini.New(apiKey, model, ...Option)`.
 | `WithFunctionCalling(enabled bool)` | false | Allow implicit function calling. When false and no tools are provided, `toolConfig` mode is set to `NONE` |
 | `WithGoogleSearch(enabled bool)` | false | Enable grounding with Google Search |
 | `WithURLContext(enabled bool)` | false | Enable URL context tool |
+| `WithLogger(l *slog.Logger)` | nil | Structured logger for warnings (e.g., unsupported GenerationParams fields) |
 
 ## OpenAI-Compatible Options
 
@@ -178,6 +192,7 @@ Passed to `openaicompat.NewProvider(apiKey, model, baseURL, ...ProviderOption)`.
 | `WithName(name string)` | `"openai"` | Provider name returned by `Name()` — used in logs and observability |
 | `WithHTTPClient(c *http.Client)` | default client | Custom HTTP client (e.g. for timeouts or proxies) |
 | `WithOptions(opts ...Option)` | — | Request-level options applied to every request made by this provider |
+| `WithLogger(l *slog.Logger)` | nil | Structured logger for warnings (e.g., unsupported GenerationParams fields like TopK) |
 
 ### Option
 

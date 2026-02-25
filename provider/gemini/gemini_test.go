@@ -20,7 +20,7 @@ func TestBuildBody_SystemMessages(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestBuildBody_AssistantMapsToModel(t *testing.T) {
 		{Role: "user", Content: "How are you?"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestBuildBody_ToolResults(t *testing.T) {
 		},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestBuildBody_ToolDeclarations(t *testing.T) {
 		},
 	}
 
-	body, err := g.buildBody(messages, tools, nil)
+	body, err := g.buildBody(messages, tools, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestBuildBody_InlineData(t *testing.T) {
 		},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestBuildBody_URLAttachment(t *testing.T) {
 		},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestBuildBody_DeprecatedBase64(t *testing.T) {
 		},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestBuildBody_EmptyContentGetsFallbackPart(t *testing.T) {
 		{Role: "user", Content: ""},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestBuildBody_GenerationConfig(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestBuildBody_GenerationConfigWithOptions(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestBuildBody_ImageGeneration(t *testing.T) {
 		{Role: "user", Content: "Generate an image of a sunset"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestBuildBody_ToolConfigDisabledByDefault(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestBuildBody_ToolConfigNotSetWithTools(t *testing.T) {
 		{Name: "search", Description: "Search", Parameters: json.RawMessage(`{"type":"object"}`)},
 	}
 
-	body, err := g.buildBody(messages, tools, nil)
+	body, err := g.buildBody(messages, tools, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestBuildBody_AdditionalToolTypes(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -513,7 +513,7 @@ func TestBuildBody_StructuredOutputDisabled(t *testing.T) {
 		Schema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`),
 	}
 
-	body, err := g.buildBody(messages, nil, schema)
+	body, err := g.buildBody(messages, nil, schema, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestBuildBody_ThoughtSignaturePreserved(t *testing.T) {
 		},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestBuildBody_NoSystemInstruction(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -632,7 +632,7 @@ func TestBuildBody_NoToolsOmitted(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -655,7 +655,7 @@ func TestBuildBody_MultipleToolCalls(t *testing.T) {
 		},
 	}
 
-	body, err := g.buildBody(messages, nil, nil)
+	body, err := g.buildBody(messages, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -872,7 +872,7 @@ func TestBuildBody_ResponseSchemaInBody(t *testing.T) {
 		Schema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}}}`),
 	}
 
-	body, err := g.buildBody(messages, nil, schema)
+	body, err := g.buildBody(messages, nil, schema, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}
@@ -909,7 +909,7 @@ func TestBuildBody_JSONRoundTrip(t *testing.T) {
 		{Name: "search", Description: "Search the web", Parameters: json.RawMessage(`{"type":"object"}`)},
 	}
 
-	body, err := g.buildBody(messages, tools, nil)
+	body, err := g.buildBody(messages, tools, nil, nil)
 	if err != nil {
 		t.Fatalf("buildBody returned error: %v", err)
 	}

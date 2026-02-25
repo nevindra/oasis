@@ -50,6 +50,50 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 
 Token estimation uses a ~4 characters (runes) per token heuristic with a small overhead for message framing. This is a rough estimate suitable for budget control — not exact tokenizer output. Multi-byte characters (CJK, emoji) are counted correctly as single characters.
 
+## Semantic Trimming
+
+By default, `MaxTokens` drops the oldest messages first. This can lose important early context (e.g., key instructions from turn 1) while keeping recent small talk. Semantic trimming scores older messages by cosine similarity to the current query and drops the least relevant first:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store,
+        oasis.MaxTokens(4000),
+        oasis.WithSemanticTrimming(embedding),
+    ),
+)
+```
+
+### How It Works
+
+1. Load messages from store (up to `MaxHistory`)
+2. If trimming is needed (exceeds `MaxTokens`) and semantic trimming is enabled:
+   - Embed the current user query
+   - Split messages into **recent** (always kept) and **older**
+   - Score each older message by cosine similarity to the query
+   - Drop lowest-scoring messages until the token budget is satisfied
+3. If embedding fails: fall back to oldest-first trimming
+
+### Tuning
+
+```go
+// Keep the 5 most recent messages (default: 3)
+oasis.WithSemanticTrimming(embedding, oasis.KeepRecent(5))
+```
+
+### Embedding Reuse
+
+When `CrossThreadSearch` is also enabled, the query embedding is computed once and reused for both cross-thread search and semantic trimming — no extra API call:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store,
+        oasis.MaxTokens(4000),
+        oasis.CrossThreadSearch(embedding),
+        oasis.WithSemanticTrimming(embedding),  // reuses the same embedding
+    ),
+)
+```
+
 ## Auto-Generated Thread Titles
 
 Automatically generate a short title for each conversation thread:
@@ -124,7 +168,9 @@ All three memory layers together:
 agent := oasis.NewLLMAgent("assistant", "Personal assistant", llm,
     oasis.WithTools(searchTool, scheduleTool),
     oasis.WithConversationMemory(store,
+        oasis.MaxTokens(4000),
         oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7)),
+        oasis.WithSemanticTrimming(embedding, oasis.KeepRecent(5)),
     ),
     oasis.WithUserMemory(memoryStore, embedding),
     oasis.WithPrompt("You are a personal assistant. Use your memory of the user to give personalized responses."),

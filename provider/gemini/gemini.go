@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type Gemini struct {
 	apiKey     string
 	model      string
 	httpClient *http.Client
+	logger     *slog.Logger
 
 	temperature        float64
 	topP               float64
@@ -56,7 +58,7 @@ func (g *Gemini) Name() string { return "gemini" }
 
 // Chat sends a non-streaming chat request and returns the complete response.
 func (g *Gemini) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-	body, err := g.buildBody(req.Messages, nil, req.ResponseSchema)
+	body, err := g.buildBody(req.Messages, nil, req.ResponseSchema, req.GenerationParams)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -65,7 +67,7 @@ func (g *Gemini) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatRes
 
 // ChatWithTools sends a chat request with tool definitions.
 func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-	body, err := g.buildBody(req.Messages, tools, req.ResponseSchema)
+	body, err := g.buildBody(req.Messages, tools, req.ResponseSchema, req.GenerationParams)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -77,7 +79,7 @@ func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools
 func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	defer close(ch)
 
-	body, err := g.buildBody(req.Messages, nil, req.ResponseSchema)
+	body, err := g.buildBody(req.Messages, nil, req.ResponseSchema, req.GenerationParams)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -219,13 +221,17 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 	}
 
 	var content strings.Builder
+	var thinking strings.Builder
 	var toolCalls []oasis.ToolCall
 	var attachments []oasis.Attachment
 
 	if len(parsed.Candidates) > 0 {
 		for _, part := range parsed.Candidates[0].Content.Parts {
-			// Skip thinking parts (thought: true) but preserve their thoughtSignature.
+			// Capture thinking parts into ChatResponse.Thinking instead of discarding.
 			if part.Thought {
+				if part.Text != nil {
+					thinking.WriteString(*part.Text)
+				}
 				continue
 			}
 			if part.Text != nil {
@@ -264,6 +270,7 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 
 	return oasis.ChatResponse{
 		Content:     content.String(),
+		Thinking:    thinking.String(),
 		Attachments: attachments,
 		ToolCalls:   toolCalls,
 		Usage:       usage,
@@ -407,7 +414,7 @@ func (e *GeminiEmbedding) Embed(ctx context.Context, texts []string) ([][]float3
 // ---- Body builder ----
 
 // buildBody constructs the Gemini API request body from chat messages and optional tool definitions.
-func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schema *oasis.ResponseSchema) (map[string]any, error) {
+func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schema *oasis.ResponseSchema, genParams *oasis.GenerationParams) (map[string]any, error) {
 	var systemParts []string
 	var contents []map[string]any
 
@@ -578,10 +585,24 @@ func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefin
 		}
 	}
 
-	// Generation config.
+	// Generation config: start with provider defaults, then override with per-request params.
 	genConfig := map[string]any{
 		"temperature": g.temperature,
 		"topP":        g.topP,
+	}
+	if genParams != nil {
+		if genParams.Temperature != nil {
+			genConfig["temperature"] = *genParams.Temperature
+		}
+		if genParams.TopP != nil {
+			genConfig["topP"] = *genParams.TopP
+		}
+		if genParams.TopK != nil {
+			genConfig["topK"] = *genParams.TopK
+		}
+		if genParams.MaxTokens != nil {
+			genConfig["maxOutputTokens"] = *genParams.MaxTokens
+		}
 	}
 
 	if g.mediaResolution != "" {

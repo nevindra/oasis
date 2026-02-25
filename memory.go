@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +58,10 @@ const maxPersistContentLen = 50_000
 // of any single recalled message in the prompt injection threat model.
 const maxRecallContentLen = 500
 
+// defaultKeepRecent is the number of most recent messages always preserved
+// during semantic trimming, regardless of their relevance score.
+const defaultKeepRecent = 3
+
 // estimateTokens returns a rough token count for a chat message.
 // Uses the ~4 characters per token heuristic, plus a small overhead
 // for role markers and message framing.
@@ -80,6 +86,9 @@ type agentMemory struct {
 	maxTokens         int               // 0 = disabled (no token-based trimming)
 	autoTitle         bool              // generate thread title from first message
 	provider          Provider          // for auto-extraction when memory != nil
+	semanticTrimming  bool              // enabled by WithSemanticTrimming option
+	trimmingEmbedding EmbeddingProvider // for semantic trimming (may equal embedding)
+	keepRecent        int               // 0 = use defaultKeepRecent
 	tracer            Tracer            // nil = no tracing
 	logger            *slog.Logger      // never nil (nopLogger fallback)
 	semOnce           sync.Once        // guards sem initialization
@@ -114,6 +123,10 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 
 	threadID := task.TaskThreadID()
 	needsEmbed := m.embedding != nil && (m.memory != nil || m.crossThreadSearch)
+	// Semantic trimming also needs an embedding of the current input.
+	if m.semanticTrimming && m.trimmingEmbedding != nil {
+		needsEmbed = true
+	}
 	needsHistory := m.store != nil && threadID != ""
 
 	// --- Phase 1: Load embedding and history concurrently ---
@@ -124,6 +137,13 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 	var history []Message
 	var historyErr error
 
+	// Pick the embedding provider: prefer m.embedding (shared with CrossThreadSearch),
+	// fall back to m.trimmingEmbedding (dedicated for semantic trimming).
+	embedProvider := m.embedding
+	if embedProvider == nil {
+		embedProvider = m.trimmingEmbedding
+	}
+
 	if needsEmbed && needsHistory {
 		limit := m.maxHistory
 		if limit <= 0 {
@@ -133,7 +153,7 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if embs, err := m.embedding.Embed(ctx, []string{task.Input}); err == nil && len(embs) > 0 {
+			if embs, err := embedProvider.Embed(ctx, []string{task.Input}); err == nil && len(embs) > 0 {
 				inputEmbedding = embs[0]
 			}
 		}()
@@ -141,7 +161,7 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 		wg.Wait()
 	} else {
 		if needsEmbed {
-			if embs, err := m.embedding.Embed(ctx, []string{task.Input}); err == nil && len(embs) > 0 {
+			if embs, err := embedProvider.Embed(ctx, []string{task.Input}); err == nil && len(embs) > 0 {
 				inputEmbedding = embs[0]
 			}
 		}
@@ -172,7 +192,7 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 			messages = append(messages, ChatMessage{Role: msg.Role, Content: msg.Content})
 		}
 
-		// Token-based trimming: drop oldest history messages until budget is met.
+		// Token-based trimming: drop messages until budget is met.
 		if m.maxTokens > 0 && len(messages) > 0 {
 			// Find the boundary between non-history and history messages.
 			// History starts after the system prompt (index historyStart) and
@@ -189,20 +209,8 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 				total += estimateTokens(messages[i])
 			}
 
-			// Drop oldest (lowest index in history) until we fit.
-			for total > m.maxTokens && historyStart < historyEnd {
-				total -= estimateTokens(messages[historyStart])
-				historyStart++
-			}
-
-			// Rebuild: keep pre-history messages + trimmed history.
-			if historyStart > 0 {
-				trimmed := make([]ChatMessage, 0, len(messages))
-				if messages[0].Role == "system" {
-					trimmed = append(trimmed, messages[0])
-				}
-				trimmed = append(trimmed, messages[historyStart:historyEnd]...)
-				messages = trimmed
+			if total > m.maxTokens {
+				messages = m.trimHistory(ctx, messages, historyStart, historyEnd, total, inputEmbedding)
 			}
 		}
 
@@ -252,6 +260,105 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 	userMsg := ChatMessage{Role: "user", Content: task.Input, Attachments: task.Attachments}
 	messages = append(messages, userMsg)
 	return messages
+}
+
+// trimHistory trims history messages to fit within m.maxTokens.
+// When semantic trimming is enabled and inputEmbedding is available, messages
+// are scored by cosine similarity to the query — lowest-scoring messages are
+// dropped first, while the most recent N messages are always preserved.
+// Falls back to oldest-first trimming otherwise.
+func (m *agentMemory) trimHistory(ctx context.Context, messages []ChatMessage, historyStart, historyEnd, totalTokens int, inputEmbedding []float32) []ChatMessage {
+	keepRecent := m.keepRecent
+	if keepRecent <= 0 {
+		keepRecent = defaultKeepRecent
+	}
+
+	historyLen := historyEnd - historyStart
+
+	// Semantic trimming: score older messages by relevance, drop lowest first.
+	if m.semanticTrimming && len(inputEmbedding) > 0 && historyLen > keepRecent {
+		embedProvider := m.trimmingEmbedding
+		if embedProvider == nil {
+			embedProvider = m.embedding
+		}
+
+		// Embed all older history messages (before the "keep recent" boundary).
+		olderEnd := historyEnd - keepRecent
+		olderTexts := make([]string, 0, olderEnd-historyStart)
+		for i := historyStart; i < olderEnd; i++ {
+			olderTexts = append(olderTexts, messages[i].Content)
+		}
+
+		embeddings, err := embedProvider.Embed(ctx, olderTexts)
+		if err != nil {
+			m.logger.Warn("semantic trimming embedding failed, falling back to oldest-first", "error", err)
+		} else if len(embeddings) == len(olderTexts) {
+			// Score each older message by cosine similarity.
+			type scored struct {
+				idx   int // index into messages
+				score float32
+			}
+			items := make([]scored, len(olderTexts))
+			for i, emb := range embeddings {
+				items[i] = scored{idx: historyStart + i, score: cosineSimilarity(inputEmbedding, emb)}
+			}
+
+			// Sort by score ascending — lowest relevance first (will be dropped first).
+			sort.Slice(items, func(a, b int) bool {
+				return items[a].score < items[b].score
+			})
+
+			// Drop lowest-scoring messages until under token budget.
+			dropSet := make(map[int]bool)
+			remaining := totalTokens
+			for _, item := range items {
+				if remaining <= m.maxTokens {
+					break
+				}
+				remaining -= estimateTokens(messages[item.idx])
+				dropSet[item.idx] = true
+			}
+
+			// Rebuild message slice excluding dropped messages.
+			trimmed := make([]ChatMessage, 0, len(messages)-len(dropSet))
+			for i, msg := range messages {
+				if !dropSet[i] {
+					trimmed = append(trimmed, msg)
+				}
+			}
+			return trimmed
+		}
+	}
+
+	// Fallback: oldest-first trimming.
+	for totalTokens > m.maxTokens && historyStart < historyEnd {
+		totalTokens -= estimateTokens(messages[historyStart])
+		historyStart++
+	}
+	trimmed := make([]ChatMessage, 0, len(messages))
+	if messages[0].Role == "system" {
+		trimmed = append(trimmed, messages[0])
+	}
+	trimmed = append(trimmed, messages[historyStart:historyEnd]...)
+	return trimmed
+}
+
+// cosineSimilarity computes the cosine similarity between two vectors.
+// Returns 0 if either vector is zero-length or has zero magnitude.
+func cosineSimilarity(a, b []float32) float32 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, magA, magB float32
+	for i := range a {
+		dot += a[i] * b[i]
+		magA += a[i] * a[i]
+		magB += b[i] * b[i]
+	}
+	if magA == 0 || magB == 0 {
+		return 0
+	}
+	return dot / (float32(math.Sqrt(float64(magA))) * float32(math.Sqrt(float64(magB))))
 }
 
 // buildSystemPrompt assembles the system prompt with optional user memory context.

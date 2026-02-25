@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	oasis "github.com/nevindra/oasis"
@@ -25,6 +26,7 @@ type Provider struct {
 	client  *http.Client
 	name    string
 	opts    []Option
+	logger  *slog.Logger
 }
 
 // NewProvider creates an OpenAI-compatible chat provider.
@@ -53,22 +55,46 @@ func NewProvider(apiKey, model, baseURL string, opts ...ProviderOption) *Provide
 // Name returns the provider name (default "openai", configurable via WithName).
 func (p *Provider) Name() string { return p.name }
 
+// mergeGenParams returns the provider's base options with any per-request
+// GenerationParams appended. Per-request params override provider defaults
+// because options are applied in order (last wins).
+func (p *Provider) mergeGenParams(params *oasis.GenerationParams) []Option {
+	if params == nil {
+		return p.opts
+	}
+	opts := make([]Option, len(p.opts), len(p.opts)+4)
+	copy(opts, p.opts)
+	if params.Temperature != nil {
+		opts = append(opts, WithTemperature(*params.Temperature))
+	}
+	if params.TopP != nil {
+		opts = append(opts, WithTopP(*params.TopP))
+	}
+	if params.MaxTokens != nil {
+		opts = append(opts, WithMaxTokens(*params.MaxTokens))
+	}
+	if params.TopK != nil && p.logger != nil {
+		p.logger.Warn("GenerationParams.TopK not supported by OpenAI-compatible provider, ignored")
+	}
+	return opts
+}
+
 // Chat sends a non-streaming chat request and returns the complete response.
 func (p *Provider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-	body := BuildBody(req.Messages, nil, p.model, req.ResponseSchema, p.opts...)
+	body := BuildBody(req.Messages, nil, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
 	return p.doRequest(ctx, body)
 }
 
 // ChatWithTools sends a chat request with tool definitions.
 func (p *Provider) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-	body := BuildBody(req.Messages, tools, p.model, req.ResponseSchema, p.opts...)
+	body := BuildBody(req.Messages, tools, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
 	return p.doRequest(ctx, body)
 }
 
 // ChatStream streams text-delta events into ch, then returns the final accumulated response.
 // The channel is closed when streaming completes (via StreamSSE) or on error.
 func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-	body := BuildBody(req.Messages, nil, p.model, req.ResponseSchema, p.opts...)
+	body := BuildBody(req.Messages, nil, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
 	body.Stream = true
 	body.StreamOptions = &StreamOptions{IncludeUsage: true}
 

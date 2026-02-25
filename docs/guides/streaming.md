@@ -16,6 +16,8 @@ if sa, ok := agent.(oasis.StreamingAgent); ok {
                 fmt.Printf("[%s received: %s]\n", ev.Name, ev.Content)
             case oasis.EventProcessingStart:
                 fmt.Printf("[%s processing...]\n", ev.Name)
+            case oasis.EventThinking:
+                fmt.Printf("[thinking: %s]\n", ev.Content)
             case oasis.EventTextDelta:
                 fmt.Print(ev.Content)
             case oasis.EventToolCallStart:
@@ -35,13 +37,14 @@ if sa, ok := agent.(oasis.StreamingAgent); ok {
 
 ## Stream Events
 
-The channel carries typed `StreamEvent` values. Seven event types:
+The channel carries typed `StreamEvent` values. Eight event types:
 
 | Event Type             | Emitted By                      | Payload                                                       |
 | ---------------------- | ------------------------------- | ------------------------------------------------------------- |
 | `EventInputReceived`   | LLMAgent/Network entry          | `Name` = agent name, `Content` = task input                   |
 | `EventProcessingStart` | runLoop (after context loading) | `Name` = loop identifier (e.g. `agent:name`)                  |
 | `EventTextDelta`       | Provider (ChatStream)           | `Content` = text chunk                                        |
+| `EventThinking`        | runLoop (after LLM call)        | `Content` = reasoning/chain-of-thought text                    |
 | `EventToolCallStart`   | runLoop (before tool dispatch)  | `Name` = tool name, `Args` = arguments                        |
 | `EventToolCallResult`  | runLoop (after tool completes)  | `Name` = tool name, `Content` = result, `Usage`, `Duration`   |
 | `EventAgentStart`      | Network dispatch                | `Name` = agent name, `Content` = task                         |

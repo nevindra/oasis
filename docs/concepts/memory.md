@@ -8,18 +8,21 @@ Oasis agents are stateless by default. Memory features are opt-in — enable the
 graph TB
     subgraph "Agent Memory (per Execute call)"
         CONV[Conversation Memory<br>WithConversationMemory]
+        TRIM[Semantic Trimming<br>WithSemanticTrimming]
         CROSS[Cross-Thread Search<br>CrossThreadSearch]
         USER[User Memory<br>WithUserMemory]
     end
 
     CONV -->|"load/persist"| STORE[(Store)]
+    TRIM -->|"score by relevance"| EMB[EmbeddingProvider]
     CROSS -->|"vector search"| STORE
     USER -->|"read facts"| MEM[(MemoryStore)]
     USER -->|"write facts"| MEM
-    CROSS -->|"embed query"| EMB[EmbeddingProvider]
+    CROSS -->|"embed query"| EMB
     USER -->|"embed facts"| EMB
 
     style CONV fill:#e1f5fe
+    style TRIM fill:#e1f5fe
     style CROSS fill:#e1f5fe
     style USER fill:#fff3e0
 ```
@@ -49,9 +52,36 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithConversationMemory(store, oasis.MaxHistory(50), oasis.MaxTokens(4000)),
 )
+
+// Semantic trimming — drop lowest-relevance messages instead of oldest
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store,
+        oasis.MaxTokens(4000),
+        oasis.WithSemanticTrimming(embedding, oasis.KeepRecent(5)),
+    ),
+)
 ```
 
 Activated when `task.TaskThreadID()` returns a non-empty value. Without a thread ID, the agent runs stateless.
+
+#### Semantic Trimming
+
+By default, when history exceeds `MaxTokens`, the oldest messages are dropped first. With `WithSemanticTrimming`, messages are instead scored by cosine similarity to the current user query — lowest-relevance messages are dropped first, preserving the most contextually important history.
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store,
+        oasis.MaxTokens(4000),
+        oasis.WithSemanticTrimming(embedding),
+    ),
+)
+```
+
+Key behaviors:
+
+- **Keep recent** — the most recent N messages (default 3, configurable via `KeepRecent(n)`) are always preserved regardless of relevance score
+- **Graceful fallback** — if the embedding call fails, trimming silently falls back to oldest-first (log warning, don't crash)
+- **Embedding reuse** — when `CrossThreadSearch` is also enabled, the user query embedding is computed once and reused for both cross-thread search and semantic trimming — no extra API call
 
 ### 2. Cross-Thread Search
 
@@ -184,7 +214,9 @@ Full setup with all three memory layers:
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithTools(searchTool),
     oasis.WithConversationMemory(store,
+        oasis.MaxTokens(4000),
         oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7)),
+        oasis.WithSemanticTrimming(embedding),
     ),
     oasis.WithUserMemory(memoryStore, embedding),
 )

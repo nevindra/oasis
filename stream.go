@@ -28,6 +28,9 @@ const (
 	EventToolCallStart StreamEventType = "tool-call-start"
 	// EventToolCallResult carries the result of a completed tool call.
 	EventToolCallResult StreamEventType = "tool-call-result"
+	// EventThinking carries the LLM's reasoning/chain-of-thought content.
+	// Emitted after each LLM call when the provider returns thinking content.
+	EventThinking StreamEventType = "thinking"
 	// EventAgentStart signals a subagent has been delegated to (Network only).
 	EventAgentStart StreamEventType = "agent-start"
 	// EventAgentFinish signals a subagent has completed (Network only).

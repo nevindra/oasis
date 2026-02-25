@@ -81,6 +81,10 @@ func (t AgentTask) TaskChatID() string {
 type AgentResult struct {
 	// Output is the agent's final response text.
 	Output string
+	// Thinking carries the LLM's reasoning/chain-of-thought from the final response.
+	// Populated when the provider returns thinking content (e.g. Gemini thought parts).
+	// Empty when the provider does not support thinking or thinking is disabled.
+	Thinking string
 	// Attachments carries optional multimodal content (images, audio, etc.) from the LLM response.
 	// Populated when the provider returns media alongside or instead of text.
 	Attachments []Attachment
@@ -137,8 +141,12 @@ type agentConfig struct {
 	maxAttachmentBytes  int64          // set by WithMaxAttachmentBytes option
 	maxSuspendSnapshots int            // set by WithSuspendBudget
 	maxSuspendBytes     int64          // set by WithSuspendBudget
-	compressModel       ModelFunc      // set by WithCompressModel
-	compressThreshold   int            // set by WithCompressThreshold
+	compressModel       ModelFunc          // set by WithCompressModel
+	compressThreshold   int                // set by WithCompressThreshold
+	generationParams    *GenerationParams  // set by WithTemperature, WithTopP, etc.
+	semanticTrimming    bool               // enabled by WithSemanticTrimming
+	trimmingEmbedding   EmbeddingProvider  // set by WithSemanticTrimming
+	keepRecent          int                // set by KeepRecent inside WithSemanticTrimming
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -210,6 +218,52 @@ func WithCompressModel(fn ModelFunc) AgentOption {
 // (~50K tokens). Negative value disables compression.
 func WithCompressThreshold(n int) AgentOption {
 	return func(c *agentConfig) { c.compressThreshold = n }
+}
+
+// --- Generation parameters ---
+
+// ensureGenParams lazily initializes the GenerationParams on agentConfig.
+func (c *agentConfig) ensureGenParams() {
+	if c.generationParams == nil {
+		c.generationParams = &GenerationParams{}
+	}
+}
+
+// WithTemperature sets the LLM sampling temperature for this agent.
+// Passed to the provider on every LLM call via ChatRequest.GenerationParams.
+// Nil (omitting this option) means "use provider default".
+func WithTemperature(t float64) AgentOption {
+	return func(c *agentConfig) {
+		c.ensureGenParams()
+		c.generationParams.Temperature = &t
+	}
+}
+
+// WithTopP sets the nucleus sampling probability for this agent.
+// Passed to the provider on every LLM call via ChatRequest.GenerationParams.
+func WithTopP(p float64) AgentOption {
+	return func(c *agentConfig) {
+		c.ensureGenParams()
+		c.generationParams.TopP = &p
+	}
+}
+
+// WithTopK sets the top-K sampling parameter for this agent.
+// Passed to the provider on every LLM call via ChatRequest.GenerationParams.
+func WithTopK(k int) AgentOption {
+	return func(c *agentConfig) {
+		c.ensureGenParams()
+		c.generationParams.TopK = &k
+	}
+}
+
+// WithMaxTokens sets the maximum output tokens for this agent.
+// Passed to the provider on every LLM call via ChatRequest.GenerationParams.
+func WithMaxTokens(n int) AgentOption {
+	return func(c *agentConfig) {
+		c.ensureGenParams()
+		c.generationParams.MaxTokens = &n
+	}
 }
 
 // WithAgents adds subagents to a Network. Ignored by LLMAgent.
@@ -357,6 +411,36 @@ func MaxTokens(n int) ConversationOption {
 // already has a title). Runs in the background alongside message persistence.
 func AutoTitle() ConversationOption {
 	return func(c *agentConfig) { c.autoTitle = true }
+}
+
+// SemanticTrimmingOption tunes semantic trimming behavior.
+type SemanticTrimmingOption func(*agentConfig)
+
+// KeepRecent sets how many recent messages are always preserved during
+// semantic trimming, regardless of their relevance score. Default: 3.
+func KeepRecent(n int) SemanticTrimmingOption {
+	return func(c *agentConfig) { c.keepRecent = n }
+}
+
+// WithSemanticTrimming enables relevance-based history trimming.
+// When the conversation exceeds MaxHistory or MaxTokens, instead of dropping
+// oldest messages first, older messages are scored by cosine similarity to
+// the current query. Lowest-scoring messages are dropped first. The most
+// recent N messages (default 3) are always preserved regardless of score.
+//
+// Requires an EmbeddingProvider. Falls back to oldest-first trimming if
+// embedding fails (degrade, don't crash).
+//
+// If CrossThreadSearch is also enabled, the query embedding is reused —
+// no extra API call.
+func WithSemanticTrimming(e EmbeddingProvider, opts ...SemanticTrimmingOption) ConversationOption {
+	return func(c *agentConfig) {
+		c.semanticTrimming = true
+		c.trimmingEmbedding = e
+		for _, o := range opts {
+			o(c)
+		}
+	}
 }
 
 // WithConversationMemory enables conversation history on the agent.

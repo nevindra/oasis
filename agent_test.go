@@ -1317,3 +1317,291 @@ func TestWithMaxAttachmentBytesOption(t *testing.T) {
 		t.Errorf("maxAttachmentBytes = %d, want %d", cfg.maxAttachmentBytes, 10<<20)
 	}
 }
+
+// --- Generation parameters option tests ---
+
+func TestWithTemperatureOption(t *testing.T) {
+	cfg := buildConfig([]AgentOption{WithTemperature(0.7)})
+	if cfg.generationParams == nil {
+		t.Fatal("generationParams should not be nil")
+	}
+	if cfg.generationParams.Temperature == nil || *cfg.generationParams.Temperature != 0.7 {
+		t.Errorf("Temperature = %v, want 0.7", cfg.generationParams.Temperature)
+	}
+}
+
+func TestWithTemperatureZero(t *testing.T) {
+	// 0.0 is a valid temperature — must not be conflated with "unset".
+	cfg := buildConfig([]AgentOption{WithTemperature(0.0)})
+	if cfg.generationParams == nil || cfg.generationParams.Temperature == nil {
+		t.Fatal("Temperature should be set (pointer to 0.0)")
+	}
+	if *cfg.generationParams.Temperature != 0.0 {
+		t.Errorf("Temperature = %v, want 0.0", *cfg.generationParams.Temperature)
+	}
+}
+
+func TestWithTopPOption(t *testing.T) {
+	cfg := buildConfig([]AgentOption{WithTopP(0.95)})
+	if cfg.generationParams == nil || cfg.generationParams.TopP == nil {
+		t.Fatal("TopP should be set")
+	}
+	if *cfg.generationParams.TopP != 0.95 {
+		t.Errorf("TopP = %v, want 0.95", *cfg.generationParams.TopP)
+	}
+}
+
+func TestWithTopKOption(t *testing.T) {
+	cfg := buildConfig([]AgentOption{WithTopK(40)})
+	if cfg.generationParams == nil || cfg.generationParams.TopK == nil {
+		t.Fatal("TopK should be set")
+	}
+	if *cfg.generationParams.TopK != 40 {
+		t.Errorf("TopK = %v, want 40", *cfg.generationParams.TopK)
+	}
+}
+
+func TestWithMaxTokensOption(t *testing.T) {
+	cfg := buildConfig([]AgentOption{WithMaxTokens(2048)})
+	if cfg.generationParams == nil || cfg.generationParams.MaxTokens == nil {
+		t.Fatal("MaxTokens should be set")
+	}
+	if *cfg.generationParams.MaxTokens != 2048 {
+		t.Errorf("MaxTokens = %v, want 2048", *cfg.generationParams.MaxTokens)
+	}
+}
+
+func TestGenerationParamsCompose(t *testing.T) {
+	// Multiple generation param options should compose into a single struct.
+	cfg := buildConfig([]AgentOption{
+		WithTemperature(0.5),
+		WithTopP(0.9),
+		WithTopK(50),
+		WithMaxTokens(1024),
+	})
+	if cfg.generationParams == nil {
+		t.Fatal("generationParams should not be nil")
+	}
+	if *cfg.generationParams.Temperature != 0.5 {
+		t.Errorf("Temperature = %v, want 0.5", *cfg.generationParams.Temperature)
+	}
+	if *cfg.generationParams.TopP != 0.9 {
+		t.Errorf("TopP = %v, want 0.9", *cfg.generationParams.TopP)
+	}
+	if *cfg.generationParams.TopK != 50 {
+		t.Errorf("TopK = %v, want 50", *cfg.generationParams.TopK)
+	}
+	if *cfg.generationParams.MaxTokens != 1024 {
+		t.Errorf("MaxTokens = %v, want 1024", *cfg.generationParams.MaxTokens)
+	}
+}
+
+func TestGenerationParamsNilWhenUnset(t *testing.T) {
+	cfg := buildConfig(nil)
+	if cfg.generationParams != nil {
+		t.Error("generationParams should be nil when no generation options are set")
+	}
+}
+
+func TestGenerationParamsInjectedIntoRequest(t *testing.T) {
+	// Verify GenerationParams flows from agent options into ChatRequest.
+	var capturedReq ChatRequest
+	provider := &callbackProvider{
+		name:     "test",
+		response: ChatResponse{Content: "ok"},
+		onChat: func(req ChatRequest) {
+			capturedReq = req
+		},
+	}
+
+	agent := NewLLMAgent("gp-test", "Tests gen params", provider,
+		WithTemperature(0.3),
+		WithTopP(0.85),
+	)
+
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capturedReq.GenerationParams == nil {
+		t.Fatal("GenerationParams should be set in ChatRequest")
+	}
+	if *capturedReq.GenerationParams.Temperature != 0.3 {
+		t.Errorf("Temperature = %v, want 0.3", *capturedReq.GenerationParams.Temperature)
+	}
+	if *capturedReq.GenerationParams.TopP != 0.85 {
+		t.Errorf("TopP = %v, want 0.85", *capturedReq.GenerationParams.TopP)
+	}
+}
+
+func TestGenerationParamsNilInRequestWhenUnset(t *testing.T) {
+	var capturedReq ChatRequest
+	provider := &callbackProvider{
+		name:     "test",
+		response: ChatResponse{Content: "ok"},
+		onChat: func(req ChatRequest) {
+			capturedReq = req
+		},
+	}
+
+	agent := NewLLMAgent("no-gp", "No gen params", provider)
+
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capturedReq.GenerationParams != nil {
+		t.Error("GenerationParams should be nil when no options set")
+	}
+}
+
+func TestGenerationParamsWithTools(t *testing.T) {
+	// GenerationParams should be present when using ChatWithTools path.
+	var capturedReq ChatRequest
+	provider := &sequentialCallbackProvider{
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{Content: "done"},
+		},
+		onChat: func(req ChatRequest) {
+			capturedReq = req
+		},
+	}
+
+	agent := NewLLMAgent("gp-tools", "Tests gen params with tools", provider,
+		WithTools(mockTool{}),
+		WithTemperature(0.1),
+	)
+
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capturedReq.GenerationParams == nil {
+		t.Fatal("GenerationParams should be set in ChatWithTools requests")
+	}
+	if *capturedReq.GenerationParams.Temperature != 0.1 {
+		t.Errorf("Temperature = %v, want 0.1", *capturedReq.GenerationParams.Temperature)
+	}
+}
+
+// --- Thinking visibility tests ---
+
+func TestThinkingInAgentResult(t *testing.T) {
+	// Provider returns thinking content — should appear in AgentResult.Thinking.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{Content: "The answer is 42", Thinking: "Let me reason about this..."},
+		},
+	}
+
+	agent := NewLLMAgent("thinker", "Thinks", provider)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "What is the answer?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "The answer is 42" {
+		t.Errorf("Output = %q, want %q", result.Output, "The answer is 42")
+	}
+	if result.Thinking != "Let me reason about this..." {
+		t.Errorf("Thinking = %q, want %q", result.Thinking, "Let me reason about this...")
+	}
+}
+
+func TestThinkingEmptyWhenNotProvided(t *testing.T) {
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "hello"}},
+	}
+
+	agent := NewLLMAgent("no-think", "No thinking", provider)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Thinking != "" {
+		t.Errorf("Thinking = %q, want empty", result.Thinking)
+	}
+}
+
+func TestThinkingFromLastResponseInToolLoop(t *testing.T) {
+	// When multiple LLM calls happen (tool loop), Thinking should capture
+	// the most recent thinking content.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{
+				ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}},
+				Thinking:  "First, I need to call a tool...",
+			},
+			{
+				Content:  "Done!",
+				Thinking: "Now I can give the final answer.",
+			},
+		},
+	}
+
+	agent := NewLLMAgent("multi-think", "Multiple thinking", provider,
+		WithTools(mockTool{}),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Thinking != "Now I can give the final answer." {
+		t.Errorf("Thinking = %q, want %q", result.Thinking, "Now I can give the final answer.")
+	}
+}
+
+func TestThinkingFromForcedSynthesis(t *testing.T) {
+	// Thinking from the forced synthesis (max iterations) should be captured.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{ToolCalls: []ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{ToolCalls: []ToolCall{{ID: "3", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{Content: "synthesized", Thinking: "Forced to summarize."},
+		},
+	}
+
+	agent := NewLLMAgent("synth-think", "Synthesis thinking", provider,
+		WithTools(mockTool{}),
+		WithMaxIter(3),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "loop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Thinking != "Forced to summarize." {
+		t.Errorf("Thinking = %q, want %q", result.Thinking, "Forced to summarize.")
+	}
+}
+
+func TestNetworkThinkingPropagated(t *testing.T) {
+	// Network should propagate thinking from the router's final response.
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{Content: "result", Thinking: "Network reasoning..."},
+		},
+	}
+
+	network := NewNetwork("net", "Network thinking", router)
+
+	result, err := network.Execute(context.Background(), AgentTask{Input: "think"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Thinking != "Network reasoning..." {
+		t.Errorf("Thinking = %q, want %q", result.Thinking, "Network reasoning...")
+	}
+}

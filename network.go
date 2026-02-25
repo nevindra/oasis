@@ -45,6 +45,7 @@ type Network struct {
 	maxSuspendBytes     int64
 	compressModel       ModelFunc
 	compressThreshold   int
+	generationParams    *GenerationParams
 }
 
 // NewNetwork creates a Network with the given router provider and options.
@@ -60,15 +61,18 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
 		mem: agentMemory{
-			store:             cfg.store,
-			embedding:         cfg.embedding,
-			memory:            cfg.memory,
-			crossThreadSearch: cfg.crossThreadSearch,
-			semanticMinScore:  cfg.semanticMinScore,
-			maxHistory:        cfg.maxHistory,
-			maxTokens:         cfg.maxTokens,
-			autoTitle:         cfg.autoTitle,
-			provider:          router,
+			store:              cfg.store,
+			embedding:          cfg.embedding,
+			memory:             cfg.memory,
+			crossThreadSearch:  cfg.crossThreadSearch,
+			semanticMinScore:   cfg.semanticMinScore,
+			maxHistory:         cfg.maxHistory,
+			maxTokens:          cfg.maxTokens,
+			autoTitle:          cfg.autoTitle,
+			provider:           router,
+			semanticTrimming:   cfg.semanticTrimming,
+			trimmingEmbedding:  cfg.trimmingEmbedding,
+			keepRecent:         cfg.keepRecent,
 		},
 	}
 	if cfg.maxIter > 0 {
@@ -99,6 +103,7 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	n.maxSuspendBytes = cfg.maxSuspendBytes
 	n.compressModel = cfg.compressModel
 	n.compressThreshold = cfg.compressThreshold
+	n.generationParams = cfg.generationParams
 	n.mem.tracer = cfg.tracer
 	n.mem.logger = cfg.logger
 
@@ -252,6 +257,7 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 		maxSuspendBytes:     n.maxSuspendBytes,
 		compressModel:       n.compressModel,
 		compressThreshold:   n.compressThreshold,
+		generationParams:    n.generationParams,
 	}
 }
 

@@ -76,7 +76,7 @@ type batchInlinedResponse struct {
 func (g *Gemini) BatchChat(ctx context.Context, requests []oasis.ChatRequest) (oasis.BatchJob, error) {
 	inlineReqs := make([]map[string]any, 0, len(requests))
 	for i, req := range requests {
-		body, err := g.buildBody(req.Messages, nil, req.ResponseSchema)
+		body, err := g.buildBody(req.Messages, nil, req.ResponseSchema, req.GenerationParams)
 		if err != nil {
 			return oasis.BatchJob{}, g.wrapErr(fmt.Sprintf("build body for request %d: %s", i, err))
 		}
@@ -247,11 +247,15 @@ func (g *Gemini) doBatchRequest(ctx context.Context, url string, payload map[str
 // Reuses the same parsing logic as doGenerate.
 func parseGeminiResponse(parsed geminiResponse) oasis.ChatResponse {
 	var content strings.Builder
+	var thinking strings.Builder
 	var toolCalls []oasis.ToolCall
 
 	if len(parsed.Candidates) > 0 {
 		for _, part := range parsed.Candidates[0].Content.Parts {
 			if part.Thought {
+				if part.Text != nil {
+					thinking.WriteString(*part.Text)
+				}
 				continue
 			}
 			if part.Text != nil {
@@ -282,6 +286,7 @@ func parseGeminiResponse(parsed geminiResponse) oasis.ChatResponse {
 
 	return oasis.ChatResponse{
 		Content:   content.String(),
+		Thinking:  thinking.String(),
 		ToolCalls: toolCalls,
 		Usage:     usage,
 	}

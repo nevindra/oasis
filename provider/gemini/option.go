@@ -1,5 +1,7 @@
 package gemini
 
+import "log/slog"
+
 // Option configures a Gemini provider.
 type Option func(*Gemini)
 
@@ -59,4 +61,11 @@ func WithGoogleSearch(enabled bool) Option {
 // WithURLContext enables or disables URL context (default false).
 func WithURLContext(enabled bool) Option {
 	return func(g *Gemini) { g.urlContext = enabled }
+}
+
+// WithLogger sets a structured logger for the provider.
+// When set, the provider emits warnings for unsupported GenerationParams fields.
+// If not set, no warnings are emitted.
+func WithLogger(l *slog.Logger) Option {
+	return func(g *Gemini) { g.logger = l }
 }

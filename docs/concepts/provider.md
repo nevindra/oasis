@@ -90,6 +90,11 @@ llm := gemini.New(apiKey, "gemini-2.0-flash-exp-image-generation",
 llm := gemini.New(apiKey, "gemini-2.5-flash-thinking",
     gemini.WithThinking(true),
 )
+
+// With structured logger (warns on unsupported GenerationParams fields)
+llm := gemini.New(apiKey, "gemini-2.0-flash",
+    gemini.WithLogger(slog.Default()),
+)
 ```
 
 See [API Reference: Options — Gemini Options](../api/options.md#gemini-options) for the full option list.
@@ -125,6 +130,7 @@ Configure with provider-level options:
 ```go
 llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1",
     openaicompat.WithName("openai"),              // for logs/observability
+    openaicompat.WithLogger(slog.Default()),      // warns on unsupported GenerationParams
     openaicompat.WithOptions(                     // applied to every request
         openaicompat.WithTemperature(0.7),
         openaicompat.WithMaxTokens(4096),
@@ -247,12 +253,14 @@ llm := oasis.WithRateLimit(
 
 ```go
 type ChatRequest struct {
-    Messages       []ChatMessage
-    ResponseSchema *ResponseSchema  // optional: enforce structured JSON output
+    Messages         []ChatMessage
+    ResponseSchema   *ResponseSchema   // optional: enforce structured JSON output
+    GenerationParams *GenerationParams  // optional: per-request sampling overrides
 }
 
 type ChatResponse struct {
     Content     string
+    Thinking    string          // LLM reasoning/chain-of-thought (e.g., Gemini thought parts)
     Attachments []Attachment    // multimodal content from LLM response
     ToolCalls   []ToolCall
     Usage       Usage
@@ -326,6 +334,8 @@ if bp, ok := provider.(oasis.BatchProvider); ok {
 - `ChatWithTools` populates `ChatResponse.ToolCalls` when the LLM wants to call tools. Each `ToolCall` needs an `ID`, `Name`, and `Args` (JSON)
 - Both implementations parse SSE streams in-process — no goroutine leaks
 - `Name()` returns a string identifier used in logging and observability
+- **Generation params** — when `req.GenerationParams` is non-nil, providers map the fields to their native API (Gemini: `generationConfig`, OpenAI: top-level request fields). Unsupported fields (e.g., TopK on OpenAI-compat) emit a warning via the provider's `WithLogger` logger. Providers that don't read `GenerationParams` continue to work unchanged
+- **Thinking capture** — Gemini captures `thought` parts from responses into `ChatResponse.Thinking`. OpenAI-compat maps reasoning tokens when available. Models without thinking support return an empty string
 
 ## See Also
 

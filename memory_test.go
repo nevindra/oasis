@@ -2,6 +2,7 @@ package oasis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -1509,6 +1510,295 @@ func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch ch
 	p.record(req)
 	ch <- StreamEvent{Type: EventTextDelta, Content: p.resp.Content}
 	return p.resp, nil
+}
+
+// --- Semantic trimming tests ---
+
+func TestCosineSimilarityIdentical(t *testing.T) {
+	a := []float32{1, 2, 3, 4}
+	sim := cosineSimilarity(a, a)
+	if sim < 0.999 {
+		t.Errorf("identical vectors should have similarity ~1.0, got %f", sim)
+	}
+}
+
+func TestCosineSimilarityOrthogonal(t *testing.T) {
+	a := []float32{1, 0, 0, 0}
+	b := []float32{0, 1, 0, 0}
+	sim := cosineSimilarity(a, b)
+	if sim > 0.001 {
+		t.Errorf("orthogonal vectors should have similarity ~0.0, got %f", sim)
+	}
+}
+
+func TestCosineSimilarityOpposite(t *testing.T) {
+	a := []float32{1, 2, 3}
+	b := []float32{-1, -2, -3}
+	sim := cosineSimilarity(a, b)
+	if sim > -0.999 {
+		t.Errorf("opposite vectors should have similarity ~-1.0, got %f", sim)
+	}
+}
+
+func TestCosineSimilarityDifferentLength(t *testing.T) {
+	a := []float32{1, 2}
+	b := []float32{1, 2, 3}
+	sim := cosineSimilarity(a, b)
+	if sim != 0 {
+		t.Errorf("different length vectors should return 0, got %f", sim)
+	}
+}
+
+func TestCosineSimilarityEmpty(t *testing.T) {
+	sim := cosineSimilarity([]float32{}, []float32{})
+	if sim != 0 {
+		t.Errorf("empty vectors should return 0, got %f", sim)
+	}
+}
+
+func TestCosineSimilarityZeroVector(t *testing.T) {
+	a := []float32{0, 0, 0}
+	b := []float32{1, 2, 3}
+	sim := cosineSimilarity(a, b)
+	if sim != 0 {
+		t.Errorf("zero vector should return 0, got %f", sim)
+	}
+}
+
+// vectorEmbedding is a test embedding provider that returns pre-configured vectors.
+type vectorEmbedding struct {
+	vectors map[string][]float32 // text -> embedding
+	dims    int
+}
+
+func (v *vectorEmbedding) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, text := range texts {
+		if vec, ok := v.vectors[text]; ok {
+			out[i] = vec
+		} else {
+			// Return zero vector for unknown texts.
+			out[i] = make([]float32, v.dims)
+		}
+	}
+	return out, nil
+}
+func (v *vectorEmbedding) Dimensions() int { return v.dims }
+func (v *vectorEmbedding) Name() string    { return "vector-test" }
+
+func TestTrimHistorySemanticDropsLowRelevance(t *testing.T) {
+	// Set up: 5 history messages, budget allows only 3.
+	// Semantic trimming should drop the 2 with lowest relevance to input.
+	emb := &vectorEmbedding{
+		dims: 3,
+		vectors: map[string][]float32{
+			"unrelated topic A": {0, 0, 1},    // orthogonal to query
+			"unrelated topic B": {0, 1, 0},    // orthogonal to query
+			"relevant context":  {1, 0, 0},    // same direction as query
+			"also relevant":     {0.9, 0.1, 0}, // similar to query
+			"somewhat related":  {0.5, 0.5, 0}, // moderate similarity
+		},
+	}
+
+	mem := &agentMemory{
+		semanticTrimming:  true,
+		trimmingEmbedding: emb,
+		keepRecent:        1,
+		maxTokens:         15, // budget below totalTokens (~39) forces dropping
+		logger:            nopLogger,
+	}
+
+	messages := []ChatMessage{
+		{Role: "system", Content: "You are a helper."},
+		{Role: "user", Content: "unrelated topic A"},
+		{Role: "assistant", Content: "unrelated topic B"},
+		{Role: "user", Content: "relevant context"},
+		{Role: "assistant", Content: "also relevant"},
+		{Role: "user", Content: "somewhat related"}, // this is the "keep recent"
+	}
+
+	// inputEmbedding is in the [1,0,0] direction — "relevant context" should be kept.
+	inputEmb := []float32{1, 0, 0}
+
+	// Calculate tokens: system is not part of history range.
+	// estimateTokens = len/4 + 4, so each ~8 tokens. 5 messages ≈ 39 tokens.
+	historyStart := 1
+	historyEnd := 6
+	totalTokens := 0
+	for i := historyStart; i < historyEnd; i++ {
+		totalTokens += estimateTokens(messages[i])
+	}
+
+	result := mem.trimHistory(context.Background(), messages, historyStart, historyEnd, totalTokens, inputEmb)
+
+	// The keepRecent=1 preserves the last message ("somewhat related").
+	// The semantic scoring should drop the lowest-relevance messages until budget met.
+	// "unrelated topic A" (score ~0) and "unrelated topic B" (score ~0) should be dropped first.
+	for _, msg := range result {
+		if msg.Content == "unrelated topic A" || msg.Content == "unrelated topic B" {
+			t.Errorf("low-relevance message %q should have been dropped", msg.Content)
+		}
+	}
+
+	// The system message should always be preserved.
+	if result[0].Role != "system" {
+		t.Errorf("first message should be system, got %q", result[0].Role)
+	}
+}
+
+func TestTrimHistoryFallsBackWhenEmbeddingFails(t *testing.T) {
+	// When the embedding provider fails, trimHistory should fall back to oldest-first.
+	emb := &errorEmbedding{err: errors.New("embedding unavailable")}
+
+	mem := &agentMemory{
+		semanticTrimming:  true,
+		trimmingEmbedding: emb,
+		keepRecent:        1,
+		maxTokens:         10, // below totalTokens (~20) to force trimming
+		logger:            nopLogger,
+	}
+
+	messages := []ChatMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "old message 1"},
+		{Role: "assistant", Content: "old reply 1"},
+		{Role: "user", Content: "recent message"},
+	}
+
+	// estimateTokens: "old message 1" → 13/4+4=7, "old reply 1" → 11/4+4=6,
+	// "recent message" → 14/4+4=7. Total ≈ 20.
+	historyStart := 1
+	historyEnd := 4
+	totalTokens := 0
+	for i := historyStart; i < historyEnd; i++ {
+		totalTokens += estimateTokens(messages[i])
+	}
+
+	result := mem.trimHistory(context.Background(), messages, historyStart, historyEnd, totalTokens, []float32{1, 0, 0})
+
+	// Embedding fails → fallback to oldest-first, which should drop at least one message.
+	if len(result) >= len(messages) {
+		t.Errorf("expected some messages to be trimmed, got %d (same as original %d)", len(result), len(messages))
+	}
+}
+
+// errorEmbedding always returns an error.
+type errorEmbedding struct {
+	err error
+}
+
+func (e *errorEmbedding) Embed(_ context.Context, _ []string) ([][]float32, error) {
+	return nil, e.err
+}
+func (e *errorEmbedding) Dimensions() int { return 3 }
+func (e *errorEmbedding) Name() string    { return "error" }
+
+func TestTrimHistoryOldestFirstFallback(t *testing.T) {
+	// Without semantic trimming, should use oldest-first.
+	mem := &agentMemory{
+		semanticTrimming: false,
+		maxTokens:        20,
+		logger:           nopLogger,
+	}
+
+	messages := []ChatMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "oldest"},
+		{Role: "assistant", Content: "reply"},
+		{Role: "user", Content: "newest"},
+	}
+
+	historyStart := 1
+	historyEnd := 4
+	totalTokens := 0
+	for i := historyStart; i < historyEnd; i++ {
+		totalTokens += estimateTokens(messages[i])
+	}
+
+	result := mem.trimHistory(context.Background(), messages, historyStart, historyEnd, totalTokens, nil)
+
+	// System prompt should be preserved.
+	if result[0].Role != "system" {
+		t.Errorf("first message should be system, got %q", result[0].Role)
+	}
+	// "newest" should survive (it's the most recent).
+	found := false
+	for _, msg := range result {
+		if msg.Content == "newest" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("newest message should survive oldest-first trimming")
+	}
+}
+
+func TestWithSemanticTrimmingOption(t *testing.T) {
+	emb := &stubEmbedding{}
+	cfg := buildConfig([]AgentOption{
+		WithConversationMemory(&recordingStore{}, WithSemanticTrimming(emb, KeepRecent(5))),
+	})
+
+	if !cfg.semanticTrimming {
+		t.Error("semanticTrimming should be true")
+	}
+	if cfg.trimmingEmbedding != emb {
+		t.Error("trimmingEmbedding should be set")
+	}
+	if cfg.keepRecent != 5 {
+		t.Errorf("keepRecent = %d, want 5", cfg.keepRecent)
+	}
+}
+
+func TestKeepRecentDefault(t *testing.T) {
+	emb := &stubEmbedding{}
+	cfg := buildConfig([]AgentOption{
+		WithConversationMemory(&recordingStore{}, WithSemanticTrimming(emb)),
+	})
+
+	// keepRecent should be 0 in config (defaults applied at trimHistory time).
+	if cfg.keepRecent != 0 {
+		t.Errorf("keepRecent = %d, want 0 (default applied at runtime)", cfg.keepRecent)
+	}
+}
+
+func TestSemanticTrimmingIntegrationWithAgent(t *testing.T) {
+	// Integration test: verify that semantic trimming option wires through
+	// to the agent's agentMemory correctly.
+	emb := &vectorEmbedding{
+		dims: 3,
+		vectors: map[string][]float32{
+			"query": {1, 0, 0},
+		},
+	}
+
+	store := &recordingStore{
+		history: []Message{
+			{Role: "user", Content: "old msg", ThreadID: "t1"},
+			{Role: "assistant", Content: "old reply", ThreadID: "t1"},
+		},
+	}
+
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "ok"}},
+	}
+
+	agent := NewLLMAgent("semantic", "Semantic trimming agent", provider,
+		WithConversationMemory(store,
+			MaxTokens(5), // very low budget to trigger trimming
+			WithSemanticTrimming(emb, KeepRecent(1)),
+		),
+	)
+
+	// This should not panic even with semantic trimming enabled.
+	_, err := agent.Execute(context.Background(), AgentTask{
+		Input:   "query",
+		Context: map[string]any{ContextThreadID: "t1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func contains(s, substr string) bool {

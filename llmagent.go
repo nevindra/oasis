@@ -39,6 +39,7 @@ type LLMAgent struct {
 	maxSuspendBytes     int64
 	compressModel       ModelFunc
 	compressThreshold   int
+	generationParams    *GenerationParams
 }
 
 // NewLLMAgent creates an LLMAgent with the given provider and options.
@@ -53,15 +54,18 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 		systemPrompt: cfg.prompt,
 		maxIter:      defaultMaxIter,
 		mem: agentMemory{
-			store:             cfg.store,
-			embedding:         cfg.embedding,
-			memory:            cfg.memory,
-			crossThreadSearch: cfg.crossThreadSearch,
-			semanticMinScore:  cfg.semanticMinScore,
-			maxHistory:        cfg.maxHistory,
-			maxTokens:         cfg.maxTokens,
-			autoTitle:         cfg.autoTitle,
-			provider:          provider,
+			store:              cfg.store,
+			embedding:          cfg.embedding,
+			memory:             cfg.memory,
+			crossThreadSearch:  cfg.crossThreadSearch,
+			semanticMinScore:   cfg.semanticMinScore,
+			maxHistory:         cfg.maxHistory,
+			maxTokens:          cfg.maxTokens,
+			autoTitle:          cfg.autoTitle,
+			provider:           provider,
+			semanticTrimming:   cfg.semanticTrimming,
+			trimmingEmbedding:  cfg.trimmingEmbedding,
+			keepRecent:         cfg.keepRecent,
 		},
 	}
 	if cfg.maxIter > 0 {
@@ -87,6 +91,7 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	a.maxSuspendBytes = cfg.maxSuspendBytes
 	a.compressModel = cfg.compressModel
 	a.compressThreshold = cfg.compressThreshold
+	a.generationParams = cfg.generationParams
 	a.mem.tracer = cfg.tracer
 	a.mem.logger = cfg.logger
 
@@ -246,6 +251,7 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConf
 		maxSuspendBytes:     a.maxSuspendBytes,
 		compressModel:       a.compressModel,
 		compressThreshold:   a.compressThreshold,
+		generationParams:    a.generationParams,
 	}
 }
 

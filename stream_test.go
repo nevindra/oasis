@@ -739,3 +739,80 @@ func TestLLMAgentExecuteStreamContextCancellation(t *testing.T) {
 	}
 	_ = drained // just verify the range terminates (channel closed)
 }
+
+// --- Thinking event tests ---
+
+func TestThinkingEventEmitted(t *testing.T) {
+	// When provider returns thinking content in a tool-calling loop,
+	// EventThinking events should be emitted on the stream channel.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{
+				ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}},
+				Thinking:  "I need to call the greet tool.",
+			},
+			{
+				Content:  "Done!",
+				Thinking: "Now I can respond.",
+			},
+		},
+	}
+
+	agent := NewLLMAgent("thinker", "Emits thinking", provider,
+		WithTools(mockTool{}),
+	)
+
+	ch := make(chan StreamEvent, 32)
+	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "greet"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var thinkingEvents []StreamEvent
+	for ev := range ch {
+		if ev.Type == EventThinking {
+			thinkingEvents = append(thinkingEvents, ev)
+		}
+	}
+
+	if len(thinkingEvents) != 2 {
+		t.Fatalf("expected 2 thinking events, got %d", len(thinkingEvents))
+	}
+	if thinkingEvents[0].Content != "I need to call the greet tool." {
+		t.Errorf("thinking[0] = %q, want %q", thinkingEvents[0].Content, "I need to call the greet tool.")
+	}
+	if thinkingEvents[1].Content != "Now I can respond." {
+		t.Errorf("thinking[1] = %q, want %q", thinkingEvents[1].Content, "Now I can respond.")
+	}
+	if result.Thinking != "Now I can respond." {
+		t.Errorf("result.Thinking = %q, want %q", result.Thinking, "Now I can respond.")
+	}
+}
+
+func TestNoThinkingEventWhenEmpty(t *testing.T) {
+	// When provider returns no thinking content, no EventThinking events should appear.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{Content: "done"},
+		},
+	}
+
+	agent := NewLLMAgent("no-think", "No thinking", provider,
+		WithTools(mockTool{}),
+	)
+
+	ch := make(chan StreamEvent, 32)
+	_, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "greet"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for ev := range ch {
+		if ev.Type == EventThinking {
+			t.Error("unexpected thinking event when provider returns no thinking")
+		}
+	}
+}

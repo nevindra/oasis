@@ -66,6 +66,8 @@ flowchart TD
 - **Tool result truncation** — tool results exceeding 100,000 runes (~25K tokens) are truncated in the message history with an `[output truncated]` marker. Stream events and step traces retain the full content. This prevents unbounded memory growth from tools returning very large outputs
 - **Suspend snapshot budget** — per-agent limits on concurrent suspended states: max snapshots (default 20) and max bytes (default 256 MB), configurable via `WithSuspendBudget`. When the budget is exceeded, suspension is rejected with an error instead of leaking memory. Counters are decremented when `Resume()` or `Release()` is called
 - **Context compression** — when message rune count exceeds a threshold (default 200K runes, configurable via `WithCompressThreshold`), old tool results are summarized via an LLM call and replaced with a compact summary. Uses a dedicated provider when configured via `WithCompressModel`, falling back to the main provider. The last 2 iterations are always preserved intact. Degrades gracefully on error (continues uncompressed)
+- **Generation parameters** — `WithTemperature`, `WithTopP`, `WithTopK`, `WithMaxTokens` set per-agent LLM sampling parameters. All fields are pointer types — nil means "use provider default", so agents sharing one provider can have different temperatures without creating separate provider instances. Parameters are injected into every `ChatRequest.GenerationParams`; providers map them to their native API
+- **Thinking visibility** — when the LLM returns reasoning/chain-of-thought content (e.g., Gemini thinking mode), it's captured in `ChatResponse.Thinking` and exposed via `AgentResult.Thinking` (last reasoning before the final response). An `EventThinking` stream event fires after each LLM call when thinking is present. PostProcessors can inspect reasoning for guardrails or debugging via the full `ChatResponse`
 
 ## AgentTask
 
@@ -102,6 +104,7 @@ The output from any Agent:
 ```go
 type AgentResult struct {
     Output      string       // final response text
+    Thinking    string       // last LLM reasoning/chain-of-thought before final response
     Attachments []Attachment // multimodal content from LLM response
     Usage       Usage        // aggregate token usage across all LLM calls
     Steps       []StepTrace  // per-step execution trace, chronological order
@@ -147,6 +150,10 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithSuspendBudget(maxSnapshots int, maxBytes int64)` | Per-agent suspend snapshot limits (default 20 snapshots, 256 MB) |
 | `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven context compression (falls back to main provider) |
 | `WithCompressThreshold(n int)` | Rune count threshold for triggering compression (default 200K, negative disables) |
+| `WithTemperature(t float64)` | Set LLM sampling temperature (nil = provider default) |
+| `WithTopP(p float64)` | Set nucleus sampling probability (nil = provider default) |
+| `WithTopK(k int)` | Set top-K sampling parameter (nil = provider default) |
+| `WithMaxTokens(n int)` | Set maximum output tokens (nil = provider default) |
 | `WithTracer(t Tracer)` | Attach a tracer for span creation (`agent.execute` → `agent.loop.iteration`, etc.) |
 | `WithLogger(l *slog.Logger)` | Attach a structured logger (replaces `log.Printf`) |
 
@@ -235,6 +242,7 @@ Both `LLMAgent` and `Network` implement it. The channel carries typed `StreamEve
 | `EventTextDelta` | Provider | `Content` (token text) |
 | `EventToolCallStart` | Agent | `Name`, `Args` (JSON) |
 | `EventToolCallResult` | Agent | `Name`, `Content` (result), `Usage`, `Duration` |
+| `EventThinking` | Agent | `Content` (reasoning/chain-of-thought text) |
 | `EventAgentStart` | Network | `Name` (subagent name) |
 | `EventAgentFinish` | Network | `Name`, `Content` (output), `Usage`, `Duration` |
 

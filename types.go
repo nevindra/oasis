@@ -453,13 +453,25 @@ func NewResponseSchema(name string, s *SchemaObject) *ResponseSchema {
 	return &ResponseSchema{Name: name, Schema: b}
 }
 
+// GenerationParams controls LLM generation behavior.
+// All fields are pointers — nil means "use provider default".
+// A Temperature of 0.0 is a valid setting, so nil (not zero) signals "unset".
+type GenerationParams struct {
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+	TopK        *int     `json:"top_k,omitempty"`
+	MaxTokens   *int     `json:"max_tokens,omitempty"`
+}
+
 type ChatRequest struct {
-	Messages       []ChatMessage   `json:"messages"`
-	ResponseSchema *ResponseSchema `json:"response_schema,omitempty"`
+	Messages         []ChatMessage     `json:"messages"`
+	ResponseSchema   *ResponseSchema   `json:"response_schema,omitempty"`
+	GenerationParams *GenerationParams `json:"generation_params,omitempty"`
 }
 
 type ChatResponse struct {
 	Content     string       `json:"content"`
+	Thinking    string       `json:"thinking,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"`
 	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
 	Usage       Usage        `json:"usage"`
