@@ -55,23 +55,18 @@ ChatID (room/channel)
      └─ Messages (turns)
 ```
 
-| Concept | Context Key | Struct Field | Meaning |
-| ------- | ----------- | ------------ | ------- |
-| **ChatID** | `ContextChatID` | `Thread.ChatID` | The room, channel, or DM scope. In Telegram this is the chat. In a SaaS app it could be a workspace or user account. |
-| **UserID** | `ContextUserID` | — | The individual person. Multiple users can share a ChatID (group chats). Not stored on Thread — it's request-scoped metadata. |
-| **ThreadID** | `ContextThreadID` | `Thread.ID` / `Message.ThreadID` | A single conversation. `ListThreads(ctx, chatID, limit)` returns all threads in a chat. `GetMessages(ctx, threadID, limit)` returns turns within a thread. |
+| Concept | Builder | Accessor | Struct Field | Meaning |
+| ------- | ------- | -------- | ------------ | ------- |
+| **ChatID** | `WithChatID()` | `TaskChatID()` | `Thread.ChatID` | The room, channel, or DM scope. In Telegram this is the chat. In a SaaS app it could be a workspace or user account. |
+| **UserID** | `WithUserID()` | `TaskUserID()` | — | The individual person. Multiple users can share a ChatID (group chats). Not stored on Thread — it's request-scoped metadata. |
+| **ThreadID** | `WithThreadID()` | `TaskThreadID()` | `Thread.ID` / `Message.ThreadID` | A single conversation. `ListThreads(ctx, chatID, limit)` returns all threads in a chat. `GetMessages(ctx, threadID, limit)` returns turns within a thread. |
 
-Pass all three via `AgentTask.Context` using the typed accessors:
+Pass all three via builder methods, read back with typed accessors:
 
 ```go
 task := oasis.AgentTask{
     Input: userMessage,
-    Context: map[string]any{
-        oasis.ContextThreadID: thread.ID,
-        oasis.ContextUserID:   userID,
-        oasis.ContextChatID:   chatID,
-    },
-}
+}.WithThreadID(thread.ID).WithUserID(userID).WithChatID(chatID)
 
 // Type-safe reads inside processors/tools:
 tid := task.TaskThreadID()

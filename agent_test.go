@@ -528,9 +528,9 @@ func TestTaskAccessors(t *testing.T) {
 	task := AgentTask{
 		Input: "test",
 		Context: map[string]any{
-			ContextThreadID: "thread-1",
-			ContextUserID:   "user-42",
-			ContextChatID:   "chat-99",
+			contextThreadID: "thread-1",
+			contextUserID:   "user-42",
+			contextChatID:   "chat-99",
 		},
 	}
 
@@ -563,7 +563,7 @@ func TestTaskAccessorsWrongType(t *testing.T) {
 	task := AgentTask{
 		Input: "test",
 		Context: map[string]any{
-			ContextThreadID: 123, // int, not string
+			contextThreadID: 123, // int, not string
 		},
 	}
 
@@ -946,7 +946,7 @@ func TestLLMAgentDynamicPrompt(t *testing.T) {
 
 	agent.Execute(context.Background(), AgentTask{
 		Input:   "hi",
-		Context: map[string]any{ContextUserID: "alice"},
+		Context: map[string]any{contextUserID: "alice"},
 	})
 
 	if capturedPrompt != "dynamic: alice" {
@@ -1047,7 +1047,7 @@ func TestLLMAgentTaskFromContextInTool(t *testing.T) {
 	agent := NewLLMAgent("ctx", "Context test", provider, WithTools(ctxTool))
 	agent.Execute(context.Background(), AgentTask{
 		Input:   "test",
-		Context: map[string]any{ContextUserID: "user-42"},
+		Context: map[string]any{contextUserID: "user-42"},
 	})
 
 	if gotUserID != "user-42" {
@@ -1060,7 +1060,7 @@ func TestLLMAgentTaskFromContextInTool(t *testing.T) {
 func TestTaskFromContextPresent(t *testing.T) {
 	task := AgentTask{
 		Input:   "hello",
-		Context: map[string]any{ContextUserID: "u1"},
+		Context: map[string]any{contextUserID: "u1"},
 	}
 	ctx := WithTaskContext(context.Background(), task)
 

@@ -205,9 +205,8 @@ func TestCreate(t *testing.T) {
 
 	// Set up task context with user ID.
 	ctx := oasis.WithTaskContext(context.Background(), oasis.AgentTask{
-		Input:   "test",
-		Context: map[string]any{oasis.ContextUserID: "user-42"},
-	})
+		Input: "test",
+	}.WithUserID("user-42"))
 
 	args, _ := json.Marshal(map[string]any{
 		"name":         "code-reviewer",

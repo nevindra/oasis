@@ -75,7 +75,7 @@ func TestNetworkDynamicPrompt(t *testing.T) {
 
 	network.Execute(context.Background(), AgentTask{
 		Input:   "test",
-		Context: map[string]any{ContextUserID: "bob"},
+		Context: map[string]any{contextUserID: "bob"},
 	})
 
 	if capturedPrompt != "router for bob" {
@@ -104,7 +104,7 @@ func TestNetworkTaskFromContextInTool(t *testing.T) {
 	network := NewNetwork("ctx", "Context test", router, WithTools(ctxTool))
 	network.Execute(context.Background(), AgentTask{
 		Input:   "test",
-		Context: map[string]any{ContextUserID: "user-99"},
+		Context: map[string]any{contextUserID: "user-99"},
 	})
 
 	if gotUserID != "user-99" {

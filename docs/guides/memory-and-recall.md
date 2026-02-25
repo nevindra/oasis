@@ -14,10 +14,7 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 // Must pass thread_id for history to work
 result, _ := agent.Execute(ctx, oasis.AgentTask{
     Input: "What did we just talk about?",
-    Context: map[string]any{
-        oasis.ContextThreadID: "thread-123",
-    },
-})
+}.WithThreadID("thread-123"))
 ```
 
 Without `thread_id`, the agent runs stateless — no history loaded or persisted.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // LLMAgent is an Agent that uses an LLM with tools to complete tasks.
@@ -158,7 +159,7 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 			return DispatchResult{Content: "error: execute_plan steps cannot call execute_plan", IsError: true}
 		}
 		calls[i] = ToolCall{
-			ID:   fmt.Sprintf("plan_step_%d", i),
+			ID:   "plan_step_" + strconv.Itoa(i),
 			Name: step.Tool,
 			Args: step.Args,
 		}

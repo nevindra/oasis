@@ -152,12 +152,7 @@ func (a *App) handle(ctx context.Context, msg IncomingMessage) {
 	task := oasis.AgentTask{
 		Input:       text,
 		Attachments: images,
-		Context: map[string]any{
-			oasis.ContextThreadID: thread.ID,
-			oasis.ContextUserID:   msg.UserID,
-			oasis.ContextChatID:   msg.ChatID,
-		},
-	}
+	}.WithThreadID(thread.ID).WithUserID(msg.UserID).WithChatID(msg.ChatID)
 
 	// Send placeholder
 	placeholderID, err := a.frontend.Send(ctx, msg.ChatID, "Thinking...")

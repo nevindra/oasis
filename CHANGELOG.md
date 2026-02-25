@@ -6,6 +6,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Removed
+
+- **`Intent` type and constants** — `Intent`, `IntentChat`, `IntentAction` were dead code with zero consumers. Deleted
+- **`ContextThreadID`, `ContextUserID`, `ContextChatID` exported constants** — replaced by `WithThreadID()`, `WithUserID()`, `WithChatID()` builder methods on `AgentTask` (see Added). The string keys are now internal
+
+### Added
+
+- **`AgentTask` builder methods** — `WithThreadID(id)`, `WithUserID(id)`, `WithChatID(id)` set context metadata and return the task for chaining. Replaces raw `map[string]any` construction with exported constants:
+  ```go
+  // before
+  task := oasis.AgentTask{Input: "hi", Context: map[string]any{oasis.ContextThreadID: "t1"}}
+  // after
+  task := oasis.AgentTask{Input: "hi"}.WithThreadID("t1")
+  ```
+
+### Changed
+
+- **Zero-allocation rune counting in `runLoop`** — replaced `len([]rune(m.Content))` with `utf8.RuneCountInString()` across all hot-path rune counting sites (`runLoop` message tracking, tool result truncation check, `runeCount` helper). Eliminates a `[]rune` heap allocation per message per iteration
+- **No JSON marshaling in routing-decision event** — replaced `json.Marshal(map[string][]string{...})` in the `EventRoutingDecision` emit path with `buildRoutingSummary()`, a `strings.Builder`-based serializer. Removes map allocation and reflection on every iteration with agent tool calls
+- **No `fmt.Sprintf` in `executePlan` loop** — replaced `fmt.Sprintf("plan_step_%d", i)` with `"plan_step_" + strconv.Itoa(i)` for cheaper string construction in the plan step ID builder
+- **Hot-path benchmarks** — added `loop_bench_test.go` with benchmarks for `runeCount` (ASCII/multibyte), `truncateStr` (short/long/multibyte), `buildRoutingSummary`, and `dispatchParallel` (single/multi). All rune counting benchmarks confirm 0 allocs/op
+
 ### Added
 
 - **Six new stream event types** — `EventToolCallDelta` (incremental tool call arguments from `ChatStream`), `EventToolProgress` (intermediate progress from `StreamingTool`), `EventStepStart`/`EventStepFinish`/`EventStepProgress` (workflow DAG step lifecycle), `EventRoutingDecision` (Network router's agent/tool selections). Total event types: 14

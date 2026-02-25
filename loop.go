@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // --- shared execution loop ---
@@ -199,7 +200,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	// Track message rune count for compression.
 	var messageRuneCount int
 	for _, m := range messages {
-		messageRuneCount += len([]rune(m.Content))
+		messageRuneCount += utf8.RuneCountInString(m.Content)
 	}
 	compressThreshold := cfg.compressThreshold
 	if compressThreshold == 0 {
@@ -340,7 +341,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
 		})
-		messageRuneCount += len([]rune(resp.Content))
+		messageRuneCount += utf8.RuneCountInString(resp.Content)
 
 		// Emit tool-call-start events before dispatch.
 		if ch != nil {
@@ -361,15 +362,11 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				}
 			}
 			if len(agents) > 0 {
-				summary, _ := json.Marshal(map[string][]string{
-					"agents": agents,
-					"tools":  directTools,
-				})
 				select {
 				case ch <- StreamEvent{
 					Type:    EventRoutingDecision,
 					Name:    cfg.name,
-					Content: string(summary),
+					Content: buildRoutingSummary(agents, directTools),
 				}:
 				case <-ctx.Done():
 				}
@@ -428,11 +425,11 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			// to prevent unbounded memory growth across iterations. Stream
 			// events and step traces retain the full content (transient).
 			msgContent := result.Content
-			if len([]rune(msgContent)) > maxToolResultMessageLen {
+			if utf8.RuneCountInString(msgContent) > maxToolResultMessageLen {
 				msgContent = truncateStr(msgContent, maxToolResultMessageLen) + "\n\n[output truncated — original was longer]"
 			}
 			messages = append(messages, ToolResultMessage(tc.ID, msgContent))
-			messageRuneCount += len([]rune(msgContent))
+			messageRuneCount += utf8.RuneCountInString(msgContent)
 
 			// Track the last sub-agent output for fallback.
 			if strings.HasPrefix(tc.Name, "agent_") {
@@ -516,7 +513,7 @@ func mergeAttachments(accumulated, resp []Attachment) []Attachment {
 func runeCount(messages []ChatMessage) int {
 	var n int
 	for _, m := range messages {
-		n += len([]rune(m.Content))
+		n += utf8.RuneCountInString(m.Content)
 	}
 	return n
 }
@@ -780,6 +777,33 @@ collect:
 		}
 	}
 	return results
+}
+
+// buildRoutingSummary builds a JSON summary of agent and tool routing
+// without json.Marshal or map allocation. Tool/agent names are always
+// safe identifiers (alphanumeric + underscore), so no escaping needed.
+func buildRoutingSummary(agents, tools []string) string {
+	var sb strings.Builder
+	sb.WriteString(`{"agents":[`)
+	for i, a := range agents {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('"')
+		sb.WriteString(a)
+		sb.WriteByte('"')
+	}
+	sb.WriteString(`],"tools":[`)
+	for i, t := range tools {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('"')
+		sb.WriteString(t)
+		sb.WriteByte('"')
+	}
+	sb.WriteString(`]}`)
+	return sb.String()
 }
 
 // truncateStr truncates a string to n runes.

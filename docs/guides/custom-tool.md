@@ -137,8 +137,8 @@ func (t *Tool) Execute(ctx context.Context, name string, args json.RawMessage) (
         return oasis.ToolResult{Error: "no task context"}, nil
     }
 
-    userID := task.TaskUserID()   // from ContextUserID
-    threadID := task.TaskThreadID() // from ContextThreadID
+    userID := task.TaskUserID()
+    threadID := task.TaskThreadID()
 
     // Custom context values
     if tier, ok := task.Context["tier"].(string); ok && tier != "pro" {

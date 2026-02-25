@@ -86,12 +86,8 @@ Context carries metadata through the agent hierarchy. Use the typed constants an
 ```go
 task := oasis.AgentTask{
     Input: "hello",
-    Context: map[string]any{
-        oasis.ContextThreadID: "thread-123",
-        oasis.ContextUserID:   "user-42",
-        oasis.ContextChatID:   "chat-99",
-    },
-}
+}.WithThreadID("thread-123").WithUserID("user-42").WithChatID("chat-99")
+
 task.TaskThreadID()  // "thread-123"
 task.TaskUserID()    // "user-42"
 task.TaskChatID()    // "chat-99"

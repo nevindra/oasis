@@ -206,7 +206,7 @@ func TestLLMAgentConversationMemory(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "new question",
-		Context: map[string]any{ContextThreadID: "thread-1"},
+		Context: map[string]any{contextThreadID: "thread-1"},
 	}
 	result, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -274,7 +274,7 @@ func TestMaxHistoryOption(t *testing.T) {
 
 			_, err := agent.Execute(context.Background(), AgentTask{
 				Input:   "hi",
-				Context: map[string]any{ContextThreadID: "t1"},
+				Context: map[string]any{contextThreadID: "t1"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -369,7 +369,7 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "question",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -410,7 +410,7 @@ func TestLLMAgentAllMemoryTypes(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "hi",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	result, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -458,7 +458,7 @@ func TestNetworkConversationMemory(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "new input",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	result, err := network.Execute(context.Background(), task)
 	if err != nil {
@@ -491,7 +491,7 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "embed me",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -641,7 +641,7 @@ func TestExtractionPipelineExtractsFacts(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "I am a Go developer and love building frameworks",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -674,7 +674,7 @@ func TestExtractionSkipsTrivialInput(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "thanks",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -717,7 +717,7 @@ func TestExtractionHandlesSupersedes(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "By the way, I just moved to Bali last month",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -765,8 +765,8 @@ func TestPersistMessagesCreatesThread(t *testing.T) {
 	task := AgentTask{
 		Input: "hello",
 		Context: map[string]any{
-			ContextThreadID: "thread-new",
-			ContextChatID:   "chat-42",
+			contextThreadID: "thread-new",
+			contextChatID:   "chat-42",
 		},
 	}
 	_, err := agent.Execute(context.Background(), task)
@@ -810,7 +810,7 @@ func TestPersistMessagesUpdatesExistingThread(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "another message",
-		Context: map[string]any{ContextThreadID: "thread-existing"},
+		Context: map[string]any{contextThreadID: "thread-existing"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -853,8 +853,8 @@ func TestPersistMessagesThreadFallbackChatID(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "hello",
-		Context: map[string]any{ContextThreadID: "thread-solo"},
-		// No ContextChatID
+		Context: map[string]any{contextThreadID: "thread-solo"},
+		// No contextChatID
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -892,8 +892,8 @@ func TestGenerateTitleOnFirstMessage(t *testing.T) {
 	task := AgentTask{
 		Input: "Can you help me write a Go program?",
 		Context: map[string]any{
-			ContextThreadID: "thread-title",
-			ContextChatID:   "chat-1",
+			contextThreadID: "thread-title",
+			contextChatID:   "chat-1",
 		},
 	}
 	_, err := agent.Execute(context.Background(), task)
@@ -935,7 +935,7 @@ func TestGenerateTitleSkipsExistingTitle(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "hello again",
-		Context: map[string]any{ContextThreadID: "thread-existing"},
+		Context: map[string]any{contextThreadID: "thread-existing"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -975,7 +975,7 @@ func TestAutoTitleSurvivesSecondMessage(t *testing.T) {
 	// Message 1 — creates thread and generates title.
 	task1 := AgentTask{
 		Input:   "Help me with Go",
-		Context: map[string]any{ContextThreadID: "t-surv", ContextChatID: "c1"},
+		Context: map[string]any{contextThreadID: "t-surv", contextChatID: "c1"},
 	}
 	if _, err := agent.Execute(context.Background(), task1); err != nil {
 		t.Fatal(err)
@@ -992,7 +992,7 @@ func TestAutoTitleSurvivesSecondMessage(t *testing.T) {
 	// Message 2 — must NOT wipe the title.
 	task2 := AgentTask{
 		Input:   "Thanks",
-		Context: map[string]any{ContextThreadID: "t-surv", ContextChatID: "c1"},
+		Context: map[string]any{contextThreadID: "t-surv", contextChatID: "c1"},
 	}
 	if _, err := agent.Execute(context.Background(), task2); err != nil {
 		t.Fatal(err)
@@ -1028,7 +1028,7 @@ func TestMaxTokensOption(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "hi",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -1071,7 +1071,7 @@ func TestMaxTokensComposesWithMaxHistory(t *testing.T) {
 
 	_, err := agent.Execute(context.Background(), AgentTask{
 		Input:   "hi",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1107,7 +1107,7 @@ func TestMaxTokensZeroDisabled(t *testing.T) {
 
 	_, err := agent.Execute(context.Background(), AgentTask{
 		Input:   "hi",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1141,7 +1141,7 @@ func TestNetworkMaxTokens(t *testing.T) {
 
 	_, err := network.Execute(context.Background(), AgentTask{
 		Input:   "hi",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1289,7 +1289,7 @@ func TestCrossThreadRecallTrustFraming(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "question",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -1327,7 +1327,7 @@ func TestCrossThreadRecallTruncatesContent(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "question",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	}
 	_, _ = agent.Execute(context.Background(), task)
 
@@ -1368,8 +1368,8 @@ func TestCrossThreadRecallChatIDScoping(t *testing.T) {
 	task := AgentTask{
 		Input: "question",
 		Context: map[string]any{
-			ContextThreadID: "t1",
-			ContextChatID:   "chat-A",
+			contextThreadID: "t1",
+			contextChatID:   "chat-A",
 		},
 	}
 	_, _ = agent.Execute(context.Background(), task)
@@ -1402,7 +1402,7 @@ func TestDrainWaitsForPersist(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "hello",
-		Context: map[string]any{ContextThreadID: "t-drain"},
+		Context: map[string]any{contextThreadID: "t-drain"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -1435,7 +1435,7 @@ func TestPersistTruncatesLargeContent(t *testing.T) {
 	largeInput := string(make([]rune, maxPersistContentLen+500))
 	task := AgentTask{
 		Input:   largeInput,
-		Context: map[string]any{ContextThreadID: "t-trunc"},
+		Context: map[string]any{contextThreadID: "t-trunc"},
 	}
 	_, err := agent.Execute(context.Background(), task)
 	if err != nil {
@@ -1466,7 +1466,7 @@ func TestEnsureThreadReturnValue(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "hi",
-		Context: map[string]any{ContextThreadID: "t-new", ContextChatID: "c1"},
+		Context: map[string]any{contextThreadID: "t-new", contextChatID: "c1"},
 	}
 
 	// First call: thread doesn't exist — should return true.
@@ -1496,7 +1496,7 @@ func TestPersistBackpressure(t *testing.T) {
 
 	task := AgentTask{
 		Input:   "should be dropped",
-		Context: map[string]any{ContextThreadID: "t-bp"},
+		Context: map[string]any{contextThreadID: "t-bp"},
 	}
 
 	// This should be dropped (non-blocking) because sem is full.
@@ -1844,7 +1844,7 @@ func TestSemanticTrimmingIntegrationWithAgent(t *testing.T) {
 	// This should not panic even with semantic trimming enabled.
 	_, err := agent.Execute(context.Background(), AgentTask{
 		Input:   "query",
-		Context: map[string]any{ContextThreadID: "t1"},
+		Context: map[string]any{contextThreadID: "t1"},
 	})
 	if err != nil {
 		t.Fatal(err)

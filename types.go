@@ -360,14 +360,6 @@ type Fact struct {
 	UpdatedAt  int64     `json:"updated_at"`
 }
 
-// Intent for classification
-type Intent int
-
-const (
-	IntentChat   Intent = iota
-	IntentAction
-)
-
 // Scheduled action (DB record)
 type ScheduledAction struct {
 	ID              string `json:"id"`

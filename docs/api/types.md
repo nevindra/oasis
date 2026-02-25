@@ -312,7 +312,7 @@ type StepTrace struct {
 | `Usage` | `Usage` | Token counts (`InputTokens`, `OutputTokens`) for this individual step |
 | `Duration` | `time.Duration` | Wall-clock time. **Serializes as nanoseconds** in JSON (Go `time.Duration` default). Divide by `1_000_000` for milliseconds |
 
-Context key constants: `ContextThreadID`, `ContextUserID`, `ContextChatID`
+Builder methods: `task.WithThreadID()`, `task.WithUserID()`, `task.WithChatID()`
 
 Typed accessors: `task.TaskThreadID()`, `task.TaskUserID()`, `task.TaskChatID()`
 

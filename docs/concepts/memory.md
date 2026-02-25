@@ -223,11 +223,7 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 
 result, _ := agent.Execute(ctx, oasis.AgentTask{
     Input: "What did we discuss yesterday?",
-    Context: map[string]any{
-        oasis.ContextThreadID: "thread-123",
-        oasis.ContextUserID:   "user-42",
-    },
-})
+}.WithThreadID("thread-123").WithUserID("user-42"))
 ```
 
 What happens during `Execute`:

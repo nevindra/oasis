@@ -42,23 +42,47 @@ type AgentTask struct {
 	// Providers that don't support it will ignore this field.
 	Attachments []Attachment
 	// Context carries optional metadata (thread ID, user ID, etc.).
-	// Use the Context* constants as keys and the Task* accessors for type-safe reads.
+	// Use the With*ID builder methods to set values and the Task*ID accessors to read them.
 	Context map[string]any
 }
 
-// Context key constants for AgentTask.Context.
+// Context key constants for AgentTask.Context (internal).
 const (
-	// ContextThreadID identifies the conversation thread.
-	ContextThreadID = "thread_id"
-	// ContextUserID identifies the user.
-	ContextUserID = "user_id"
-	// ContextChatID identifies the chat/channel.
-	ContextChatID = "chat_id"
+	contextThreadID = "thread_id"
+	contextUserID   = "user_id"
+	contextChatID   = "chat_id"
 )
+
+// WithThreadID sets the conversation thread ID on the task and returns it.
+func (t AgentTask) WithThreadID(id string) AgentTask {
+	if t.Context == nil {
+		t.Context = map[string]any{}
+	}
+	t.Context[contextThreadID] = id
+	return t
+}
+
+// WithUserID sets the user ID on the task and returns it.
+func (t AgentTask) WithUserID(id string) AgentTask {
+	if t.Context == nil {
+		t.Context = map[string]any{}
+	}
+	t.Context[contextUserID] = id
+	return t
+}
+
+// WithChatID sets the chat/channel ID on the task and returns it.
+func (t AgentTask) WithChatID(id string) AgentTask {
+	if t.Context == nil {
+		t.Context = map[string]any{}
+	}
+	t.Context[contextChatID] = id
+	return t
+}
 
 // TaskThreadID returns the thread ID from task context, or "" if absent.
 func (t AgentTask) TaskThreadID() string {
-	if v, ok := t.Context[ContextThreadID].(string); ok {
+	if v, ok := t.Context[contextThreadID].(string); ok {
 		return v
 	}
 	return ""
@@ -66,7 +90,7 @@ func (t AgentTask) TaskThreadID() string {
 
 // TaskUserID returns the user ID from task context, or "" if absent.
 func (t AgentTask) TaskUserID() string {
-	if v, ok := t.Context[ContextUserID].(string); ok {
+	if v, ok := t.Context[contextUserID].(string); ok {
 		return v
 	}
 	return ""
@@ -74,7 +98,7 @@ func (t AgentTask) TaskUserID() string {
 
 // TaskChatID returns the chat ID from task context, or "" if absent.
 func (t AgentTask) TaskChatID() string {
-	if v, ok := t.Context[ContextChatID].(string); ok {
+	if v, ok := t.Context[contextChatID].(string); ok {
 		return v
 	}
 	return ""
@@ -154,6 +178,11 @@ type agentConfig struct {
 
 // AgentOption configures an LLMAgent or Network.
 type AgentOption func(*agentConfig)
+
+// PromptFunc, ModelFunc, and ToolsFunc share the same func(ctx, task) T shape.
+// A generic ResolveFunc[T] was considered and rejected: the named types provide
+// domain clarity at call sites (PromptFunc vs ResolveFunc[string]) and better
+// Godoc discoverability. Three stable, self-documenting types beat one generic.
 
 // PromptFunc resolves the system prompt per-request.
 // When set via WithDynamicPrompt, it is called at the start of every
@@ -360,6 +389,12 @@ func WithInputHandler(h InputHandler) AgentOption {
 
 // ConversationOption configures conversation memory behavior.
 // Pass to WithConversationMemory to enable optional features like cross-thread search.
+//
+// This is a separate type from AgentOption and SemanticOption to provide
+// compile-time scoping: ConversationOption values are only accepted by
+// WithConversationMemory, preventing accidental misuse in other contexts.
+// The same pattern applies to SemanticOption (scoped to CrossThreadSearch)
+// and SemanticTrimmingOption (scoped to WithSemanticTrimming).
 type ConversationOption func(*agentConfig)
 
 // CrossThreadSearch enables semantic recall across all conversation threads.
@@ -383,6 +418,7 @@ func CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption) Conversation
 }
 
 // SemanticOption tunes semantic search parameters within CrossThreadSearch.
+// Scoped type — only accepted by CrossThreadSearch, not by other option functions.
 type SemanticOption func(*agentConfig)
 
 // MinScore sets the minimum cosine similarity score for cross-thread semantic
@@ -417,6 +453,7 @@ func AutoTitle() ConversationOption {
 }
 
 // SemanticTrimmingOption tunes semantic trimming behavior.
+// Scoped type — only accepted by WithSemanticTrimming, not by other option functions.
 type SemanticTrimmingOption func(*agentConfig)
 
 // KeepRecent sets how many recent messages are always preserved during
