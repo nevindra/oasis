@@ -64,9 +64,6 @@ func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	return m.next(), nil
 }
-func (m *mockProvider) ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error) {
-	return m.next(), nil
-}
 func (m *mockProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	resp := m.next()
@@ -265,9 +262,6 @@ func (p *errProvider) Name() string { return p.name }
 func (p *errProvider) Chat(_ context.Context, _ ChatRequest) (ChatResponse, error) {
 	return ChatResponse{}, p.err
 }
-func (p *errProvider) ChatWithTools(_ context.Context, _ ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
-	return ChatResponse{}, p.err
-}
 func (p *errProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	return ChatResponse{}, p.err
@@ -278,9 +272,6 @@ type ctxProvider struct{ name string }
 
 func (p *ctxProvider) Name() string { return p.name }
 func (p *ctxProvider) Chat(ctx context.Context, _ ChatRequest) (ChatResponse, error) {
-	return ChatResponse{}, ctx.Err()
-}
-func (p *ctxProvider) ChatWithTools(ctx context.Context, _ ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
 	return ChatResponse{}, ctx.Err()
 }
 func (p *ctxProvider) ChatStream(ctx context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
@@ -304,7 +295,7 @@ func TestLLMAgentProviderError(t *testing.T) {
 }
 
 func TestLLMAgentProviderErrorWithTools(t *testing.T) {
-	// ChatWithTools path (provider has tools registered)
+	// Chat with tools path (req.Tools is non-empty)
 	agent := NewLLMAgent("broken", "Broken agent", &errProvider{
 		name: "fail",
 		err:  errors.New("rate limited"),
@@ -1105,7 +1096,7 @@ func (bigResultTool) Execute(_ context.Context, _ string, _ json.RawMessage) (To
 }
 
 func TestContextCompression(t *testing.T) {
-	// Track message counts per ChatWithTools call.
+	// Track message counts per Chat call.
 	var messageCounts []int
 
 	// Responses: 4 rounds of 2 tool calls each + 1 final text.
@@ -1198,9 +1189,6 @@ func (s *sequentialCallbackProvider) next(req ChatRequest) ChatResponse {
 	return resp
 }
 func (s *sequentialCallbackProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
-	return s.next(req), nil
-}
-func (s *sequentialCallbackProvider) ChatWithTools(_ context.Context, req ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
 	return s.next(req), nil
 }
 func (s *sequentialCallbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
@@ -1458,7 +1446,7 @@ func TestGenerationParamsNilInRequestWhenUnset(t *testing.T) {
 }
 
 func TestGenerationParamsWithTools(t *testing.T) {
-	// GenerationParams should be present when using ChatWithTools path.
+	// GenerationParams should be present when using Chat with tools path.
 	var capturedReq ChatRequest
 	provider := &sequentialCallbackProvider{
 		responses: []ChatResponse{
@@ -1481,7 +1469,7 @@ func TestGenerationParamsWithTools(t *testing.T) {
 	}
 
 	if capturedReq.GenerationParams == nil {
-		t.Fatal("GenerationParams should be set in ChatWithTools requests")
+		t.Fatal("GenerationParams should be set in Chat requests with tools")
 	}
 	if *capturedReq.GenerationParams.Temperature != 0.1 {
 		t.Errorf("Temperature = %v, want 0.1", *capturedReq.GenerationParams.Temperature)

@@ -39,6 +39,21 @@ func (s *executionState) getResult(name string) (StepResult, bool) {
 // and marks downstream steps as StepSkipped.
 // Returns an AgentResult with the last successful step's output.
 func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+	return w.execute(ctx, task, nil)
+}
+
+// ExecuteStream runs the workflow like Execute, but emits StreamEvent values
+// into ch throughout execution. Step start/finish events are emitted for each
+// step. When an AgentStep delegates to a StreamingAgent, that agent's events
+// are forwarded through ch. The channel is closed when streaming completes.
+func (w *Workflow) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
+	defer close(ch)
+	return w.execute(ctx, task, ch)
+}
+
+// execute is the shared implementation for Execute and ExecuteStream.
+// When ch is non-nil, step-start/step-finish events are emitted.
+func (w *Workflow) execute(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -57,9 +72,9 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 		cancel:         cancel,
 	}
 
-	w.runDAG(ctx, state)
+	w.runDAG(ctx, state, ch)
 
-	result, err := w.buildResult(state, task)
+	result, err := w.buildResult(state, task, ch)
 	if span != nil {
 		if err != nil {
 			var suspended *ErrSuspended
@@ -81,7 +96,7 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 // are pre-populated — steps that were skipped due to the suspension (failure-skipped)
 // will re-execute on resume. This is intentional: those steps never ran, so they
 // must run once the suspended step succeeds.
-func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedResults map[string]StepResult, contextValues map[string]any, data json.RawMessage) (AgentResult, error) {
+func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedResults map[string]StepResult, contextValues map[string]any, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -104,20 +119,20 @@ func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedR
 	maps.Copy(state.results, completedResults)
 
 	// Re-run the DAG — completed steps are skipped, suspended step re-executes.
-	w.runDAG(ctx, state)
+	w.runDAG(ctx, state, ch)
 
 	// Clear resume data after execution to avoid retaining the payload.
 	wCtx.mu.Lock()
 	delete(wCtx.values, resumeDataKey)
 	wCtx.mu.Unlock()
 
-	return w.buildResult(state, task)
+	return w.buildResult(state, task, ch)
 }
 
 // buildResult converts execution state into an AgentResult after the DAG completes.
 // Handles suspension (returns ErrSuspended), failure (returns WorkflowError),
 // and success. Shared by Execute and executeResume.
-func (w *Workflow) buildResult(state *executionState, task AgentTask) (AgentResult, error) {
+func (w *Workflow) buildResult(state *executionState, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	// Check for suspension.
 	if state.suspendedStep != "" {
 		snapshotResults := make(map[string]StepResult)
@@ -138,7 +153,11 @@ func (w *Workflow) buildResult(state *executionState, task AgentTask) (AgentResu
 			Step:    suspendedStep,
 			Payload: suspendPayload,
 			resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
-				return w.executeResume(ctx, task, snapshotResults, snapshotValues, data)
+				return w.executeResume(ctx, task, snapshotResults, snapshotValues, data, nil)
+			},
+			resumeStream: func(ctx context.Context, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error) {
+				defer close(ch)
+				return w.executeResume(ctx, task, snapshotResults, snapshotValues, data, ch)
 			},
 		}
 	}
@@ -222,7 +241,7 @@ func workflowStepsToTraces(order []string, results map[string]StepResult) []Step
 // triggers evaluation of its dependents, avoiding the latency penalty of
 // wave-based batching where fast steps must wait for slow siblings to finish.
 // Uses the pre-computed w.dependents forward adjacency built at construction time.
-func (w *Workflow) runDAG(ctx context.Context, state *executionState) {
+func (w *Workflow) runDAG(ctx context.Context, state *executionState, ch chan<- StreamEvent) {
 	// Track completed steps and remaining in-degree for each step.
 	// All access is serialized through the coordinator goroutine via done channel,
 	// so no mutex is needed for these maps.
@@ -286,7 +305,7 @@ func (w *Workflow) runDAG(ctx context.Context, state *executionState) {
 		completed[name] = true
 		inflight++
 		go func() {
-			w.executeStep(ctx, s, state)
+			w.executeStep(ctx, s, state, ch)
 			done <- name
 		}()
 	}
@@ -337,7 +356,8 @@ func (w *Workflow) hasFailedUpstream(s *stepConfig, state *executionState) bool 
 }
 
 // executeStep runs a single step, handling conditions, retries, and step types.
-func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *executionState) {
+// When ch is non-nil, emits step-start and step-finish events.
+func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *executionState, ch chan<- StreamEvent) {
 	start := time.Now()
 
 	var stepSpan Span
@@ -377,6 +397,14 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 		return
 	}
 
+	// Emit step-start event.
+	if ch != nil {
+		select {
+		case ch <- StreamEvent{Type: EventStepStart, Name: s.name}:
+		case <-ctx.Done():
+		}
+	}
+
 	// Mark as running.
 	state.setResult(s.name, StepResult{
 		Name:   s.name,
@@ -386,7 +414,7 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 	var run func() error
 	switch s.stepType {
 	case stepTypeForEach:
-		run = func() error { return w.executeForEach(ctx, s, state) }
+		run = func() error { return w.executeForEach(ctx, s, state, ch) }
 	case stepTypeDoUntil:
 		run = func() error { return w.executeDoUntil(ctx, s, state) }
 	case stepTypeDoWhile:
@@ -396,13 +424,13 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 	}
 	err := w.executeWithRetry(ctx, s, run)
 
-	w.recordStepOutcome(s, state, err, stepSpan, time.Since(start), endSpan)
+	w.recordStepOutcome(s, state, err, stepSpan, time.Since(start), endSpan, ch)
 }
 
 // recordStepOutcome records the final step result (suspend, failure, or success)
 // into the execution state. Handles span annotation, logging, onError callbacks,
 // and fail-fast cancellation for failures.
-func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err error, stepSpan Span, duration time.Duration, endSpan func(string)) {
+func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err error, stepSpan Span, duration time.Duration, endSpan func(string), ch chan<- StreamEvent) {
 	// Check for suspend (before error handling — suspend is not a failure).
 	var suspend *errSuspend
 	if errors.As(err, &suspend) {
@@ -418,6 +446,12 @@ func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err e
 		}
 		state.mu.Unlock()
 		w.logger.Info("step suspended", "workflow", w.name, "step", s.name)
+		if ch != nil {
+			select {
+			case ch <- StreamEvent{Type: EventStepFinish, Name: s.name, Content: "suspended", Duration: duration}:
+			default:
+			}
+		}
 		endSpan("suspended")
 		return
 	}
@@ -443,6 +477,12 @@ func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err e
 
 		// Fail fast: cancel context so in-flight steps get cancelled.
 		state.cancel()
+		if ch != nil {
+			select {
+			case ch <- StreamEvent{Type: EventStepFinish, Name: s.name, Content: err.Error(), Duration: duration}:
+			default:
+			}
+		}
 		if stepSpan != nil {
 			stepSpan.Error(err)
 		}
@@ -459,6 +499,12 @@ func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err e
 		Duration: duration,
 	})
 	w.logger.Info("step completed", "workflow", w.name, "step", s.name, "duration", duration)
+	if ch != nil {
+		select {
+		case ch <- StreamEvent{Type: EventStepFinish, Name: s.name, Content: output, Duration: duration}:
+		default:
+		}
+	}
 	endSpan("success")
 }
 

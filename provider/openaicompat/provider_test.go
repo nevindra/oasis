@@ -66,7 +66,7 @@ func TestProvider_Chat(t *testing.T) {
 	}
 }
 
-func TestProvider_ChatWithTools(t *testing.T) {
+func TestProvider_ChatWithToolsOnRequest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -110,11 +110,12 @@ func TestProvider_ChatWithTools(t *testing.T) {
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`),
 	}}
 
-	resp, err := p.ChatWithTools(context.Background(), oasis.ChatRequest{
+	resp, err := p.Chat(context.Background(), oasis.ChatRequest{
 		Messages: []oasis.ChatMessage{{Role: "user", Content: "Weather in London?"}},
-	}, tools)
+		Tools:    tools,
+	})
 	if err != nil {
-		t.Fatalf("ChatWithTools returned error: %v", err)
+		t.Fatalf("Chat with tools returned error: %v", err)
 	}
 
 	if len(resp.ToolCalls) != 1 {

@@ -57,17 +57,9 @@ func New(apiKey, model string, opts ...Option) *Gemini {
 func (g *Gemini) Name() string { return "gemini" }
 
 // Chat sends a non-streaming chat request and returns the complete response.
+// When req.Tools is non-empty, the response may contain ToolCalls.
 func (g *Gemini) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-	body, err := g.buildBody(req.Messages, nil, req.ResponseSchema, req.GenerationParams)
-	if err != nil {
-		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
-	}
-	return g.doGenerate(ctx, body)
-}
-
-// ChatWithTools sends a chat request with tool definitions.
-func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-	body, err := g.buildBody(req.Messages, tools, req.ResponseSchema, req.GenerationParams)
+	body, err := g.buildBody(req.Messages, req.Tools, req.ResponseSchema, req.GenerationParams)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -76,10 +68,11 @@ func (g *Gemini) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools
 
 // ChatStream streams text-delta events into ch, then returns the final accumulated response.
 // The channel is closed when streaming completes.
+// When req.Tools is non-empty, tool call arguments stream as EventToolCallDelta events.
 func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	defer close(ch)
 
-	body, err := g.buildBody(req.Messages, nil, req.ResponseSchema, req.GenerationParams)
+	body, err := g.buildBody(req.Messages, req.Tools, req.ResponseSchema, req.GenerationParams)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}

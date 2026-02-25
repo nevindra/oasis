@@ -88,12 +88,6 @@ func (c *callbackProvider) Chat(_ context.Context, req ChatRequest) (ChatRespons
 	}
 	return c.response, nil
 }
-func (c *callbackProvider) ChatWithTools(_ context.Context, req ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
-	if c.onChat != nil {
-		c.onChat(req)
-	}
-	return c.response, nil
-}
 func (c *callbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	if c.onChat != nil {

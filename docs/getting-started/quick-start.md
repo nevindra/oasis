@@ -63,7 +63,7 @@ sequenceDiagram
 
     You->>Agent: Execute(task)
     loop Tool-calling loop
-        Agent->>LLM: ChatWithTools(messages, toolDefs)
+        Agent->>LLM: Chat(messages + tools)
         LLM-->>Agent: Response (text or tool calls)
         alt Has tool calls
             Agent->>Tools: Execute(name, args) [parallel]

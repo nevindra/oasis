@@ -119,13 +119,13 @@ sequenceDiagram
     App->>Agent: Execute(task)
     Agent->>S: Load conversation history
     Agent->>S: Load user facts
-    Agent->>LLM: ChatWithTools(messages)
+    Agent->>LLM: Chat(messages + tools)
 
     loop Tool-calling loop
         LLM-->>Agent: Tool calls
         Agent->>T: Dispatch (parallel)
         T-->>Agent: Results
-        Agent->>LLM: ChatWithTools(messages + results)
+        Agent->>LLM: Chat(messages + results + tools)
     end
 
     LLM-->>Agent: Final response

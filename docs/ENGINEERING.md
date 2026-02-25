@@ -4,14 +4,18 @@ Engineering principles for all contributors (human and LLM). Read this before wr
 
 Oasis is a Go framework for building autonomous AI agents — designed for production today, ready for the next leap in AI capabilities tomorrow.
 
-## API Strategy (v0.8+)
+## API Strategy (v1.0.0)
 
-Oasis has its building blocks in place. The focus shifts from adding primitives to making them work together seamlessly.
+v1.0.0 is a one-way door. Every exported symbol that ships becomes a permanent contract. The pre-v1 period is our last chance to get the API surface right.
 
-1. **Integration over invention.** Polish how existing primitives compose. Fill genuine gaps. Don't add new abstractions speculatively.
-2. **New interfaces require a design doc.** Any new exported interface must have a written design (in docs/plans/) reviewed before landing. New interfaces are welcome when they solve a real problem — this gate ensures intentionality, not bureaucracy.
-3. **Consolidate when possible, extend when necessary.** If two interfaces overlap or can be combined without losing expressiveness, combine them. When adding new capabilities, prefer optional interfaces discovered via type assertion over growing existing ones.
-4. **DX wins without new API surface.** Better error messages, examples, copy-paste-able snippets reduce friction without adding maintenance burden.
+**Breaking-change window.** From now until v1.0.0 is tagged, breaking changes are expected and encouraged when they make the final API surface cleaner, more consistent, or more performant. Each breaking change must justify itself — write a migration note in the PR description showing what it simplifies. After v1.0.0, semver rules apply strictly: no breaking changes until v2.
+
+**Mandated API audit.** Before tagging v1.0.0, every exported interface, type, and function must pass review: *"Does this earn its place in the v1 surface?"* If the answer is no — merge it, internalize it, or remove it. Document each decision in `docs/plans/`.
+
+1. **Consolidate aggressively.** If two interfaces overlap or can become one without losing expressiveness, they must be merged. If a type exists only for historical reasons, remove it. Fewer, more powerful primitives beat many narrow ones.
+2. **Break what needs breaking.** Rename for clarity, change signatures for consistency, restructure packages for coherence. The cost of a breaking change now is a migration note. The cost of a bad API in v1 is forever.
+3. **Every export is a commitment.** New exported symbols still require a design doc in `docs/plans/`. But now the bar is higher: does this *need* to be public, or can it stay internal?
+4. **DX wins without new API surface.** Better error messages, examples, copy-paste-able snippets reduce friction without adding maintenance burden. This still applies.
 
 ---
 
@@ -20,7 +24,7 @@ Oasis has its building blocks in place. The focus shifts from adding primitives 
 Every design decision asks two questions:
 
 1. **Does this work reliably in production today?**
-2. **Will this still work when agents get 10× smarter?**
+2. **Will this still work when agents get 10x smarter?**
 
 ### 1. Build for Production Today, Design for Autonomy Tomorrow
 
@@ -46,7 +50,7 @@ Primitives that snap together to form systems more capable than any individual p
 - Interfaces at natural boundaries — between your system and an external service, not between two internal functions that always change together.
 - Depend on behavior, not implementation. Consumers shouldn't care whether storage is SQLite or Postgres.
 - Explicit dependencies. Constructor injection, not service locator. Dependencies visible in function signatures. No hidden side effects.
-- Earn every abstraction. Write concrete code first. Extract only when a pattern repeats 3×. No `utils`, `helpers`, or `common` packages. Framework primitives are different — they're designed for composability from the start.
+- Earn every abstraction. Write concrete code first. Extract only when a pattern repeats 3x. No `utils`, `helpers`, or `common` packages. Framework primitives are different — they're designed for composability from the start.
 
 ### 3. Code for Dual Readers — Human and Agent
 
@@ -97,17 +101,30 @@ Heavy non-critical work (memory extraction, embedding) runs in background gorout
 
 Components that start background work must expose a `Close()` or accept a context whose cancellation triggers cleanup. Shutdown must drain in-flight work within a timeout, not drop it silently. Test shutdown paths — a `Close()` that's never tested is a shutdown that doesn't work.
 
+### Performance
+
+The run loop, tool dispatch, and streaming paths are hot. Treat them accordingly.
+
+- **Zero-allocation hot paths.** The run loop and tool dispatch must not allocate on the common path. Use sync.Pool for transient buffers. Avoid fmt.Sprintf in hot paths — use string concatenation or pre-formatted strings.
+- **Benchmark before and after.** Any change to a hot path must include benchmark results in the PR. Use `go test -bench` with `-benchmem`. Regressions need justification.
+- **No reflection or unnecessary serialization in the loop.** JSON marshaling, type reflection, and interface conversions in the run loop add up fast. Marshal at boundaries (provider calls, store writes), not between internal steps.
+- **Streaming must not block the sender.** Buffered channels with bounded size. If the consumer is slow, drop or backpressure — never block the LLM response path.
+- **Profile before optimizing.** Don't guess. Use `pprof` to find the actual bottleneck. Premature optimization of cold paths is wasted effort.
+
 ---
 
 ## Extensibility
 
+**During the v1.0.0 window**, the rules below are relaxed — signatures, interfaces, and package structure can all change if the change passes the API audit. After v1.0.0, these rules become hard constraints.
+
 ### New interface
 
-Define in the root `oasis` package, document contracts and nil/zero behavior, add a concrete implementation with compile-time check. Requires a design doc in docs/plans/ before landing.
+Define in the root `oasis` package, document contracts and nil/zero behavior, add a concrete implementation with compile-time check. Requires a design doc in `docs/plans/` before landing. Must pass the v1 audit: *"Does this need to be a separate interface, or can it fold into an existing one?"*
 
-### Extend existing interface
+### Modify existing interface
 
-Don't modify signatures. New capability = new interface + type assertion. New struct field = zero value preserves old behavior.
+**Pre-v1:** allowed. Change signatures, rename methods, merge interfaces — with a migration note in the PR.
+**Post-v1:** don't modify signatures. New capability = new interface + type assertion. New struct field = zero value preserves old behavior.
 
 ### New tool
 
@@ -123,11 +140,13 @@ Implement `PreProcessor`/`PostProcessor`/`PostToolProcessor`. Return `nil` to pa
 
 ### New store capability
 
-Implement as a separate optional interface. Store implementations opt in via type assertion. Do not add methods to the `Store` interface.
+Implement as a separate optional interface. Store implementations opt in via type assertion. Do not add methods to the `Store` interface — **unless the v1 audit determines that a capability is universal enough to belong in the core interface.**
 
 ---
 
 ## Things to Never Do
+
+These rules apply always — including during the v1.0.0 breaking-change window.
 
 - Do not add LLM SDK dependencies — raw HTTP only
 - Do not add bot/HTTP router/error wrapping/logging frameworks
@@ -136,3 +155,4 @@ Implement as a separate optional interface. Store implementations opt in via typ
 - Do not start goroutines without a shutdown path
 - Do not use unbounded channels, caches, or buffers
 - Do not store `context.Context` in structs
+- Do not ship v1.0.0 with any exported symbol that hasn't passed the API audit

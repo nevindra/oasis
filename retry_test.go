@@ -35,11 +35,6 @@ func (s *stubProvider) Chat(_ context.Context, _ ChatRequest) (ChatResponse, err
 	return r.resp, r.err
 }
 
-func (s *stubProvider) ChatWithTools(_ context.Context, _ ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
-	r := s.next()
-	return r.resp, r.err
-}
-
 func (s *stubProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	r := s.next()
@@ -135,16 +130,18 @@ func TestWithRetry_Chat_ExhaustsMaxAttempts(t *testing.T) {
 	}
 }
 
-// --- ChatWithTools tests ---
+// --- Chat with tools on request tests ---
 
-func TestWithRetry_ChatWithTools_RetriesOn429(t *testing.T) {
+func TestWithRetry_ChatWithToolsOnRequest_RetriesOn429(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{err: &ErrHTTP{Status: 429}},
 		{resp: ChatResponse{Content: "done"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	_, err := p.ChatWithTools(context.Background(), ChatRequest{}, nil)
+	_, err := p.Chat(context.Background(), ChatRequest{
+		Tools: []ToolDefinition{{Name: "test"}},
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

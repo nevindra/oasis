@@ -38,18 +38,20 @@ func Suspend(payload json.RawMessage) error {
 
 // ErrSuspended is returned by Execute() when a workflow step or network
 // processor suspends execution to await external input.
-// Inspect Payload for context, then call Resume() with the human's response.
+// Inspect Payload for context, then call Resume() or ResumeStream() with
+// the human's response.
 //
-// Retention: ErrSuspended holds a closure that captures the full conversation
+// Retention: ErrSuspended holds closures that capture the full conversation
 // message history (including tool call arguments, results, and attachments).
-// This data remains in memory until Resume() is called, Release() is called,
-// the TTL expires, or the ErrSuspended value is garbage-collected.
+// This data remains in memory until Resume()/ResumeStream() is called,
+// Release() is called, the TTL expires, or the ErrSuspended value is
+// garbage-collected.
 //
 // To prevent memory leaks in server environments, use WithSuspendTTL to set
 // an automatic expiry. When the TTL elapses without Resume(), the snapshot
 // is released automatically. Without a TTL, callers must call Release()
 // explicitly when the resume window has passed (e.g. timeout, user abandonment).
-// After release (manual or automatic), Resume() returns an error.
+// After release (manual or automatic), Resume()/ResumeStream() returns an error.
 type ErrSuspended struct {
 	// Step is the name of the step or processor hook that suspended.
 	Step string
@@ -59,7 +61,10 @@ type ErrSuspended struct {
 	// Guarded by mu when a TTL timer is active (timer callback writes from
 	// a separate goroutine). Without a TTL, single-goroutine access is safe.
 	resume func(ctx context.Context, data json.RawMessage) (AgentResult, error)
-	// mu guards resume against concurrent access from the TTL timer goroutine.
+	// resumeStream is like resume but emits StreamEvent values into ch.
+	// Set by workflow and agent-level suspend for streaming resume support.
+	resumeStream func(ctx context.Context, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error)
+	// mu guards resume/resumeStream against concurrent access from the TTL timer goroutine.
 	mu sync.Mutex
 	// ttlTimer is the auto-release timer. Nil when no TTL is set.
 	ttlTimer *time.Timer
@@ -85,6 +90,7 @@ func (e *ErrSuspended) Resume(ctx context.Context, data json.RawMessage) (AgentR
 	fn := e.resume
 	onRel := e.onRelease
 	e.resume = nil // single-use: free the captured snapshot after resume
+	e.resumeStream = nil
 	e.onRelease = nil
 	e.mu.Unlock()
 
@@ -95,6 +101,33 @@ func (e *ErrSuspended) Resume(ctx context.Context, data json.RawMessage) (AgentR
 		onRel(e.snapshotSize)
 	}
 	return fn(ctx, data)
+}
+
+// ResumeStream continues execution with the human's response data, emitting
+// StreamEvent values into ch throughout. Like Resume but with streaming support.
+// The channel is closed when streaming completes.
+// Returns an error if called on a released, expired, or externally constructed ErrSuspended,
+// or if the suspend was created in a non-streaming context (resumeStream is nil).
+func (e *ErrSuspended) ResumeStream(ctx context.Context, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error) {
+	e.mu.Lock()
+	if e.ttlTimer != nil {
+		e.ttlTimer.Stop()
+	}
+	fn := e.resumeStream
+	onRel := e.onRelease
+	e.resume = nil
+	e.resumeStream = nil
+	e.onRelease = nil
+	e.mu.Unlock()
+
+	if fn == nil {
+		close(ch)
+		return AgentResult{}, fmt.Errorf("ErrSuspended: resumeStream closure is nil (released, expired, or not supported)")
+	}
+	if onRel != nil {
+		onRel(e.snapshotSize)
+	}
+	return fn(ctx, data, ch)
 }
 
 // Release nils out the resume closure, eagerly freeing the captured message
@@ -112,6 +145,7 @@ func (e *ErrSuspended) Release() {
 		e.onRelease = nil // prevent double-decrement
 	}
 	e.resume = nil
+	e.resumeStream = nil
 }
 
 // WithSuspendTTL sets an automatic expiry on the suspended state.
@@ -140,6 +174,7 @@ func (e *ErrSuspended) WithSuspendTTL(d time.Duration) {
 			e.onRelease = nil
 		}
 		e.resume = nil
+		e.resumeStream = nil
 	})
 }
 
@@ -265,6 +300,15 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 			resumeCfg := cfg
 			resumeCfg.resumeMessages = resumed
 			return runLoop(ctx, resumeCfg, task, nil)
+		},
+		resumeStream: func(ctx context.Context, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error) {
+			defer close(ch)
+			resumed := make([]ChatMessage, len(snapshot)+1)
+			copy(resumed, snapshot)
+			resumed[len(snapshot)] = UserMessage("Human input: " + string(data))
+			resumeCfg := cfg
+			resumeCfg.resumeMessages = resumed
+			return runLoop(ctx, resumeCfg, task, ch)
 		},
 	}
 	if cfg.suspendCount != nil {

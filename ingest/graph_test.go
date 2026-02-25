@@ -263,10 +263,6 @@ func (m *mockGraphProvider) Chat(_ context.Context, req oasis.ChatRequest) (oasi
 	return oasis.ChatResponse{Content: m.response}, nil
 }
 
-func (m *mockGraphProvider) ChatWithTools(_ context.Context, _ oasis.ChatRequest, _ []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-	return oasis.ChatResponse{}, fmt.Errorf("not implemented")
-}
-
 func (m *mockGraphProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, _ chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	return oasis.ChatResponse{}, fmt.Errorf("not implemented")
 }

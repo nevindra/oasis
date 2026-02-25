@@ -9,11 +9,19 @@ All interfaces live in the root `oasis` package (`github.com/nevindra/oasis`).
 ```go
 type Provider interface {
     Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
-    ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error)
-    ChatStream(ctx context.Context, req ChatRequest, ch chan<- string) (ChatResponse, error)
+    ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error)
     Name() string
 }
 ```
+
+Two methods handle all interaction patterns:
+
+| Method | When it's used |
+|--------|---------------|
+| `Chat` | Blocking request/response. When `req.Tools` is non-empty, the response may contain `ToolCalls` |
+| `ChatStream` | Like Chat but emits `StreamEvent` values into `ch` as content is generated. When `req.Tools` is non-empty, emits `EventToolCallDelta` events. The channel is NOT closed by the provider — the caller owns its lifecycle |
+
+Tools are passed via `ChatRequest.Tools` — no separate method needed.
 
 | Implementation | Constructor |
 |----------------|------------|
@@ -21,7 +29,9 @@ type Provider interface {
 | `provider/openaicompat` | `openaicompat.NewProvider(apiKey, model, baseURL string)` |
 | `provider/resolve` | `resolve.Provider(cfg resolve.Config)` — config-driven, returns any of the above |
 
-Middleware: `oasis.WithRetry(p Provider, opts ...RetryOption) Provider`
+Middleware:
+- `oasis.WithRetry(p Provider, opts ...RetryOption) Provider`
+- `oasis.WithRateLimit(p Provider, opts ...RateLimitOption) Provider`
 
 ---
 
@@ -178,6 +188,25 @@ type Tool interface {
 }
 ```
 
+---
+
+## StreamingTool
+
+**File:** `types.go`
+
+Optional capability for tools that support progress streaming during execution. Discovered via type assertion.
+
+```go
+type StreamingTool interface {
+    Tool
+    ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error)
+}
+```
+
+Tools emit `EventToolProgress` events on `ch` to report intermediate progress. The channel is shared with the parent agent's stream — events appear inline with other agent events. The channel is NOT closed by the tool — the caller owns its lifecycle.
+
+When a tool implements `StreamingTool` and the agent is streaming, `ExecuteStream` is called instead of `Execute`. Tools that only implement `Tool` work unchanged — the framework falls back to `Execute`.
+
 | Implementation | Constructor | Functions |
 |----------------|------------|-----------|
 | `tools/knowledge` | `knowledge.New(store, embedding)` | `knowledge_search` |
@@ -217,11 +246,11 @@ type Agent interface {
 ```go
 type StreamingAgent interface {
     Agent
-    ExecuteStream(ctx context.Context, task AgentTask, ch chan<- string) (AgentResult, error)
+    ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
 }
 ```
 
-Implemented by `LLMAgent` and `Network`.
+Implemented by `LLMAgent`, `Network`, and `Workflow`.
 
 ---
 

@@ -35,6 +35,29 @@ const (
 	EventAgentStart StreamEventType = "agent-start"
 	// EventAgentFinish signals a subagent has completed (Network only).
 	EventAgentFinish StreamEventType = "agent-finish"
+	// EventToolCallDelta carries an incremental chunk of tool call arguments.
+	// Emitted by ChatStream when req.Tools is non-empty. ID carries the tool
+	// call ID for correlation with the eventual tool-call-start/result events.
+	EventToolCallDelta StreamEventType = "tool-call-delta"
+	// EventToolProgress carries intermediate progress from a long-running tool.
+	// Emitted by tools that implement StreamingTool. Name carries the tool name;
+	// Content carries free-form progress JSON.
+	EventToolProgress StreamEventType = "tool-progress"
+	// EventStepStart signals a workflow step has begun execution.
+	// Name carries the step name.
+	EventStepStart StreamEventType = "step-start"
+	// EventStepFinish signals a workflow step has completed.
+	// Name carries the step name; Content carries the output (success) or
+	// error message (failure); Duration carries the step wall-clock time.
+	EventStepFinish StreamEventType = "step-finish"
+	// EventStepProgress carries intermediate progress from a ForEach workflow step.
+	// Name carries the step name; Content carries progress JSON
+	// (e.g. {"completed":3,"total":10}).
+	EventStepProgress StreamEventType = "step-progress"
+	// EventRoutingDecision signals the Network router has decided which agents/tools
+	// to invoke. Name carries the network name; Content carries a JSON summary
+	// (e.g. {"agents":["researcher"],"tools":["search"]}).
+	EventRoutingDecision StreamEventType = "routing-decision"
 )
 
 // StreamEvent is a typed event emitted during agent streaming.
@@ -42,6 +65,9 @@ const (
 type StreamEvent struct {
 	// Type identifies the event kind.
 	Type StreamEventType `json:"type"`
+	// ID is the tool call ID for correlation across tool-call-delta,
+	// tool-call-start, and tool-call-result events. Empty for non-tool events.
+	ID string `json:"id,omitempty"`
 	// Name is the tool or agent name (set for tool/agent events, empty for text-delta).
 	Name string `json:"name,omitempty"`
 	// Content carries the text delta (text-delta), tool result (tool-call-result),

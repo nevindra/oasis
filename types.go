@@ -25,14 +25,18 @@ func NowUnix() int64 {
 // --- Core interfaces ---
 
 // Provider abstracts the LLM backend.
+//
+// Two methods handle all interaction patterns:
+//   - Chat: blocking request/response. When req.Tools is non-empty, the
+//     response may contain ToolCalls that the caller must dispatch.
+//   - ChatStream: like Chat but emits StreamEvent values into ch as content
+//     is generated. When req.Tools is non-empty, emits EventToolCallDelta
+//     events as tool call arguments are generated incrementally. The channel
+//     is NOT closed by the provider — the caller owns its lifecycle.
+//     Returns the final assembled ChatResponse with complete ToolCalls and Usage.
 type Provider interface {
-	// Chat sends a request and returns a complete response.
 	Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
-	// ChatWithTools sends a request with tool definitions, returns response (may contain tool calls).
-	ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error)
-	// ChatStream streams text-delta events into ch, then returns the final response with usage stats.
 	ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error)
-	// Name returns the provider name (e.g. "gemini", "anthropic").
 	Name() string
 }
 
@@ -50,6 +54,22 @@ type EmbeddingProvider interface {
 type Tool interface {
 	Definitions() []ToolDefinition
 	Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error)
+}
+
+// StreamingTool is an optional capability for tools that support progress
+// streaming during execution. Check via type assertion:
+//
+//	if st, ok := tool.(StreamingTool); ok {
+//	    result, err := st.ExecuteStream(ctx, name, args, ch)
+//	}
+//
+// Tools emit EventToolProgress events on ch to report intermediate progress.
+// The channel is shared with the parent agent's stream — events appear
+// inline with other agent events.
+// The channel is NOT closed by the tool — the caller owns its lifecycle.
+type StreamingTool interface {
+	Tool
+	ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error)
 }
 
 // ToolResult is the outcome of a tool execution.
@@ -92,6 +112,22 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args json.RawMe
 		return t.Execute(ctx, name, args)
 	}
 	return ToolResult{Error: "unknown tool: " + name}, nil
+}
+
+// ExecuteStream dispatches a tool call with streaming support. If the resolved
+// tool implements StreamingTool and ch is non-nil, it calls ExecuteStream.
+// Otherwise falls back to Execute.
+func (r *ToolRegistry) ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+	t, ok := r.index[name]
+	if !ok {
+		return ToolResult{Error: "unknown tool: " + name}, nil
+	}
+	if ch != nil {
+		if st, ok := t.(StreamingTool); ok {
+			return st.ExecuteStream(ctx, name, args, ch)
+		}
+	}
+	return t.Execute(ctx, name, args)
 }
 
 // Store abstracts persistence with vector search capabilities.
@@ -465,6 +501,7 @@ type GenerationParams struct {
 
 type ChatRequest struct {
 	Messages         []ChatMessage     `json:"messages"`
+	Tools            []ToolDefinition  `json:"tools,omitempty"`
 	ResponseSchema   *ResponseSchema   `json:"response_schema,omitempty"`
 	GenerationParams *GenerationParams `json:"generation_params,omitempty"`
 }

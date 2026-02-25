@@ -45,33 +45,37 @@ func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- 
 
 // buildLoopConfig wires LLMAgent fields into a loopConfig for runLoop.
 // Resolves dynamic prompt, model, and tools when configured.
-func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, _ chan<- StreamEvent) loopConfig {
+func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- StreamEvent) loopConfig {
 	prompt, provider := a.resolvePromptAndProvider(ctx, task)
 
 	// Resolve tools: dynamic replaces static.
 	var toolDefs []ToolDefinition
 	var executeTool toolExecFunc
+	var executeToolStream toolExecStreamFunc
 	if dynDefs, dynExec := a.resolveDynamicTools(ctx, task); dynDefs != nil {
 		toolDefs = a.cacheBuiltinToolDefs(dynDefs)
 		executeTool = dynExec
 	} else {
 		toolDefs = a.cachedToolDefs
 		executeTool = a.tools.Execute
+		executeToolStream = a.tools.ExecuteStream
 	}
 
-	return a.baseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool))
+	return a.baseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool, executeToolStream, ch))
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
 // executor function and handles the ask_user, execute_plan, and execute_code
 // special cases via the shared dispatchBuiltins helper.
-func (a *LLMAgent) makeDispatch(executeTool toolExecFunc) DispatchFunc {
+// When executeToolStream and ch are non-nil, tools implementing StreamingTool
+// emit progress events during execution.
+func (a *LLMAgent) makeDispatch(executeTool toolExecFunc, executeToolStream toolExecStreamFunc, ch chan<- StreamEvent) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		if r, ok := dispatchBuiltins(ctx, tc, dispatch, a.inputHandler, a.name, a.planExecution, a.codeRunner); ok {
 			return r
 		}
-		return dispatchTool(ctx, executeTool, tc.Name, tc.Args)
+		return dispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
 	}
 	return dispatch
 }

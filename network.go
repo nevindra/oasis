@@ -67,21 +67,24 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 	// Resolve tools: dynamic replaces static.
 	var toolDefs []ToolDefinition
 	var executeTool toolExecFunc
+	var executeToolStream toolExecStreamFunc
 	if dynDefs, dynExec := n.resolveDynamicTools(ctx, task); dynDefs != nil {
 		toolDefs = n.cacheBuiltinToolDefs(n.buildToolDefs(dynDefs))
 		executeTool = dynExec
 	} else {
 		toolDefs = n.cachedToolDefs
 		executeTool = n.tools.Execute
+		executeToolStream = n.tools.ExecuteStream
 	}
 
-	return n.baseLoopConfig("network:"+n.name, prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool))
+	return n.baseLoopConfig("network:"+n.name, prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream))
 }
 
 // makeDispatch returns a DispatchFunc that routes tool calls to subagents,
 // the shared built-in tools, or direct tools. When ch is non-nil, agent-start
-// and agent-finish events are emitted for subagent delegation.
-func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, executeTool toolExecFunc) DispatchFunc {
+// and agent-finish events are emitted for subagent delegation. Tools
+// implementing StreamingTool emit progress events via executeToolStream.
+func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, executeTool toolExecFunc, executeToolStream toolExecStreamFunc) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		// Built-in tools: ask_user, execute_plan, execute_code.
@@ -96,7 +99,7 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 		}
 
 		// Regular tool call.
-		return dispatchTool(ctx, executeTool, tc.Name, tc.Args)
+		return dispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
 	}
 	return dispatch
 }

@@ -507,9 +507,12 @@ const defaultLoopMaxIter = 10
 // Unlike Network (which uses an LLM to route between agents), Workflow follows
 // explicit step sequences and dependency edges defined at construction time.
 // Parallel execution emerges naturally when multiple steps share the same
-// predecessor. Workflow implements the Agent interface, enabling recursive
-// composition: Networks can contain Workflows, and Workflows can contain
-// Agents (LLMAgent, Network, or other Workflows).
+// predecessor. Workflow implements both Agent and StreamingAgent, enabling
+// recursive composition: Networks can contain Workflows, and Workflows can
+// contain Agents (LLMAgent, Network, or other Workflows).
+//
+// ExecuteStream emits EventStepStart/EventStepFinish for each step,
+// and EventStepProgress during ForEach iterations.
 type Workflow struct {
 	name         string
 	description  string
@@ -526,8 +529,11 @@ type Workflow struct {
 	logger       *slog.Logger
 }
 
-// compile-time check
-var _ Agent = (*Workflow)(nil)
+// compile-time checks
+var (
+	_ Agent          = (*Workflow)(nil)
+	_ StreamingAgent = (*Workflow)(nil)
+)
 
 // Name returns the workflow's identifier.
 func (w *Workflow) Name() string { return w.name }

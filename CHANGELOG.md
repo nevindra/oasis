@@ -8,6 +8,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Six new stream event types** — `EventToolCallDelta` (incremental tool call arguments from `ChatStream`), `EventToolProgress` (intermediate progress from `StreamingTool`), `EventStepStart`/`EventStepFinish`/`EventStepProgress` (workflow DAG step lifecycle), `EventRoutingDecision` (Network router's agent/tool selections). Total event types: 14
+- **`StreamEvent.ID` field** — correlates `EventToolCallDelta`, `EventToolCallStart`, and `EventToolCallResult` events for the same tool call, enabling consumers to track individual tool calls through their lifecycle
+- **`StreamingTool` interface** — optional capability for tools that support progress streaming during execution. Tools implementing `ExecuteStream(ctx, name, args, ch)` emit `EventToolProgress` events on the parent agent's stream channel. The framework falls back to `Execute` for tools that don't implement it
+- **Workflow streaming (`ExecuteStream`)** — `Workflow` now implements `StreamingAgent`. Emits `EventStepStart` before each step, `EventStepFinish` after completion (with duration), and `EventStepProgress` during ForEach iterations (with completed/total counts)
+- **`ErrSuspended.ResumeStream`** — streaming variant of `Resume` for suspended agents and workflows. Emits `StreamEvent` values into a channel throughout the resumed execution. The channel is closed when streaming completes. Returns an error if the suspension was created without streaming support
+- **Network routing decision events** — when the router LLM returns `agent_*` tool calls, an `EventRoutingDecision` event is emitted with a JSON summary of the selected agents and direct tools
+
+### Changed
+
+- **Provider interface consolidation** — `ChatWithTools` removed; tools now passed via `ChatRequest.Tools`. `ChatStream` signature changed from `ch chan<- string` to `ch chan<- StreamEvent`, emitting typed events (text deltas, tool call deltas) instead of raw strings. Provider interface reduced from 4 methods to 3 (`Chat`, `ChatStream`, `Name`). All provider implementations and middleware (`WithRetry`, `WithRateLimit`, observer wrappers) updated accordingly
+
+### Added
+
 - **Agent-level generation parameters** — `WithTemperature`, `WithTopP`, `WithTopK`, `WithMaxTokens` agent options set LLM sampling parameters declaratively per agent. Stored as `GenerationParams` (pointer fields — nil means "use provider default") on the agent and injected into every `ChatRequest` via `loopConfig`. Providers read `req.GenerationParams` and map to their native API fields. Agents sharing one provider can now have different temperatures without creating separate provider instances
 - **`GenerationParams` type** — new protocol type (`types.go`) with `*float64` Temperature/TopP and `*int` TopK/MaxTokens. Added as optional field on `ChatRequest`. Zero-value backward compatible — nil `GenerationParams` means no override
 - **Thinking/reasoning visibility** — `ChatResponse.Thinking` carries the LLM's chain-of-thought content (e.g., Gemini `thought` parts). `AgentResult.Thinking` exposes the last reasoning from the tool-calling loop. `EventThinking` stream event fires after each LLM call when thinking is present. PostProcessors see the full `ChatResponse` including `Thinking` — can inspect reasoning for guardrails, logging, or redaction

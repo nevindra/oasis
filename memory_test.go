@@ -1555,10 +1555,6 @@ func (p *capturingProvider) Chat(_ context.Context, req ChatRequest) (ChatRespon
 	}
 	return p.resp, nil
 }
-func (p *capturingProvider) ChatWithTools(_ context.Context, req ChatRequest, _ []ToolDefinition) (ChatResponse, error) {
-	p.record(req)
-	return p.resp, nil
-}
 func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	p.record(req)

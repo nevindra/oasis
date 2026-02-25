@@ -9,19 +9,19 @@ Providers are the LLM backend — they turn messages into responses. Every agent
 ```go
 type Provider interface {
     Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
-    ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error)
-    ChatStream(ctx context.Context, req ChatRequest, ch chan<- string) (ChatResponse, error)
+    ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error)
     Name() string
 }
 ```
 
-Three capabilities, all on one interface:
+Two methods handle all interaction patterns:
 
 | Method | When it's used |
 |--------|---------------|
-| `Chat` | Simple request/response — no tools, no streaming |
-| `ChatWithTools` | Request with tool definitions — response may contain `ToolCalls` |
-| `ChatStream` | Stream tokens into a channel, return final aggregated response |
+| `Chat` | Blocking request/response. When `req.Tools` is non-empty, the response may contain `ToolCalls` |
+| `ChatStream` | Like Chat but emits `StreamEvent` values into `ch` as content is generated. When `req.Tools` is non-empty, emits `EventToolCallDelta` events. The channel is NOT closed by the provider — the caller owns its lifecycle |
+
+Tools are passed via `ChatRequest.Tools` — no separate method needed.
 
 ```mermaid
 sequenceDiagram
@@ -29,18 +29,18 @@ sequenceDiagram
     participant Provider
     participant LLM API
 
-    Agent->>Provider: ChatWithTools(req, tools)
+    Agent->>Provider: Chat(req) [req.Tools set]
     Provider->>LLM API: HTTP POST (SSE)
     LLM API-->>Provider: Response with tool_calls
     Provider-->>Agent: ChatResponse{ToolCalls: [...]}
 
     Note over Agent: Execute tools, feed results back
 
-    Agent->>Provider: ChatStream(req, ch)
+    Agent->>Provider: ChatStream(req, ch) [no tools]
     Provider->>LLM API: HTTP POST (SSE)
     loop Each chunk
         LLM API-->>Provider: token
-        Provider-->>Agent: ch <- token
+        Provider-->>Agent: ch <- StreamEvent{TextDelta}
     end
     Provider-->>Agent: ChatResponse{Content, Usage}
 ```
@@ -330,8 +330,9 @@ if bp, ok := provider.(oasis.BatchProvider); ok {
 
 ## Key Behaviors
 
-- `ChatStream` **must close `ch`** when done — callers rely on this for cleanup
-- `ChatWithTools` populates `ChatResponse.ToolCalls` when the LLM wants to call tools. Each `ToolCall` needs an `ID`, `Name`, and `Args` (JSON)
+- `ChatStream` does **NOT close `ch`** — the caller owns the channel's lifecycle
+- When `req.Tools` is non-empty, `Chat` may populate `ChatResponse.ToolCalls`. Each `ToolCall` needs an `ID`, `Name`, and `Args` (JSON)
+- When `req.Tools` is non-empty, `ChatStream` emits `EventToolCallDelta` events with incremental argument chunks, then returns the assembled `ToolCalls` in the response
 - Both implementations parse SSE streams in-process — no goroutine leaks
 - `Name()` returns a string identifier used in logging and observability
 - **Generation params** — when `req.GenerationParams` is non-nil, providers map the fields to their native API (Gemini: `generationConfig`, OpenAI: top-level request fields). Unsupported fields (e.g., TopK on OpenAI-compat) emit a warning via the provider's `WithLogger` logger. Providers that don't read `GenerationParams` continue to work unchanged

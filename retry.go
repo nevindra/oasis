@@ -70,15 +70,6 @@ func (r *retryProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse
 	})
 }
 
-// ChatWithTools implements Provider with retry.
-func (r *retryProvider) ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error) {
-	ctx, cancel := r.withTimeout(ctx)
-	defer cancel()
-	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), func() (ChatResponse, error) {
-		return r.inner.ChatWithTools(ctx, req, tools)
-	})
-}
-
 // ChatStream implements Provider with retry. Retries are only performed if no
 // tokens have been written to ch yet — once streaming has started, errors pass
 // through immediately to avoid sending duplicate content.

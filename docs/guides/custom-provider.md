@@ -62,34 +62,29 @@ func (p *Provider) Name() string { return "myprovider" }
 func (p *Provider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
     // Convert req.Messages to your API format
     // Handle req.Messages[].Attachments for multimodal input
+    // Include req.Tools as tool definitions in the request body
+    // If the LLM wants to call tools, parse them into ToolCalls
     // Make HTTP request
     // Parse response
     return oasis.ChatResponse{
-        Content: responseText,
-        Usage:   oasis.Usage{InputTokens: in, OutputTokens: out},
-    }, nil
-}
-
-func (p *Provider) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-    // Same as Chat, but include tool definitions in the request body
-    // If the LLM wants to call tools, parse them into ToolCalls
-    return oasis.ChatResponse{
         Content:   responseText,
-        ToolCalls: parsedToolCalls,
-        Usage:     usage,
+        ToolCalls: parsedToolCalls, // non-nil when LLM requests tool calls
+        Usage:     oasis.Usage{InputTokens: in, OutputTokens: out},
     }, nil
 }
 
 func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-    defer close(ch)  // MUST close when done
-
     // Make streaming HTTP request (SSE)
-    // For each chunk:
+    // For each text chunk:
     //   ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: chunkText}
+    // When req.Tools is non-empty, emit tool call deltas as arguments arrive:
+    //   ch <- oasis.StreamEvent{Type: oasis.EventToolCallDelta, ID: callID, Content: argChunk}
+    // Do NOT close ch — the caller owns its lifecycle.
 
     return oasis.ChatResponse{
-        Content: fullText,
-        Usage:   usage,
+        Content:   fullText,
+        ToolCalls: parsedToolCalls, // assembled from streamed deltas
+        Usage:     usage,
     }, nil
 }
 
@@ -103,7 +98,7 @@ If your API is *mostly* OpenAI-compatible but needs custom headers or auth, use 
 
 ```go
 func (p *Provider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-    body := openaicompat.BuildBody(req.Messages, nil, p.model, req.ResponseSchema)
+    body := openaicompat.BuildBody(req.Messages, req.Tools, p.model, req.ResponseSchema)
     // Custom HTTP request with special headers...
     var resp openaicompat.ChatResponse
     json.NewDecoder(httpResp.Body).Decode(&resp)
@@ -111,8 +106,7 @@ func (p *Provider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatR
 }
 
 func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-    // Don't defer close(ch) — StreamSSE handles it
-    body := openaicompat.BuildBody(req.Messages, nil, p.model, req.ResponseSchema)
+    body := openaicompat.BuildBody(req.Messages, req.Tools, p.model, req.ResponseSchema)
     // Custom HTTP request...
     return openaicompat.StreamSSE(ctx, httpResp.Body, ch)
 }
@@ -120,9 +114,10 @@ func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch cha
 
 ## Key Requirements
 
-1. **`ChatStream` must close `ch`** — callers rely on channel close for cleanup
-2. **`ChatWithTools` populates `ToolCalls`** — each needs `ID`, `Name`, and `Args` (JSON)
-3. **Raw HTTP only** — no SDKs. Use `net/http` + SSE parsing
+1. **`Chat` populates `ToolCalls`** when `req.Tools` is non-empty — each needs `ID`, `Name`, and `Args` (JSON)
+2. **`ChatStream` does NOT close `ch`** — the caller owns the channel's lifecycle
+3. **`ChatStream` emits `EventToolCallDelta`** when `req.Tools` is non-empty — incremental argument chunks with the tool call `ID`
+4. **Raw HTTP only** — no SDKs. Use `net/http` + SSE parsing
 4. **Return `ErrHTTP` for HTTP errors** — enables retry middleware
 
 ```go

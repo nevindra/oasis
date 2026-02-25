@@ -48,7 +48,7 @@ func WithCodeExecution(enabled bool) Option {
 }
 
 // WithFunctionCalling enables or disables implicit function calling (default false).
-// When disabled, toolConfig mode is set to NONE unless tools are explicitly provided via ChatWithTools.
+// When disabled, toolConfig mode is set to NONE unless tools are explicitly provided via ChatRequest.Tools.
 func WithFunctionCalling(enabled bool) Option {
 	return func(g *Gemini) { g.functionCalling = enabled }
 }

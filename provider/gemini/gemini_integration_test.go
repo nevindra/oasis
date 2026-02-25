@@ -163,7 +163,7 @@ func TestIntegration(t *testing.T) {
 
 	time.Sleep(rateLimitDelay)
 
-	t.Run("ChatWithTools", func(t *testing.T) {
+	t.Run("ChatWithToolsOnRequest", func(t *testing.T) {
 		g := New(key, "gemini-2.0-flash")
 
 		tools := []oasis.ToolDefinition{
@@ -174,13 +174,14 @@ func TestIntegration(t *testing.T) {
 			},
 		}
 
-		resp, err := g.ChatWithTools(context.Background(), oasis.ChatRequest{
+		resp, err := g.Chat(context.Background(), oasis.ChatRequest{
 			Messages: []oasis.ChatMessage{
 				{Role: "user", Content: "What's the weather in Tokyo?"},
 			},
-		}, tools)
+			Tools: tools,
+		})
 		if err != nil {
-			t.Fatalf("ChatWithTools failed: %v", err)
+			t.Fatalf("Chat with tools failed: %v", err)
 		}
 
 		if len(resp.ToolCalls) == 0 {

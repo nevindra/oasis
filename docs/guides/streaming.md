@@ -1,6 +1,6 @@
 # Streaming
 
-Stream LLM tokens and execution events as they happen instead of waiting for the full response. Both LLMAgent and Network support streaming via the `StreamingAgent` interface.
+Stream LLM tokens and execution events as they happen instead of waiting for the full response. `LLMAgent`, `Network`, and `Workflow` all support streaming via the `StreamingAgent` interface.
 
 ## Basic Streaming
 
@@ -20,14 +20,26 @@ if sa, ok := agent.(oasis.StreamingAgent); ok {
                 fmt.Printf("[thinking: %s]\n", ev.Content)
             case oasis.EventTextDelta:
                 fmt.Print(ev.Content)
+            case oasis.EventToolCallDelta:
+                fmt.Printf("[tool %s building args: %s]\n", ev.ID, ev.Content)
             case oasis.EventToolCallStart:
-                fmt.Printf("\n[calling %s...]\n", ev.Name)
+                fmt.Printf("\n[calling %s (id=%s)...]\n", ev.Name, ev.ID)
+            case oasis.EventToolProgress:
+                fmt.Printf("[%s progress: %s]\n", ev.Name, ev.Content)
             case oasis.EventToolCallResult:
                 fmt.Printf("[%s done]\n", ev.Name)
+            case oasis.EventRoutingDecision:
+                fmt.Printf("[routing: %s]\n", ev.Content)
             case oasis.EventAgentStart:
                 fmt.Printf("\n[agent %s working...]\n", ev.Name)
             case oasis.EventAgentFinish:
                 fmt.Printf("[agent %s done]\n", ev.Name)
+            case oasis.EventStepStart:
+                fmt.Printf("[step %s started]\n", ev.Name)
+            case oasis.EventStepProgress:
+                fmt.Printf("[step %s: %s]\n", ev.Name, ev.Content)
+            case oasis.EventStepFinish:
+                fmt.Printf("[step %s finished]\n", ev.Name)
             }
         }
     }()
@@ -37,33 +49,50 @@ if sa, ok := agent.(oasis.StreamingAgent); ok {
 
 ## Stream Events
 
-The channel carries typed `StreamEvent` values. Eight event types:
+The channel carries typed `StreamEvent` values. Fourteen event types cover agents, tools, workflows, and networks:
 
-| Event Type             | Emitted By                      | Payload                                                       |
-| ---------------------- | ------------------------------- | ------------------------------------------------------------- |
-| `EventInputReceived`   | LLMAgent/Network entry          | `Name` = agent name, `Content` = task input                   |
-| `EventProcessingStart` | runLoop (after context loading) | `Name` = loop identifier (e.g. `agent:name`)                  |
-| `EventTextDelta`       | Provider (ChatStream)           | `Content` = text chunk                                        |
-| `EventThinking`        | runLoop (after LLM call)        | `Content` = reasoning/chain-of-thought text                    |
-| `EventToolCallStart`   | runLoop (before tool dispatch)  | `Name` = tool name, `Args` = arguments                        |
-| `EventToolCallResult`  | runLoop (after tool completes)  | `Name` = tool name, `Content` = result, `Usage`, `Duration`   |
-| `EventAgentStart`      | Network dispatch                | `Name` = agent name, `Content` = task                         |
-| `EventAgentFinish`     | Network dispatch                | `Name` = agent name, `Content` = output, `Usage`, `Duration`  |
+| Event Type | Emitted By | Payload |
+|---|---|---|
+| `EventInputReceived` | LLMAgent/Network entry | `Name` = agent name, `Content` = task input |
+| `EventProcessingStart` | runLoop (after context loading) | `Name` = loop identifier (e.g. `agent:name`) |
+| `EventTextDelta` | Provider (ChatStream) | `Content` = text chunk |
+| `EventThinking` | runLoop (after LLM call) | `Content` = reasoning/chain-of-thought text |
+| `EventToolCallDelta` | Provider (ChatStream) | `ID` = tool call ID, `Content` = argument chunk |
+| `EventToolCallStart` | runLoop (before tool dispatch) | `ID` = tool call ID, `Name` = tool name, `Args` = arguments |
+| `EventToolProgress` | StreamingTool (during execution) | `Name` = tool name, `Content` = progress JSON |
+| `EventToolCallResult` | runLoop (after tool completes) | `ID` = tool call ID, `Name` = tool name, `Content` = result, `Usage`, `Duration` |
+| `EventRoutingDecision` | Network (after router response) | `Name` = network name, `Content` = JSON (`{"agents":[...],"tools":[...]}`) |
+| `EventAgentStart` | Network dispatch | `Name` = agent name, `Content` = task |
+| `EventAgentFinish` | Network dispatch | `Name` = agent name, `Content` = output, `Usage`, `Duration` |
+| `EventStepStart` | Workflow (before step execution) | `Name` = step name |
+| `EventStepProgress` | Workflow ForEach (after iteration) | `Name` = step name, `Content` = JSON (`{"completed":3,"total":10}`) |
+| `EventStepFinish` | Workflow (after step completes) | `Name` = step name, `Content` = output or error, `Duration` |
 
 ```go
 type StreamEvent struct {
     Type     StreamEventType  `json:"type"`
+    ID       string           `json:"id,omitempty"`       // tool call correlation
     Name     string           `json:"name,omitempty"`
     Content  string           `json:"content,omitempty"`
     Args     json.RawMessage  `json:"args,omitempty"`
     Usage    Usage            `json:"usage,omitempty"`    // tool-call-result, agent-finish
-    Duration time.Duration    `json:"duration,omitempty"` // tool-call-result, agent-finish
+    Duration time.Duration    `json:"duration,omitempty"` // tool-call-result, agent-finish, step-finish
 }
 ```
 
+### Tool Call Correlation
+
+Tool call events share the same `ID` for correlation:
+
+1. `EventToolCallDelta` — incremental argument chunks from the LLM (ID = tool call ID)
+2. `EventToolCallStart` — tool dispatch begins (ID = tool call ID)
+3. `EventToolCallResult` — tool returns (ID = tool call ID)
+
+This lets consumers track individual tool calls through their lifecycle, even when multiple calls overlap in a streaming response.
+
 ## How It Works
 
-Tool-calling iterations run in blocking mode (`ChatWithTools`), but emit tool events on the channel. The final text response streams token-by-token via `ChatStream`:
+The tool-calling loop uses `ChatStream` for all LLM calls (when streaming), emitting `EventToolCallDelta` as arguments arrive. Tool dispatch emits start/progress/result events. The final text response streams token-by-token:
 
 ```mermaid
 sequenceDiagram
@@ -77,14 +106,16 @@ sequenceDiagram
     Agent-->>Caller: ch <- ProcessingStart
 
     rect rgb(240, 240, 240)
-        Note over Agent,LLM: Blocking tool loop (with events)
-        Agent->>LLM: ChatWithTools (blocking)
-        LLM-->>Agent: tool calls
+        Note over Agent,LLM: Streaming tool loop
+        Agent->>LLM: ChatStream(req, ch) [req.Tools set]
+        loop argument chunks
+            LLM-->>Agent: tool_call delta
+            Agent-->>Caller: ch <- ToolCallDelta
+        end
+        LLM-->>Agent: ChatResponse{ToolCalls}
         Agent-->>Caller: ch <- ToolCallStart
         Agent->>Agent: execute tools
         Agent-->>Caller: ch <- ToolCallResult
-        Agent->>LLM: ChatWithTools (blocking)
-        LLM-->>Agent: no tool calls
     end
 
     rect rgb(230, 245, 255)
@@ -98,6 +129,94 @@ sequenceDiagram
 
     Agent-->>Caller: AgentResult
 ```
+
+## Workflow Streaming
+
+Workflows implement `StreamingAgent`. Use `ExecuteStream` to receive step-level events as the DAG executes:
+
+```go
+wf, _ := oasis.NewWorkflow("pipeline", "data pipeline",
+    oasis.WithStep("extract", extractFn),
+    oasis.WithStep("transform", transformFn, oasis.DependsOn("extract")),
+    oasis.WithStep("load", loadFn, oasis.DependsOn("transform")),
+)
+
+ch := make(chan oasis.StreamEvent, 64)
+go func() {
+    for ev := range ch {
+        switch ev.Type {
+        case oasis.EventStepStart:
+            fmt.Printf("[%s started]\n", ev.Name)
+        case oasis.EventStepFinish:
+            fmt.Printf("[%s finished in %v]\n", ev.Name, ev.Duration)
+        }
+    }
+}()
+result, err := wf.ExecuteStream(ctx, task, ch)
+```
+
+### ForEach Progress
+
+ForEach steps emit `EventStepProgress` after each completed iteration:
+
+```go
+oasis.WithForEach("process-items", processFn,
+    oasis.ForEachItems("items"),
+    oasis.ForEachConcurrency(4),
+)
+// Emits: {"completed":1,"total":10}, {"completed":2,"total":10}, ...
+```
+
+## StreamingTool
+
+Tools can implement the optional `StreamingTool` interface to emit progress events during execution:
+
+```go
+type MyTool struct{}
+
+func (t *MyTool) Definitions() []oasis.ToolDefinition {
+    return []oasis.ToolDefinition{{Name: "my_tool", Description: "Long-running tool"}}
+}
+
+func (t *MyTool) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
+    // Non-streaming fallback
+    return oasis.ToolResult{Content: "done"}, nil
+}
+
+func (t *MyTool) ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- oasis.StreamEvent) (oasis.ToolResult, error) {
+    for i := 0; i < 10; i++ {
+        // Do work...
+        ch <- oasis.StreamEvent{
+            Type:    oasis.EventToolProgress,
+            Name:    name,
+            Content: fmt.Sprintf(`{"step":%d,"total":10}`, i+1),
+        }
+    }
+    return oasis.ToolResult{Content: "done"}, nil
+}
+```
+
+When the agent streams, `ExecuteStream` is called automatically. When the agent uses non-streaming `Execute`, the regular `Execute` method is called — no special handling needed.
+
+## Stream Resume
+
+When a suspended agent or workflow is resumed, use `ResumeStream` for streaming output:
+
+```go
+var suspended *oasis.ErrSuspended
+if errors.As(err, &suspended) {
+    // Later, resume with streaming
+    ch := make(chan oasis.StreamEvent, 64)
+    go func() {
+        for ev := range ch {
+            fmt.Printf("[%s] %s\n", ev.Type, ev.Content)
+        }
+    }()
+    result, err := suspended.ResumeStream(ctx, approvalData, ch)
+}
+```
+
+`ResumeStream` works for both agent-level and workflow-level suspensions. The channel is closed when streaming completes. If the suspension was created in a non-streaming context (no `resumeStream` closure), `ResumeStream` returns an error and closes `ch`.
 
 ## Channel Buffering
 
@@ -225,5 +344,7 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 ## See Also
 
 - [Agent Concept](../concepts/agent.md) — StreamingAgent interface
+- [Workflow Concept](../concepts/workflow.md) — Workflow streaming
 - [Processors Guide](processors-and-guardrails.md) — PostProcessor details
 - [Observability](../concepts/observability.md) — Tracer/Span interfaces
+- [Human-in-the-Loop](human-in-the-loop.md) — Suspend/resume with streaming

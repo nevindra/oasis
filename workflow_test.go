@@ -2,7 +2,7 @@ package oasis
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -311,7 +311,7 @@ func TestResolveJSONMarshalError(t *testing.T) {
 func TestWorkflowErrorFormat(t *testing.T) {
 	err := &WorkflowError{
 		StepName: "fetch",
-		Err:      json.Unmarshal([]byte("not json"), nil),
+		Err:      fmt.Errorf("invalid character 'o' in literal null"),
 	}
 
 	got := err.Error()

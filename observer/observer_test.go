@@ -24,9 +24,6 @@ func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) Chat(_ context.Context, _ oasis.ChatRequest) (oasis.ChatResponse, error) {
 	return m.chatResp, m.chatErr
 }
-func (m *mockProvider) ChatWithTools(_ context.Context, _ oasis.ChatRequest, _ []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-	return m.chatResp, m.chatErr
-}
 func (m *mockProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: "hello"}
 	ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: " world"}
@@ -43,9 +40,6 @@ type mockProviderManyEvents struct {
 
 func (m *mockProviderManyEvents) Name() string { return m.name }
 func (m *mockProviderManyEvents) Chat(_ context.Context, _ oasis.ChatRequest) (oasis.ChatResponse, error) {
-	return m.chatResp, nil
-}
-func (m *mockProviderManyEvents) ChatWithTools(_ context.Context, _ oasis.ChatRequest, _ []oasis.ToolDefinition) (oasis.ChatResponse, error) {
 	return m.chatResp, nil
 }
 func (m *mockProviderManyEvents) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
@@ -143,7 +137,7 @@ func TestObservedProviderChatError(t *testing.T) {
 	}
 }
 
-func TestObservedProviderChatWithTools(t *testing.T) {
+func TestObservedProviderChatWithToolsOnRequest(t *testing.T) {
 	want := oasis.ChatResponse{
 		Content: "tool response",
 		ToolCalls: []oasis.ToolCall{
@@ -155,9 +149,9 @@ func TestObservedProviderChatWithTools(t *testing.T) {
 	op := WrapProvider(inner, "m", testInstruments(t))
 
 	tools := []oasis.ToolDefinition{{Name: "search", Description: "search things"}}
-	got, err := op.ChatWithTools(context.Background(), oasis.ChatRequest{}, tools)
+	got, err := op.Chat(context.Background(), oasis.ChatRequest{Tools: tools})
 	if err != nil {
-		t.Fatalf("ChatWithTools returned unexpected error: %v", err)
+		t.Fatalf("Chat with tools returned unexpected error: %v", err)
 	}
 	if got.Content != want.Content {
 		t.Errorf("Content = %q, want %q", got.Content, want.Content)

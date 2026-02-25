@@ -68,17 +68,6 @@ func (r *rateLimitProvider) Chat(ctx context.Context, req ChatRequest) (ChatResp
 	return resp, err
 }
 
-func (r *rateLimitProvider) ChatWithTools(ctx context.Context, req ChatRequest, tools []ToolDefinition) (ChatResponse, error) {
-	if err := r.waitForBudget(ctx); err != nil {
-		return ChatResponse{}, err
-	}
-	resp, err := r.inner.ChatWithTools(ctx, req, tools)
-	if err == nil {
-		r.recordUsage(resp.Usage)
-	}
-	return resp, err
-}
-
 func (r *rateLimitProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	if err := r.waitForBudget(ctx); err != nil {
 		close(ch)

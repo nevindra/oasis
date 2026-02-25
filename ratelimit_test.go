@@ -122,15 +122,17 @@ func TestWithRateLimit_RPMAndTPM(t *testing.T) {
 	}
 }
 
-// --- ChatWithTools and ChatStream tests (Task 6) ---
+// --- Chat with tools and ChatStream tests ---
 
-func TestWithRateLimit_ChatWithTools(t *testing.T) {
+func TestWithRateLimit_ChatWithToolsOnRequest(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{resp: ChatResponse{Content: "ok", Usage: Usage{InputTokens: 50, OutputTokens: 50}}},
 	}}
 	p := WithRateLimit(stub, RPM(60))
 
-	resp, err := p.ChatWithTools(context.Background(), ChatRequest{}, nil)
+	resp, err := p.Chat(context.Background(), ChatRequest{
+		Tools: []ToolDefinition{{Name: "test"}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

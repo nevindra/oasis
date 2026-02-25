@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // --- ForEach iteration helpers ---
@@ -120,7 +121,7 @@ func toolStepFunc(tool Tool, toolName string, cfg *stepConfig) StepFunc {
 
 // executeForEach iterates over a collection from context, running the step
 // function once per element. Concurrency is bounded by the step's concurrency setting.
-func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *executionState) error {
+func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *executionState, ch chan<- StreamEvent) error {
 	if s.iterOver == "" {
 		return fmt.Errorf("step %s: ForEach requires IterOver option", s.name)
 	}
@@ -148,6 +149,8 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 	iterCtx, iterCancel := context.WithCancel(ctx)
 	defer iterCancel()
 
+	total := len(items)
+	var completed atomic.Int64
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	var firstErr error
@@ -178,6 +181,20 @@ func (w *Workflow) executeForEach(ctx context.Context, s *stepConfig, state *exe
 				if err := s.fn(elemCtx, state.wCtx); err != nil {
 					errOnce.Do(func() { firstErr = err })
 					iterCancel()
+					return
+				}
+
+				// Emit step-progress event after each successful iteration.
+				done := completed.Add(1)
+				if ch != nil {
+					select {
+					case ch <- StreamEvent{
+						Type:    EventStepProgress,
+						Name:    s.name,
+						Content: fmt.Sprintf(`{"completed":%d,"total":%d}`, done, total),
+					}:
+					case <-iterCtx.Done():
+					}
 				}
 			}(item, i)
 			continue

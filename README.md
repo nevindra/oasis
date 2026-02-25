@@ -183,7 +183,7 @@ h.Cancel()
 
 | Interface | Purpose |
 | --------- | ------- |
-| `Provider` | LLM backend — `Chat`, `ChatWithTools`, `ChatStream` |
+| `Provider` | LLM backend — `Chat`, `ChatStream` |
 | `EmbeddingProvider` | Text-to-vector embedding |
 | `Store` | Persistence with vector search, keyword search, graph storage |
 | `MemoryStore` | Long-term semantic memory (facts, confidence, decay) |

@@ -80,21 +80,17 @@ func (p *Provider) mergeGenParams(params *oasis.GenerationParams) []Option {
 }
 
 // Chat sends a non-streaming chat request and returns the complete response.
+// When req.Tools is non-empty, the response may contain ToolCalls.
 func (p *Provider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-	body := BuildBody(req.Messages, nil, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
-	return p.doRequest(ctx, body)
-}
-
-// ChatWithTools sends a chat request with tool definitions.
-func (p *Provider) ChatWithTools(ctx context.Context, req oasis.ChatRequest, tools []oasis.ToolDefinition) (oasis.ChatResponse, error) {
-	body := BuildBody(req.Messages, tools, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
+	body := BuildBody(req.Messages, req.Tools, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
 	return p.doRequest(ctx, body)
 }
 
 // ChatStream streams text-delta events into ch, then returns the final accumulated response.
 // The channel is closed when streaming completes (via StreamSSE) or on error.
+// When req.Tools is non-empty, tool call arguments stream as EventToolCallDelta events.
 func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-	body := BuildBody(req.Messages, nil, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
+	body := BuildBody(req.Messages, req.Tools, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
 	body.Stream = true
 	body.StreamOptions = &StreamOptions{IncludeUsage: true}
 

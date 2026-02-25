@@ -4,11 +4,56 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// --- New event type tests ---
+
+func TestNewStreamEventTypes(t *testing.T) {
+	// Verify the new event type constants have the expected string values.
+	tests := []struct {
+		got  StreamEventType
+		want string
+	}{
+		{EventToolCallDelta, "tool-call-delta"},
+		{EventToolProgress, "tool-progress"},
+		{EventStepStart, "step-start"},
+		{EventStepFinish, "step-finish"},
+		{EventStepProgress, "step-progress"},
+		{EventRoutingDecision, "routing-decision"},
+	}
+	for _, tt := range tests {
+		if string(tt.got) != tt.want {
+			t.Errorf("event type = %q, want %q", tt.got, tt.want)
+		}
+	}
+}
+
+func TestStreamEventIDField(t *testing.T) {
+	ev := StreamEvent{
+		Type: EventToolCallStart,
+		ID:   "call_123",
+		Name: "search",
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"id":"call_123"`) {
+		t.Errorf("JSON missing id field: %s", data)
+	}
+
+	// Zero-value ID should be omitted.
+	ev2 := StreamEvent{Type: EventTextDelta, Content: "hi"}
+	data2, _ := json.Marshal(ev2)
+	if strings.Contains(string(data2), `"id"`) {
+		t.Errorf("empty ID should be omitted: %s", data2)
+	}
+}
 
 // --- Streaming tests ---
 
@@ -59,7 +104,7 @@ func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 		responses: []ChatResponse{
 			// First: tool call (blocking)
 			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
-			// Second: final text response (streamed as single chunk since from ChatWithTools)
+			// Second: final text response (streamed as single chunk since from Chat with tools)
 			{Content: "after tool call"},
 		},
 	}
@@ -790,6 +835,94 @@ func TestThinkingEventEmitted(t *testing.T) {
 	}
 }
 
+// --- StreamingTool tests ---
+
+// progressTool implements StreamingTool for testing.
+type progressTool struct{}
+
+func (t progressTool) Definitions() []ToolDefinition {
+	return []ToolDefinition{{
+		Name:        "slow_search",
+		Description: "Slow search with progress",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
+	}}
+}
+
+func (t progressTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{Content: "found 3 results"}, nil
+}
+
+func (t progressTool) ExecuteStream(_ context.Context, name string, _ json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+	for i := 1; i <= 3; i++ {
+		ch <- StreamEvent{
+			Type:    EventToolProgress,
+			Name:    name,
+			Content: fmt.Sprintf(`{"found":%d}`, i),
+		}
+	}
+	return ToolResult{Content: "found 3 results"}, nil
+}
+
+func TestStreamingToolEmitsProgress(t *testing.T) {
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "slow_search", Args: json.RawMessage(`{"q":"test"}`)}}},
+			{Content: "done"},
+		},
+	}
+
+	agent := NewLLMAgent("searcher", "Searches", provider,
+		WithTools(progressTool{}),
+	)
+
+	ch := make(chan StreamEvent, 32)
+	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "search"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "done" {
+		t.Errorf("Output = %q, want %q", result.Output, "done")
+	}
+
+	var progressEvents []StreamEvent
+	for ev := range ch {
+		if ev.Type == EventToolProgress {
+			progressEvents = append(progressEvents, ev)
+		}
+	}
+	if len(progressEvents) != 3 {
+		t.Fatalf("expected 3 tool-progress events, got %d", len(progressEvents))
+	}
+	if progressEvents[0].Name != "slow_search" {
+		t.Errorf("progress[0].Name = %q, want %q", progressEvents[0].Name, "slow_search")
+	}
+}
+
+func TestStreamingToolFallsBackToExecute(t *testing.T) {
+	// When not streaming (Execute, not ExecuteStream), StreamingTool should
+	// fall back to regular Execute.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "slow_search", Args: json.RawMessage(`{"q":"test"}`)}}},
+			{Content: "done"},
+		},
+	}
+
+	agent := NewLLMAgent("searcher", "Searches", provider,
+		WithTools(progressTool{}),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "done" {
+		t.Errorf("Output = %q, want %q", result.Output, "done")
+	}
+}
+
 func TestNoThinkingEventWhenEmpty(t *testing.T) {
 	// When provider returns no thinking content, no EventThinking events should appear.
 	provider := &mockProvider{
@@ -813,6 +946,261 @@ func TestNoThinkingEventWhenEmpty(t *testing.T) {
 	for ev := range ch {
 		if ev.Type == EventThinking {
 			t.Error("unexpected thinking event when provider returns no thinking")
+		}
+	}
+}
+
+// --- Workflow streaming tests ---
+
+func TestWorkflowExecuteStream(t *testing.T) {
+	wf, err := NewWorkflow("test-wf", "Streaming workflow",
+		Step("step-a", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("step-a.output", "hello")
+			return nil
+		}),
+		Step("step-b", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("step-b.output", "world")
+			return nil
+		}, After("step-a")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ch := make(chan StreamEvent, 32)
+	result, err := wf.ExecuteStream(context.Background(), AgentTask{Input: "go"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "world" {
+		t.Errorf("Output = %q, want %q", result.Output, "world")
+	}
+
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+
+	// Should have step-start and step-finish for both steps.
+	var starts, finishes []string
+	for _, ev := range events {
+		switch ev.Type {
+		case EventStepStart:
+			starts = append(starts, ev.Name)
+		case EventStepFinish:
+			finishes = append(finishes, ev.Name)
+		}
+	}
+	if len(starts) != 2 {
+		t.Errorf("step-start events = %d, want 2", len(starts))
+	}
+	if len(finishes) != 2 {
+		t.Errorf("step-finish events = %d, want 2", len(finishes))
+	}
+}
+
+func TestWorkflowExecuteStreamStepFailure(t *testing.T) {
+	wf, err := NewWorkflow("fail-wf", "Failing workflow",
+		Step("step-a", func(_ context.Context, wCtx *WorkflowContext) error {
+			return fmt.Errorf("step-a broke")
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ch := make(chan StreamEvent, 32)
+	_, err = wf.ExecuteStream(context.Background(), AgentTask{Input: "go"}, ch)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+
+	// Should have step-start and step-finish with error content.
+	var hasStart, hasFinish bool
+	for _, ev := range events {
+		if ev.Type == EventStepStart && ev.Name == "step-a" {
+			hasStart = true
+		}
+		if ev.Type == EventStepFinish && ev.Name == "step-a" {
+			hasFinish = true
+			if !strings.Contains(ev.Content, "step-a broke") {
+				t.Errorf("step-finish content = %q, want error message", ev.Content)
+			}
+		}
+	}
+	if !hasStart {
+		t.Error("expected step-start for step-a")
+	}
+	if !hasFinish {
+		t.Error("expected step-finish for step-a")
+	}
+}
+
+func TestWorkflowForEachStreamProgress(t *testing.T) {
+	wf, err := NewWorkflow("foreach-wf", "ForEach streaming",
+		Step("setup", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("items", []any{"a", "b", "c"})
+			return nil
+		}),
+		ForEach("process", func(_ context.Context, wCtx *WorkflowContext) error {
+			return nil
+		}, After("setup"), IterOver("items")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ch := make(chan StreamEvent, 64)
+	_, err = wf.ExecuteStream(context.Background(), AgentTask{Input: "go"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var progressEvents []StreamEvent
+	for ev := range ch {
+		if ev.Type == EventStepProgress {
+			progressEvents = append(progressEvents, ev)
+		}
+	}
+	if len(progressEvents) != 3 {
+		t.Fatalf("expected 3 step-progress events, got %d", len(progressEvents))
+	}
+	// Last progress should show completed=3, total=3
+	if !strings.Contains(progressEvents[2].Content, `"completed":3`) {
+		t.Errorf("last progress = %q, want completed:3", progressEvents[2].Content)
+	}
+}
+
+func TestWorkflowResumeStream(t *testing.T) {
+	callCount := 0
+	wf, err := NewWorkflow("suspend-wf", "Suspend and resume with streaming",
+		Step("check", func(_ context.Context, wCtx *WorkflowContext) error {
+			callCount++
+			if _, ok := ResumeData(wCtx); ok {
+				wCtx.Set("check.output", "resumed")
+				return nil
+			}
+			return Suspend(json.RawMessage(`{"need":"approval"}`))
+		}),
+		Step("finish", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("finish.output", "done")
+			return nil
+		}, After("check")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First execution — suspends.
+	ch := make(chan StreamEvent, 32)
+	_, err = wf.ExecuteStream(context.Background(), AgentTask{Input: "go"}, ch)
+	for range ch {
+	} // drain
+
+	var suspended *ErrSuspended
+	if !errors.As(err, &suspended) {
+		t.Fatalf("expected ErrSuspended, got %v", err)
+	}
+
+	// Resume with streaming.
+	ch2 := make(chan StreamEvent, 32)
+	result, err := suspended.ResumeStream(context.Background(), json.RawMessage(`"approved"`), ch2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "done" {
+		t.Errorf("Output = %q, want %q", result.Output, "done")
+	}
+
+	var events []StreamEvent
+	for ev := range ch2 {
+		events = append(events, ev)
+	}
+
+	// Should have step events for check (re-executed) and finish.
+	var stepStarts []string
+	for _, ev := range events {
+		if ev.Type == EventStepStart {
+			stepStarts = append(stepStarts, ev.Name)
+		}
+	}
+	if len(stepStarts) < 1 {
+		t.Errorf("expected at least 1 step-start on resume, got %d", len(stepStarts))
+	}
+}
+
+// --- Network routing decision tests ---
+
+func TestNetworkRoutingDecisionEvent(t *testing.T) {
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{
+				{ID: "1", Name: "agent_researcher", Args: json.RawMessage(`{"task":"find papers"}`)},
+			}},
+			{Content: "summary"},
+		},
+	}
+
+	researcher := &stubAgent{
+		name: "researcher",
+		desc: "Finds papers",
+		fn: func(task AgentTask) (AgentResult, error) {
+			return AgentResult{Output: "found 3 papers"}, nil
+		},
+	}
+
+	network := NewNetwork("coordinator", "Routes tasks", router, WithAgents(researcher))
+
+	ch := make(chan StreamEvent, 32)
+	_, err := network.ExecuteStream(context.Background(), AgentTask{Input: "research"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var routingEvents []StreamEvent
+	for ev := range ch {
+		if ev.Type == EventRoutingDecision {
+			routingEvents = append(routingEvents, ev)
+		}
+	}
+	if len(routingEvents) != 1 {
+		t.Fatalf("expected 1 routing-decision event, got %d", len(routingEvents))
+	}
+	if !strings.Contains(routingEvents[0].Content, "researcher") {
+		t.Errorf("routing-decision content = %q, want mention of researcher", routingEvents[0].Content)
+	}
+}
+
+func TestNetworkRoutingDecisionNotEmittedForToolsOnly(t *testing.T) {
+	// When the Network only calls regular tools (no agent_* calls),
+	// no routing-decision event should be emitted.
+	router := &mockProvider{
+		name: "router",
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{
+				{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)},
+			}},
+			{Content: "done"},
+		},
+	}
+
+	network := NewNetwork("net", "Tools only", router, WithTools(mockTool{}))
+
+	ch := make(chan StreamEvent, 32)
+	_, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for ev := range ch {
+		if ev.Type == EventRoutingDecision {
+			t.Error("unexpected routing-decision event for tool-only dispatch")
 		}
 	}
 }

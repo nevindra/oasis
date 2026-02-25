@@ -21,12 +21,15 @@ type Agent interface {
 
 // StreamingAgent is an optional capability for agents that support event streaming.
 // Check via type assertion: if sa, ok := agent.(StreamingAgent); ok { ... }
+//
+// Implemented by LLMAgent, Network, and Workflow.
 type StreamingAgent interface {
 	Agent
 	// ExecuteStream runs the agent like Execute, but emits StreamEvent values
 	// into ch throughout execution. Events include text deltas, tool call
-	// start/result, and agent start/finish (for Networks). The channel is
-	// closed when streaming completes.
+	// deltas/start/result/progress, agent start/finish (Networks), step
+	// start/finish/progress (Workflows), and routing decisions (Networks).
+	// The channel is closed when streaming completes.
 	ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
 }
 

@@ -34,6 +34,10 @@ type DispatchFunc func(ctx context.Context, tc ToolCall) DispatchResult
 // dispatch functions work without an intermediate registry allocation.
 type toolExecFunc = func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error)
 
+// toolExecStreamFunc executes a tool with streaming progress support.
+// Abstracts ToolRegistry.ExecuteStream.
+type toolExecStreamFunc = func(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error)
+
 // dispatchBuiltins handles the built-in special-case tools (ask_user, execute_plan,
 // execute_code). Returns (result, true) if the call was handled, or (zero, false)
 // if the caller should proceed with its own routing (agent delegation, direct tools).
@@ -63,8 +67,20 @@ func dispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, i
 }
 
 // dispatchTool executes a tool via the given executor and converts the result
-// to a DispatchResult. Shared by LLMAgent and Network for the common tool path.
-func dispatchTool(ctx context.Context, executeTool toolExecFunc, name string, args json.RawMessage) DispatchResult {
+// to a DispatchResult. When executeToolStream is non-nil and ch is non-nil,
+// it uses the streaming executor instead.
+// Shared by LLMAgent and Network for the common tool path.
+func dispatchTool(ctx context.Context, executeTool toolExecFunc, executeToolStream toolExecStreamFunc, name string, args json.RawMessage, ch chan<- StreamEvent) DispatchResult {
+	if ch != nil && executeToolStream != nil {
+		result, err := executeToolStream(ctx, name, args, ch)
+		if err != nil {
+			return DispatchResult{Content: "error: " + err.Error(), IsError: true}
+		}
+		if result.Error != "" {
+			return DispatchResult{Content: "error: " + result.Error, IsError: true}
+		}
+		return DispatchResult{Content: result.Content}
+	}
 	result, err := executeTool(ctx, name, args)
 	if err != nil {
 		return DispatchResult{Content: "error: " + err.Error(), IsError: true}
@@ -225,8 +241,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		var resp ChatResponse
 		var err error
 
+		req.Tools = cfg.tools
 		if len(cfg.tools) > 0 {
-			resp, err = cfg.provider.ChatWithTools(iterCtx, req, cfg.tools)
+			resp, err = cfg.provider.Chat(iterCtx, req)
 		} else if ch != nil {
 			// No tools, streaming — stream the response directly.
 			resp, err = cfg.provider.ChatStream(iterCtx, req, ch)
@@ -329,7 +346,31 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		if ch != nil {
 			for _, tc := range resp.ToolCalls {
 				select {
-				case ch <- StreamEvent{Type: EventToolCallStart, Name: tc.Name, Args: tc.Args}:
+				case ch <- StreamEvent{Type: EventToolCallStart, ID: tc.ID, Name: tc.Name, Args: tc.Args}:
+				case <-ctx.Done():
+				}
+			}
+
+			// Emit routing-decision for Networks (when agent_* tool calls are present).
+			var agents, directTools []string
+			for _, tc := range resp.ToolCalls {
+				if after, ok := strings.CutPrefix(tc.Name, "agent_"); ok {
+					agents = append(agents, after)
+				} else {
+					directTools = append(directTools, tc.Name)
+				}
+			}
+			if len(agents) > 0 {
+				summary, _ := json.Marshal(map[string][]string{
+					"agents": agents,
+					"tools":  directTools,
+				})
+				select {
+				case ch <- StreamEvent{
+					Type:    EventRoutingDecision,
+					Name:    cfg.name,
+					Content: string(summary),
+				}:
 				case <-ctx.Done():
 				}
 			}
@@ -348,6 +389,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				select {
 				case ch <- StreamEvent{
 					Type:     EventToolCallResult,
+					ID:       tc.ID,
 					Name:     tc.Name,
 					Content:  results[j].content,
 					Usage:    results[j].usage,
