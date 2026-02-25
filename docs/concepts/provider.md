@@ -99,6 +99,38 @@ llm := gemini.New(apiKey, "gemini-2.0-flash",
 
 See [API Reference: Options — Gemini Options](../api/options.md#gemini-options) for the full option list.
 
+#### Context Caching
+
+Gemini supports explicit context caching — upload large content once, then reference the cached tokens in subsequent requests for reduced cost and latency.
+
+```go
+import "github.com/nevindra/oasis/provider/gemini"
+
+llm := gemini.New(apiKey, "gemini-2.5-flash")
+
+// 1. Create a cache with a system instruction (or conversation content)
+cc, err := llm.CreateCachedContent(ctx, gemini.NewTextCachedContent(
+    "models/gemini-2.5-flash",
+    "You are an expert on the Go programming language. [long reference docs...]",
+    1*time.Hour, // TTL
+))
+
+// 2. Use the cache in a new provider instance
+cachedLLM := gemini.New(apiKey, "gemini-2.5-flash",
+    gemini.WithCachedContent(cc.Name),
+)
+
+// 3. Subsequent requests use cached tokens — check usage
+result, _ := agent.Execute(ctx, oasis.AgentTask{Input: "Explain interfaces"})
+fmt.Println(result.Usage.CachedTokens) // tokens served from cache
+
+// 4. Manage cache lifecycle
+caches, _ := llm.ListCachedContents(ctx)
+llm.DeleteCachedContent(ctx, cc.Name)
+```
+
+The cache is immutable after creation — only the expiration can be updated via `UpdateCachedContent`. Minimum token count varies by model (1,024–4,096).
+
 ### OpenAI-Compatible Provider
 
 Most LLM providers implement the OpenAI chat completions API. Use `openaicompat.NewProvider` to connect to any of them:
@@ -139,6 +171,20 @@ llm := openaicompat.NewProvider("sk-xxx", "gpt-4o", "https://api.openai.com/v1",
 ```
 
 See [API Reference: Options — OpenAI-Compatible Options](../api/options.md#openai-compatible-options) for the full option list.
+
+#### Context Caching
+
+Some OpenAI-compatible providers (Anthropic, Qwen) support explicit cache control markers on messages. Use `WithCacheControl` to mark messages as cache breakpoints:
+
+```go
+llm := openaicompat.NewProvider(apiKey, model, baseURL,
+    openaicompat.WithOptions(
+        openaicompat.WithCacheControl(0, 1), // cache system prompt (0) and context (1)
+    ),
+)
+```
+
+The provider adds `cache_control: {"type": "ephemeral"}` to the last content block of each marked message. Cached tokens appear in `Usage.CachedTokens`. Providers without cache support silently ignore the markers.
 
 ## Provider Resolution
 
@@ -277,6 +323,7 @@ type ChatMessage struct {
 type Usage struct {
     InputTokens  int
     OutputTokens int
+    CachedTokens int // input tokens served from provider cache (zero when no caching)
 }
 ```
 

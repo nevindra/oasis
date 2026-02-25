@@ -63,6 +63,17 @@ func WithURLContext(enabled bool) Option {
 	return func(g *Gemini) { g.urlContext = enabled }
 }
 
+// WithCachedContent sets the cached content resource name to use for requests.
+// The name must reference a previously created cache (e.g. "cachedContents/abc123").
+// When set, the cached content is prepended to each request, reducing cost and
+// latency for repeated large prefixes (system instructions, documents, etc.).
+//
+// Create caches with Gemini.CreateCachedContent. The cache must use the same
+// model as the provider.
+func WithCachedContent(name string) Option {
+	return func(g *Gemini) { g.cachedContent = name }
+}
+
 // WithLogger sets a structured logger for the provider.
 // When set, the provider emits warnings for unsupported GenerationParams fields.
 // If not set, no warnings are emitted.

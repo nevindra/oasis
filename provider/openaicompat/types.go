@@ -64,10 +64,19 @@ type Message struct {
 
 // ContentBlock represents a typed content block for multimodal messages.
 type ContentBlock struct {
-	Type     string    `json:"type"` // "text", "image_url", or "file"
-	Text     string    `json:"text,omitempty"`
-	ImageURL *ImageURL `json:"image_url,omitempty"`
-	File     *FileData `json:"file,omitempty"`
+	Type         string        `json:"type"` // "text", "image_url", or "file"
+	Text         string        `json:"text,omitempty"`
+	ImageURL     *ImageURL     `json:"image_url,omitempty"`
+	File         *FileData     `json:"file,omitempty"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
+}
+
+// CacheControl marks a content block as a cache breakpoint.
+// The provider caches all content up to and including this block.
+// Supported by Anthropic, Qwen, and other providers that implement
+// the cache_control extension to the OpenAI chat completions format.
+type CacheControl struct {
+	Type string `json:"type"` // "ephemeral"
 }
 
 // ImageURL holds the URL (or data URI) for an image content block.
@@ -135,7 +144,13 @@ type ChoiceMessage struct {
 
 // Usage contains token usage statistics.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int              `json:"prompt_tokens"`
+	CompletionTokens int              `json:"completion_tokens"`
+	TotalTokens      int              `json:"total_tokens"`
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// PromptTokensDetails breaks down prompt token usage, including cached tokens.
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
 }

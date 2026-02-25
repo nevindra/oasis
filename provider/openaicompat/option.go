@@ -44,3 +44,44 @@ func WithSeed(s int) Option {
 func WithToolChoice(choice any) Option {
 	return func(r *ChatRequest) { r.ToolChoice = choice }
 }
+
+// WithCacheControl marks the last content block of each specified message index
+// with cache_control: {"type": "ephemeral"}. The provider caches all content
+// up to and including each marked block, reducing cost and latency on subsequent
+// requests that share the same prefix.
+//
+// Supported by Anthropic, Qwen, and other providers that implement the
+// cache_control extension. Providers without cache support silently ignore it.
+//
+// Typical usage: mark the system message and/or long context messages:
+//
+//	openaicompat.WithCacheControl(0, 1) // cache system prompt (index 0) and context (index 1)
+func WithCacheControl(messageIndices ...int) Option {
+	return func(r *ChatRequest) {
+		set := make(map[int]struct{}, len(messageIndices))
+		for _, idx := range messageIndices {
+			set[idx] = struct{}{}
+		}
+		cc := &CacheControl{Type: "ephemeral"}
+
+		for i := range r.Messages {
+			if _, ok := set[i]; !ok {
+				continue
+			}
+			msg := &r.Messages[i]
+			switch content := msg.Content.(type) {
+			case string:
+				// Convert plain string to content blocks so we can attach cache_control.
+				msg.Content = []ContentBlock{
+					{Type: "text", Text: content, CacheControl: cc},
+				}
+			case []ContentBlock:
+				// Mark the last block.
+				if len(content) > 0 {
+					content[len(content)-1].CacheControl = cc
+					msg.Content = content
+				}
+			}
+		}
+	}
+}

@@ -26,6 +26,9 @@ func ParseResponse(resp ChatResponse) (oasis.ChatResponse, error) {
 			InputTokens:  resp.Usage.PromptTokens,
 			OutputTokens: resp.Usage.CompletionTokens,
 		}
+		if resp.Usage.PromptTokensDetails != nil {
+			out.Usage.CachedTokens = resp.Usage.PromptTokensDetails.CachedTokens
+		}
 	}
 
 	return out, nil

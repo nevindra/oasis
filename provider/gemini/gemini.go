@@ -35,6 +35,7 @@ type Gemini struct {
 	functionCalling    bool
 	googleSearch       bool
 	urlContext         bool
+	cachedContent      string // cached content resource name (e.g. "cachedContents/abc123")
 }
 
 // New creates a new Gemini chat provider with functional options.
@@ -259,6 +260,7 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 	if parsed.UsageMetadata != nil {
 		usage.InputTokens = parsed.UsageMetadata.PromptTokenCount
 		usage.OutputTokens = parsed.UsageMetadata.CandidatesTokenCount
+		usage.CachedTokens = parsed.UsageMetadata.CachedContentTokenCount
 	}
 
 	return oasis.ChatResponse{
@@ -623,6 +625,10 @@ func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefin
 
 	body["generationConfig"] = genConfig
 
+	if g.cachedContent != "" {
+		body["cachedContent"] = g.cachedContent
+	}
+
 	return body, nil
 }
 
@@ -669,8 +675,9 @@ type geminiFuncCall struct {
 }
 
 type geminiUsage struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
+	PromptTokenCount          int `json:"promptTokenCount"`
+	CandidatesTokenCount      int `json:"candidatesTokenCount"`
+	CachedContentTokenCount   int `json:"cachedContentTokenCount"`
 }
 
 type embedResponse struct {
@@ -775,6 +782,7 @@ func extractUsageFromParsed(parsed map[string]json.RawMessage, usage *oasis.Usag
 	if u.PromptTokenCount > 0 || u.CandidatesTokenCount > 0 {
 		usage.InputTokens = u.PromptTokenCount
 		usage.OutputTokens = u.CandidatesTokenCount
+		usage.CachedTokens = u.CachedContentTokenCount
 	}
 }
 

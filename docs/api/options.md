@@ -177,6 +177,7 @@ Passed directly to `gemini.New(apiKey, model, ...Option)`.
 | `WithFunctionCalling(enabled bool)` | false | Allow implicit function calling. When false and no tools are provided, `toolConfig` mode is set to `NONE` |
 | `WithGoogleSearch(enabled bool)` | false | Enable grounding with Google Search |
 | `WithURLContext(enabled bool)` | false | Enable URL context tool |
+| `WithCachedContent(name string)` | — (disabled) | Reference a pre-created cache resource (e.g. `"cachedContents/abc123"`). Reduces cost and latency for repeated large prefixes. Create caches with `Gemini.CreateCachedContent` |
 | `WithLogger(l *slog.Logger)` | nil | Structured logger for warnings (e.g., unsupported GenerationParams fields) |
 
 ## OpenAI-Compatible Options
@@ -208,6 +209,7 @@ Passed inside `WithOptions(...)` or accumulated per-request.
 | `WithStop(s ...string)` | — | One or more stop sequences |
 | `WithSeed(s int)` | — | Deterministic seed for reproducible outputs |
 | `WithToolChoice(choice any)` | — | Tool selection: `"none"`, `"auto"`, `"required"`, or a specific tool object |
+| `WithCacheControl(messageIndices ...int)` | — | Mark messages as cache breakpoints with `cache_control: {"type": "ephemeral"}`. Supported by Anthropic, Qwen, and other providers with the cache_control extension |
 
 ## CodeRunner Options
 

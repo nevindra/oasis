@@ -66,6 +66,9 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 			if chunk.Usage != nil {
 				usage.InputTokens = chunk.Usage.PromptTokens
 				usage.OutputTokens = chunk.Usage.CompletionTokens
+				if chunk.Usage.PromptTokensDetails != nil {
+					usage.CachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+				}
 			}
 			continue
 		}
@@ -108,6 +111,9 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 		if chunk.Usage != nil {
 			usage.InputTokens = chunk.Usage.PromptTokens
 			usage.OutputTokens = chunk.Usage.CompletionTokens
+			if chunk.Usage.PromptTokensDetails != nil {
+				usage.CachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
 		}
 	}
 

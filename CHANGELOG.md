@@ -8,6 +8,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Context caching support** — both providers now support API-level context caching to reduce cost and latency for repeated large prefixes (system instructions, documents)
+  - **`Usage.CachedTokens`** — new field on `oasis.Usage` reports input tokens served from provider cache. Zero when no caching is active
+  - **Gemini: `WithCachedContent(name)`** — references a pre-created cache resource in requests. Cache CRUD methods on `Gemini`: `CreateCachedContent`, `GetCachedContent`, `ListCachedContents`, `UpdateCachedContent`, `DeleteCachedContent`. Convenience constructor `NewTextCachedContent(model, systemInstruction, ttl)`. Parses `cachedContentTokenCount` from usage metadata
+  - **OpenAI-compat: `WithCacheControl(messageIndices ...int)`** — marks messages with `cache_control: {"type": "ephemeral"}` for providers that support the cache_control extension (Anthropic, Qwen). New `CacheControl` and `PromptTokensDetails` types. Parses `cached_tokens` from response usage
+- **`AgentTask` builder methods** — `WithThreadID(id)`, `WithUserID(id)`, `WithChatID(id)` set context metadata and return the task for chaining. Replaces raw `map[string]any` construction with exported constants:
+  ```go
+  // before
+  task := oasis.AgentTask{Input: "hi", Context: map[string]any{oasis.ContextThreadID: "t1"}}
+  // after
+  task := oasis.AgentTask{Input: "hi"}.WithThreadID("t1")
+  ```
 - **`HTTPRunner` code execution** — new `CodeRunner` implementation (`code/` package) that POSTs code to a remote sandbox service via HTTP. Replaces `SubprocessRunner` with a sidecar container pattern for proper isolation and multi-runtime support
 - **Callback server for tool bridge** — shared `/_oasis/dispatch` HTTP endpoint with correlation-ID routing. Sandbox code calls `call_tool()` which POSTs back to this endpoint; the framework dispatches through the agent's tool registry and returns results. Supports concurrent tool calls from parallel code execution
 - **`CodeFile` type** — bidirectional file transfer between app and sandbox. Input: `Name` + `Data` (inline bytes) or `Name` + `URL` (future). Output: `Name` + `MIME` + `Data`. `Data` tagged `json:"-"` to avoid double-encoding; wire format uses base64
@@ -19,55 +30,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **Reference sandbox service (`cmd/sandbox/`)** — Docker sidecar with `POST /execute`, `GET /health`, `DELETE /workspace/{session_id}`. Python 3.12 and Node.js 22 runtimes with embedded preludes. Session-scoped workspaces with TTL eviction. Semaphore-based concurrency limiting (503 fail-fast). Dockerfile with pre-installed scientific packages (matplotlib, pandas, numpy, seaborn, pillow, scipy)
 - **Node.js runtime prelude** — `callTool()`, `callToolsParallel()`, `setResult()`, `installPackage()` for Node.js code execution. All tool functions are async. User code wrapped in async IIFE for top-level await support
 - **HTTPRunner options** — `WithCallbackAddr`, `WithCallbackExternal`, `WithMaxFileSize`, `WithMaxRetries`, `WithRetryDelay`
-
-### Removed
-
-- **`SubprocessRunner`** — replaced by `HTTPRunner` + sandbox sidecar. The `CodeRunner` interface is unchanged for pluggability
-- **`WithWorkspace`, `WithEnv`, `WithEnvPassthrough` options** — subprocess-specific options removed with `SubprocessRunner`
-
-### Removed
-
-- **`Intent` type and constants** — `Intent`, `IntentChat`, `IntentAction` were dead code with zero consumers. Deleted
-- **`ContextThreadID`, `ContextUserID`, `ContextChatID` exported constants** — replaced by `WithThreadID()`, `WithUserID()`, `WithChatID()` builder methods on `AgentTask` (see Added). The string keys are now internal
-
-### Added
-
-- **`AgentTask` builder methods** — `WithThreadID(id)`, `WithUserID(id)`, `WithChatID(id)` set context metadata and return the task for chaining. Replaces raw `map[string]any` construction with exported constants:
-  ```go
-  // before
-  task := oasis.AgentTask{Input: "hi", Context: map[string]any{oasis.ContextThreadID: "t1"}}
-  // after
-  task := oasis.AgentTask{Input: "hi"}.WithThreadID("t1")
-  ```
-
-### Changed
-
-- **Zero-allocation rune counting in `runLoop`** — replaced `len([]rune(m.Content))` with `utf8.RuneCountInString()` across all hot-path rune counting sites (`runLoop` message tracking, tool result truncation check, `runeCount` helper). Eliminates a `[]rune` heap allocation per message per iteration
-- **No JSON marshaling in routing-decision event** — replaced `json.Marshal(map[string][]string{...})` in the `EventRoutingDecision` emit path with `buildRoutingSummary()`, a `strings.Builder`-based serializer. Removes map allocation and reflection on every iteration with agent tool calls
-- **No `fmt.Sprintf` in `executePlan` loop** — replaced `fmt.Sprintf("plan_step_%d", i)` with `"plan_step_" + strconv.Itoa(i)` for cheaper string construction in the plan step ID builder
-- **Hot-path benchmarks** — added `loop_bench_test.go` with benchmarks for `runeCount` (ASCII/multibyte), `truncateStr` (short/long/multibyte), `buildRoutingSummary`, and `dispatchParallel` (single/multi). All rune counting benchmarks confirm 0 allocs/op
-
-### Added
-
 - **Six new stream event types** — `EventToolCallDelta` (incremental tool call arguments from `ChatStream`), `EventToolProgress` (intermediate progress from `StreamingTool`), `EventStepStart`/`EventStepFinish`/`EventStepProgress` (workflow DAG step lifecycle), `EventRoutingDecision` (Network router's agent/tool selections). Total event types: 14
 - **`StreamEvent.ID` field** — correlates `EventToolCallDelta`, `EventToolCallStart`, and `EventToolCallResult` events for the same tool call, enabling consumers to track individual tool calls through their lifecycle
 - **`StreamingTool` interface** — optional capability for tools that support progress streaming during execution. Tools implementing `ExecuteStream(ctx, name, args, ch)` emit `EventToolProgress` events on the parent agent's stream channel. The framework falls back to `Execute` for tools that don't implement it
 - **Workflow streaming (`ExecuteStream`)** — `Workflow` now implements `StreamingAgent`. Emits `EventStepStart` before each step, `EventStepFinish` after completion (with duration), and `EventStepProgress` during ForEach iterations (with completed/total counts)
 - **`ErrSuspended.ResumeStream`** — streaming variant of `Resume` for suspended agents and workflows. Emits `StreamEvent` values into a channel throughout the resumed execution. The channel is closed when streaming completes. Returns an error if the suspension was created without streaming support
 - **Network routing decision events** — when the router LLM returns `agent_*` tool calls, an `EventRoutingDecision` event is emitted with a JSON summary of the selected agents and direct tools
-
-### Changed
-
-- **Provider interface consolidation** — `ChatWithTools` removed; tools now passed via `ChatRequest.Tools`. `ChatStream` signature changed from `ch chan<- string` to `ch chan<- StreamEvent`, emitting typed events (text deltas, tool call deltas) instead of raw strings. Provider interface reduced from 4 methods to 3 (`Chat`, `ChatStream`, `Name`). All provider implementations and middleware (`WithRetry`, `WithRateLimit`, observer wrappers) updated accordingly
-
-### Added
-
 - **Agent-level generation parameters** — `WithTemperature`, `WithTopP`, `WithTopK`, `WithMaxTokens` agent options set LLM sampling parameters declaratively per agent. Stored as `GenerationParams` (pointer fields — nil means "use provider default") on the agent and injected into every `ChatRequest` via `loopConfig`. Providers read `req.GenerationParams` and map to their native API fields. Agents sharing one provider can now have different temperatures without creating separate provider instances
 - **`GenerationParams` type** — new protocol type (`types.go`) with `*float64` Temperature/TopP and `*int` TopK/MaxTokens. Added as optional field on `ChatRequest`. Zero-value backward compatible — nil `GenerationParams` means no override
 - **Thinking/reasoning visibility** — `ChatResponse.Thinking` carries the LLM's chain-of-thought content (e.g., Gemini `thought` parts). `AgentResult.Thinking` exposes the last reasoning from the tool-calling loop. `EventThinking` stream event fires after each LLM call when thinking is present. PostProcessors see the full `ChatResponse` including `Thinking` — can inspect reasoning for guardrails, logging, or redaction
 - **Semantic context trimming (`WithSemanticTrimming`)** — opt-in relevance-based history trimming inside `WithConversationMemory`. When the conversation exceeds `MaxTokens`, older messages are scored by cosine similarity to the current query instead of being dropped oldest-first. Lowest-scoring messages are dropped first. The most recent N messages (default 3, configurable via `KeepRecent`) are always preserved. Falls back to oldest-first trimming if embedding fails. Reuses the query embedding from `CrossThreadSearch` when both are enabled — no extra API call
 - **Provider `WithLogger(*slog.Logger)`** — both `provider/gemini` and `provider/openaicompat` gain a `WithLogger` option for structured logging. Used to emit warnings when `GenerationParams` contains fields unsupported by the provider (e.g., TopK on OpenAI). No logger = no warning
-
 - **Edge descriptions** — `ChunkEdge` now carries a `Description` field with a human-readable explanation of why the relationship exists, as generated by the LLM during graph extraction. Stored in a new `description` column across all backends (SQLite, Postgres, libSQL) with an idempotent `ALTER TABLE` migration
 - **`EdgeContext` type + `RetrievalResult.GraphContext`** — graph-discovered chunks now include `[]EdgeContext` explaining which edges led to their discovery (source chunk, relation type, description). Seed chunks have an empty `GraphContext`
 - **Sliding window batches (`WithGraphBatchOverlap`)** — graph extraction batches can now overlap, allowing consecutive batches to share chunks and discover cross-boundary relationships. Duplicate edges from overlapping batches are deduplicated by keeping the highest-weight edge per (source, target, relation) key
@@ -77,9 +50,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`DocumentChunkLister` interface** — optional Store capability (`GetChunksByDocument`) for listing chunks belonging to a specific document, discovered via type assertion
 - **`ByExcludeDocument` filter + `OpNeq`** — new `ChunkFilter` constructor that excludes chunks from a given document ID. Supported across all three backends
 - **`KnowledgeTool` formats `GraphContext`** — knowledge search output now includes edge descriptions for graph-discovered chunks (`↳ Related: "description" (relation)`)
+- **Comprehensive agent test coverage** — 43 new tests (322 → 365 total) covering previously untested critical paths: `WithSuspendTTL` auto-release/override/budget decrement, suspend snapshot isolation, `Resume`/`Release` edge cases, `estimateSnapshotSize`, subagent panic recovery (sync + streaming), `execute_code` tool dispatch (success, empty code, invalid args, runner error, runtime error, recursion prevention), plan execution edge cases (max steps cap, `ask_user` blocked), `dispatchParallel` (context cancellation, single-call fast path, tool panic recovery), tool result truncation, `truncateStr`, `buildStepTrace`, `ServeSSE` panic recovery, `WriteSSEEvent` (no flusher, marshal error), stream context cancellation, `Spawn` panic recovery, `Drain()` completion, and all option builders
+- **`agentCore` unit tests** — 20 new tests (`agentcore_test.go`) for extracted helpers: `initCore` field wiring (all fields, defaults, memory), shared methods (`cacheBuiltinToolDefs`, `resolvePromptAndProvider`, `resolveDynamicTools`), `executeAgent` (non-streaming, streaming delegation, panic recovery for both paths), `forwardSubagentStream` (EventInputReceived filtering, context cancellation), `onceClose` (idempotent + 100-goroutine concurrent safety), `startDrainTimeout`, `statusStr`, `safeAgentError`, embedded method promotion
+- **`WithMaxAttachmentBytes(n int64)`** — configurable byte budget for accumulated attachments per execution (default 50 MB). Attachments that would exceed the budget are silently dropped. Works alongside the existing per-count cap of 50 attachments
+- **`WithSuspendBudget(maxSnapshots int, maxBytes int64)`** — per-agent limits on concurrent suspended states (default 20 snapshots, 256 MB). When the budget is exceeded, `checkSuspendLoop` rejects the suspension with an error instead of allocating unbounded memory. Counters are decremented when `Resume()`, `Release()`, or the TTL timer fires
+- **`WithCompressModel(fn ModelFunc)` / `WithCompressThreshold(n int)`** — LLM-driven context compression for the `runLoop`. When the message rune count exceeds the threshold (default 200K runes), old tool results are summarized via an LLM call and replaced with a compact summary message. A dedicated provider can be configured via `WithCompressModel`; the main provider is used as fallback. The last 2 iterations are always preserved intact. Successive compressions fold prior summaries into new ones. Degrades gracefully on error
+- **`ErrSuspended.WithSuspendTTL`** — opt-in automatic expiry for suspended agent states. Starts a timer that auto-releases the resume closure (and its captured message snapshot) when the TTL elapses without `Resume()` being called. Prevents memory leaks in server environments where callers may not call `Release()` on abandoned suspensions
+- **Tool result truncation in `runLoop`** — tool results exceeding 100,000 runes (~25K tokens) are truncated in the message history with an `[output truncated]` marker. Prevents unbounded memory growth from tools returning very large outputs (e.g. web scraping, file reads). Stream events and step traces retain the full content since they are transient
+
+### Removed
+
+- **`SubprocessRunner`** — replaced by `HTTPRunner` + sandbox sidecar. The `CodeRunner` interface is unchanged for pluggability
+- **`WithWorkspace`, `WithEnv`, `WithEnvPassthrough` options** — subprocess-specific options removed with `SubprocessRunner`
+- **`Intent` type and constants** — `Intent`, `IntentChat`, `IntentAction` were dead code with zero consumers. Deleted
+- **`ContextThreadID`, `ContextUserID`, `ContextChatID` exported constants** — replaced by `WithThreadID()`, `WithUserID()`, `WithChatID()` builder methods on `AgentTask` (see Added). The string keys are now internal
 
 ### Changed
 
+- **Zero-allocation rune counting in `runLoop`** — replaced `len([]rune(m.Content))` with `utf8.RuneCountInString()` across all hot-path rune counting sites (`runLoop` message tracking, tool result truncation check, `runeCount` helper). Eliminates a `[]rune` heap allocation per message per iteration
+- **No JSON marshaling in routing-decision event** — replaced `json.Marshal(map[string][]string{...})` in the `EventRoutingDecision` emit path with `buildRoutingSummary()`, a `strings.Builder`-based serializer. Removes map allocation and reflection on every iteration with agent tool calls
+- **No `fmt.Sprintf` in `executePlan` loop** — replaced `fmt.Sprintf("plan_step_%d", i)` with `"plan_step_" + strconv.Itoa(i)` for cheaper string construction in the plan step ID builder
+- **Hot-path benchmarks** — added `loop_bench_test.go` with benchmarks for `runeCount` (ASCII/multibyte), `truncateStr` (short/long/multibyte), `buildRoutingSummary`, and `dispatchParallel` (single/multi). All rune counting benchmarks confirm 0 allocs/op
+- **Provider interface consolidation** — `ChatWithTools` removed; tools now passed via `ChatRequest.Tools`. `ChatStream` signature changed from `ch chan<- string` to `ch chan<- StreamEvent`, emitting typed events (text deltas, tool call deltas) instead of raw strings. Provider interface reduced from 4 methods to 3 (`Chat`, `ChatStream`, `Name`). All provider implementations and middleware (`WithRetry`, `WithRateLimit`, observer wrappers) updated accordingly
 - **Agent file split** — split monolithic `agent.go` (~1,700 lines) into five files by concern: `agent.go` (API surface: interfaces, types, options, constructors), `loop.go` (execution engine: `runLoop`, `dispatchParallel`, `DispatchResult`, `DispatchFunc`), `suspend.go` (suspend/resume: `ErrSuspended`, `checkSuspendLoop`, `ResumeData`), `batch.go` (batch primitives: `BatchProvider`, `BatchState`, `BatchJob`), `stream.go` (streaming: `StreamEvent`, `ServeSSE`, `WriteSSEEvent`). Split `agent_test.go` (~2,700 lines) correspondingly into `agent_test.go`, `loop_test.go`, `suspend_test.go`, `stream_test.go`. No API changes — purely internal reorganization
 - **Shared dispatch helpers** — extracted `dispatchBuiltins` and `dispatchTool` from duplicated code in `LLMAgent.makeDispatch` and `Network.makeDispatch`. The `ask_user`, `execute_plan`, `execute_code`, and tool-result conversion logic now lives in a single place
 - **`ErrSuspended` default TTL (30 minutes)** — `checkSuspendLoop` now applies a default 30-minute TTL to all `ErrSuspended` values. Previously, abandoned suspensions leaked the entire agent graph (resume closure captures provider, processors, memory, tool registry) indefinitely. Callers can still override with `WithSuspendTTL`
@@ -89,18 +81,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **Embedded `agentCore` struct** — extracted ~24 shared fields from `LLMAgent` and `Network` into a single embedded `agentCore` struct (`agentcore.go`). Both types now embed `agentCore`, eliminating structural duplication and drift bugs when new agent-level options are added. Shared constructor `initCore()` uses field-by-field assignment to avoid copying sync primitives in `agentMemory`. Shared methods: `Name()`, `Description()`, `Drain()`, `cacheBuiltinToolDefs()`, `resolvePromptAndProvider()`, `resolveDynamicTools()`, `baseLoopConfig()`, `executeWithSpan()`. No public API changes
 - **Simplified Network subagent dispatch** — extracted 160-line `Network.makeDispatch` into focused helpers: `dispatchAgent()` (agent routing + event emission), `executeAgent()` (panic recovery + streaming delegation), `forwardSubagentStream()` (channel forwarding + drain timeout), `startDrainTimeout()`, and generic `onceClose[T]()`. Three near-identical panic-recovery blocks collapsed into two reusable functions
 
-### Added
-
-- **Comprehensive agent test coverage** — 43 new tests (322 → 365 total) covering previously untested critical paths: `WithSuspendTTL` auto-release/override/budget decrement, suspend snapshot isolation, `Resume`/`Release` edge cases, `estimateSnapshotSize`, subagent panic recovery (sync + streaming), `execute_code` tool dispatch (success, empty code, invalid args, runner error, runtime error, recursion prevention), plan execution edge cases (max steps cap, `ask_user` blocked), `dispatchParallel` (context cancellation, single-call fast path, tool panic recovery), tool result truncation, `truncateStr`, `buildStepTrace`, `ServeSSE` panic recovery, `WriteSSEEvent` (no flusher, marshal error), stream context cancellation, `Spawn` panic recovery, `Drain()` completion, and all option builders
-- **`agentCore` unit tests** — 20 new tests (`agentcore_test.go`) for extracted helpers: `initCore` field wiring (all fields, defaults, memory), shared methods (`cacheBuiltinToolDefs`, `resolvePromptAndProvider`, `resolveDynamicTools`), `executeAgent` (non-streaming, streaming delegation, panic recovery for both paths), `forwardSubagentStream` (EventInputReceived filtering, context cancellation), `onceClose` (idempotent + 100-goroutine concurrent safety), `startDrainTimeout`, `statusStr`, `safeAgentError`, embedded method promotion
-- **`WithMaxAttachmentBytes(n int64)`** — configurable byte budget for accumulated attachments per execution (default 50 MB). Attachments that would exceed the budget are silently dropped. Works alongside the existing per-count cap of 50 attachments
-- **`WithSuspendBudget(maxSnapshots int, maxBytes int64)`** — per-agent limits on concurrent suspended states (default 20 snapshots, 256 MB). When the budget is exceeded, `checkSuspendLoop` rejects the suspension with an error instead of allocating unbounded memory. Counters are decremented when `Resume()`, `Release()`, or the TTL timer fires
-- **`WithCompressModel(fn ModelFunc)` / `WithCompressThreshold(n int)`** — LLM-driven context compression for the `runLoop`. When the message rune count exceeds the threshold (default 200K runes), old tool results are summarized via an LLM call and replaced with a compact summary message. A dedicated provider can be configured via `WithCompressModel`; the main provider is used as fallback. The last 2 iterations are always preserved intact. Successive compressions fold prior summaries into new ones. Degrades gracefully on error
-- **`ErrSuspended.WithSuspendTTL`** — opt-in automatic expiry for suspended agent states. Starts a timer that auto-releases the resume closure (and its captured message snapshot) when the TTL elapses without `Resume()` being called. Prevents memory leaks in server environments where callers may not call `Release()` on abandoned suspensions
-- **Tool result truncation in `runLoop`** — tool results exceeding 100,000 runes (~25K tokens) are truncated in the message history with an `[output truncated]` marker. Prevents unbounded memory growth from tools returning very large outputs (e.g. web scraping, file reads). Stream events and step traces retain the full content since they are transient
-
 ### Fixed
 
+- **Gemini batch JSON tag mismatches** — `batchStatsJSON.SucceededRequestCount` used incorrect JSON tag `"successfulRequestCount"` (should be `"succeededRequestCount"`), causing batch stats to always report 0 succeeded. `batchMetadata.Output` used `"output"` instead of `"dest"`, causing batch results to always fail with "no results". Removed unnecessary `batchInlinedResponseList` wrapper type
 - **memory**: harden fact extraction against prompt injection — extraction prompt guardrail, injection pattern filter in `sanitizeFacts`, trust framing in `BuildContext`
 - **memory**: harden cross-thread recall against injection — trust framing header, content truncation (500 runes), ChatID-scoped filtering
 - **Network subagent drain timeout goroutine leak** — when a streaming subagent ignored context cancellation and the 60-second drain timeout elapsed, `subCh` remained open. The subagent's `ExecuteStream` goroutine blocked indefinitely on sends to the unread channel, leaking permanently. The drain goroutine now calls `safeCloseSubCh()` after timeout, causing the subagent's next send to panic and get caught by the existing `recover` wrapper — converting the leak into a clean error
