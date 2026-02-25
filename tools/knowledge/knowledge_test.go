@@ -134,3 +134,65 @@ func TestKnowledgeTool_WithTopK(t *testing.T) {
 		t.Errorf("topK = %d, want 10", tool.topK)
 	}
 }
+
+func TestKnowledgeTool_GraphContextInOutput(t *testing.T) {
+	ret := &mockRetriever{
+		results: []oasis.RetrievalResult{
+			{
+				Content: "OAuth setup flow",
+				Score:   0.9,
+				ChunkID: "c1",
+				GraphContext: []oasis.EdgeContext{
+					{FromChunkID: "c2", Relation: oasis.RelDependsOn, Description: "requires auth configuration"},
+					{FromChunkID: "c3", Relation: oasis.RelElaborates, Description: "expands on setup steps"},
+				},
+			},
+			{
+				Content: "Token refresh mechanism",
+				Score:   0.7,
+				ChunkID: "c4",
+				// No GraphContext — seed chunk, should not show edge lines.
+			},
+		},
+	}
+	store := &nopStore{}
+	emb := &mockEmb{}
+
+	tool := New(store, emb, WithRetriever(ret))
+	args, _ := json.Marshal(map[string]string{"query": "OAuth"})
+	result, err := tool.Execute(context.Background(), "knowledge_search", args)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Chunk content should be present.
+	if !strings.Contains(result.Content, "OAuth setup flow") {
+		t.Error("missing chunk content")
+	}
+	if !strings.Contains(result.Content, "Token refresh mechanism") {
+		t.Error("missing second chunk content")
+	}
+
+	// GraphContext edges should be formatted.
+	if !strings.Contains(result.Content, "requires auth configuration") {
+		t.Errorf("missing edge description: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "depends_on") {
+		t.Errorf("missing relation type in output: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "expands on setup steps") {
+		t.Errorf("missing second edge description: %s", result.Content)
+	}
+
+	// Second chunk should NOT have edge lines.
+	lines := strings.Split(result.Content, "\n")
+	inSecondChunk := false
+	for _, line := range lines {
+		if strings.Contains(line, "Token refresh mechanism") {
+			inSecondChunk = true
+		}
+		if inSecondChunk && strings.Contains(line, "↳") {
+			t.Errorf("second chunk should have no edge context lines, found: %s", line)
+		}
+	}
+}

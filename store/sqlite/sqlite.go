@@ -151,8 +151,10 @@ func (s *Store) Init(ctx context.Context) error {
 		target_id TEXT NOT NULL,
 		relation TEXT NOT NULL,
 		weight REAL NOT NULL,
+		description TEXT DEFAULT '',
 		UNIQUE(source_id, target_id, relation)
 	)`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE chunk_edges ADD COLUMN description TEXT DEFAULT ''`)
 	_, _ = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_chunk_edges_source ON chunk_edges(source_id)`)
 	_, _ = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_chunk_edges_target ON chunk_edges(target_id)`)
 
@@ -414,6 +416,9 @@ func buildChunkFilters(filters []oasis.ChunkFilter) (string, []any, bool) {
 				clauses = append(clauses, "c.document_id IN ("+strings.Join(placeholders, ",")+")") //nolint:gocritic
 			} else if f.Op == oasis.OpEq {
 				clauses = append(clauses, "c.document_id = ?")
+				args = append(args, f.Value)
+			} else if f.Op == oasis.OpNeq {
+				clauses = append(clauses, "c.document_id != ?")
 				args = append(args, f.Value)
 			}
 
@@ -1037,9 +1042,9 @@ func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
 
 	for _, e := range edges {
 		_, err := tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO chunk_edges (id, source_id, target_id, relation, weight)
-			 VALUES (?, ?, ?, ?, ?)`,
-			e.ID, e.SourceID, e.TargetID, string(e.Relation), e.Weight,
+			`INSERT OR REPLACE INTO chunk_edges (id, source_id, target_id, relation, weight, description)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			e.ID, e.SourceID, e.TargetID, string(e.Relation), e.Weight, e.Description,
 		)
 		if err != nil {
 			return fmt.Errorf("store edge: %w", err)
@@ -1059,7 +1064,7 @@ func (s *Store) GetEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkE
 		args[i] = id
 	}
 	query := fmt.Sprintf(
-		`SELECT id, source_id, target_id, relation, weight FROM chunk_edges WHERE source_id IN (%s)`,
+		`SELECT id, source_id, target_id, relation, weight, description FROM chunk_edges WHERE source_id IN (%s)`,
 		strings.Join(placeholders, ","),
 	)
 	return s.scanEdges(ctx, query, args)
@@ -1076,7 +1081,7 @@ func (s *Store) GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]oasi
 		args[i] = id
 	}
 	query := fmt.Sprintf(
-		`SELECT id, source_id, target_id, relation, weight FROM chunk_edges WHERE target_id IN (%s)`,
+		`SELECT id, source_id, target_id, relation, weight, description FROM chunk_edges WHERE target_id IN (%s)`,
 		strings.Join(placeholders, ","),
 	)
 	return s.scanEdges(ctx, query, args)
@@ -1103,7 +1108,7 @@ func (s *Store) scanEdges(ctx context.Context, query string, args []any) ([]oasi
 	for rows.Next() {
 		var e oasis.ChunkEdge
 		var rel string
-		if err := rows.Scan(&e.ID, &e.SourceID, &e.TargetID, &rel, &e.Weight); err != nil {
+		if err := rows.Scan(&e.ID, &e.SourceID, &e.TargetID, &rel, &e.Weight, &e.Description); err != nil {
 			return nil, fmt.Errorf("scan edge: %w", err)
 		}
 		e.Relation = oasis.RelationType(rel)

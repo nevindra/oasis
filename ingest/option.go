@@ -83,6 +83,19 @@ func WithGraphBatchSize(n int) Option {
 	return func(ing *Ingestor) { ing.graphBatchSize = n }
 }
 
+// WithGraphBatchOverlap sets the number of chunks that overlap between consecutive
+// extraction batches (default 0). Overlap must be less than graphBatchSize.
+// Higher overlap discovers more cross-boundary relationships at the cost of more LLM calls.
+func WithGraphBatchOverlap(n int) Option {
+	return func(ing *Ingestor) { ing.graphBatchOverlap = n }
+}
+
+// WithGraphExtractionWorkers sets the max concurrent LLM calls for graph extraction
+// (default 3). Set to 1 for sequential extraction.
+func WithGraphExtractionWorkers(n int) Option {
+	return func(ing *Ingestor) { ing.graphWorkers = n }
+}
+
 // WithCrossDocumentEdges enables cross-document relationship discovery (default false).
 func WithCrossDocumentEdges(b bool) Option {
 	return func(ing *Ingestor) { ing.crossDocEdges = b }
@@ -117,4 +130,35 @@ func WithOnSuccess(fn func(IngestResult)) Option {
 // source is the filename (IngestFile) or source string (IngestText).
 func WithOnError(fn func(source string, err error)) Option {
 	return func(ing *Ingestor) { ing.onError = fn }
+}
+
+// CrossDocOption configures ExtractCrossDocumentEdges.
+type CrossDocOption func(*crossDocConfig)
+
+type crossDocConfig struct {
+	documentIDs         []string
+	similarityThreshold float32
+	maxPairsPerChunk    int
+	batchSize           int
+}
+
+// CrossDocWithDocumentIDs scopes extraction to specific documents (default: all).
+func CrossDocWithDocumentIDs(ids ...string) CrossDocOption {
+	return func(c *crossDocConfig) { c.documentIDs = ids }
+}
+
+// CrossDocWithSimilarityThreshold sets the minimum cosine similarity to consider
+// a cross-document chunk pair (default 0.5).
+func CrossDocWithSimilarityThreshold(t float32) CrossDocOption {
+	return func(c *crossDocConfig) { c.similarityThreshold = t }
+}
+
+// CrossDocWithMaxPairsPerChunk caps the number of cross-document candidates per chunk (default 3).
+func CrossDocWithMaxPairsPerChunk(n int) CrossDocOption {
+	return func(c *crossDocConfig) { c.maxPairsPerChunk = n }
+}
+
+// CrossDocWithBatchSize sets the number of chunks per LLM call for cross-doc extraction (default 5).
+func CrossDocWithBatchSize(n int) CrossDocOption {
+	return func(c *crossDocConfig) { c.batchSize = n }
 }

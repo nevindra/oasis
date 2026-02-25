@@ -30,6 +30,7 @@ For each relationship found, output a JSON edge with:
 - "target": the chunk ID being referenced
 - "relation": one of: references, elaborates, depends_on, contradicts, part_of, similar_to, sequence, caused_by
 - "weight": confidence score from 0.0 to 1.0
+- "description": a brief explanation of why this relationship exists (1 sentence)
 
 Relationship type definitions:
 - references: chunk A cites or mentions content from chunk B
@@ -42,7 +43,7 @@ Relationship type definitions:
 - caused_by: chunk A is a consequence of chunk B
 
 Output ONLY valid JSON in this format:
-{"edges":[{"source":"chunk_id","target":"chunk_id","relation":"type","weight":0.0}]}
+{"edges":[{"source":"chunk_id","target":"chunk_id","relation":"type","weight":0.0,"description":"why this relationship exists"}]}
 
 If no relationships exist, output: {"edges":[]}
 
@@ -50,57 +51,124 @@ Chunks:
 `
 
 // extractGraphEdges sends chunks to an LLM in batches and extracts relationship edges.
-func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize int, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
+// overlap controls how many chunks overlap between consecutive batches (0 = no overlap).
+// workers controls max concurrent LLM calls (<=1 = sequential).
+func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize, overlap, workers int, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
 	if len(chunks) < 2 {
 		return nil, nil
 	}
 	if batchSize <= 0 {
 		batchSize = 5
 	}
+	if workers <= 0 {
+		workers = 1
+	}
 
-	var allEdges []oasis.ChunkEdge
+	stride := batchSize
+	if overlap > 0 && overlap < batchSize {
+		stride = batchSize - overlap
+	}
 
-	for i := 0; i < len(chunks); i += batchSize {
-		if ctx.Err() != nil {
-			break
-		}
-
+	// Build all batch windows upfront.
+	type batch struct {
+		chunks []oasis.Chunk
+		index  int
+	}
+	var batches []batch
+	for i := 0; i < len(chunks); i += stride {
 		end := min(i+batchSize, len(chunks))
-		batch := chunks[i:end]
-
-		if len(batch) < 2 {
+		b := chunks[i:end]
+		if len(b) < 2 {
 			continue
 		}
+		batches = append(batches, batch{chunks: b, index: len(batches)})
+	}
 
-		var prompt strings.Builder
-		prompt.WriteString(graphExtractionPrompt)
-		for _, c := range batch {
-			fmt.Fprintf(&prompt, "\n[%s]: %s\n", c.ID, c.Content)
-		}
+	if len(batches) == 0 {
+		return nil, nil
+	}
 
-		resp, err := provider.Chat(ctx, oasis.ChatRequest{
-			Messages: []oasis.ChatMessage{
-				{Role: "user", Content: prompt.String()},
-			},
-		})
-		if err != nil {
-			if logger != nil {
-				logger.Warn("graph extraction: LLM call failed", "batch", i, "err", err)
+	// Worker pool.
+	numWorkers := min(workers, len(batches))
+	work := make(chan batch, len(batches))
+	results := make(chan []oasis.ChunkEdge, len(batches))
+
+	for w := 0; w < numWorkers; w++ {
+		go func() {
+			for b := range work {
+				if ctx.Err() != nil {
+					results <- nil
+					continue
+				}
+
+				var prompt strings.Builder
+				prompt.WriteString(graphExtractionPrompt)
+				for _, c := range b.chunks {
+					fmt.Fprintf(&prompt, "\n[%s]: %s\n", c.ID, c.Content)
+				}
+
+				resp, err := provider.Chat(ctx, oasis.ChatRequest{
+					Messages: []oasis.ChatMessage{
+						{Role: "user", Content: prompt.String()},
+					},
+				})
+				if err != nil {
+					if logger != nil {
+						logger.Warn("graph extraction: LLM call failed", "batch", b.index, "err", err)
+					}
+					results <- nil
+					continue
+				}
+
+				edges, err := parseEdgeResponse(resp.Content, b.chunks)
+				if err != nil {
+					if logger != nil {
+						logger.Warn("graph extraction: parse failed", "batch", b.index, "err", err)
+					}
+					results <- nil
+					continue
+				}
+				results <- edges
 			}
-			continue
-		}
+		}()
+	}
 
-		edges, err := parseEdgeResponse(resp.Content, batch)
-		if err != nil {
-			if logger != nil {
-				logger.Warn("graph extraction: parse failed", "batch", i, "err", err)
-			}
-			continue
+	// Send all batches.
+	for _, b := range batches {
+		work <- b
+	}
+	close(work)
+
+	// Collect results.
+	var allEdges []oasis.ChunkEdge
+	for range batches {
+		if edges := <-results; len(edges) > 0 {
+			allEdges = append(allEdges, edges...)
 		}
-		allEdges = append(allEdges, edges...)
 	}
 
 	return allEdges, nil
+}
+
+// deduplicateEdges merges edges with the same (source, target, relation) key,
+// keeping the highest weight and its description.
+func deduplicateEdges(edges []oasis.ChunkEdge) []oasis.ChunkEdge {
+	type key struct {
+		source, target string
+		relation       oasis.RelationType
+	}
+	best := make(map[key]oasis.ChunkEdge)
+	for _, e := range edges {
+		k := key{e.SourceID, e.TargetID, e.Relation}
+		if existing, ok := best[k]; !ok || e.Weight > existing.Weight {
+			best[k] = e
+		}
+	}
+	result := make([]oasis.ChunkEdge, 0, len(best))
+	for _, e := range best {
+		result = append(result, e)
+	}
+	return result
 }
 
 // parseEdgeResponse parses LLM JSON output into ChunkEdge values.
@@ -108,10 +176,11 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 func parseEdgeResponse(content string, chunks []oasis.Chunk) ([]oasis.ChunkEdge, error) {
 	var parsed struct {
 		Edges []struct {
-			Source   string  `json:"source"`
-			Target   string  `json:"target"`
-			Relation string  `json:"relation"`
-			Weight   float32 `json:"weight"`
+			Source      string  `json:"source"`
+			Target      string  `json:"target"`
+			Relation    string  `json:"relation"`
+			Weight      float32 `json:"weight"`
+			Description string  `json:"description"`
 		} `json:"edges"`
 	}
 
@@ -137,11 +206,12 @@ func parseEdgeResponse(content string, chunks []oasis.Chunk) ([]oasis.ChunkEdge,
 			continue
 		}
 		edges = append(edges, oasis.ChunkEdge{
-			ID:       oasis.NewID(),
-			SourceID: e.Source,
-			TargetID: e.Target,
-			Relation: rel,
-			Weight:   e.Weight,
+			ID:          oasis.NewID(),
+			SourceID:    e.Source,
+			TargetID:    e.Target,
+			Relation:    rel,
+			Weight:      e.Weight,
+			Description: e.Description,
 		})
 	}
 

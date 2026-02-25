@@ -44,8 +44,10 @@ type Ingestor struct {
 	graphProvider    oasis.Provider
 	minEdgeWeight    float32
 	maxEdgesPerChunk int
-	graphBatchSize   int
-	crossDocEdges    bool
+	graphBatchSize    int
+	graphBatchOverlap int
+	graphWorkers      int
+	crossDocEdges     bool
 	sequenceEdges    bool
 
 	// observability
@@ -80,6 +82,7 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 		parentChunker:   NewRecursiveChunker(WithMaxTokens(1024)),
 		childChunker:    NewRecursiveChunker(WithMaxTokens(256)),
 		graphBatchSize:  5,
+		graphWorkers:    3,
 	}
 	for _, o := range opts {
 		o(ing)
@@ -283,12 +286,14 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 
 	// LLM-based extraction.
 	if ing.graphProvider != nil {
-		llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.logger)
+		llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.graphBatchOverlap, ing.graphWorkers, ing.logger)
 		if err != nil && ing.logger != nil {
 			ing.logger.Warn("graph extraction failed", "err", err)
 		}
 		edges = append(edges, llmEdges...)
 	}
+
+	edges = deduplicateEdges(edges)
 
 	if ing.minEdgeWeight > 0 || ing.maxEdgesPerChunk > 0 {
 		edges = pruneEdges(edges, ing.minEdgeWeight, ing.maxEdgesPerChunk)

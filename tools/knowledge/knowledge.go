@@ -98,7 +98,11 @@ func (k *KnowledgeTool) Execute(ctx context.Context, _ string, args json.RawMess
 	if len(chunks) > 0 {
 		out.WriteString("From knowledge base:\n")
 		for i, r := range chunks {
-			fmt.Fprintf(&out, "%d. %s\n\n", i+1, r.Content)
+			fmt.Fprintf(&out, "%d. %s\n", i+1, r.Content)
+			for _, ec := range r.GraphContext {
+				fmt.Fprintf(&out, "   ↳ Related: %q (%s)\n", ec.Description, ec.Relation)
+			}
+			out.WriteString("\n")
 		}
 	}
 	if len(messages) > 0 {
@@ -108,7 +112,7 @@ func (k *KnowledgeTool) Execute(ctx context.Context, _ string, args json.RawMess
 		}
 	}
 	if out.Len() == 0 {
-		out.WriteString(fmt.Sprintf("No relevant information found for %q.", params.Query))
+		fmt.Fprintf(&out, "No relevant information found for %q.", params.Query)
 	}
 
 	return oasis.ToolResult{Content: out.String()}, nil

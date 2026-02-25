@@ -485,6 +485,38 @@ func TestGraphRetriever_RelationFilter(t *testing.T) {
 	}
 }
 
+func TestEdgeContext_InRetrievalResult(t *testing.T) {
+	r := RetrievalResult{
+		Content:    "test content",
+		Score:      0.9,
+		ChunkID:    "c1",
+		DocumentID: "d1",
+		GraphContext: []EdgeContext{
+			{FromChunkID: "c0", Relation: RelElaborates, Description: "expands on auth flow"},
+		},
+	}
+	if len(r.GraphContext) != 1 {
+		t.Fatalf("len(GraphContext) = %d, want 1", len(r.GraphContext))
+	}
+	if r.GraphContext[0].Description != "expands on auth flow" {
+		t.Errorf("Description = %q, want %q", r.GraphContext[0].Description, "expands on auth flow")
+	}
+}
+
+func TestChunkEdge_Description(t *testing.T) {
+	e := ChunkEdge{
+		ID:          "e1",
+		SourceID:    "c1",
+		TargetID:    "c2",
+		Relation:    RelReferences,
+		Weight:      0.8,
+		Description: "cites the OAuth spec",
+	}
+	if e.Description != "cites the OAuth spec" {
+		t.Errorf("Description = %q, want %q", e.Description, "cites the OAuth spec")
+	}
+}
+
 // --- GraphRetriever test helpers ---
 
 type graphTestStore struct {
@@ -556,6 +588,112 @@ func (s *graphTestStoreWithEdges) GetIncomingEdges(_ context.Context, chunkIDs [
 }
 
 func (s *graphTestStoreWithEdges) PruneOrphanEdges(_ context.Context) (int, error) { return 0, nil }
+
+type graphTestStoreWithKeyword struct {
+	graphTestStoreWithEdges
+	keywords []ScoredChunk
+}
+
+func (s *graphTestStoreWithKeyword) SearchChunksKeyword(_ context.Context, _ string, _ int, _ ...ChunkFilter) ([]ScoredChunk, error) {
+	return s.keywords, nil
+}
+
+func TestGraphRetriever_HybridSeeding(t *testing.T) {
+	store := &graphTestStoreWithKeyword{
+		graphTestStoreWithEdges: graphTestStoreWithEdges{
+			graphTestStore: graphTestStore{
+				chunks: []ScoredChunk{
+					{Chunk: Chunk{ID: "c1", DocumentID: "d1", Content: "vector match"}, Score: 0.9},
+				},
+				allChunks: map[string]Chunk{
+					"c1": {ID: "c1", DocumentID: "d1", Content: "vector match"},
+					"c2": {ID: "c2", DocumentID: "d1", Content: "keyword match"},
+					"c3": {ID: "c3", DocumentID: "d1", Content: "graph neighbor"},
+				},
+			},
+			edges: map[string][]ChunkEdge{
+				"c2": {{ID: "e1", SourceID: "c2", TargetID: "c3", Relation: RelElaborates, Weight: 0.8}},
+			},
+		},
+		keywords: []ScoredChunk{
+			{Chunk: Chunk{ID: "c2", DocumentID: "d1", Content: "keyword match"}, Score: 0.8},
+		},
+	}
+	emb := &graphTestEmbedding{}
+
+	// Without hybrid seeding: only c1 is seed, c2+c3 not discovered.
+	gr := NewGraphRetriever(store, emb, WithMaxHops(1))
+	results, _ := gr.Retrieve(context.Background(), "test", 10)
+	hasC3 := false
+	for _, r := range results {
+		if r.ChunkID == "c3" {
+			hasC3 = true
+		}
+	}
+	if hasC3 {
+		t.Error("without hybrid seeding, c3 should not be found (c2 is not a seed)")
+	}
+
+	// With hybrid seeding: c2 becomes a seed via keyword, c3 discovered via graph.
+	gr = NewGraphRetriever(store, emb, WithMaxHops(1), WithSeedKeywordWeight(0.3))
+	results, _ = gr.Retrieve(context.Background(), "test", 10)
+	hasC3 = false
+	for _, r := range results {
+		if r.ChunkID == "c3" {
+			hasC3 = true
+		}
+	}
+	if !hasC3 {
+		t.Error("with hybrid seeding, c3 should be found via c2's graph edge")
+	}
+}
+
+func TestGraphRetriever_GraphContext(t *testing.T) {
+	store := &graphTestStoreWithEdges{
+		graphTestStore: graphTestStore{
+			chunks: []ScoredChunk{
+				{Chunk: Chunk{ID: "c1", DocumentID: "d1", Content: "seed"}, Score: 0.9},
+			},
+			allChunks: map[string]Chunk{
+				"c1": {ID: "c1", DocumentID: "d1", Content: "seed"},
+				"c2": {ID: "c2", DocumentID: "d1", Content: "graph discovered"},
+			},
+		},
+		edges: map[string][]ChunkEdge{
+			"c1": {{ID: "e1", SourceID: "c1", TargetID: "c2", Relation: RelElaborates, Weight: 0.8, Description: "provides more detail"}},
+		},
+	}
+	emb := &graphTestEmbedding{}
+
+	gr := NewGraphRetriever(store, emb, WithMaxHops(1))
+	results, err := gr.Retrieve(context.Background(), "test", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed chunk (c1) should have no GraphContext.
+	// Graph-discovered chunk (c2) should have GraphContext.
+	for _, r := range results {
+		if r.ChunkID == "c1" && len(r.GraphContext) > 0 {
+			t.Error("seed chunk c1 should not have GraphContext")
+		}
+		if r.ChunkID == "c2" {
+			if len(r.GraphContext) != 1 {
+				t.Fatalf("c2 GraphContext len = %d, want 1", len(r.GraphContext))
+			}
+			ec := r.GraphContext[0]
+			if ec.FromChunkID != "c1" {
+				t.Errorf("FromChunkID = %q, want c1", ec.FromChunkID)
+			}
+			if ec.Relation != RelElaborates {
+				t.Errorf("Relation = %q, want elaborates", ec.Relation)
+			}
+			if ec.Description != "provides more detail" {
+				t.Errorf("Description = %q, want %q", ec.Description, "provides more detail")
+			}
+		}
+	}
+}
 
 func TestLLMReranker_GracefulDegradation(t *testing.T) {
 	provider := &mockProvider{

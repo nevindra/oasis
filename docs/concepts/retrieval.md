@@ -33,16 +33,19 @@ Any component that needs search results depends on `Retriever` — not on a spec
 
 ```go
 type RetrievalResult struct {
-    Content        string  `json:"content"`
-    Score          float32 `json:"score"`
-    ChunkID        string  `json:"chunk_id"`
-    DocumentID     string  `json:"document_id"`
-    DocumentTitle  string  `json:"document_title"`
-    DocumentSource string  `json:"document_source"`
+    Content        string        `json:"content"`
+    Score          float32       `json:"score"`
+    ChunkID        string        `json:"chunk_id"`
+    DocumentID     string        `json:"document_id"`
+    DocumentTitle  string        `json:"document_title"`
+    DocumentSource string        `json:"document_source"`
+    GraphContext   []EdgeContext `json:"graph_context,omitempty"`
 }
 ```
 
 Score is in [0, 1]; higher means more relevant. The exact range depends on the scoring method (cosine similarity, RRF, or reranker output).
+
+`GraphContext` is populated by `GraphRetriever` for chunks discovered via graph traversal (not from the initial seed search). Each `EdgeContext` describes the edge that led to the chunk's discovery, including a human-readable description of the relationship. Seed chunks have an empty `GraphContext`.
 
 ## HybridRetriever (Default)
 
@@ -162,6 +165,7 @@ For the full deep-dive — extraction internals, relationship types, score blend
 | `WithRelationFilter(types...)` | all | Restrict traversal to specific relation types |
 | `WithMinTraversalScore(s)` | 0 | Minimum edge weight to follow |
 | `WithSeedTopK(k)` | 10 | Seed chunks from initial vector search |
+| `WithSeedKeywordWeight(w)` | 0 (disabled) | Keyword weight for hybrid seed selection via RRF |
 | `WithGraphFilters(f...)` | none | Metadata filters for vector search |
 | `WithGraphRetrieverTracer(t)` | nil | Attach a `Tracer` for span creation |
 | `WithGraphRetrieverLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |

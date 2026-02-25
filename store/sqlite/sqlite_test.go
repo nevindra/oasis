@@ -215,6 +215,41 @@ func TestSearchChunks(t *testing.T) {
 	}
 }
 
+func TestSearchChunks_ExcludeDocument(t *testing.T) {
+	ctx := context.Background()
+	s := New(":memory:")
+	if err := s.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Store two documents with chunks.
+	doc1 := oasis.Document{ID: "d1", Title: "doc1", CreatedAt: oasis.NowUnix()}
+	doc2 := oasis.Document{ID: "d2", Title: "doc2", CreatedAt: oasis.NowUnix()}
+	emb := []float32{0.1, 0.2, 0.3}
+	c1 := oasis.Chunk{ID: "c1", DocumentID: "d1", Content: "hello", Embedding: emb}
+	c2 := oasis.Chunk{ID: "c2", DocumentID: "d2", Content: "world", Embedding: emb}
+
+	if err := s.StoreDocument(ctx, doc1, []oasis.Chunk{c1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StoreDocument(ctx, doc2, []oasis.Chunk{c2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Search excluding d1 — should only find c2.
+	results, err := s.SearchChunks(ctx, emb, 10, oasis.ByExcludeDocument("d1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len = %d, want 1", len(results))
+	}
+	if results[0].ID != "c2" {
+		t.Errorf("got chunk %q, want c2", results[0].ID)
+	}
+}
+
 func TestScheduledActions(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -548,6 +583,54 @@ func TestGraphStorePruneOrphan(t *testing.T) {
 	}
 	if pruned != 1 {
 		t.Fatalf("PruneOrphanEdges: pruned %d, want 1", pruned)
+	}
+}
+
+func TestStoreEdges_Description(t *testing.T) {
+	ctx := context.Background()
+	s := New(":memory:")
+	if err := s.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Store a document + chunk so edges have valid references.
+	doc := oasis.Document{ID: "d1", Title: "test", CreatedAt: oasis.NowUnix()}
+	chunk := oasis.Chunk{ID: "c1", DocumentID: "d1", Content: "hello", Embedding: []float32{0.1}}
+	chunk2 := oasis.Chunk{ID: "c2", DocumentID: "d1", Content: "world", Embedding: []float32{0.2}}
+	if err := s.StoreDocument(ctx, doc, []oasis.Chunk{chunk, chunk2}); err != nil {
+		t.Fatal(err)
+	}
+
+	edges := []oasis.ChunkEdge{
+		{ID: "e1", SourceID: "c1", TargetID: "c2", Relation: oasis.RelElaborates, Weight: 0.8, Description: "expands on greeting"},
+		{ID: "e2", SourceID: "c2", TargetID: "c1", Relation: oasis.RelReferences, Weight: 0.7},
+	}
+	if err := s.StoreEdges(ctx, edges); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetEdges(ctx, []string{"c1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Description != "expands on greeting" {
+		t.Errorf("Description = %q, want %q", got[0].Description, "expands on greeting")
+	}
+
+	// Edge without description should have empty string.
+	got2, err := s.GetEdges(ctx, []string{"c2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got2) != 1 {
+		t.Fatalf("len = %d, want 1", len(got2))
+	}
+	if got2[0].Description != "" {
+		t.Errorf("Description = %q, want empty", got2[0].Description)
 	}
 }
 

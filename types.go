@@ -229,11 +229,12 @@ const (
 
 // ChunkEdge represents a directed, weighted relationship between two chunks.
 type ChunkEdge struct {
-	ID       string       `json:"id"`
-	SourceID string       `json:"source_id"`
-	TargetID string       `json:"target_id"`
-	Relation RelationType `json:"relation"`
-	Weight   float32      `json:"weight"`
+	ID          string       `json:"id"`
+	SourceID    string       `json:"source_id"`
+	TargetID    string       `json:"target_id"`
+	Relation    RelationType `json:"relation"`
+	Weight      float32      `json:"weight"`
+	Description string       `json:"description,omitempty"`
 }
 
 // --- Chunk filtering ---
@@ -250,6 +251,8 @@ const (
 	OpGt
 	// OpLt matches when field is less than value.
 	OpLt
+	// OpNeq matches when field does not equal value.
+	OpNeq
 )
 
 // ChunkFilter restricts which chunks are considered during vector search.
@@ -275,6 +278,11 @@ func BySource(source string) ChunkFilter {
 // Key corresponds to a ChunkMeta JSON field (e.g. "section_heading", "page_number").
 func ByMeta(key, value string) ChunkFilter {
 	return ChunkFilter{Field: "meta." + key, Op: OpEq, Value: value}
+}
+
+// ByExcludeDocument returns a filter that excludes chunks belonging to the given document.
+func ByExcludeDocument(docID string) ChunkFilter {
+	return ChunkFilter{Field: "document_id", Op: OpNeq, Value: docID}
 }
 
 // CreatedAfter returns a filter matching chunks from documents created after unix timestamp.

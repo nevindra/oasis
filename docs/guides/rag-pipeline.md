@@ -443,16 +443,30 @@ Use sequence edges alone for zero-cost graph traversal, or combine both for the 
 
 Each edge carries a confidence weight (0.0–1.0). Use `WithMinEdgeWeight` to prune low-confidence edges.
 
+### Cross-Document Edge Extraction
+
+After ingesting multiple documents, discover relationships between them:
+
+```go
+count, err := ingestor.ExtractCrossDocumentEdges(ctx,
+    ingest.CrossDocWithSimilarityThreshold(0.5),
+    ingest.CrossDocWithMaxPairsPerChunk(3),
+)
+fmt.Printf("Created %d cross-document edges\n", count)
+```
+
 ### Graph Ingestion Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `WithGraphExtraction(p)` | nil | Enable LLM-based graph extraction |
 | `WithGraphBatchSize(n)` | 5 | Chunks per LLM extraction call |
+| `WithGraphBatchOverlap(n)` | 0 | Overlapping chunks between consecutive batches |
+| `WithGraphExtractionWorkers(n)` | 3 | Max concurrent LLM calls for graph extraction |
 | `WithMinEdgeWeight(w)` | 0 | Minimum edge weight to keep |
 | `WithMaxEdgesPerChunk(n)` | 0 (unlimited) | Cap edges per source chunk (top N by weight) |
 | `WithSequenceEdges(b)` | false | Auto-create sequence edges between consecutive chunks |
-| `WithCrossDocumentEdges(b)` | false | Reserved for future cross-document edge discovery |
+| `WithCrossDocumentEdges(b)` | false | Enable automatic cross-document edge discovery during ingestion |
 
 ### GraphRetriever Options
 
@@ -466,6 +480,7 @@ Each edge carries a confidence weight (0.0–1.0). Use `WithMinEdgeWeight` to pr
 | `WithRelationFilter(types...)` | all | Restrict traversal to specific relation types |
 | `WithMinTraversalScore(s)` | 0 | Minimum edge weight to follow |
 | `WithSeedTopK(k)` | 10 | Seed chunks from initial vector search |
+| `WithSeedKeywordWeight(w)` | 0 (disabled) | Keyword weight for hybrid seed selection via RRF |
 | `WithGraphFilters(f...)` | none | Metadata filters for vector search |
 | `WithGraphRetrieverTracer(t)` | nil | Attach a `Tracer` for span creation |
 | `WithGraphRetrieverLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |

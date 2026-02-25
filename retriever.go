@@ -17,7 +17,16 @@ type RetrievalResult struct {
 	ChunkID        string  `json:"chunk_id"`
 	DocumentID     string  `json:"document_id"`
 	DocumentTitle  string  `json:"document_title"`
-	DocumentSource string  `json:"document_source"`
+	DocumentSource string        `json:"document_source"`
+	GraphContext   []EdgeContext `json:"graph_context,omitempty"`
+}
+
+// EdgeContext describes a graph edge that led to a chunk's discovery.
+// Populated by GraphRetriever for graph-discovered (non-seed) chunks.
+type EdgeContext struct {
+	FromChunkID string       `json:"from_chunk_id"`
+	Relation    RelationType `json:"relation"`
+	Description string       `json:"description"`
 }
 
 // Retriever searches a knowledge base and returns ranked results.
@@ -452,6 +461,7 @@ type graphRetrieverConfig struct {
 	relationFilter    map[RelationType]bool
 	minTraversalScore float32
 	seedTopK          int
+	seedKeywordWeight float32
 	filters           []ChunkFilter
 	tracer            Tracer
 	logger            *slog.Logger
@@ -501,6 +511,13 @@ func WithMinTraversalScore(s float32) GraphRetrieverOption {
 // WithSeedTopK sets the number of seed chunks from initial vector search (default 10).
 func WithSeedTopK(k int) GraphRetrieverOption {
 	return func(c *graphRetrieverConfig) { c.seedTopK = k }
+}
+
+// WithSeedKeywordWeight sets the keyword search weight in the seed RRF merge (default 0, disabled).
+// When > 0 and the Store implements KeywordSearcher, keyword results are merged with vector
+// results to produce a more diverse seed set for graph traversal.
+func WithSeedKeywordWeight(w float32) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.seedKeywordWeight = w }
 }
 
 // WithGraphFilters sets metadata filters passed to the initial vector search.
@@ -581,10 +598,35 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
+	// Keyword search for seed diversity (if store supports it and weight > 0).
+	if g.cfg.seedKeywordWeight > 0 {
+		if ks, ok := g.store.(KeywordSearcher); ok {
+			kwResults, _ := ks.SearchChunksKeyword(ctx, query, g.cfg.seedTopK, g.cfg.filters...)
+			if len(kwResults) > 0 {
+				rrfResults := reciprocalRankFusion(seeds, kwResults, g.cfg.seedKeywordWeight)
+				mergedSeeds := make([]ScoredChunk, 0, len(rrfResults))
+				chunkLookup := make(map[string]Chunk)
+				for _, sc := range seeds {
+					chunkLookup[sc.ID] = sc.Chunk
+				}
+				for _, sc := range kwResults {
+					chunkLookup[sc.ID] = sc.Chunk
+				}
+				for _, rr := range rrfResults {
+					if c, ok := chunkLookup[rr.ChunkID]; ok {
+						mergedSeeds = append(mergedSeeds, ScoredChunk{Chunk: c, Score: rr.Score})
+					}
+				}
+				seeds = mergedSeeds
+			}
+		}
+	}
+
 	// Track all discovered chunks with their best scores.
 	type scored struct {
-		chunkID string
-		score   float32
+		chunkID      string
+		score        float32
+		graphContext []EdgeContext
 	}
 	best := make(map[string]*scored)
 
@@ -635,21 +677,30 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 
 				// Determine the neighbor (could be source or target depending on direction).
 				neighborID := edge.TargetID
+				fromID := edge.SourceID
 				if visited[neighborID] {
 					neighborID = edge.SourceID
+					fromID = edge.TargetID
 					if visited[neighborID] {
 						continue
 					}
 				}
 				visited[neighborID] = true
 
+				ec := EdgeContext{
+					FromChunkID: fromID,
+					Relation:    edge.Relation,
+					Description: edge.Description,
+				}
+
 				graphScore := g.cfg.graphWeight * edge.Weight * decay
 				if existing, ok := best[neighborID]; ok {
 					if graphScore > existing.score {
 						existing.score = graphScore
+						existing.graphContext = []EdgeContext{ec}
 					}
 				} else {
-					best[neighborID] = &scored{chunkID: neighborID, score: graphScore}
+					best[neighborID] = &scored{chunkID: neighborID, score: graphScore, graphContext: []EdgeContext{ec}}
 				}
 				nextIDs = append(nextIDs, neighborID)
 			}
@@ -698,10 +749,11 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 			continue
 		}
 		results = append(results, RetrievalResult{
-			Content:    c.Content,
-			Score:      s.score,
-			ChunkID:    c.ID,
-			DocumentID: c.DocumentID,
+			Content:      c.Content,
+			Score:        s.score,
+			ChunkID:      c.ID,
+			DocumentID:   c.DocumentID,
+			GraphContext: s.graphContext,
 		})
 	}
 
