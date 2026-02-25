@@ -37,6 +37,7 @@ type agentCore struct {
 	maxAttachmentBytes  int64
 	suspendCount        atomic.Int64
 	suspendBytes        atomic.Int64
+	suspendMu           sync.Mutex // guards check-then-add on suspendCount/suspendBytes
 	maxSuspendSnapshots int
 	maxSuspendBytes     int64
 	compressModel       ModelFunc
@@ -178,6 +179,7 @@ func (c *agentCore) baseLoopConfig(name, prompt string, provider Provider, tools
 		maxAttachmentBytes:  c.maxAttachmentBytes,
 		suspendCount:        &c.suspendCount,
 		suspendBytes:        &c.suspendBytes,
+		suspendMu:           &c.suspendMu,
 		maxSuspendSnapshots: c.maxSuspendSnapshots,
 		maxSuspendBytes:     c.maxSuspendBytes,
 		compressModel:       c.compressModel,
@@ -319,6 +321,11 @@ func forwardSubagentStream(
 // startDrainTimeout drains remaining events from a subagent channel in the
 // background with a 60-second timeout. If the subagent ignores cancellation,
 // the channel is force-closed to trigger a panic caught by the recover wrapper.
+//
+// The spawned goroutine is intentionally untracked (no WaitGroup) — it is a
+// best-effort safety valve with a bounded 60-second lifetime. Tracking it
+// would require plumbing a WaitGroup through the streaming path for a case
+// that only fires when a subagent misbehaves (ignores context cancellation).
 func startDrainTimeout(subCh <-chan StreamEvent, safeClose func(), logger *slog.Logger, agentName string) {
 	go func() {
 		timeout := time.NewTimer(60 * time.Second)

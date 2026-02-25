@@ -110,6 +110,7 @@ type loopConfig struct {
 	maxAttachmentBytes  int64            // attachment size budget (0 = default 50MB)
 	suspendCount        *atomic.Int64    // nil = no budget tracking
 	suspendBytes        *atomic.Int64
+	suspendMu           *sync.Mutex     // guards check-then-add on suspendCount/suspendBytes
 	maxSuspendSnapshots int
 	maxSuspendBytes     int64
 	compressModel       ModelFunc
@@ -436,12 +437,12 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				lastAgentOutput = result.Content
 			}
 		}
-		endIter()
-
-		// Compress context if over budget.
+		// Compress context if over budget (within the iteration span so
+		// compression traces are children of the iteration that triggered them).
 		if compressThreshold > 0 && messageRuneCount > compressThreshold {
-			messages, messageRuneCount = compressMessages(ctx, cfg, task, messages, 2)
+			messages, messageRuneCount = compressMessages(iterCtx, cfg, task, messages, 2)
 		}
+		endIter()
 	}
 
 	// Max iterations — force synthesis.

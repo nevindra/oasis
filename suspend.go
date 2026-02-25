@@ -232,6 +232,8 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 	snapSize := estimateSnapshotSize(messages)
 
 	// Enforce per-agent suspend budget.
+	// The check-then-add must be atomic to prevent concurrent suspensions
+	// from both passing the check and exceeding the budget (TOCTOU race).
 	if cfg.suspendCount != nil {
 		maxSnap := cfg.maxSuspendSnapshots
 		if maxSnap <= 0 {
@@ -241,8 +243,10 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 		if maxBytes <= 0 {
 			maxBytes = defaultMaxSuspendBytes
 		}
+		cfg.suspendMu.Lock()
 		if cfg.suspendCount.Load() >= int64(maxSnap) ||
 			cfg.suspendBytes.Load()+snapSize > maxBytes {
+			cfg.suspendMu.Unlock()
 			cfg.logger.Warn("suspend budget exceeded, skipping suspension",
 				"agent", cfg.name,
 				"count", cfg.suspendCount.Load(),
@@ -251,6 +255,7 @@ func checkSuspendLoop(err error, cfg loopConfig, messages []ChatMessage, task Ag
 		}
 		cfg.suspendCount.Add(1)
 		cfg.suspendBytes.Add(snapSize)
+		cfg.suspendMu.Unlock()
 	}
 
 	// Deep-copy messages for resume closure so that ToolCalls, Attachments,

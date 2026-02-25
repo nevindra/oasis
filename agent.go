@@ -29,7 +29,10 @@ type StreamingAgent interface {
 	// into ch throughout execution. Events include text deltas, tool call
 	// deltas/start/result/progress, agent start/finish (Networks), step
 	// start/finish/progress (Workflows), and routing decisions (Networks).
-	// The channel is closed when streaming completes.
+	//
+	// Contract: implementations MUST close ch before returning. Callers
+	// (including ServeSSE) use `for ev := range ch` to consume events,
+	// which blocks until ch is closed. Failing to close ch causes a deadlock.
 	ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
 }
 

@@ -544,8 +544,8 @@ const generateTitlePrompt = `Generate a short title (max 8 words) for this conve
 const maxTitleInputLen = 500
 
 // generateTitleNewThread generates a thread title from the user message using
-// the LLM and updates the thread. Called only for newly created threads, so it
-// skips the GetThread check — a new thread always has an empty title.
+// the LLM and updates the thread. Reads the existing thread first to avoid
+// overwriting ChatID, Metadata, or other fields with zero values.
 func (m *agentMemory) generateTitleNewThread(ctx context.Context, agentName, userText, threadID string) {
 	resp, err := m.provider.Chat(ctx, ChatRequest{
 		Messages: []ChatMessage{
@@ -570,11 +570,16 @@ func (m *agentMemory) generateTitleNewThread(ctx context.Context, agentName, use
 		title = string(r[:100])
 	}
 
-	if err := m.store.UpdateThread(ctx, Thread{
-		ID:        threadID,
-		Title:     title,
-		UpdatedAt: NowUnix(),
-	}); err != nil {
+	// Read-then-update to preserve ChatID, Metadata, and other fields.
+	// ensureThread may have raced and already set fields on this thread.
+	thread, getErr := m.store.GetThread(ctx, threadID)
+	if getErr != nil {
+		m.logger.Error("get thread for title update failed", "agent", agentName, "thread_id", threadID, "error", getErr)
+		return
+	}
+	thread.Title = title
+	thread.UpdatedAt = NowUnix()
+	if err := m.store.UpdateThread(ctx, thread); err != nil {
 		m.logger.Error("update thread title failed", "agent", agentName, "thread_id", threadID, "error", err)
 	}
 }
