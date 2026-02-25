@@ -208,23 +208,29 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 // executeCodeToolDef is the tool definition for the built-in execute_code tool.
 var executeCodeToolDef = ToolDefinition{
 	Name:        "execute_code",
-	Description: "Execute Python code to perform complex operations. Use when you need conditional logic, data processing, loops, or to chain multiple tool calls with dependencies. You have access to call_tool(name, args) to invoke any available tool from within your code. The Python environment has full access to installed packages. Use print() for logs/debug output. Return results via set_result(data).",
+	Description: "Execute code in a sandboxed environment. Supports multiple runtimes. Use Python for data analysis, visualization, and complex logic. Use Node.js for web-related tasks. You can install packages on-the-fly with install_package(). Use call_tool() to access agent tools from within code. Return results via set_result(). Explicitly list files in set_result to return them to the user.",
 	Parameters: json.RawMessage(`{
 		"type": "object",
 		"properties": {
+			"runtime": {
+				"type": "string",
+				"enum": ["python", "node"],
+				"description": "The runtime to execute the code in. Default: python."
+			},
 			"code": {
 				"type": "string",
-				"description": "Python code to execute. Use call_tool(name, args) to call tools. Use call_tools_parallel([(name, args), ...]) for parallel tool calls. Use set_result(data) to return structured results. Use print() for debug output."
+				"description": "The code to execute. Use call_tool(name, args) to call tools. Use call_tools_parallel([(name, args), ...]) for parallel tool calls. Use set_result(data, files=['file.png']) to return structured results with files. Use install_package(name) to install packages on-the-fly. Use print() for debug output."
 			}
 		},
-		"required": ["code"]
+		"required": ["runtime", "code"]
 	}`),
 }
 
 // executeCode handles the execute_code tool call by delegating to the CodeRunner.
 func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, dispatch DispatchFunc) DispatchResult {
 	var params struct {
-		Code string `json:"code"`
+		Code    string `json:"code"`
+		Runtime string `json:"runtime"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return DispatchResult{Content: "error: invalid execute_code args: " + err.Error(), IsError: true}
@@ -233,7 +239,15 @@ func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, d
 		return DispatchResult{Content: "error: execute_code requires non-empty code", IsError: true}
 	}
 
-	result, err := runner.Run(ctx, CodeRequest{Code: params.Code}, dispatch)
+	req := CodeRequest{
+		Code:    params.Code,
+		Runtime: params.Runtime,
+	}
+	if req.Runtime == "" {
+		req.Runtime = "python"
+	}
+
+	result, err := runner.Run(ctx, req, dispatch)
 	if err != nil {
 		return DispatchResult{Content: "error: code execution failed: " + err.Error(), IsError: true}
 	}
@@ -256,7 +270,21 @@ func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, d
 	if result.Logs != "" {
 		response += "\n\nlogs:\n" + result.Logs
 	}
-	return DispatchResult{Content: response}
+
+	// Map output files to attachments for the agent result.
+	var attachments []Attachment
+	for _, f := range result.Files {
+		if len(f.Data) == 0 && f.URL == "" {
+			continue
+		}
+		attachments = append(attachments, Attachment{
+			MimeType: f.MIME,
+			Data:     f.Data,
+			URL:      f.URL,
+		})
+	}
+
+	return DispatchResult{Content: response, Attachments: attachments}
 }
 
 // --- ask_user tool ---

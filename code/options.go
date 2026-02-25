@@ -3,26 +3,36 @@ package code
 
 import "time"
 
-// Option configures a SubprocessRunner.
+// Option configures an HTTPRunner.
 type Option func(*runnerConfig)
 
 type runnerConfig struct {
-	timeout        time.Duration
-	maxOutput      int
-	workspace      string
-	envVars        map[string]string
-	envPassthrough bool
+	// Shared options.
+	timeout   time.Duration
+	maxOutput int
+
+	// HTTPRunner options.
+	sandboxURL      string
+	callbackAddr    string // auto-start listener address (default "127.0.0.1:0")
+	callbackExtAddr string // user-provided external address (skip auto-start)
+	maxFileSize     int64  // max bytes per returned file
+	maxRetries      int    // total attempts (1 = no retry)
+	retryDelay      time.Duration
 }
 
 func defaultConfig() runnerConfig {
 	return runnerConfig{
-		timeout:   30 * time.Second,
-		maxOutput: 64 * 1024, // 64KB
+		timeout:      30 * time.Second,
+		maxOutput:    64 * 1024,        // 64KB
+		callbackAddr: "127.0.0.1:0",   // OS-assigned port
+		maxFileSize:  10 << 20,         // 10MB
+		maxRetries:   2,                // 1 retry
+		retryDelay:   500 * time.Millisecond,
 	}
 }
 
 // WithTimeout sets the maximum execution duration for code.
-// Default: 30s. The subprocess is killed (SIGKILL) on timeout.
+// Default: 30s.
 func WithTimeout(d time.Duration) Option {
 	return func(c *runnerConfig) { c.timeout = d }
 }
@@ -33,27 +43,43 @@ func WithMaxOutput(bytes int) Option {
 	return func(c *runnerConfig) { c.maxOutput = bytes }
 }
 
-// WithWorkspace sets the working directory for code execution.
-// Filesystem operations in the code are restricted to this directory.
-// Default: os.TempDir().
-func WithWorkspace(path string) Option {
-	return func(c *runnerConfig) { c.workspace = path }
+// WithCallbackAddr sets the address for the auto-started callback HTTP server.
+// The callback server handles tool dispatch requests from the sandbox.
+// Default: "127.0.0.1:0" (OS-assigned port).
+func WithCallbackAddr(addr string) Option {
+	return func(c *runnerConfig) { c.callbackAddr = addr }
 }
 
-// WithEnv sets a specific environment variable for the subprocess.
-// Multiple calls accumulate. These are added to the subprocess environment
-// alongside any passthrough variables.
-func WithEnv(key, value string) Option {
+// WithCallbackExternal tells HTTPRunner that the callback handler is mounted
+// on an external HTTP server at the given address. HTTPRunner will not start
+// its own listener. Use runner.Handler() to get the http.Handler to mount.
+//
+// publicAddr should be the base URL reachable from the sandbox, e.g.
+// "http://app:8080". The dispatch path /_oasis/dispatch is appended automatically.
+func WithCallbackExternal(publicAddr string) Option {
+	return func(c *runnerConfig) { c.callbackExtAddr = publicAddr }
+}
+
+// WithMaxFileSize sets the maximum size in bytes for a single returned file.
+// Files exceeding this limit are included without data (metadata only).
+// Default: 10MB.
+func WithMaxFileSize(bytes int64) Option {
+	return func(c *runnerConfig) { c.maxFileSize = bytes }
+}
+
+// WithMaxRetries sets the total number of attempts for the sandbox HTTP request.
+// 1 means no retry; 2 means one retry on transient failure. Default: 2.
+func WithMaxRetries(n int) Option {
 	return func(c *runnerConfig) {
-		if c.envVars == nil {
-			c.envVars = make(map[string]string)
+		if n < 1 {
+			n = 1
 		}
-		c.envVars[key] = value
+		c.maxRetries = n
 	}
 }
 
-// WithEnvPassthrough passes all host environment variables to the subprocess.
-// By default, the subprocess inherits a minimal environment.
-func WithEnvPassthrough() Option {
-	return func(c *runnerConfig) { c.envPassthrough = true }
+// WithRetryDelay sets the initial backoff delay between retries.
+// The delay doubles on each subsequent retry. Default: 500ms.
+func WithRetryDelay(d time.Duration) Option {
+	return func(c *runnerConfig) { c.retryDelay = d }
 }

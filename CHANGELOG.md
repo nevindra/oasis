@@ -6,6 +6,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **`HTTPRunner` code execution** — new `CodeRunner` implementation (`code/` package) that POSTs code to a remote sandbox service via HTTP. Replaces `SubprocessRunner` with a sidecar container pattern for proper isolation and multi-runtime support
+- **Callback server for tool bridge** — shared `/_oasis/dispatch` HTTP endpoint with correlation-ID routing. Sandbox code calls `call_tool()` which POSTs back to this endpoint; the framework dispatches through the agent's tool registry and returns results. Supports concurrent tool calls from parallel code execution
+- **`CodeFile` type** — bidirectional file transfer between app and sandbox. Input: `Name` + `Data` (inline bytes) or `Name` + `URL` (future). Output: `Name` + `MIME` + `Data`. `Data` tagged `json:"-"` to avoid double-encoding; wire format uses base64
+- **`CodeRequest.Runtime`** — selects execution environment (`"python"` or `"node"`). Empty defaults to `"python"`
+- **`CodeRequest.SessionID`** — enables workspace persistence across executions. Same session ID = same workspace directory
+- **`CodeRequest.Files` / `CodeResult.Files`** — file input/output on code execution requests and results
+- **`execute_code` tool `runtime` parameter** — LLM can now choose between Python and Node.js runtimes
+- **File→Attachment mapping** — `executeCode` dispatch handler maps `CodeResult.Files` to `DispatchResult.Attachments`, carrying generated files (charts, CSVs) through to `AgentResult`
+- **Reference sandbox service (`cmd/sandbox/`)** — Docker sidecar with `POST /execute`, `GET /health`, `DELETE /workspace/{session_id}`. Python 3.12 and Node.js 22 runtimes with embedded preludes. Session-scoped workspaces with TTL eviction. Semaphore-based concurrency limiting (503 fail-fast). Dockerfile with pre-installed scientific packages (matplotlib, pandas, numpy, seaborn, pillow, scipy)
+- **Node.js runtime prelude** — `callTool()`, `callToolsParallel()`, `setResult()`, `installPackage()` for Node.js code execution. All tool functions are async. User code wrapped in async IIFE for top-level await support
+- **HTTPRunner options** — `WithCallbackAddr`, `WithCallbackExternal`, `WithMaxFileSize`, `WithMaxRetries`, `WithRetryDelay`
+
+### Removed
+
+- **`SubprocessRunner`** — replaced by `HTTPRunner` + sandbox sidecar. The `CodeRunner` interface is unchanged for pluggability
+- **`WithWorkspace`, `WithEnv`, `WithEnvPassthrough` options** — subprocess-specific options removed with `SubprocessRunner`
+
 ### Removed
 
 - **`Intent` type and constants** — `Intent`, `IntentChat`, `IntentAction` were dead code with zero consumers. Deleted
