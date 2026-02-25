@@ -953,6 +953,60 @@ func TestGenerateTitleSkipsExistingTitle(t *testing.T) {
 	}
 }
 
+func TestAutoTitleSurvivesSecondMessage(t *testing.T) {
+	store := &recordingStore{
+		threads: map[string]Thread{},
+	}
+
+	// Responses: 1) chat reply, 2) title generation, 3) second chat reply.
+	provider := &mockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			{Content: "first reply"},
+			{Content: "Go Programming Help"},
+			{Content: "second reply"},
+		},
+	}
+
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store, AutoTitle()),
+	)
+
+	// Message 1 — creates thread and generates title.
+	task1 := AgentTask{
+		Input:   "Help me with Go",
+		Context: map[string]any{ContextThreadID: "t-surv", ContextChatID: "c1"},
+	}
+	if _, err := agent.Execute(context.Background(), task1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	store.mu.Lock()
+	titleAfterFirst := store.threads["t-surv"].Title
+	store.mu.Unlock()
+	if titleAfterFirst != "Go Programming Help" {
+		t.Fatalf("title after first message = %q, want %q", titleAfterFirst, "Go Programming Help")
+	}
+
+	// Message 2 — must NOT wipe the title.
+	task2 := AgentTask{
+		Input:   "Thanks",
+		Context: map[string]any{ContextThreadID: "t-surv", ContextChatID: "c1"},
+	}
+	if _, err := agent.Execute(context.Background(), task2); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	store.mu.Lock()
+	titleAfterSecond := store.threads["t-surv"].Title
+	store.mu.Unlock()
+	if titleAfterSecond != "Go Programming Help" {
+		t.Errorf("title after second message = %q, want %q (title was wiped)", titleAfterSecond, "Go Programming Help")
+	}
+}
+
 func TestMaxTokensOption(t *testing.T) {
 	// Create a store that returns history with known content lengths.
 	// Oldest messages first — oldest-first trimming drops the big ones to fit budget.

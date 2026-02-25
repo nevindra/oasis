@@ -4,126 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"sync/atomic"
 )
-
-const defaultMaxIter = 10
 
 // LLMAgent is an Agent that uses an LLM with tools to complete tasks.
 // Optionally supports conversation memory, user memory, and cross-thread search
 // when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
 type LLMAgent struct {
-	name          string
-	description   string
-	provider      Provider
-	tools         *ToolRegistry
-	processors    *ProcessorChain
-	systemPrompt  string
-	maxIter       int
-	inputHandler  InputHandler
-	planExecution  bool
-	codeRunner     CodeRunner
-	responseSchema *ResponseSchema
-	dynamicPrompt  PromptFunc
-	dynamicModel   ModelFunc
-	dynamicTools   ToolsFunc
-	tracer             Tracer
-	logger             *slog.Logger
-	mem                agentMemory
-	cachedToolDefs      []ToolDefinition // computed once at construction for the non-dynamic path
-	maxAttachmentBytes  int64
-	suspendCount        atomic.Int64
-	suspendBytes        atomic.Int64
-	maxSuspendSnapshots int
-	maxSuspendBytes     int64
-	compressModel       ModelFunc
-	compressThreshold   int
-	generationParams    *GenerationParams
+	agentCore
 }
 
 // NewLLMAgent creates an LLMAgent with the given provider and options.
 func NewLLMAgent(name, description string, provider Provider, opts ...AgentOption) *LLMAgent {
 	cfg := buildConfig(opts)
-	a := &LLMAgent{
-		name:         name,
-		description:  description,
-		provider:     provider,
-		tools:        NewToolRegistry(),
-		processors:   NewProcessorChain(),
-		systemPrompt: cfg.prompt,
-		maxIter:      defaultMaxIter,
-		mem: agentMemory{
-			store:              cfg.store,
-			embedding:          cfg.embedding,
-			memory:             cfg.memory,
-			crossThreadSearch:  cfg.crossThreadSearch,
-			semanticMinScore:   cfg.semanticMinScore,
-			maxHistory:         cfg.maxHistory,
-			maxTokens:          cfg.maxTokens,
-			autoTitle:          cfg.autoTitle,
-			provider:           provider,
-			semanticTrimming:   cfg.semanticTrimming,
-			trimmingEmbedding:  cfg.trimmingEmbedding,
-			keepRecent:         cfg.keepRecent,
-		},
-	}
-	if cfg.maxIter > 0 {
-		a.maxIter = cfg.maxIter
-	}
-	for _, t := range cfg.tools {
-		a.tools.Add(t)
-	}
-	for _, p := range cfg.processors {
-		a.processors.Add(p)
-	}
-	a.inputHandler = cfg.inputHandler
-	a.planExecution = cfg.planExecution
-	a.codeRunner = cfg.codeRunner
-	a.responseSchema = cfg.responseSchema
-	a.dynamicPrompt = cfg.dynamicPrompt
-	a.dynamicModel = cfg.dynamicModel
-	a.dynamicTools = cfg.dynamicTools
-	a.tracer = cfg.tracer
-	a.logger = cfg.logger
-	a.maxAttachmentBytes = cfg.maxAttachmentBytes
-	a.maxSuspendSnapshots = cfg.maxSuspendSnapshots
-	a.maxSuspendBytes = cfg.maxSuspendBytes
-	a.compressModel = cfg.compressModel
-	a.compressThreshold = cfg.compressThreshold
-	a.generationParams = cfg.generationParams
-	a.mem.tracer = cfg.tracer
-	a.mem.logger = cfg.logger
+	a := &LLMAgent{}
+	initCore(&a.agentCore, name, description, provider, cfg)
 
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Avoids rebuilding the slice on every Execute call.
 	if a.dynamicTools == nil {
-		a.cachedToolDefs = a.tools.AllDefinitions()
-		if a.inputHandler != nil {
-			a.cachedToolDefs = append(a.cachedToolDefs, askUserToolDef)
-		}
-		if a.planExecution {
-			a.cachedToolDefs = append(a.cachedToolDefs, executePlanToolDef)
-		}
-		if a.codeRunner != nil {
-			a.cachedToolDefs = append(a.cachedToolDefs, executeCodeToolDef)
-		}
+		a.cachedToolDefs = a.cacheBuiltinToolDefs(a.tools.AllDefinitions())
 	}
 
 	return a
 }
 
-func (a *LLMAgent) Name() string        { return a.name }
-func (a *LLMAgent) Description() string { return a.description }
-
-// Drain waits for all in-flight background persist goroutines to finish.
-// Call during shutdown to ensure the last messages are written to the store.
-func (a *LLMAgent) Drain() { a.mem.drain() }
-
 // Execute runs the tool-calling loop until the LLM produces a final text response.
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)
-	return a.executeWithSpan(ctx, task, nil)
+	return a.executeWithSpan(ctx, task, nil, "LLMAgent", "agent", a.buildLoopConfig)
 }
 
 // ExecuteStream runs the tool-calling loop like Execute, but emits StreamEvent
@@ -132,127 +40,26 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 // The channel is closed when streaming completes.
 func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)
-	return a.executeWithSpan(ctx, task, ch)
-}
-
-// executeWithSpan wraps runLoop with an agent.execute span when a tracer is configured.
-func (a *LLMAgent) executeWithSpan(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
-	// Emit input-received event so consumers know a task arrived.
-	if ch != nil {
-		select {
-		case ch <- StreamEvent{Type: EventInputReceived, Name: a.name, Content: task.Input}:
-		case <-ctx.Done():
-			return AgentResult{}, ctx.Err()
-		}
-	}
-
-	if a.tracer != nil {
-		var span Span
-		ctx, span = a.tracer.Start(ctx, "agent.execute",
-			StringAttr("agent.name", a.name),
-			StringAttr("agent.type", "LLMAgent"))
-		defer func() {
-			span.End()
-		}()
-
-		a.logger.Info("agent started", "agent", a.name)
-		result, err := runLoop(ctx, a.buildLoopConfig(ctx, task), task, ch)
-
-		span.SetAttr(
-			IntAttr("tokens.input", result.Usage.InputTokens),
-			IntAttr("tokens.output", result.Usage.OutputTokens))
-		if err != nil {
-			span.Error(err)
-			span.SetAttr(StringAttr("agent.status", "error"))
-		} else {
-			span.SetAttr(StringAttr("agent.status", "ok"))
-		}
-		a.logger.Info("agent completed", "agent", a.name,
-			"status", statusStr(err),
-			"tokens.input", result.Usage.InputTokens,
-			"tokens.output", result.Usage.OutputTokens)
-		return result, err
-	}
-	return runLoop(ctx, a.buildLoopConfig(ctx, task), task, ch)
-}
-
-func statusStr(err error) string {
-	if err != nil {
-		return "error"
-	}
-	return "ok"
+	return a.executeWithSpan(ctx, task, ch, "LLMAgent", "agent", a.buildLoopConfig)
 }
 
 // buildLoopConfig wires LLMAgent fields into a loopConfig for runLoop.
 // Resolves dynamic prompt, model, and tools when configured.
-func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask) loopConfig {
-	// Resolve prompt: dynamic > static
-	prompt := a.systemPrompt
-	if a.dynamicPrompt != nil {
-		prompt = a.dynamicPrompt(ctx, task)
-	}
-
-	// Resolve provider: dynamic > construction-time
-	provider := a.provider
-	if a.dynamicModel != nil {
-		provider = a.dynamicModel(ctx, task)
-	}
+func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, _ chan<- StreamEvent) loopConfig {
+	prompt, provider := a.resolvePromptAndProvider(ctx, task)
 
 	// Resolve tools: dynamic replaces static.
-	// When dynamicTools is set, build definitions and an index per-request.
-	// Otherwise, use the cached definitions computed at construction time.
 	var toolDefs []ToolDefinition
 	var executeTool toolExecFunc
-	if a.dynamicTools != nil {
-		dynTools := a.dynamicTools(ctx, task)
-		index := make(map[string]Tool, len(dynTools))
-		for _, t := range dynTools {
-			for _, d := range t.Definitions() {
-				toolDefs = append(toolDefs, d)
-				index[d.Name] = t
-			}
-		}
-		executeTool = func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
-			if t, ok := index[name]; ok {
-				return t.Execute(ctx, name, args)
-			}
-			return ToolResult{Error: "unknown tool: " + name}, nil
-		}
-		if a.inputHandler != nil {
-			toolDefs = append(toolDefs, askUserToolDef)
-		}
-		if a.planExecution {
-			toolDefs = append(toolDefs, executePlanToolDef)
-		}
-		if a.codeRunner != nil {
-			toolDefs = append(toolDefs, executeCodeToolDef)
-		}
+	if dynDefs, dynExec := a.resolveDynamicTools(ctx, task); dynDefs != nil {
+		toolDefs = a.cacheBuiltinToolDefs(dynDefs)
+		executeTool = dynExec
 	} else {
 		toolDefs = a.cachedToolDefs
 		executeTool = a.tools.Execute
 	}
-	return loopConfig{
-		name:               "agent:" + a.name,
-		provider:           provider,
-		tools:              toolDefs,
-		processors:         a.processors,
-		maxIter:            a.maxIter,
-		mem:                &a.mem,
-		inputHandler:       a.inputHandler,
-		dispatch:           a.makeDispatch(executeTool),
-		systemPrompt:       prompt,
-		responseSchema:     a.responseSchema,
-		tracer:              a.tracer,
-		logger:              a.logger,
-		maxAttachmentBytes:  a.maxAttachmentBytes,
-		suspendCount:        &a.suspendCount,
-		suspendBytes:        &a.suspendBytes,
-		maxSuspendSnapshots: a.maxSuspendSnapshots,
-		maxSuspendBytes:     a.maxSuspendBytes,
-		compressModel:       a.compressModel,
-		compressThreshold:   a.compressThreshold,
-		generationParams:    a.generationParams,
-	}
+
+	return a.baseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool))
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given

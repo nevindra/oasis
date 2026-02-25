@@ -388,7 +388,7 @@ func (m *agentMemory) ensureThread(ctx context.Context, agentName string, task A
 	threadID := task.TaskThreadID()
 	now := NowUnix()
 
-	_, err := m.store.GetThread(ctx, threadID)
+	existing, err := m.store.GetThread(ctx, threadID)
 	if err != nil {
 		// Thread doesn't exist yet — create it.
 		chatID := task.TaskChatID()
@@ -408,10 +408,10 @@ func (m *agentMemory) ensureThread(ctx context.Context, agentName string, task A
 	}
 
 	// Thread exists — bump updated_at so ListThreads ordering stays current.
-	if updateErr := m.store.UpdateThread(ctx, Thread{
-		ID:        threadID,
-		UpdatedAt: now,
-	}); updateErr != nil {
+	// Preserve the existing thread fields (title, metadata) to avoid clobbering
+	// values set by background goroutines (e.g. AutoTitle).
+	existing.UpdatedAt = now
+	if updateErr := m.store.UpdateThread(ctx, existing); updateErr != nil {
 		m.logger.Error("update thread timestamp failed", "agent", agentName, "thread_id", threadID, "error", updateErr)
 	}
 	return false
