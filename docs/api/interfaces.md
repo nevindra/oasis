@@ -324,7 +324,7 @@ type CodeRunner interface {
 
 ## DispatchResult
 
-**File:** `agent.go`
+**File:** `loop.go`
 
 ```go
 type DispatchResult struct {
@@ -341,7 +341,7 @@ Holds the result of a single tool or agent dispatch. `Content` is the text outpu
 
 ## DispatchFunc
 
-**File:** `agent.go`
+**File:** `loop.go`
 
 ```go
 type DispatchFunc func(ctx context.Context, tc ToolCall) DispatchResult

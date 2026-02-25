@@ -64,7 +64,7 @@ Returned (wrapped) by `DoUntil`/`DoWhile` steps when the loop cap is reached wit
 
 ## ErrSuspended
 
-**File:** `agent.go`
+**File:** `suspend.go`
 
 ```go
 // ErrSuspended is returned by Execute() when a workflow step or

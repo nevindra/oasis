@@ -39,8 +39,11 @@ oasis/                              # FRAMEWORK (root package)
 |-- store.go, memory.go
 |-- processor.go                    # Processor interfaces + ProcessorChain
 |-- agent.go, llmagent.go, network.go  # Agent primitives (composable)
+|-- loop.go, suspend.go            # Execution engine, suspend/resume
+|-- batch.go, stream.go            # Batch primitives, SSE streaming
 |-- agentmemory.go                 # Shared memory wiring
-|-- workflow.go                     # DAG-based orchestration
+|-- workflow.go, workflow_exec.go    # DAG-based orchestration
+|-- workflow_steps.go, workflow_definition.go
 |-- input.go                       # InputHandler (human-in-the-loop)
 |-- handle.go                      # Spawn() + AgentHandle
 |

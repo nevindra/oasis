@@ -3,6 +3,7 @@ package oasis
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -249,3 +250,34 @@ func TestAgentStateIsTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestSpawnPanicRecovery(t *testing.T) {
+	// An agent that panics should be caught and converted to StateFailed,
+	// not crash the process.
+	agent := &panicingAgent{name: "crasher"}
+
+	h := Spawn(context.Background(), agent, AgentTask{Input: "crash"})
+
+	result, err := h.Await(context.Background())
+	if err == nil {
+		t.Fatal("expected error from panicking agent")
+	}
+	if h.State() != StateFailed {
+		t.Errorf("State = %v, want %v", h.State(), StateFailed)
+	}
+	if result.Output != "" {
+		t.Errorf("Output = %q, want empty", result.Output)
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("err = %q, want mention of panic", err.Error())
+	}
+}
+
+// panicingAgent is an Agent that panics during Execute.
+type panicingAgent struct {
+	name string
+}
+
+func (p *panicingAgent) Name() string                                                { return p.name }
+func (p *panicingAgent) Description() string                                         { return "panics" }
+func (p *panicingAgent) Execute(_ context.Context, _ AgentTask) (AgentResult, error) { panic("agent on fire") }

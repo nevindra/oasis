@@ -61,7 +61,7 @@ oasis.DoWhile(name string, fn StepFunc, opts ...StepOption)
 
 ## FromDefinition
 
-**File:** `workflow.go`
+**File:** `workflow_definition.go`
 
 ```go
 wf, err := oasis.FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, error)
@@ -178,7 +178,7 @@ handler, ok := oasis.InputHandlerFromContext(ctx) (InputHandler, bool)
 
 ## ForEach Helpers
 
-**File:** `workflow.go`
+**File:** `workflow_steps.go`
 
 ```go
 item, ok := oasis.ForEachItem(ctx) (any, bool)

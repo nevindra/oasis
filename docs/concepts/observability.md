@@ -13,7 +13,7 @@ User Code
          │
 Core Framework (root package)
   tracer.go ──► Tracer/Span interface (pure Go, no OTEL)
-  agent.go  ──► spans via tracer (nil = no-op)
+  llmagent.go, loop.go ──► spans via tracer (nil = no-op)
   memory.go ──► spans + slog
   workflow.go, network.go, retriever.go, ingest/
          │
