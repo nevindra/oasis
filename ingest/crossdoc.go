@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	oasis "github.com/nevindra/oasis"
 )
@@ -242,23 +244,18 @@ func (ing *Ingestor) runCrossDoc(
 		local  oasis.Chunk
 		remote oasis.Chunk
 	}
+
+	var mu sync.Mutex
 	globalSeen := make(map[string]bool)
-	totalEdges := 0
+	var totalEdges atomic.Int64
 
-	for i, doc := range docs {
-		if ctx.Err() != nil {
-			if ing.logger != nil {
-				ing.logger.Warn("cross-doc: context cancelled", "processed", i, "remaining", len(docs)-i)
-			}
-			break
-		}
-
+	processDoc := func(doc oasis.Document) {
 		chunks, err := dcl.GetChunksByDocument(ctx, doc.ID)
 		if err != nil {
 			if ing.logger != nil {
 				ing.logger.Warn("cross-doc: get chunks failed", "doc", doc.Source, "err", err)
 			}
-			continue
+			return
 		}
 
 		var pairs []chunkPair
@@ -276,18 +273,25 @@ func (ing *Ingestor) runCrossDoc(
 				}
 				key1 := c.ID + ":" + cand.ID
 				key2 := cand.ID + ":" + c.ID
-				if globalSeen[key1] || globalSeen[key2] {
+				mu.Lock()
+				seen := globalSeen[key1] || globalSeen[key2]
+				if !seen {
+					globalSeen[key1] = true
+				}
+				mu.Unlock()
+				if seen {
 					continue
 				}
-				globalSeen[key1] = true
 				pairs = append(pairs, chunkPair{local: c, remote: cand.Chunk})
 			}
 		}
 
 		if len(pairs) == 0 {
+			mu.Lock()
 			processedDocs[doc.ID] = true
 			saveCrossDocProgress()
-			continue
+			mu.Unlock()
+			return
 		}
 
 		var batchChunks []oasis.Chunk
@@ -308,7 +312,7 @@ func (ing *Ingestor) runCrossDoc(
 			if ing.logger != nil {
 				ing.logger.Error("cross-doc: edge extraction failed", "doc", doc.Source, "err", err)
 			}
-			continue
+			return
 		}
 
 		edges = deduplicateEdges(edges)
@@ -321,20 +325,60 @@ func (ing *Ingestor) runCrossDoc(
 				if ing.logger != nil {
 					ing.logger.Error("cross-doc: store edges failed", "doc", doc.Source, "err", err)
 				}
-				continue
+				return
 			}
 		}
 
-		totalEdges += len(edges)
+		totalEdges.Add(int64(len(edges)))
 
 		if ing.logger != nil {
 			ing.logger.Info("cross-doc: document processed",
-				"doc", doc.Source, "pairs", len(pairs), "edges", len(edges),
-				"progress", fmt.Sprintf("%d/%d", i+1, len(docs)))
+				"doc", doc.Source, "pairs", len(pairs), "edges", len(edges))
 		}
 
+		mu.Lock()
 		processedDocs[doc.ID] = true
 		saveCrossDocProgress()
+		mu.Unlock()
+	}
+
+	numWorkers := max(cfg.workers, 1)
+	if numWorkers == 1 {
+		// Sequential processing.
+		for i, doc := range docs {
+			if ctx.Err() != nil {
+				if ing.logger != nil {
+					ing.logger.Warn("cross-doc: context cancelled", "processed", i, "remaining", len(docs)-i)
+				}
+				break
+			}
+			processDoc(doc)
+		}
+	} else {
+		// Parallel worker pool.
+		if ing.logger != nil {
+			ing.logger.Info("cross-doc: parallel processing",
+				"workers", numWorkers, "documents", len(docs))
+		}
+		work := make(chan oasis.Document, len(docs))
+		var wg sync.WaitGroup
+		for w := 0; w < min(numWorkers, len(docs)); w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for doc := range work {
+					if ctx.Err() != nil {
+						return
+					}
+					processDoc(doc)
+				}
+			}()
+		}
+		for _, doc := range docs {
+			work <- doc
+		}
+		close(work)
+		wg.Wait()
 	}
 
 	// Delete checkpoint on successful completion.
@@ -342,11 +386,12 @@ func (ing *Ingestor) runCrossDoc(
 		ing.deleteCheckpoint(ctx, cpID)
 	}
 
+	total := int(totalEdges.Load())
 	if ing.logger != nil {
 		ing.logger.Info("cross-doc extraction completed",
-			"edges_stored", totalEdges,
+			"edges_stored", total,
 			"documents_processed", len(docs))
 	}
 
-	return totalEdges, nil
+	return total, nil
 }

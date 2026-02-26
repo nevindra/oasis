@@ -283,10 +283,9 @@ func (h *HybridRetriever) retrieveInner(ctx context.Context, query string, topK 
 		results = reciprocalRankFusion(vectorResults, nil, 0)
 	}
 
-	results, err = h.resolveParents(ctx, results)
-	if err != nil {
-		return nil, fmt.Errorf("resolve parents: %w", err)
-	}
+	results = resolveParentChunks(ctx, h.store, results)
+
+	populateDocumentMeta(ctx, h.store, results)
 
 	if h.cfg.reranker != nil {
 		results, err = h.cfg.reranker.Rerank(ctx, query, results, topK)
@@ -312,12 +311,21 @@ func (h *HybridRetriever) retrieveInner(ctx context.Context, query string, topK 
 	return results, nil
 }
 
-// resolveParents replaces child chunks with their parent's richer content.
+// --- Shared retrieval helpers ---
+
+// DocumentGetter is an optional Store capability for batch document lookup by ID.
+// Store implementations that support it can implement this interface; callers
+// discover it via type assertion. If not implemented, title/source fields stay empty.
+type DocumentGetter interface {
+	GetDocumentsByIDs(ctx context.Context, ids []string) ([]Document, error)
+}
+
+// resolveParentChunks replaces child chunks with their parent's richer content.
 // If multiple children map to the same parent, the highest-scored child wins.
 // Errors are non-fatal — on failure, results pass through unmodified.
-func (h *HybridRetriever) resolveParents(ctx context.Context, results []RetrievalResult) ([]RetrievalResult, error) {
+func resolveParentChunks(ctx context.Context, store Store, results []RetrievalResult) []RetrievalResult {
 	if len(results) == 0 {
-		return results, nil
+		return results
 	}
 
 	chunkIDs := make([]string, len(results))
@@ -325,9 +333,9 @@ func (h *HybridRetriever) resolveParents(ctx context.Context, results []Retrieva
 		chunkIDs[i] = r.ChunkID
 	}
 
-	chunks, err := h.store.GetChunksByIDs(ctx, chunkIDs)
+	chunks, err := store.GetChunksByIDs(ctx, chunkIDs)
 	if err != nil {
-		return results, nil // degrade gracefully
+		return results // degrade gracefully
 	}
 
 	chunkMap := make(map[string]Chunk, len(chunks))
@@ -345,12 +353,12 @@ func (h *HybridRetriever) resolveParents(ctx context.Context, results []Retrieva
 	}
 
 	if len(pIDs) == 0 {
-		return results, nil
+		return results
 	}
 
-	parents, err := h.store.GetChunksByIDs(ctx, pIDs)
+	parents, err := store.GetChunksByIDs(ctx, pIDs)
 	if err != nil {
-		return results, nil // degrade gracefully
+		return results // degrade gracefully
 	}
 
 	parentMap := make(map[string]Chunk, len(parents))
@@ -380,14 +388,54 @@ func (h *HybridRetriever) resolveParents(ctx context.Context, results []Retrieva
 		}
 
 		resolved = append(resolved, RetrievalResult{
-			Content:    parent.Content,
-			Score:      r.Score,
-			ChunkID:    parent.ID,
-			DocumentID: parent.DocumentID,
+			Content:      parent.Content,
+			Score:        r.Score,
+			ChunkID:      parent.ID,
+			DocumentID:   parent.DocumentID,
+			GraphContext: r.GraphContext,
 		})
 	}
 
-	return resolved, nil
+	return resolved
+}
+
+// populateDocumentMeta fills DocumentTitle and DocumentSource on results
+// by batch-fetching document metadata. If the Store does not implement
+// DocumentGetter, fields stay empty (same behavior as before).
+func populateDocumentMeta(ctx context.Context, store Store, results []RetrievalResult) {
+	dg, ok := store.(DocumentGetter)
+	if !ok || len(results) == 0 {
+		return
+	}
+
+	idSet := make(map[string]bool)
+	var ids []string
+	for _, r := range results {
+		if r.DocumentID != "" && !idSet[r.DocumentID] {
+			idSet[r.DocumentID] = true
+			ids = append(ids, r.DocumentID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	docs, err := dg.GetDocumentsByIDs(ctx, ids)
+	if err != nil {
+		return // degrade gracefully
+	}
+
+	docMap := make(map[string]Document, len(docs))
+	for _, d := range docs {
+		docMap[d.ID] = d
+	}
+
+	for i := range results {
+		if d, ok := docMap[results[i].DocumentID]; ok {
+			results[i].DocumentTitle = d.Title
+			results[i].DocumentSource = d.Source
+		}
+	}
 }
 
 // --- LLMReranker ---
@@ -474,6 +522,9 @@ type graphRetrieverConfig struct {
 	minTraversalScore float32
 	seedTopK          int
 	seedKeywordWeight float32
+	graphTopK         int
+	maxFrontierSize   int
+	reranker          Reranker
 	filters           []ChunkFilter
 	tracer            Tracer
 	logger            *slog.Logger
@@ -530,6 +581,27 @@ func WithSeedTopK(k int) GraphRetrieverOption {
 // results to produce a more diverse seed set for graph traversal.
 func WithSeedKeywordWeight(w float32) GraphRetrieverOption {
 	return func(c *graphRetrieverConfig) { c.seedKeywordWeight = w }
+}
+
+// WithGraphTopK sets the number of guaranteed graph-discovered slots in
+// the final results. When > 0, results are partitioned into a seed pool and
+// a graph pool, each sorted independently, then merged. Default is 0
+// (single-pool behavior, backward compatible).
+func WithGraphTopK(n int) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.graphTopK = n }
+}
+
+// WithMaxFrontierSize caps the BFS frontier per hop. When > 0, after building
+// the next-hop candidate list, only the top n candidates by tentative graph
+// score are kept. Default is 0 (unlimited, backward compatible).
+func WithMaxFrontierSize(n int) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.maxFrontierSize = n }
+}
+
+// WithGraphReranker sets an optional re-ranking stage that runs after graph
+// score blending and parent resolution, before the final topK trim.
+func WithGraphReranker(r Reranker) GraphRetrieverOption {
+	return func(c *graphRetrieverConfig) { c.reranker = r }
 }
 
 // WithGraphFilters sets metadata filters passed to the initial vector search.
@@ -638,13 +710,15 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 	type scored struct {
 		chunkID      string
 		score        float32
+		isSeed       bool
 		graphContext []EdgeContext
 	}
 	best := make(map[string]*scored)
 
+	seedSet := make(map[string]bool, len(seeds))
 	for _, sc := range seeds {
-		s := g.cfg.vectorWeight*sc.Score + g.cfg.graphWeight*1.0
-		best[sc.ID] = &scored{chunkID: sc.ID, score: s}
+		seedSet[sc.ID] = true
+		best[sc.ID] = &scored{chunkID: sc.ID, score: g.cfg.vectorWeight * sc.Score, isSeed: true}
 	}
 
 	// 2. Graph traversal (if store supports it).
@@ -709,12 +783,29 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 				if existing, ok := best[neighborID]; ok {
 					if graphScore > existing.score {
 						existing.score = graphScore
-						existing.graphContext = []EdgeContext{ec}
+					}
+					if len(existing.graphContext) < 3 {
+						existing.graphContext = append(existing.graphContext, ec)
 					}
 				} else {
 					best[neighborID] = &scored{chunkID: neighborID, score: graphScore, graphContext: []EdgeContext{ec}}
 				}
 				nextIDs = append(nextIDs, neighborID)
+			}
+
+			// Cap frontier size if configured.
+			if g.cfg.maxFrontierSize > 0 && len(nextIDs) > g.cfg.maxFrontierSize {
+				sort.Slice(nextIDs, func(i, j int) bool {
+					si, sj := best[nextIDs[i]], best[nextIDs[j]]
+					if si == nil {
+						return false
+					}
+					if sj == nil {
+						return true
+					}
+					return si.score > sj.score
+				})
+				nextIDs = nextIDs[:g.cfg.maxFrontierSize]
 			}
 
 			currentIDs = nextIDs
@@ -727,14 +818,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 	// 3. Fetch chunk content for graph-discovered chunks.
 	var needFetch []string
 	for id := range best {
-		found := false
-		for _, sc := range seeds {
-			if sc.ID == id {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !seedSet[id] {
 			needFetch = append(needFetch, id)
 		}
 	}
@@ -769,9 +853,49 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 		})
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
-	})
+	// 5. Parent-child resolution.
+	results = resolveParentChunks(ctx, g.store, results)
+
+	// 6. Populate document metadata.
+	populateDocumentMeta(ctx, g.store, results)
+
+	// 7. Reranker (if configured).
+	if g.cfg.reranker != nil {
+		results, err = g.cfg.reranker.Rerank(ctx, query, results, topK)
+		if err != nil {
+			return nil, fmt.Errorf("rerank: %w", err)
+		}
+	}
+
+	// 8. Two-pool merge or single-pool sort.
+	if g.cfg.graphTopK > 0 {
+		var seedPool, graphPool []RetrievalResult
+		for _, r := range results {
+			if seedSet[r.ChunkID] {
+				seedPool = append(seedPool, r)
+			} else {
+				graphPool = append(graphPool, r)
+			}
+		}
+		sort.Slice(seedPool, func(i, j int) bool { return seedPool[i].Score > seedPool[j].Score })
+		sort.Slice(graphPool, func(i, j int) bool { return graphPool[i].Score > graphPool[j].Score })
+
+		seedSlots := topK - g.cfg.graphTopK
+		if seedSlots < 0 {
+			seedSlots = 0
+		}
+		if len(seedPool) > seedSlots {
+			seedPool = seedPool[:seedSlots]
+		}
+		if len(graphPool) > g.cfg.graphTopK {
+			graphPool = graphPool[:g.cfg.graphTopK]
+		}
+		results = append(seedPool, graphPool...)
+	} else {
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Score > results[j].Score
+		})
+	}
 
 	if len(results) > topK {
 		results = results[:topK]

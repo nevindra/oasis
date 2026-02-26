@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	oasis "github.com/nevindra/oasis"
 )
@@ -28,7 +29,7 @@ const graphExtractionPrompt = `You are a knowledge graph extractor. Analyze the 
 For each relationship found, output a JSON edge with:
 - "source": the chunk ID that holds the relationship
 - "target": the chunk ID being referenced
-- "relation": one of: references, elaborates, depends_on, contradicts, part_of, similar_to, sequence, caused_by
+- "relation": one of: references, elaborates, depends_on, contradicts, part_of, sequence, caused_by
 - "weight": confidence score from 0.0 to 1.0
 - "description": a brief explanation of why this relationship exists (1 sentence)
 
@@ -38,7 +39,6 @@ Relationship type definitions:
 - depends_on: chunk A assumes knowledge from chunk B
 - contradicts: chunk A conflicts with chunk B
 - part_of: chunk A is a component or subset of chunk B
-- similar_to: chunks cover overlapping topics
 - sequence: chunk A follows chunk B in logical order
 - caused_by: chunk A is a consequence of chunk B
 
@@ -133,42 +133,83 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 					fmt.Fprintf(&prompt, "\n[%s]: %s\n", c.ID, c.Content)
 				}
 
-				if logger != nil {
-					logger.Debug("graph extraction: sending LLM request",
-						"batch", b.index,
-						"chunk_count", len(b.chunks),
-						"prompt_bytes", prompt.Len())
-				}
+				const maxBatchRetries = 3
+				var edges []oasis.ChunkEdge
+				succeeded := false
 
-				resp, err := provider.Chat(ctx, oasis.ChatRequest{
-					Messages: []oasis.ChatMessage{
-						{Role: "user", Content: prompt.String()},
-					},
-				})
-				if err != nil {
+				for attempt := 0; attempt < maxBatchRetries; attempt++ {
+					if ctx.Err() != nil {
+						break
+					}
+
+					if attempt > 0 {
+						backoff := time.Second * time.Duration(1<<(attempt-1)) // 1s, 2s
+						if logger != nil {
+							logger.Info("graph extraction: retrying batch",
+								"batch", b.index,
+								"attempt", attempt+1,
+								"backoff", backoff)
+						}
+						select {
+						case <-time.After(backoff):
+						case <-ctx.Done():
+						}
+						if ctx.Err() != nil {
+							break
+						}
+					}
+
 					if logger != nil {
-						logger.Warn("graph extraction: LLM call failed",
+						logger.Debug("graph extraction: sending LLM request",
 							"batch", b.index,
 							"chunk_count", len(b.chunks),
-							"err", err)
+							"attempt", attempt+1,
+							"prompt_bytes", prompt.Len())
 					}
-					results <- batchResult{failed: true}
-					continue
-				}
 
-				if logger != nil {
-					logger.Debug("graph extraction: LLM response received",
-						"batch", b.index,
-						"response_bytes", len(resp.Content))
-				}
+					resp, err := provider.Chat(ctx, oasis.ChatRequest{
+						Messages: []oasis.ChatMessage{
+							{Role: "user", Content: prompt.String()},
+						},
+					})
+					if err != nil {
+						if logger != nil {
+							logger.Warn("graph extraction: LLM call failed",
+								"batch", b.index,
+								"attempt", attempt+1,
+								"err", err)
+						}
+						continue
+					}
 
-				edges, err := parseEdgeResponse(resp.Content, b.chunks)
-				if err != nil {
 					if logger != nil {
-						logger.Warn("graph extraction: parse failed",
+						logger.Debug("graph extraction: LLM response received",
 							"batch", b.index,
-							"response_bytes", len(resp.Content),
-							"err", err)
+							"attempt", attempt+1,
+							"response_bytes", len(resp.Content))
+					}
+
+					edges, err = parseEdgeResponse(resp.Content, b.chunks)
+					if err != nil {
+						if logger != nil {
+							logger.Warn("graph extraction: parse failed",
+								"batch", b.index,
+								"attempt", attempt+1,
+								"response_bytes", len(resp.Content),
+								"err", err)
+						}
+						continue
+					}
+
+					succeeded = true
+					break
+				}
+
+				if !succeeded {
+					if logger != nil {
+						logger.Warn("graph extraction: batch failed after retries",
+							"batch", b.index,
+							"max_retries", maxBatchRetries)
 					}
 					results <- batchResult{failed: true}
 					continue
@@ -360,4 +401,104 @@ func pruneEdges(edges []oasis.ChunkEdge, minWeight float32, maxPerChunk int) []o
 		result = append(result, group...)
 	}
 	return result
+}
+
+// buildSemanticBatches groups chunks into batches based on embedding similarity
+// rather than sequential position. Each chunk's nearest neighbors (by cosine
+// similarity) are grouped together, producing batches where chunks are
+// semantically related — improving LLM extraction quality.
+func buildSemanticBatches(chunks []oasis.Chunk, batchSize int) [][]oasis.Chunk {
+	if len(chunks) < 2 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = 5
+	}
+
+	// Filter to chunks that have embeddings.
+	var embedded []oasis.Chunk
+	for _, c := range chunks {
+		if len(c.Embedding) > 0 {
+			embedded = append(embedded, c)
+		}
+	}
+	if len(embedded) < 2 {
+		return nil
+	}
+
+	assigned := make(map[string]bool, len(embedded))
+	var batches [][]oasis.Chunk
+
+	for _, seed := range embedded {
+		if assigned[seed.ID] {
+			continue
+		}
+
+		// Score all unassigned chunks by cosine similarity to seed.
+		type scored struct {
+			chunk oasis.Chunk
+			sim   float64
+		}
+		var candidates []scored
+		for _, c := range embedded {
+			if assigned[c.ID] || c.ID == seed.ID {
+				continue
+			}
+			sim := cosineSimilarity(seed.Embedding, c.Embedding)
+			candidates = append(candidates, scored{chunk: c, sim: sim})
+		}
+
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].sim > candidates[j].sim
+		})
+
+		batch := []oasis.Chunk{seed}
+		assigned[seed.ID] = true
+
+		for _, sc := range candidates {
+			if len(batch) >= batchSize {
+				break
+			}
+			if assigned[sc.chunk.ID] {
+				continue
+			}
+			batch = append(batch, sc.chunk)
+			assigned[sc.chunk.ID] = true
+		}
+
+		if len(batch) >= 2 {
+			batches = append(batches, batch)
+		}
+	}
+
+	return batches
+}
+
+// cosineSimilarity computes the cosine similarity between two vectors.
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (sqrt(normA) * sqrt(normB))
+}
+
+// sqrt returns the square root (avoids importing math for a single call).
+func sqrt(x float64) float64 {
+	if x <= 0 {
+		return 0
+	}
+	z := x
+	for i := 0; i < 20; i++ {
+		z = (z + x/z) / 2
+	}
+	return z
 }

@@ -381,6 +381,34 @@ func (s *Store) GetChunksByDocument(ctx context.Context, docID string) ([]oasis.
 	return chunks, rows.Err()
 }
 
+// GetDocumentsByIDs returns documents matching the given IDs.
+func (s *Store) GetDocumentsByIDs(ctx context.Context, ids []string) ([]oasis.Document, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	start := time.Now()
+	s.logger.Debug("postgres: get documents by ids", "count", len(ids))
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, title, source, content, created_at FROM documents WHERE id = ANY($1)`, ids)
+	if err != nil {
+		s.logger.Error("postgres: get documents by ids failed", "error", err, "duration", time.Since(start))
+		return nil, fmt.Errorf("postgres: get documents by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []oasis.Document
+	for rows.Next() {
+		var d oasis.Document
+		if err := rows.Scan(&d.ID, &d.Title, &d.Source, &d.Content, &d.CreatedAt); err != nil {
+			return nil, fmt.Errorf("postgres: scan document: %w", err)
+		}
+		docs = append(docs, d)
+	}
+	s.logger.Debug("postgres: get documents by ids ok", "count", len(docs), "duration", time.Since(start))
+	return docs, rows.Err()
+}
+
 // GetChunksByIDs returns chunks matching the given IDs.
 func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk, error) {
 	if len(ids) == 0 {

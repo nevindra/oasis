@@ -38,21 +38,21 @@ The ingestor sends chunks to an LLM in batches and parses the response for relat
 
 **Step-by-step:**
 
-1. **Batch formation** — chunks are grouped into sliding window batches of `graphBatchSize` (default 5) with configurable overlap (`WithGraphBatchOverlap`). Each batch must contain at least 2 chunks. Overlap allows consecutive batches to share chunks, discovering cross-boundary relationships at the cost of more LLM calls.
+1. **Batch formation** — chunks are grouped into sliding window batches of `graphBatchSize` (default 5) with configurable overlap (`WithGraphBatchOverlap`). Each batch must contain at least 2 chunks. Overlap allows consecutive batches to share chunks, discovering cross-boundary relationships at the cost of more LLM calls. Alternatively, `WithSemanticBatching(true)` groups chunks by embedding similarity instead of sequential position — this produces higher-quality batches where semantically related chunks are processed together (overlap is ignored in this mode).
 2. **Prompt construction** — each batch is formatted into a structured prompt with chunk IDs and content:
    ```
    [chunk_abc123]: Go is a programming language created by Google.
    [chunk_def456]: Go supports concurrency via goroutines.
    ```
-3. **Parallel LLM calls** — batches are processed concurrently by a worker pool (`WithGraphExtractionWorkers`, default 3). Each worker sends its batch to the configured `Provider` via `Chat()`. The prompt instructs the LLM to output JSON edges with source, target, relation type, confidence weight, and a brief description of the relationship.
+3. **Parallel LLM calls** — batches are processed concurrently by a worker pool (`WithGraphExtractionWorkers`, default 3). Each worker sends its batch to the configured `Provider` via `Chat()`. The prompt instructs the LLM to output JSON edges with source, target, relation type, confidence weight, and a brief description of the relationship. Failed batches are retried up to 3 times with exponential backoff (1s, 2s) before being skipped.
 4. **Response parsing** — the JSON response is parsed and validated:
    - Source and target must reference valid chunk IDs from the current batch
    - Self-referencing edges (source == target) are rejected
-   - Relation must be one of the 8 defined types
+   - Relation must be one of the 7 prompted types (8 types are accepted for backward compatibility — `similar_to` is no longer prompted but still parsed if returned)
    - Weight must be in the range (0.0, 1.0]
 5. **Deduplication** — when overlapping batches produce duplicate edges (same source, target, and relation), only the highest-weight edge is kept.
 6. **Context cancellation** — workers check `ctx.Err()` before processing each batch, stopping early if the context is cancelled.
-7. **Graceful degradation** — individual batch failures (LLM errors or parse errors) are logged and skipped. The extraction continues with remaining batches. If `WithIngestorLogger` is configured, failures are logged at `WARN` level.
+7. **Graceful degradation** — individual batch failures (LLM errors or parse errors) are retried up to 3 times with exponential backoff. If all retries fail, the batch is skipped and extraction continues with remaining batches. If `WithIngestorLogger` is configured, failures are logged at `WARN` level.
 
 ### 2. Sequence Edges (`WithSequenceEdges`)
 
@@ -94,7 +94,7 @@ The LLM identifies 8 typed relationships between chunks. Each is a `RelationType
 | `depends_on` | `RelDependsOn` | Chunk A assumes knowledge from chunk B | "Building on the OAuth flow described above..." |
 | `contradicts` | `RelContradicts` | Chunk A conflicts with chunk B | Two sections with conflicting recommendations |
 | `part_of` | `RelPartOf` | Chunk A is a component or subset of chunk B | A subsection of a broader topic |
-| `similar_to` | `RelSimilarTo` | Chunks cover overlapping topics | Two sections about related features |
+| `similar_to` | `RelSimilarTo` | Chunks cover overlapping topics (**deprecated** — no longer prompted, accepted for backward compatibility) | Two sections about related features |
 | `sequence` | `RelSequence` | Chunk A follows chunk B in logical order | Consecutive paragraphs, tutorial steps |
 | `caused_by` | `RelCausedBy` | Chunk A is a consequence of chunk B | "This led to..." or cause-and-effect chains |
 
@@ -152,6 +152,9 @@ ingestor := ingest.NewIngestor(store, embedding,
     ingest.WithMinEdgeWeight(0.3),             // drop low-confidence edges
     ingest.WithMaxEdgesPerChunk(5),            // cap edges per source chunk
 
+    // Semantic batching (group by similarity instead of position)
+    ingest.WithSemanticBatching(true),         // embedding-based batch grouping
+
     // Sequence edges (no LLM cost)
     ingest.WithSequenceEdges(true),            // auto-link consecutive chunks
 
@@ -172,6 +175,7 @@ ingestor := ingest.NewIngestor(store, embedding,
 | `WithMinEdgeWeight(w)` | 0 (no filter) | Minimum confidence weight to keep an edge |
 | `WithMaxEdgesPerChunk(n)` | 0 (unlimited) | Maximum edges per source chunk (top N by weight) |
 | `WithSequenceEdges(b)` | false | Auto-create `sequence` edges between consecutive chunks. No LLM required |
+| `WithSemanticBatching(b)` | false | Group chunks by embedding similarity instead of sequential position for LLM extraction. Produces higher-quality batches. When enabled, `WithGraphBatchOverlap` is ignored |
 | `WithCrossDocumentEdges(b)` | false | Enable automatic cross-document edge discovery during ingestion |
 
 ## Cross-Document Edge Extraction
@@ -190,6 +194,7 @@ count, err := ingestor.ExtractCrossDocumentEdges(ctx,
     ingest.CrossDocWithMaxPairsPerChunk(3),       // candidates per chunk (default 3)
     ingest.CrossDocWithBatchSize(5),              // chunks per LLM call (default 5)
     ingest.CrossDocWithDocumentIDs("d1", "d2"),   // scope to specific docs (default: all)
+    ingest.CrossDocWithWorkers(4),                // parallel document processing (default 1)
 )
 fmt.Printf("Created %d cross-document edges\n", count)
 ```
@@ -241,7 +246,7 @@ sequenceDiagram
 
 1. **Embed the query** — `EmbeddingProvider.Embed()` converts the query to a vector.
 2. **Vector search (seed)** — `Store.SearchChunks()` returns `seedTopK` (default 10) seed chunks, scored by cosine similarity.
-3. **Score initialization** — each seed chunk gets an initial blended score: `vectorWeight × vectorScore + graphWeight × 1.0`.
+3. **Score initialization** — each seed chunk gets an initial score: `vectorWeight × vectorScore`.
 4. **BFS traversal** — for up to `maxHops` iterations:
    - Fetch outgoing edges via `GetEdges()` for current frontier chunks
    - Optionally fetch incoming edges via `GetIncomingEdges()` when `bidirectional = true`
@@ -250,14 +255,17 @@ sequenceDiagram
    - Track the best score per chunk (max of vector and graph scores)
    - Advance the frontier to newly discovered chunks
 5. **Fetch content** — graph-discovered chunks that weren't in the seed set are fetched via `GetChunksByIDs()`.
-6. **Sort and trim** — results are sorted by blended score descending and trimmed to `topK`.
+6. **Parent resolution** — if a result chunk has a `ParentID`, its parent content replaces the child content for richer context.
+7. **Document metadata** — if the Store implements `DocumentGetter`, the `DocumentTitle` and `DocumentSource` fields are populated on each result.
+8. **Reranking** — if `WithGraphReranker` is configured, results are reranked before final selection.
+9. **Sort and trim** — results are sorted by blended score descending and trimmed to `topK`. With `WithGraphTopK`, a two-pool merge guarantees graph-discovered slots.
 
 ### Score Blending
 
 The final score for each chunk combines vector similarity and graph traversal:
 
 ```
-For seed chunks:    score = vectorWeight × vectorScore + graphWeight × 1.0
+For seed chunks:    score = vectorWeight × vectorScore
 For graph chunks:   score = graphWeight × edgeWeight × hopDecay[hop]
 ```
 
@@ -270,10 +278,16 @@ score = 0.3 × 0.8 × 0.5 = 0.12
 
 A seed chunk with cosine similarity 0.9:
 ```
-score = 0.7 × 0.9 + 0.3 × 1.0 = 0.93
+score = 0.7 × 0.9 = 0.63
 ```
 
-Seed chunks will generally score higher than graph-discovered chunks, but graph chunks add context that vector search would miss entirely.
+By default, results are sorted by score descending and trimmed to `topK`. When `WithGraphTopK(n)` is set, a **two-pool merge** guarantees that at least `n` slots are reserved for graph-discovered chunks. This prevents high-scoring seeds from completely crowding out graph discoveries:
+
+```
+final results = top (topK - graphTopK) seeds + top graphTopK graph chunks
+```
+
+If either pool has fewer candidates than its allocation, the other pool fills the remaining slots.
 
 ### Retrieval Configuration
 
@@ -288,6 +302,9 @@ retriever := oasis.NewGraphRetriever(store, embedding,
         oasis.RelDependsOn, oasis.RelReferences),
     oasis.WithMinTraversalScore(0.3),                   // skip weak edges
     oasis.WithSeedTopK(10),                             // seed chunks from vector search
+    oasis.WithGraphTopK(3),                             // reserve 3 slots for graph discoveries
+    oasis.WithMaxFrontierSize(50),                      // cap BFS frontier per hop
+    oasis.WithGraphReranker(reranker),                  // rerank before final selection
     oasis.WithGraphFilters(oasis.BySource("docs/")),    // scope vector search
     oasis.WithGraphRetrieverTracer(tracer),             // observability
     oasis.WithGraphRetrieverLogger(slog.Default()),
@@ -319,7 +336,7 @@ type EdgeContext struct {
 }
 ```
 
-Seed chunks have an empty `GraphContext`. The `KnowledgeTool` automatically formats edge descriptions in its output:
+When a chunk is discovered through multiple paths across different hops, all discovery paths are accumulated in `GraphContext` (capped at 3 entries per chunk). Seed chunks have an empty `GraphContext`. The `KnowledgeTool` automatically formats edge descriptions in its output:
 
 ```
 1. OAuth setup flow
@@ -343,6 +360,9 @@ Seed chunks have an empty `GraphContext`. The `KnowledgeTool` automatically form
 | `WithSeedTopK(k)` | 10 | Number of seed chunks from initial vector search |
 | `WithSeedKeywordWeight(w)` | 0 (disabled) | Keyword weight for hybrid seed selection via RRF. Set > 0 to enable keyword+vector seed fusion |
 | `WithGraphFilters(f...)` | none | Metadata filters passed to the vector search step |
+| `WithGraphTopK(n)` | 0 (disabled) | Reserve `n` result slots for graph-discovered chunks (two-pool merge). Ensures graph traversal adds value even when seeds score high |
+| `WithMaxFrontierSize(n)` | 0 (unlimited) | Cap the BFS frontier size per hop. Prevents combinatorial explosion on densely connected graphs |
+| `WithGraphReranker(r)` | nil | Apply a `Reranker` to graph results before final selection |
 | `WithGraphRetrieverTracer(t)` | nil | Attach a `Tracer` for span creation (`retriever.retrieve`) |
 | `WithGraphRetrieverLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
@@ -353,8 +373,8 @@ Graph RAG is designed to degrade silently at every level:
 | Scenario | Behavior |
 |----------|----------|
 | Store doesn't implement `GraphStore` | Graph extraction and traversal are skipped; vector-only results returned |
-| LLM call fails during extraction | Batch is skipped, remaining batches continue. Logged at WARN level if logger is configured |
-| LLM returns invalid JSON | Batch is skipped, extraction continues |
+| LLM call fails during extraction | Batch is retried up to 3 times with exponential backoff. If all retries fail, batch is skipped and remaining batches continue. Logged at WARN level if logger is configured |
+| LLM returns invalid JSON | Response is retried (counts as a batch failure). If all retries produce invalid JSON, batch is skipped |
 | LLM returns invalid edge (bad ID, unknown relation, out-of-range weight) | Individual edge is dropped, others kept |
 | Graph traversal `GetEdges()` fails | Traversal stops, seed results returned as-is |
 | `GetChunksByIDs()` fails for graph-discovered chunks | Only seed chunks appear in results |

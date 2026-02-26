@@ -383,6 +383,41 @@ func (s *Store) GetChunksByDocument(ctx context.Context, docID string) ([]oasis.
 	return chunks, rows.Err()
 }
 
+// GetDocumentsByIDs returns documents matching the given IDs.
+func (s *Store) GetDocumentsByIDs(ctx context.Context, ids []string) ([]oasis.Document, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	start := time.Now()
+	s.logger.Debug("sqlite: get documents by ids", "count", len(ids))
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`SELECT id, title, source, content, created_at FROM documents WHERE id IN (%s)`,
+		strings.Join(placeholders, ","))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get documents by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []oasis.Document
+	for rows.Next() {
+		var d oasis.Document
+		if err := rows.Scan(&d.ID, &d.Title, &d.Source, &d.Content, &d.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan document: %w", err)
+		}
+		docs = append(docs, d)
+	}
+	s.logger.Debug("sqlite: get documents by ids ok", "requested", len(ids), "returned", len(docs), "duration", time.Since(start))
+	return docs, rows.Err()
+}
+
 // GetChunksByIDs returns chunks matching the given IDs.
 func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk, error) {
 	if len(ids) == 0 {

@@ -42,14 +42,15 @@ type Ingestor struct {
 	childChunker  Chunker
 
 	// graph extraction config
-	graphProvider    oasis.Provider
-	minEdgeWeight    float32
-	maxEdgesPerChunk int
+	graphProvider     oasis.Provider
+	minEdgeWeight     float32
+	maxEdgesPerChunk  int
 	graphBatchSize    int
 	graphBatchOverlap int
 	graphWorkers      int
 	crossDocEdges     bool
-	sequenceEdges    bool
+	sequenceEdges     bool
+	semanticBatching  bool
 
 	// contextual enrichment config
 	contextProvider    oasis.Provider
@@ -468,23 +469,51 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 
 	// LLM-based extraction.
 	if ing.graphProvider != nil {
-		if ing.logger != nil {
-			ing.logger.Info("LLM graph extraction started",
-				"chunk_count", len(chunks),
-				"batch_size", ing.graphBatchSize,
-				"overlap", ing.graphBatchOverlap,
-				"workers", ing.graphWorkers)
-		}
-		llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.graphBatchOverlap, ing.graphWorkers, ing.logger)
-		if err != nil {
+		if ing.semanticBatching {
 			if ing.logger != nil {
-				ing.logger.Warn("LLM graph extraction failed", "err", err)
+				ing.logger.Info("semantic batching graph extraction started",
+					"chunk_count", len(chunks),
+					"batch_size", ing.graphBatchSize,
+					"workers", ing.graphWorkers)
 			}
-		} else if ing.logger != nil {
-			ing.logger.Info("LLM graph extraction completed",
-				"edge_count", len(llmEdges))
+			semBatches := buildSemanticBatches(chunks, ing.graphBatchSize)
+			if ing.logger != nil {
+				ing.logger.Debug("semantic batches built",
+					"batch_count", len(semBatches))
+			}
+			for _, sb := range semBatches {
+				llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, sb, len(sb), 0, 1, ing.logger)
+				if err != nil {
+					if ing.logger != nil {
+						ing.logger.Warn("semantic batch extraction failed", "err", err)
+					}
+					continue
+				}
+				edges = append(edges, llmEdges...)
+			}
+			if ing.logger != nil {
+				ing.logger.Info("semantic batching graph extraction completed",
+					"edge_count", len(edges))
+			}
+		} else {
+			if ing.logger != nil {
+				ing.logger.Info("LLM graph extraction started",
+					"chunk_count", len(chunks),
+					"batch_size", ing.graphBatchSize,
+					"overlap", ing.graphBatchOverlap,
+					"workers", ing.graphWorkers)
+			}
+			llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.graphBatchOverlap, ing.graphWorkers, ing.logger)
+			if err != nil {
+				if ing.logger != nil {
+					ing.logger.Warn("LLM graph extraction failed", "err", err)
+				}
+			} else if ing.logger != nil {
+				ing.logger.Info("LLM graph extraction completed",
+					"edge_count", len(llmEdges))
+			}
+			edges = append(edges, llmEdges...)
 		}
-		edges = append(edges, llmEdges...)
 	}
 
 	beforeDedup := len(edges)

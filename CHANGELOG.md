@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Removed
+
+- **`store/libsql`** — removed libsql store backend to reduce maintenance surface. Use `store/sqlite` or `store/postgres` instead
+
 ### Fixed
 
 - **`store/sqlite`, `store/postgres`: implement `DocumentChunkLister`** — add `GetChunksByDocument` method so `ExtractCrossDocumentEdges` no longer fails with "store to implement DocumentChunkLister"

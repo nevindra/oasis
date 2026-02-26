@@ -179,6 +179,16 @@ func WithBatchCrossDocEdges(b bool) Option {
 	return func(ing *Ingestor) { ing.batchCrossDocEdges = b }
 }
 
+// WithSemanticBatching enables embedding-based batching for graph extraction
+// instead of the default sliding window. When enabled, each chunk's nearest
+// intra-document neighbors (by embedding similarity) are grouped into batches,
+// producing higher-quality LLM extraction with fewer wasted calls.
+// When enabled, WithGraphBatchOverlap is ignored (overlap is meaningful only
+// for sequential windowing).
+func WithSemanticBatching(b bool) Option {
+	return func(ing *Ingestor) { ing.semanticBatching = b }
+}
+
 // CrossDocOption configures ExtractCrossDocumentEdges.
 type CrossDocOption func(*crossDocConfig)
 
@@ -187,6 +197,7 @@ type crossDocConfig struct {
 	similarityThreshold float32
 	maxPairsPerChunk    int
 	batchSize           int
+	workers             int
 	resume              bool
 }
 
@@ -216,4 +227,10 @@ func CrossDocWithBatchSize(n int) CrossDocOption {
 // via the Store's config mechanism (key: "crossdoc:processed").
 func CrossDocWithResume(resume bool) CrossDocOption {
 	return func(c *crossDocConfig) { c.resume = resume }
+}
+
+// CrossDocWithWorkers sets the number of documents processed concurrently
+// during cross-document extraction (default 1, sequential).
+func CrossDocWithWorkers(n int) CrossDocOption {
+	return func(c *crossDocConfig) { c.workers = n }
 }
