@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ type SemanticChunker struct {
 	maxBytes   int
 	percentile int
 	fallback   *RecursiveChunker
+	logger     *slog.Logger
 }
 
 var _ Chunker = (*SemanticChunker)(nil)
@@ -34,6 +36,7 @@ func NewSemanticChunker(embed EmbedFunc, opts ...ChunkerOption) *SemanticChunker
 		maxBytes:   cfg.maxTokens * 4,
 		percentile: cfg.breakpointPercentile,
 		fallback:   NewRecursiveChunker(opts...),
+		logger:     cfg.logger,
 	}
 }
 
@@ -61,12 +64,24 @@ func (sc *SemanticChunker) ChunkContext(ctx context.Context, text string) ([]str
 		return []string{text}, nil
 	}
 
+	if sc.logger != nil {
+		sc.logger.Debug("semantic chunking: embedding sentences",
+			"sentence_count", len(sentences), "text_bytes", len(text))
+	}
+
 	embeddings, err := sc.embed(ctx, sentences)
 	if err != nil {
-		// Degrade gracefully: fall back to recursive chunking.
+		if sc.logger != nil {
+			sc.logger.Warn("semantic chunking: embedding failed, falling back to recursive",
+				"sentence_count", len(sentences), "err", err)
+		}
 		return sc.fallback.Chunk(text), nil
 	}
 	if len(embeddings) != len(sentences) {
+		if sc.logger != nil {
+			sc.logger.Warn("semantic chunking: embedding count mismatch, falling back to recursive",
+				"expected", len(sentences), "got", len(embeddings))
+		}
 		return sc.fallback.Chunk(text), nil
 	}
 
@@ -96,7 +111,13 @@ func (sc *SemanticChunker) ChunkContext(ctx context.Context, text string) ([]str
 		groups = append(groups, strings.TrimSpace(current.String()))
 	}
 
-	return sc.mergeAndSplit(groups), nil
+	chunks := sc.mergeAndSplit(groups)
+	if sc.logger != nil {
+		sc.logger.Info("semantic chunking completed",
+			"sentences", len(sentences), "groups", len(groups),
+			"chunks", len(chunks), "threshold", threshold)
+	}
+	return chunks, nil
 }
 
 // mergeAndSplit merges small groups up to maxBytes and splits oversized ones.

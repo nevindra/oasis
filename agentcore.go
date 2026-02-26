@@ -216,6 +216,7 @@ func (c *agentCore) executeWithSpan(
 		defer span.End()
 
 		c.logger.Info(logKey+" started", logKey, c.name)
+		start := time.Now()
 		result, err := runLoop(ctx, buildCfg(ctx, task, ch), task, ch)
 
 		span.SetAttr(
@@ -224,16 +225,40 @@ func (c *agentCore) executeWithSpan(
 		if err != nil {
 			span.Error(err)
 			span.SetAttr(StringAttr("agent.status", "error"))
+			c.logger.Error(logKey+" failed", logKey, c.name,
+				"error", err,
+				"duration", time.Since(start),
+				"tokens.input", result.Usage.InputTokens,
+				"tokens.output", result.Usage.OutputTokens)
 		} else {
 			span.SetAttr(StringAttr("agent.status", "ok"))
+			c.logger.Info(logKey+" completed", logKey, c.name,
+				"duration", time.Since(start),
+				"tokens.input", result.Usage.InputTokens,
+				"tokens.output", result.Usage.OutputTokens,
+				"steps", len(result.Steps))
 		}
-		c.logger.Info(logKey+" completed", logKey, c.name,
-			"status", statusStr(err),
-			"tokens.input", result.Usage.InputTokens,
-			"tokens.output", result.Usage.OutputTokens)
 		return result, err
 	}
-	return runLoop(ctx, buildCfg(ctx, task, ch), task, ch)
+
+	// Non-tracing path: still log lifecycle events.
+	c.logger.Info(logKey+" started", logKey, c.name)
+	start := time.Now()
+	result, err := runLoop(ctx, buildCfg(ctx, task, ch), task, ch)
+	if err != nil {
+		c.logger.Error(logKey+" failed", logKey, c.name,
+			"error", err,
+			"duration", time.Since(start),
+			"tokens.input", result.Usage.InputTokens,
+			"tokens.output", result.Usage.OutputTokens)
+	} else {
+		c.logger.Info(logKey+" completed", logKey, c.name,
+			"duration", time.Since(start),
+			"tokens.input", result.Usage.InputTokens,
+			"tokens.output", result.Usage.OutputTokens,
+			"steps", len(result.Steps))
+	}
+	return result, err
 }
 
 func statusStr(err error) string {
@@ -251,12 +276,15 @@ func statusStr(err error) string {
 func executeAgent(ctx context.Context, agent Agent, agentName string, task AgentTask, ch chan<- StreamEvent, logger *slog.Logger) (result AgentResult, err error) {
 	if ch != nil {
 		if sa, ok := agent.(StreamingAgent); ok {
+			logger.Debug("executing subagent (streaming)", "agent", agentName)
 			return forwardSubagentStream(ctx, sa, agentName, task, ch, logger)
 		}
 	}
 	// Non-streaming path: Execute with panic recovery.
+	logger.Debug("executing subagent", "agent", agentName)
 	defer func() {
 		if p := recover(); p != nil {
+			logger.Error("subagent panic", "agent", agentName, "panic", fmt.Sprintf("%v", p))
 			result = AgentResult{}
 			err = safeAgentError(agentName, p)
 		}

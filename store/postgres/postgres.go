@@ -10,8 +10,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,16 +24,18 @@ import (
 // Store implements oasis.Store backed by PostgreSQL with pgvector.
 // Vector search uses HNSW indexes with cosine distance.
 type Store struct {
-	pool *pgxpool.Pool
-	cfg  pgConfig
+	pool   *pgxpool.Pool
+	cfg    pgConfig
+	logger *slog.Logger
 }
 
 // pgConfig holds store configuration set via Option functions.
 type pgConfig struct {
-	embeddingDimension int // required — pgvector HNSW indexes need vector(N)
-	hnswM              int // 0 = pgvector default (16)
-	hnswEFConstruction int // 0 = pgvector default (64)
-	hnswEFSearch       int // 0 = pgvector default (40)
+	embeddingDimension int          // required — pgvector HNSW indexes need vector(N)
+	hnswM              int          // 0 = pgvector default (16)
+	hnswEFConstruction int          // 0 = pgvector default (64)
+	hnswEFSearch       int          // 0 = pgvector default (40)
+	logger             *slog.Logger // nil = no logs
 }
 
 // Option configures a PostgreSQL Store or MemoryStore.
@@ -60,6 +64,13 @@ func WithEFConstruction(ef int) Option {
 	return func(c *pgConfig) { c.hnswEFConstruction = ef }
 }
 
+// WithLogger sets a structured logger for the store.
+// When set, the store emits debug logs for every operation including
+// timing, row counts, and key parameters. If not set, no logs are emitted.
+func WithLogger(l *slog.Logger) Option {
+	return func(c *pgConfig) { c.logger = l }
+}
+
 // WithEFSearch sets the HNSW ef_search parameter (query-time candidate list
 // size). Higher values improve recall at the cost of latency. Default:
 // pgvector's 40. Applied via SET (session-level) during Init().
@@ -71,6 +82,16 @@ var _ oasis.Store = (*Store)(nil)
 var _ oasis.KeywordSearcher = (*Store)(nil)
 var _ oasis.GraphStore = (*Store)(nil)
 
+// nopLogger is a logger that discards all output.
+var nopLogger = slog.New(pgDiscardHandler{})
+
+type pgDiscardHandler struct{}
+
+func (pgDiscardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (pgDiscardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d pgDiscardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d pgDiscardHandler) WithGroup(string) slog.Handler            { return d }
+
 // New creates a Store using an existing pgxpool.Pool.
 // The caller owns the pool and is responsible for closing it.
 func New(pool *pgxpool.Pool, opts ...Option) *Store {
@@ -78,7 +99,11 @@ func New(pool *pgxpool.Pool, opts ...Option) *Store {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return &Store{pool: pool, cfg: cfg}
+	logger := cfg.logger
+	if logger == nil {
+		logger = nopLogger
+	}
+	return &Store{pool: pool, cfg: cfg, logger: logger}
 }
 
 // vectorType returns "vector" or "vector(N)" depending on config.
@@ -111,6 +136,8 @@ func (s *Store) hnswWithClause() string {
 // Requires WithEmbeddingDimension to be set — pgvector HNSW indexes need
 // typed vector(N) columns.
 func (s *Store) Init(ctx context.Context) error {
+	start := time.Now()
+	s.logger.Debug("postgres: init started")
 	if s.cfg.embeddingDimension <= 0 {
 		return fmt.Errorf("postgres: init: embedding dimension is required (use WithEmbeddingDimension)")
 	}
@@ -225,6 +252,7 @@ func (s *Store) Init(ctx context.Context) error {
 		}
 	}
 
+	s.logger.Info("postgres: init completed", "duration", time.Since(start))
 	return nil
 }
 
@@ -232,6 +260,8 @@ func (s *Store) Init(ctx context.Context) error {
 
 // StoreMessage inserts or replaces a message.
 func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
+	start := time.Now()
+	s.logger.Debug("postgres: store message", "id", msg.ID, "thread_id", msg.ThreadID, "role", msg.Role, "has_embedding", len(msg.Embedding) > 0)
 	var metaJSON *string
 	if len(msg.Metadata) > 0 {
 		data, _ := json.Marshal(msg.Metadata)
@@ -253,8 +283,10 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 			   created_at = EXCLUDED.created_at`,
 			msg.ID, msg.ThreadID, msg.Role, msg.Content, embStr, metaJSON, msg.CreatedAt)
 		if err != nil {
+			s.logger.Error("postgres: store message failed", "id", msg.ID, "error", err, "duration", time.Since(start))
 			return fmt.Errorf("postgres: store message: %w", err)
 		}
+		s.logger.Debug("postgres: store message ok", "id", msg.ID, "duration", time.Since(start))
 		return nil
 	}
 
@@ -270,14 +302,18 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 		   created_at = EXCLUDED.created_at`,
 		msg.ID, msg.ThreadID, msg.Role, msg.Content, metaJSON, msg.CreatedAt)
 	if err != nil {
+		s.logger.Error("postgres: store message failed", "id", msg.ID, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: store message: %w", err)
 	}
+	s.logger.Debug("postgres: store message ok", "id", msg.ID, "duration", time.Since(start))
 	return nil
 }
 
 // GetMessages returns the most recent messages for a thread,
 // ordered chronologically (oldest first).
 func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]oasis.Message, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: get messages", "thread_id", threadID, "limit", limit)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, thread_id, role, content, metadata, created_at
 		 FROM messages
@@ -286,6 +322,7 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 		 LIMIT $2`,
 		threadID, limit)
 	if err != nil {
+		s.logger.Error("postgres: get messages failed", "thread_id", threadID, "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: get messages: %w", err)
 	}
 	defer rows.Close()
@@ -310,12 +347,16 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
+
+	s.logger.Debug("postgres: get messages ok", "thread_id", threadID, "count", len(messages), "duration", time.Since(start))
 	return messages, nil
 }
 
 // SearchMessages performs vector similarity search over messages
 // using pgvector's cosine distance operator with HNSW index.
 func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: search messages", "top_k", topK, "embedding_dim", len(embedding))
 	embStr := serializeEmbedding(embedding)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, thread_id, role, content, metadata, created_at,
@@ -326,6 +367,7 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 		 LIMIT $2`,
 		embStr, topK)
 	if err != nil {
+		s.logger.Error("postgres: search messages failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: search messages: %w", err)
 	}
 	defer rows.Close()
@@ -343,6 +385,7 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 		}
 		results = append(results, oasis.ScoredMessage{Message: m, Score: score})
 	}
+	s.logger.Debug("postgres: search messages ok", "count", len(results), "duration", time.Since(start))
 	return results, rows.Err()
 }
 
@@ -350,6 +393,8 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 
 // StoreDocument inserts a document and all its chunks in a single transaction.
 func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []oasis.Chunk) error {
+	start := time.Now()
+	s.logger.Debug("postgres: store document", "id", doc.ID, "title", doc.Title, "chunks", len(chunks))
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres: begin tx: %w", err)
@@ -366,6 +411,7 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 		   created_at = EXCLUDED.created_at`,
 		doc.ID, doc.Title, doc.Source, doc.Content, doc.CreatedAt)
 	if err != nil {
+		s.logger.Error("postgres: store document failed", "id", doc.ID, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: insert document: %w", err)
 	}
 
@@ -408,6 +454,7 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 				chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, metaJSON)
 		}
 		if err != nil {
+			s.logger.Error("postgres: store document chunk failed", "doc_id", doc.ID, "chunk_id", chunk.ID, "error", err, "duration", time.Since(start))
 			return fmt.Errorf("postgres: insert chunk: %w", err)
 		}
 	}
@@ -415,11 +462,14 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("postgres: commit tx: %w", err)
 	}
+	s.logger.Debug("postgres: store document ok", "id", doc.ID, "chunks", len(chunks), "duration", time.Since(start))
 	return nil
 }
 
 // ListDocuments returns all documents ordered by most recently created first.
 func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: list documents", "limit", limit)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, title, source, content, created_at
 		 FROM documents
@@ -427,6 +477,7 @@ func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document,
 		 LIMIT $1`,
 		limit)
 	if err != nil {
+		s.logger.Error("postgres: list documents failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: list documents: %w", err)
 	}
 	defer rows.Close()
@@ -439,11 +490,14 @@ func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document,
 		}
 		docs = append(docs, d)
 	}
+	s.logger.Debug("postgres: list documents ok", "count", len(docs), "duration", time.Since(start))
 	return docs, rows.Err()
 }
 
 // DeleteDocument removes a document and all its chunks in a single transaction.
 func (s *Store) DeleteDocument(ctx context.Context, id string) error {
+	start := time.Now()
+	s.logger.Debug("postgres: delete document", "id", id)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres: begin tx: %w", err)
@@ -451,15 +505,22 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	if _, err := tx.Exec(ctx, `DELETE FROM chunk_edges WHERE source_id IN (SELECT id FROM chunks WHERE document_id = $1) OR target_id IN (SELECT id FROM chunks WHERE document_id = $1)`, id); err != nil {
+		s.logger.Error("postgres: delete document edges failed", "id", id, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: delete document edges: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM chunks WHERE document_id = $1`, id); err != nil {
+		s.logger.Error("postgres: delete document chunks failed", "id", id, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: delete document chunks: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM documents WHERE id = $1`, id); err != nil {
+		s.logger.Error("postgres: delete document failed", "id", id, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: delete document: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.logger.Debug("postgres: delete document ok", "id", id, "duration", time.Since(start))
+	return nil
 }
 
 // safeMetaKey returns true if the key contains only alphanumeric chars and underscores.
@@ -550,6 +611,8 @@ func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, [
 // SearchChunks performs vector similarity search over document chunks
 // using pgvector's cosine distance operator with HNSW index.
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: search chunks", "top_k", topK, "embedding_dim", len(embedding), "filters", len(filters))
 	embStr := serializeEmbedding(embedding)
 	whereExtra, filterArgs, needsDocJoin := buildChunkFiltersPg(filters, 3) // $1=embedding, $2=topK
 
@@ -575,6 +638,7 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 
 	rows, err := s.pool.Query(ctx, q, allArgs...)
 	if err != nil {
+		s.logger.Error("postgres: search chunks failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: search chunks: %w", err)
 	}
 	defer rows.Close()
@@ -597,12 +661,15 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 		}
 		results = append(results, oasis.ScoredChunk{Chunk: c, Score: score})
 	}
+	s.logger.Debug("postgres: search chunks ok", "count", len(results), "duration", time.Since(start))
 	return results, rows.Err()
 }
 
 // SearchChunksKeyword performs full-text keyword search over document chunks
 // using PostgreSQL tsvector/tsquery with a GIN index.
 func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: search chunks keyword", "query", query, "top_k", topK, "filters", len(filters))
 	whereExtra, filterArgs, needsDocJoin := buildChunkFiltersPg(filters, 3) // $1=query, $2=topK
 
 	var q string
@@ -627,6 +694,7 @@ func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int,
 
 	rows, err := s.pool.Query(ctx, q, allArgs...)
 	if err != nil {
+		s.logger.Error("postgres: search chunks keyword failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: keyword search: %w", err)
 	}
 	defer rows.Close()
@@ -649,16 +717,20 @@ func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int,
 		}
 		results = append(results, oasis.ScoredChunk{Chunk: c, Score: score})
 	}
+	s.logger.Debug("postgres: search chunks keyword ok", "count", len(results), "duration", time.Since(start))
 	return results, rows.Err()
 }
 
 // GetChunksByDocument returns all chunks belonging to a specific document,
 // including their embeddings. This implements ingest.DocumentChunkLister.
 func (s *Store) GetChunksByDocument(ctx context.Context, docID string) ([]oasis.Chunk, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: get chunks by document", "doc_id", docID)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, document_id, parent_id, content, chunk_index, embedding::text, metadata
 		 FROM chunks WHERE document_id = $1 ORDER BY chunk_index`, docID)
 	if err != nil {
+		s.logger.Error("postgres: get chunks by document failed", "doc_id", docID, "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: get chunks by document: %w", err)
 	}
 	defer rows.Close()
@@ -684,6 +756,7 @@ func (s *Store) GetChunksByDocument(ctx context.Context, docID string) ([]oasis.
 		}
 		chunks = append(chunks, c)
 	}
+	s.logger.Debug("postgres: get chunks by document ok", "doc_id", docID, "count", len(chunks), "duration", time.Since(start))
 	return chunks, rows.Err()
 }
 
@@ -692,11 +765,14 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 	if len(ids) == 0 {
 		return nil, nil
 	}
+	start := time.Now()
+	s.logger.Debug("postgres: get chunks by ids", "count", len(ids))
 
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, document_id, parent_id, content, chunk_index, metadata
 		 FROM chunks WHERE id = ANY($1)`, ids)
 	if err != nil {
+		s.logger.Error("postgres: get chunks by ids failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: get chunks by ids: %w", err)
 	}
 	defer rows.Close()
@@ -718,6 +794,7 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 		}
 		chunks = append(chunks, c)
 	}
+	s.logger.Debug("postgres: get chunks by ids ok", "count", len(chunks), "duration", time.Since(start))
 	return chunks, rows.Err()
 }
 
@@ -725,6 +802,8 @@ func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk
 
 // CreateThread inserts a new thread.
 func (s *Store) CreateThread(ctx context.Context, thread oasis.Thread) error {
+	start := time.Now()
+	s.logger.Debug("postgres: create thread", "id", thread.ID, "chat_id", thread.ChatID, "title", thread.Title)
 	var metaJSON *string
 	if len(thread.Metadata) > 0 {
 		data, _ := json.Marshal(thread.Metadata)
@@ -737,29 +816,37 @@ func (s *Store) CreateThread(ctx context.Context, thread oasis.Thread) error {
 		 VALUES ($1, $2, $3, $4::jsonb, $5, $6)`,
 		thread.ID, thread.ChatID, thread.Title, metaJSON, thread.CreatedAt, thread.UpdatedAt)
 	if err != nil {
+		s.logger.Error("postgres: create thread failed", "id", thread.ID, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: create thread: %w", err)
 	}
+	s.logger.Debug("postgres: create thread ok", "id", thread.ID, "duration", time.Since(start))
 	return nil
 }
 
 // GetThread returns a thread by ID.
 func (s *Store) GetThread(ctx context.Context, id string) (oasis.Thread, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: get thread", "id", id)
 	var t oasis.Thread
 	var metaJSON []byte
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, chat_id, title, metadata, created_at, updated_at FROM threads WHERE id = $1`, id,
 	).Scan(&t.ID, &t.ChatID, &t.Title, &metaJSON, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
+		s.logger.Error("postgres: get thread failed", "id", id, "error", err, "duration", time.Since(start))
 		return oasis.Thread{}, fmt.Errorf("postgres: get thread: %w", err)
 	}
 	if metaJSON != nil {
 		_ = json.Unmarshal(metaJSON, &t.Metadata)
 	}
+	s.logger.Debug("postgres: get thread ok", "id", id, "duration", time.Since(start))
 	return t, nil
 }
 
 // ListThreads returns threads for a chatID, ordered by most recently updated first.
 func (s *Store) ListThreads(ctx context.Context, chatID string, limit int) ([]oasis.Thread, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: list threads", "chat_id", chatID, "limit", limit)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, chat_id, title, metadata, created_at, updated_at
 		 FROM threads WHERE chat_id = $1
@@ -767,6 +854,7 @@ func (s *Store) ListThreads(ctx context.Context, chatID string, limit int) ([]oa
 		 LIMIT $2`,
 		chatID, limit)
 	if err != nil {
+		s.logger.Error("postgres: list threads failed", "chat_id", chatID, "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: list threads: %w", err)
 	}
 	defer rows.Close()
@@ -783,11 +871,14 @@ func (s *Store) ListThreads(ctx context.Context, chatID string, limit int) ([]oa
 		}
 		threads = append(threads, t)
 	}
+	s.logger.Debug("postgres: list threads ok", "chat_id", chatID, "count", len(threads), "duration", time.Since(start))
 	return threads, rows.Err()
 }
 
 // UpdateThread updates a thread's title, metadata, and updated_at.
 func (s *Store) UpdateThread(ctx context.Context, thread oasis.Thread) error {
+	start := time.Now()
+	s.logger.Debug("postgres: update thread", "id", thread.ID, "title", thread.Title)
 	var metaJSON *string
 	if len(thread.Metadata) > 0 {
 		data, _ := json.Marshal(thread.Metadata)
@@ -799,13 +890,17 @@ func (s *Store) UpdateThread(ctx context.Context, thread oasis.Thread) error {
 		`UPDATE threads SET title=$1, metadata=$2::jsonb, updated_at=$3 WHERE id=$4`,
 		thread.Title, metaJSON, thread.UpdatedAt, thread.ID)
 	if err != nil {
+		s.logger.Error("postgres: update thread failed", "id", thread.ID, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: update thread: %w", err)
 	}
+	s.logger.Debug("postgres: update thread ok", "id", thread.ID, "duration", time.Since(start))
 	return nil
 }
 
 // DeleteThread removes a thread and its messages.
 func (s *Store) DeleteThread(ctx context.Context, id string) error {
+	start := time.Now()
+	s.logger.Debug("postgres: delete thread", "id", id)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres: begin tx: %w", err)
@@ -813,112 +908,177 @@ func (s *Store) DeleteThread(ctx context.Context, id string) error {
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	if _, err := tx.Exec(ctx, `DELETE FROM messages WHERE thread_id = $1`, id); err != nil {
+		s.logger.Error("postgres: delete thread messages failed", "id", id, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: delete thread messages: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM threads WHERE id = $1`, id); err != nil {
+		s.logger.Error("postgres: delete thread failed", "id", id, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: delete thread: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.logger.Debug("postgres: delete thread ok", "id", id, "duration", time.Since(start))
+	return nil
 }
 
 // --- Config ---
 
 func (s *Store) GetConfig(ctx context.Context, key string) (string, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: get config", "key", key)
 	var value string
 	err := s.pool.QueryRow(ctx, `SELECT value FROM config WHERE key = $1`, key).Scan(&value)
 	if err == pgx.ErrNoRows {
+		s.logger.Debug("postgres: get config not found", "key", key, "duration", time.Since(start))
 		return "", nil
 	}
 	if err != nil {
+		s.logger.Error("postgres: get config failed", "key", key, "error", err, "duration", time.Since(start))
 		return "", fmt.Errorf("postgres: get config: %w", err)
 	}
+	s.logger.Debug("postgres: get config ok", "key", key, "duration", time.Since(start))
 	return value, nil
 }
 
 func (s *Store) SetConfig(ctx context.Context, key, value string) error {
+	start := time.Now()
+	s.logger.Debug("postgres: set config", "key", key)
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO config (key, value) VALUES ($1, $2)
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 		key, value)
 	if err != nil {
+		s.logger.Error("postgres: set config failed", "key", key, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: set config: %w", err)
 	}
+	s.logger.Debug("postgres: set config ok", "key", key, "duration", time.Since(start))
 	return nil
 }
 
 // --- Scheduled Actions ---
 
 func (s *Store) CreateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
+	start := time.Now()
+	s.logger.Debug("postgres: create scheduled action", "id", action.ID, "description", action.Description)
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		action.ID, action.Description, action.Schedule, action.ToolCalls,
 		action.SynthesisPrompt, action.NextRun, action.Enabled, action.SkillID, action.CreatedAt)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: create scheduled action failed", "id", action.ID, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: create scheduled action ok", "id", action.ID, "duration", time.Since(start))
+	return nil
 }
 
 func (s *Store) ListScheduledActions(ctx context.Context) ([]oasis.ScheduledAction, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: list scheduled actions")
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at
 		 FROM scheduled_actions ORDER BY next_run`)
 	if err != nil {
+		s.logger.Error("postgres: list scheduled actions failed", "error", err, "duration", time.Since(start))
 		return nil, err
 	}
 	defer rows.Close()
-	return scanScheduledActions(rows)
+	actions, err := scanScheduledActions(rows)
+	s.logger.Debug("postgres: list scheduled actions ok", "count", len(actions), "duration", time.Since(start))
+	return actions, err
 }
 
 func (s *Store) GetDueScheduledActions(ctx context.Context, now int64) ([]oasis.ScheduledAction, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: get due scheduled actions", "now", now)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at
 		 FROM scheduled_actions WHERE enabled = TRUE AND next_run <= $1`, now)
 	if err != nil {
+		s.logger.Error("postgres: get due scheduled actions failed", "error", err, "duration", time.Since(start))
 		return nil, err
 	}
 	defer rows.Close()
-	return scanScheduledActions(rows)
+	actions, err := scanScheduledActions(rows)
+	s.logger.Debug("postgres: get due scheduled actions ok", "count", len(actions), "duration", time.Since(start))
+	return actions, err
 }
 
 func (s *Store) UpdateScheduledAction(ctx context.Context, action oasis.ScheduledAction) error {
+	start := time.Now()
+	s.logger.Debug("postgres: update scheduled action", "id", action.ID)
 	_, err := s.pool.Exec(ctx,
 		`UPDATE scheduled_actions SET description=$1, schedule=$2, tool_calls=$3, synthesis_prompt=$4, next_run=$5, enabled=$6, skill_id=$7 WHERE id=$8`,
 		action.Description, action.Schedule, action.ToolCalls, action.SynthesisPrompt, action.NextRun, action.Enabled, action.SkillID, action.ID)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: update scheduled action failed", "id", action.ID, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: update scheduled action ok", "id", action.ID, "duration", time.Since(start))
+	return nil
 }
 
 func (s *Store) UpdateScheduledActionEnabled(ctx context.Context, id string, enabled bool) error {
+	start := time.Now()
+	s.logger.Debug("postgres: update scheduled action enabled", "id", id, "enabled", enabled)
 	_, err := s.pool.Exec(ctx, `UPDATE scheduled_actions SET enabled=$1 WHERE id=$2`, enabled, id)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: update scheduled action enabled failed", "id", id, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: update scheduled action enabled ok", "id", id, "duration", time.Since(start))
+	return nil
 }
 
 func (s *Store) DeleteScheduledAction(ctx context.Context, id string) error {
+	start := time.Now()
+	s.logger.Debug("postgres: delete scheduled action", "id", id)
 	_, err := s.pool.Exec(ctx, `DELETE FROM scheduled_actions WHERE id=$1`, id)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: delete scheduled action failed", "id", id, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: delete scheduled action ok", "id", id, "duration", time.Since(start))
+	return nil
 }
 
 func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: delete all scheduled actions")
 	tag, err := s.pool.Exec(ctx, `DELETE FROM scheduled_actions`)
 	if err != nil {
+		s.logger.Error("postgres: delete all scheduled actions failed", "error", err, "duration", time.Since(start))
 		return 0, err
 	}
-	return int(tag.RowsAffected()), nil
+	n := int(tag.RowsAffected())
+	s.logger.Debug("postgres: delete all scheduled actions ok", "deleted", n, "duration", time.Since(start))
+	return n, nil
 }
 
 func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: find scheduled actions by description", "pattern", pattern)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at
 		 FROM scheduled_actions WHERE description LIKE $1`,
 		"%"+pattern+"%")
 	if err != nil {
+		s.logger.Error("postgres: find scheduled actions by description failed", "error", err, "duration", time.Since(start))
 		return nil, err
 	}
 	defer rows.Close()
-	return scanScheduledActions(rows)
+	actions, err := scanScheduledActions(rows)
+	s.logger.Debug("postgres: find scheduled actions by description ok", "count", len(actions), "duration", time.Since(start))
+	return actions, err
 }
 
 // --- Skills ---
 
 func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
+	start := time.Now()
+	s.logger.Debug("postgres: create skill", "id", skill.ID, "name", skill.Name)
 	var toolsJSON string
 	if len(skill.Tools) > 0 {
 		data, _ := json.Marshal(skill.Tools)
@@ -942,7 +1102,12 @@ func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector, $11, $12)`,
 			skill.ID, skill.Name, skill.Description, skill.Instructions,
 			toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embStr, skill.CreatedAt, skill.UpdatedAt)
-		return err
+		if err != nil {
+			s.logger.Error("postgres: create skill failed", "id", skill.ID, "error", err, "duration", time.Since(start))
+			return err
+		}
+		s.logger.Debug("postgres: create skill ok", "id", skill.ID, "duration", time.Since(start))
+		return nil
 	}
 
 	_, err := s.pool.Exec(ctx,
@@ -950,10 +1115,17 @@ func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)`,
 		skill.ID, skill.Name, skill.Description, skill.Instructions,
 		toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, skill.CreatedAt, skill.UpdatedAt)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: create skill failed", "id", skill.ID, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: create skill ok", "id", skill.ID, "duration", time.Since(start))
+	return nil
 }
 
 func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: get skill", "id", id)
 	var sk oasis.Skill
 	var tools, model, tags, refs string
 	err := s.pool.QueryRow(ctx,
@@ -961,6 +1133,7 @@ func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
 		 FROM skills WHERE id = $1`, id,
 	).Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &sk.CreatedBy, &refs, &sk.CreatedAt, &sk.UpdatedAt)
 	if err != nil {
+		s.logger.Error("postgres: get skill failed", "id", id, "error", err, "duration", time.Since(start))
 		return oasis.Skill{}, fmt.Errorf("postgres: get skill: %w", err)
 	}
 	if tools != "" {
@@ -973,14 +1146,18 @@ func (s *Store) GetSkill(ctx context.Context, id string) (oasis.Skill, error) {
 		_ = json.Unmarshal([]byte(refs), &sk.References)
 	}
 	sk.Model = model
+	s.logger.Debug("postgres: get skill ok", "id", id, "duration", time.Since(start))
 	return sk, nil
 }
 
 func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: list skills")
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, name, description, instructions, tools, model, tags, created_by, refs, created_at, updated_at
 		 FROM skills ORDER BY created_at`)
 	if err != nil {
+		s.logger.Error("postgres: list skills failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: list skills: %w", err)
 	}
 	defer rows.Close()
@@ -1004,10 +1181,13 @@ func (s *Store) ListSkills(ctx context.Context) ([]oasis.Skill, error) {
 		sk.Model = model
 		skills = append(skills, sk)
 	}
+	s.logger.Debug("postgres: list skills ok", "count", len(skills), "duration", time.Since(start))
 	return skills, rows.Err()
 }
 
 func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
+	start := time.Now()
+	s.logger.Debug("postgres: update skill", "id", skill.ID, "name", skill.Name)
 	var toolsJSON string
 	if len(skill.Tools) > 0 {
 		data, _ := json.Marshal(skill.Tools)
@@ -1029,23 +1209,42 @@ func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
 		_, err := s.pool.Exec(ctx,
 			`UPDATE skills SET name=$1, description=$2, instructions=$3, tools=$4, model=$5, tags=$6, created_by=$7, refs=$8, embedding=$9::vector, updated_at=$10 WHERE id=$11`,
 			skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embStr, skill.UpdatedAt, skill.ID)
-		return err
+		if err != nil {
+			s.logger.Error("postgres: update skill failed", "id", skill.ID, "error", err, "duration", time.Since(start))
+			return err
+		}
+		s.logger.Debug("postgres: update skill ok", "id", skill.ID, "duration", time.Since(start))
+		return nil
 	}
 
 	_, err := s.pool.Exec(ctx,
 		`UPDATE skills SET name=$1, description=$2, instructions=$3, tools=$4, model=$5, tags=$6, created_by=$7, refs=$8, embedding=NULL, updated_at=$9 WHERE id=$10`,
 		skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, skill.UpdatedAt, skill.ID)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: update skill failed", "id", skill.ID, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: update skill ok", "id", skill.ID, "duration", time.Since(start))
+	return nil
 }
 
 func (s *Store) DeleteSkill(ctx context.Context, id string) error {
+	start := time.Now()
+	s.logger.Debug("postgres: delete skill", "id", id)
 	_, err := s.pool.Exec(ctx, `DELETE FROM skills WHERE id=$1`, id)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: delete skill failed", "id", id, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: delete skill ok", "id", id, "duration", time.Since(start))
+	return nil
 }
 
 // SearchSkills performs vector similarity search over stored skills
 // using pgvector's cosine distance operator with HNSW index.
 func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredSkill, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: search skills", "top_k", topK, "embedding_dim", len(embedding))
 	embStr := serializeEmbedding(embedding)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, name, description, instructions, tools, model, tags, created_by, refs, created_at, updated_at,
@@ -1056,6 +1255,7 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		 LIMIT $2`,
 		embStr, topK)
 	if err != nil {
+		s.logger.Error("postgres: search skills failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: search skills: %w", err)
 	}
 	defer rows.Close()
@@ -1080,6 +1280,7 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		sk.Model = model
 		results = append(results, oasis.ScoredSkill{Skill: sk, Score: score})
 	}
+	s.logger.Debug("postgres: search skills ok", "count", len(results), "duration", time.Since(start))
 	return results, rows.Err()
 }
 
@@ -1094,6 +1295,8 @@ func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
 	if len(edges) == 0 {
 		return nil
 	}
+	start := time.Now()
+	s.logger.Debug("postgres: store edges", "count", len(edges))
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres: begin tx: %w", err)
@@ -1108,49 +1311,69 @@ func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
 			e.ID, e.SourceID, e.TargetID, string(e.Relation), e.Weight, e.Description,
 		)
 		if err != nil {
+			s.logger.Error("postgres: store edge failed", "id", e.ID, "error", err, "duration", time.Since(start))
 			return fmt.Errorf("postgres: store edge: %w", err)
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.logger.Debug("postgres: store edges ok", "count", len(edges), "duration", time.Since(start))
+	return nil
 }
 
 func (s *Store) GetEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkEdge, error) {
 	if len(chunkIDs) == 0 {
 		return nil, nil
 	}
+	start := time.Now()
+	s.logger.Debug("postgres: get edges", "chunk_count", len(chunkIDs))
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, source_id, target_id, relation, weight, description FROM chunk_edges WHERE source_id = ANY($1)`,
 		chunkIDs,
 	)
 	if err != nil {
+		s.logger.Error("postgres: get edges failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: get edges: %w", err)
 	}
 	defer rows.Close()
-	return scanEdgesPg(rows)
+	edges, err := scanEdgesPg(rows)
+	s.logger.Debug("postgres: get edges ok", "count", len(edges), "duration", time.Since(start))
+	return edges, err
 }
 
 func (s *Store) GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkEdge, error) {
 	if len(chunkIDs) == 0 {
 		return nil, nil
 	}
+	start := time.Now()
+	s.logger.Debug("postgres: get incoming edges", "chunk_count", len(chunkIDs))
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, source_id, target_id, relation, weight, description FROM chunk_edges WHERE target_id = ANY($1)`,
 		chunkIDs,
 	)
 	if err != nil {
+		s.logger.Error("postgres: get incoming edges failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: get incoming edges: %w", err)
 	}
 	defer rows.Close()
-	return scanEdgesPg(rows)
+	edges, err := scanEdgesPg(rows)
+	s.logger.Debug("postgres: get incoming edges ok", "count", len(edges), "duration", time.Since(start))
+	return edges, err
 }
 
 func (s *Store) PruneOrphanEdges(ctx context.Context) (int, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: prune orphan edges")
 	tag, err := s.pool.Exec(ctx,
 		`DELETE FROM chunk_edges WHERE source_id NOT IN (SELECT id FROM chunks) OR target_id NOT IN (SELECT id FROM chunks)`)
 	if err != nil {
+		s.logger.Error("postgres: prune orphan edges failed", "error", err, "duration", time.Since(start))
 		return 0, fmt.Errorf("postgres: prune orphan edges: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	n := int(tag.RowsAffected())
+	s.logger.Debug("postgres: prune orphan edges ok", "deleted", n, "duration", time.Since(start))
+	return n, nil
 }
 
 func scanEdgesPg(rows pgx.Rows) ([]oasis.ChunkEdge, error) {

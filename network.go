@@ -69,6 +69,7 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 	var executeTool toolExecFunc
 	var executeToolStream toolExecStreamFunc
 	if dynDefs, dynExec := n.resolveDynamicTools(ctx, task); dynDefs != nil {
+		n.logger.Debug("using dynamic tools", "network", n.name, "tool_count", len(dynDefs))
 		toolDefs = n.cacheBuiltinToolDefs(n.buildToolDefs(dynDefs))
 		executeTool = dynExec
 	} else {
@@ -158,8 +159,13 @@ func (n *Network) dispatchAgent(ctx context.Context, tc ToolCall, agentPrefix st
 	}
 
 	if err != nil {
+		n.logger.Error("subagent failed", "network", n.name, "agent", agentName, "error", err, "duration", elapsed)
 		return DispatchResult{Content: "error: " + err.Error(), IsError: true}
 	}
+	n.logger.Info("subagent completed", "network", n.name, "agent", agentName,
+		"duration", elapsed,
+		"input_tokens", result.Usage.InputTokens,
+		"output_tokens", result.Usage.OutputTokens)
 	return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
 }
 

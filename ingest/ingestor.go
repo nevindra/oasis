@@ -154,7 +154,7 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 	}
 
 	if ing.logger != nil {
-		ing.logger.Info("storing document",
+		ing.logger.Debug("storing document",
 			"doc_id", docID, "chunk_count", len(chunks))
 	}
 
@@ -166,6 +166,10 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 		}
 		ing.notifyError(source, err)
 		return IngestResult{}, err
+	}
+
+	if ing.logger != nil {
+		ing.logger.Debug("document stored", "doc_id", docID)
 	}
 
 	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
@@ -257,7 +261,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 	// Use MetadataExtractor if available.
 	if me, ok := extractor.(MetadataExtractor); ok {
 		if ing.logger != nil {
-			ing.logger.Info("extracting with metadata extractor",
+			ing.logger.Debug("extracting with metadata extractor",
 				"doc_id", docID, "content_type", string(ct))
 		}
 		result, err := safeExtractWithMeta(me, content)
@@ -273,13 +277,13 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		text = result.Text
 		pageMeta = result.Meta
 		if ing.logger != nil {
-			ing.logger.Info("extraction completed",
+			ing.logger.Debug("extraction completed",
 				"doc_id", docID, "text_bytes", len(text),
 				"page_meta_count", len(pageMeta))
 		}
 	} else {
 		if ing.logger != nil {
-			ing.logger.Info("extracting with standard extractor",
+			ing.logger.Debug("extracting with standard extractor",
 				"doc_id", docID, "content_type", string(ct))
 		}
 		var err error
@@ -294,7 +298,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 			return IngestResult{}, err
 		}
 		if ing.logger != nil {
-			ing.logger.Info("extraction completed",
+			ing.logger.Debug("extraction completed",
 				"doc_id", docID, "text_bytes", len(text))
 		}
 	}
@@ -320,7 +324,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 	}
 
 	if ing.logger != nil {
-		ing.logger.Info("storing document",
+		ing.logger.Debug("storing document",
 			"doc_id", docID, "chunk_count", len(chunks))
 	}
 
@@ -332,6 +336,10 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		}
 		ing.notifyError(filename, err)
 		return IngestResult{}, err
+	}
+
+	if ing.logger != nil {
+		ing.logger.Debug("document stored", "doc_id", docID)
 	}
 
 	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
@@ -396,7 +404,7 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 		seqEdges := buildSequenceEdges(chunks)
 		edges = append(edges, seqEdges...)
 		if ing.logger != nil {
-			ing.logger.Info("sequence edges built",
+			ing.logger.Debug("sequence edges built",
 				"edge_count", len(seqEdges))
 		}
 	}
@@ -425,7 +433,7 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 	beforeDedup := len(edges)
 	edges = deduplicateEdges(edges)
 	if ing.logger != nil && beforeDedup != len(edges) {
-		ing.logger.Info("edges deduplicated",
+		ing.logger.Debug("edges deduplicated",
 			"before", beforeDedup, "after", len(edges))
 	}
 
@@ -433,7 +441,7 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 		beforePrune := len(edges)
 		edges = pruneEdges(edges, ing.minEdgeWeight, ing.maxEdgesPerChunk)
 		if ing.logger != nil {
-			ing.logger.Info("edges pruned",
+			ing.logger.Debug("edges pruned",
 				"before", beforePrune, "after", len(edges),
 				"min_weight", ing.minEdgeWeight,
 				"max_per_chunk", ing.maxEdgesPerChunk)
@@ -442,13 +450,13 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 
 	if len(edges) == 0 {
 		if ing.logger != nil {
-			ing.logger.Info("no edges to store after processing")
+			ing.logger.Debug("no edges to store after processing")
 		}
 		return nil
 	}
 
 	if ing.logger != nil {
-		ing.logger.Info("storing edges", "edge_count", len(edges))
+		ing.logger.Debug("storing edges", "edge_count", len(edges))
 	}
 
 	if err := gs.StoreEdges(ctx, edges); err != nil {
@@ -656,6 +664,11 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 		if err != nil {
 			return nil, fmt.Errorf("chunk child: %w", err)
 		}
+		if ing.logger != nil {
+			ing.logger.Debug("parent split into children",
+				"doc_id", docID, "parent_id", parentID,
+				"parent_bytes", len(pt), "child_count", len(childTexts))
+		}
 		childOffset := 0
 		for _, childText := range childTexts {
 			cidx := strings.Index(pt[childOffset:], childText)
@@ -756,10 +769,19 @@ func assignMeta(startByte, endByte int, source string, pageMeta []PageMeta) *oas
 // If an explicit chunker was set via WithChunker, it is always used.
 func (ing *Ingestor) selectChunker(ct ContentType) Chunker {
 	if ing.customChunker {
+		if ing.logger != nil {
+			ing.logger.Debug("using custom chunker", "content_type", string(ct))
+		}
 		return ing.chunker
 	}
 	if ct == TypeMarkdown {
+		if ing.logger != nil {
+			ing.logger.Debug("using markdown chunker", "content_type", string(ct))
+		}
 		return ing.mdChunker
+	}
+	if ing.logger != nil {
+		ing.logger.Debug("using default recursive chunker", "content_type", string(ct))
 	}
 	return ing.chunker
 }
@@ -789,7 +811,7 @@ func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk) error
 		}
 
 		if ing.logger != nil {
-			ing.logger.Info("embedding batch",
+			ing.logger.Debug("embedding batch",
 				"batch", batchNum, "total_batches", totalBatches,
 				"chunks_in_batch", len(batch))
 		}
@@ -802,6 +824,12 @@ func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk) error
 					"err", err)
 			}
 			return fmt.Errorf("embed batch %d-%d: %w", i, end, err)
+		}
+
+		if ing.logger != nil && len(embeddings) > 0 {
+			ing.logger.Debug("embedding batch completed",
+				"batch", batchNum, "embeddings_returned", len(embeddings),
+				"dimensions", len(embeddings[0]))
 		}
 
 		for j := range batch {

@@ -3,7 +3,7 @@ package oasis
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"math/rand"
 	"time"
 )
@@ -14,7 +14,8 @@ type retryProvider struct {
 	inner       Provider
 	maxAttempts int
 	baseDelay   time.Duration
-	timeout     time.Duration // overall timeout across all attempts; 0 = no limit
+	timeout     time.Duration    // overall timeout across all attempts; 0 = no limit
+	logger      *slog.Logger     // nil = nopLogger
 }
 
 // RetryOption configures a retryProvider.
@@ -38,6 +39,13 @@ func RetryTimeout(d time.Duration) RetryOption {
 	return func(r *retryProvider) { r.timeout = d }
 }
 
+// RetryLogger sets the structured logger for retry events. When set, retries
+// log at WARN level and final failures after exhausting attempts log at ERROR.
+// If not set, a no-op logger is used (no output).
+func RetryLogger(l *slog.Logger) RetryOption {
+	return func(r *retryProvider) { r.logger = l }
+}
+
 // WithRetry wraps p with automatic retry on transient HTTP errors (429, 503).
 // Retries use exponential backoff with jitter. When the error includes a
 // Retry-After duration (parsed from the HTTP header), the retry delay is at
@@ -55,6 +63,9 @@ func WithRetry(p Provider, opts ...RetryOption) Provider {
 	for _, opt := range opts {
 		opt(r)
 	}
+	if r.logger == nil {
+		r.logger = nopLogger
+	}
 	return r
 }
 
@@ -65,7 +76,7 @@ func (r *retryProvider) Name() string { return r.inner.Name() }
 func (r *retryProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
-	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), func() (ChatResponse, error) {
+	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), r.logger, func() (ChatResponse, error) {
 		return r.inner.Chat(ctx, req)
 	})
 }
@@ -103,7 +114,11 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 		}
 
 		lastErr = streamErr
-		log.Printf("[retry] %s: transient %d (attempt %d/%d), retrying", r.inner.Name(), statusOf(streamErr), i+1, r.maxAttempts)
+		r.logger.Warn("retrying transient error",
+			"provider", r.inner.Name(),
+			"status", statusOf(streamErr),
+			"attempt", i+1,
+			"max_attempts", r.maxAttempts)
 		if i < r.maxAttempts-1 {
 			delay := retryDelay(r.baseDelay, i, streamErr)
 			timer := time.NewTimer(delay)
@@ -116,6 +131,10 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 			}
 		}
 	}
+	r.logger.Error("all retry attempts exhausted (stream)",
+		"provider", r.inner.Name(),
+		"attempts", r.maxAttempts,
+		"error", lastErr)
 	close(ch)
 	return ChatResponse{}, lastErr
 }
@@ -170,7 +189,7 @@ func retryDelay(base time.Duration, i int, err error) time.Duration {
 }
 
 // retryCall calls fn up to maxAttempts times, sleeping between transient failures.
-func retryCall[T any](ctx context.Context, maxAttempts int, base time.Duration, name string, fn func() (T, error)) (T, error) {
+func retryCall[T any](ctx context.Context, maxAttempts int, base time.Duration, name string, logger *slog.Logger, fn func() (T, error)) (T, error) {
 	var zero T
 	var last error
 	for i := 0; i < maxAttempts; i++ {
@@ -179,7 +198,11 @@ func retryCall[T any](ctx context.Context, maxAttempts int, base time.Duration, 
 			return result, err
 		}
 		last = err
-		log.Printf("[retry] %s: transient %d (attempt %d/%d), retrying", name, statusOf(err), i+1, maxAttempts)
+		logger.Warn("retrying transient error",
+			"provider", name,
+			"status", statusOf(err),
+			"attempt", i+1,
+			"max_attempts", maxAttempts)
 		if i < maxAttempts-1 {
 			delay := retryDelay(base, i, err)
 			timer := time.NewTimer(delay)
@@ -191,6 +214,10 @@ func retryCall[T any](ctx context.Context, maxAttempts int, base time.Duration, 
 			}
 		}
 	}
+	logger.Error("all retry attempts exhausted",
+		"provider", name,
+		"attempts", maxAttempts,
+		"error", last)
 	return zero, last
 }
 
@@ -209,6 +236,7 @@ type retryEmbeddingProvider struct {
 	maxAttempts int
 	baseDelay   time.Duration
 	timeout     time.Duration
+	logger      *slog.Logger
 }
 
 // WithEmbeddingRetry wraps p with automatic retry on transient HTTP errors (429, 503).
@@ -222,11 +250,16 @@ func WithEmbeddingRetry(p EmbeddingProvider, opts ...RetryOption) EmbeddingProvi
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	logger := cfg.logger
+	if logger == nil {
+		logger = nopLogger
+	}
 	return &retryEmbeddingProvider{
 		inner:       p,
 		maxAttempts: cfg.maxAttempts,
 		baseDelay:   cfg.baseDelay,
 		timeout:     cfg.timeout,
+		logger:      logger,
 	}
 }
 
@@ -242,7 +275,7 @@ func (r *retryEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][
 			defer cancel()
 		}
 	}
-	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), func() ([][]float32, error) {
+	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), r.logger, func() ([][]float32, error) {
 		return r.inner.Embed(ctx, texts)
 	})
 }

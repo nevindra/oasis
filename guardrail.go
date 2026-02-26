@@ -3,6 +3,7 @@ package oasis
 import (
 	"context"
 	"encoding/base64"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -125,6 +126,7 @@ type InjectionGuard struct {
 	response   string
 	skipLayers map[int]bool
 	scanAll    bool
+	logger     *slog.Logger
 }
 
 // NewInjectionGuard creates a guard with built-in multi-layer injection detection.
@@ -137,6 +139,9 @@ func NewInjectionGuard(opts ...InjectionOption) *InjectionGuard {
 	}
 	for _, opt := range opts {
 		opt(g)
+	}
+	if g.logger == nil {
+		g.logger = nopLogger
 	}
 	return g
 }
@@ -175,6 +180,12 @@ func ScanAllMessages() InjectionOption {
 	return func(g *InjectionGuard) { g.scanAll = true }
 }
 
+// InjectionLogger sets the structured logger for the guard. When set,
+// blocked requests are logged at WARN level with the matched layer.
+func InjectionLogger(l *slog.Logger) InjectionOption {
+	return func(g *InjectionGuard) { g.logger = l }
+}
+
 // SkipLayers disables specific detection layers (1-5).
 // Use when a layer produces false positives for your use case.
 func SkipLayers(layers ...int) InjectionOption {
@@ -191,7 +202,8 @@ func SkipLayers(layers ...int) InjectionOption {
 func (g *InjectionGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 	contents := userContents(req.Messages, g.scanAll)
 	for _, content := range contents {
-		if err := g.checkContent(content); err != nil {
+		if layer, err := g.checkContent(content); err != nil {
+			g.logger.Warn("injection attempt blocked", "layer", layer)
 			return err
 		}
 	}
@@ -199,7 +211,8 @@ func (g *InjectionGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 }
 
 // checkContent runs all enabled detection layers against a single message.
-func (g *InjectionGuard) checkContent(content string) error {
+// Returns the layer number that matched and an ErrHalt, or (0, nil) if clean.
+func (g *InjectionGuard) checkContent(content string) (int, error) {
 	// Pre-pass: strip zero-width characters, normalize unicode (NFKC handles
 	// fullwidth Latin, mathematical alphanumerics, ligatures, etc.).
 	cleaned := zeroWidthChars.Replace(content)
@@ -210,7 +223,7 @@ func (g *InjectionGuard) checkContent(content string) error {
 	if !g.skipLayers[1] {
 		for _, phrase := range g.phrases {
 			if strings.Contains(lower, phrase) {
-				return &ErrHalt{Response: g.response}
+				return 1, &ErrHalt{Response: g.response}
 			}
 		}
 	}
@@ -220,7 +233,7 @@ func (g *InjectionGuard) checkContent(content string) error {
 		if injectionRolePrefix.MatchString(cleaned) ||
 			injectionMarkdownRole.MatchString(cleaned) ||
 			injectionXMLRole.MatchString(cleaned) {
-			return &ErrHalt{Response: g.response}
+			return 2, &ErrHalt{Response: g.response}
 		}
 	}
 
@@ -228,7 +241,7 @@ func (g *InjectionGuard) checkContent(content string) error {
 	if !g.skipLayers[3] {
 		if injectionFakeBoundary.MatchString(cleaned) ||
 			injectionSeparatorRole.MatchString(cleaned) {
-			return &ErrHalt{Response: g.response}
+			return 3, &ErrHalt{Response: g.response}
 		}
 	}
 
@@ -248,7 +261,7 @@ func (g *InjectionGuard) checkContent(content string) error {
 				decodedLower := strings.ToLower(string(decoded))
 				for _, phrase := range g.phrases {
 					if strings.Contains(decodedLower, phrase) {
-						return &ErrHalt{Response: g.response}
+						return 4, &ErrHalt{Response: g.response}
 					}
 				}
 			}
@@ -259,12 +272,12 @@ func (g *InjectionGuard) checkContent(content string) error {
 	if !g.skipLayers[5] {
 		for _, re := range g.custom {
 			if re.MatchString(cleaned) {
-				return &ErrHalt{Response: g.response}
+				return 5, &ErrHalt{Response: g.response}
 			}
 		}
 	}
 
-	return nil
+	return 0, nil
 }
 
 // userContents returns user message content to scan. When scanAll is false,
@@ -316,6 +329,7 @@ type ContentGuard struct {
 	maxInputLen  int
 	maxOutputLen int
 	response     string
+	logger       *slog.Logger
 }
 
 // NewContentGuard creates a guard that enforces content length limits.
@@ -325,6 +339,9 @@ func NewContentGuard(opts ...ContentOption) *ContentGuard {
 	}
 	for _, opt := range opts {
 		opt(g)
+	}
+	if g.logger == nil {
+		g.logger = nopLogger
 	}
 	return g
 }
@@ -344,6 +361,12 @@ func MaxOutputLength(n int) ContentOption {
 	return func(g *ContentGuard) { g.maxOutputLen = n }
 }
 
+// ContentLogger sets the structured logger for the guard. When set,
+// blocked requests are logged at WARN level with the exceeded limit.
+func ContentLogger(l *slog.Logger) ContentOption {
+	return func(g *ContentGuard) { g.logger = l }
+}
+
 // ContentResponse sets the halt response message.
 // Default: "Content exceeds the allowed length."
 func ContentResponse(msg string) ContentOption {
@@ -356,7 +379,9 @@ func (g *ContentGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 		return nil
 	}
 	content := lastUserContent(req.Messages)
-	if len([]rune(content)) > g.maxInputLen {
+	runeLen := len([]rune(content))
+	if runeLen > g.maxInputLen {
+		g.logger.Warn("input content exceeds limit", "length", runeLen, "max", g.maxInputLen)
 		return &ErrHalt{Response: g.response}
 	}
 	return nil
@@ -367,7 +392,9 @@ func (g *ContentGuard) PostLLM(_ context.Context, resp *ChatResponse) error {
 	if g.maxOutputLen <= 0 {
 		return nil
 	}
-	if len([]rune(resp.Content)) > g.maxOutputLen {
+	runeLen := len([]rune(resp.Content))
+	if runeLen > g.maxOutputLen {
+		g.logger.Warn("output content exceeds limit", "length", runeLen, "max", g.maxOutputLen)
 		return &ErrHalt{Response: g.response}
 	}
 	return nil
@@ -388,6 +415,7 @@ type KeywordGuard struct {
 	keywords []string
 	regexes  []*regexp.Regexp
 	response string
+	logger   *slog.Logger
 }
 
 // NewKeywordGuard creates a guard that blocks messages containing any of
@@ -400,6 +428,7 @@ func NewKeywordGuard(keywords ...string) *KeywordGuard {
 	return &KeywordGuard{
 		keywords: lower,
 		response: "Message contains blocked content.",
+		logger:   nopLogger,
 	}
 }
 
@@ -407,6 +436,14 @@ func NewKeywordGuard(keywords ...string) *KeywordGuard {
 // Returns the guard for builder-style chaining.
 func (g *KeywordGuard) WithRegex(patterns ...*regexp.Regexp) *KeywordGuard {
 	g.regexes = append(g.regexes, patterns...)
+	return g
+}
+
+// WithKeywordLogger sets the structured logger for the guard. When set,
+// blocked messages are logged at WARN level with the matched keyword.
+// Returns the guard for builder-style chaining.
+func (g *KeywordGuard) WithKeywordLogger(l *slog.Logger) *KeywordGuard {
+	g.logger = l
 	return g
 }
 
@@ -427,12 +464,14 @@ func (g *KeywordGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 	lower := strings.ToLower(content)
 	for _, kw := range g.keywords {
 		if strings.Contains(lower, kw) {
+			g.logger.Warn("keyword blocked", "keyword", kw)
 			return &ErrHalt{Response: g.response}
 		}
 	}
 
 	for _, re := range g.regexes {
 		if re.MatchString(content) {
+			g.logger.Warn("regex pattern blocked", "pattern", re.String())
 			return &ErrHalt{Response: g.response}
 		}
 	}

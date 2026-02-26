@@ -54,6 +54,7 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 	var executeTool toolExecFunc
 	var executeToolStream toolExecStreamFunc
 	if dynDefs, dynExec := a.resolveDynamicTools(ctx, task); dynDefs != nil {
+		a.logger.Debug("using dynamic tools", "agent", a.name, "tool_count", len(dynDefs))
 		toolDefs = a.cacheBuiltinToolDefs(dynDefs)
 		executeTool = dynExec
 	} else {

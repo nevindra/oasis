@@ -58,6 +58,12 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 				}
 
 				prompt := fmt.Sprintf(contextualEnrichmentPrompt, docText, chunks[i].Content)
+				if logger != nil {
+					logger.Debug("contextual enrichment: sending LLM request",
+						"chunk_id", chunks[i].ID,
+						"chunk_bytes", len(chunks[i].Content),
+						"prompt_bytes", len(prompt))
+				}
 				resp, err := provider.Chat(ctx, oasis.ChatRequest{
 					Messages: []oasis.ChatMessage{
 						{Role: "user", Content: prompt},
@@ -76,6 +82,11 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 				if prefix != "" {
 					chunks[i].Content = prefix + "\n\n" + chunks[i].Content
 					enriched.Add(1)
+					if logger != nil {
+						logger.Debug("contextual enrichment: chunk enriched",
+							"chunk_id", chunks[i].ID,
+							"prefix_bytes", len(prefix))
+					}
 				} else if logger != nil {
 					logger.Warn("contextual enrichment: empty response from LLM",
 						"chunk_id", chunks[i].ID)

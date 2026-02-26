@@ -164,6 +164,7 @@ type crossDocConfig struct {
 	similarityThreshold float32
 	maxPairsPerChunk    int
 	batchSize           int
+	resume              bool
 }
 
 // CrossDocWithDocumentIDs scopes extraction to specific documents (default: all).
@@ -185,4 +186,11 @@ func CrossDocWithMaxPairsPerChunk(n int) CrossDocOption {
 // CrossDocWithBatchSize sets the number of chunks per LLM call for cross-doc extraction (default 5).
 func CrossDocWithBatchSize(n int) CrossDocOption {
 	return func(c *crossDocConfig) { c.batchSize = n }
+}
+
+// CrossDocWithResume enables resume mode. When enabled, documents that were
+// successfully processed in a previous run are skipped. Progress is tracked
+// via the Store's config mechanism (key: "crossdoc:processed").
+func CrossDocWithResume(resume bool) CrossDocOption {
+	return func(c *crossDocConfig) { c.resume = resume }
 }

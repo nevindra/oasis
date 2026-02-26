@@ -3,7 +3,9 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -13,8 +15,9 @@ import (
 // MemoryStore implements oasis.MemoryStore backed by PostgreSQL with pgvector.
 // Semantic deduplication uses pgvector cosine distance instead of brute-force.
 type MemoryStore struct {
-	pool *pgxpool.Pool
-	cfg  pgConfig
+	pool   *pgxpool.Pool
+	cfg    pgConfig
+	logger *slog.Logger
 }
 
 var _ oasis.MemoryStore = (*MemoryStore)(nil)
@@ -28,7 +31,11 @@ func NewMemoryStore(pool *pgxpool.Pool, opts ...Option) *MemoryStore {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return &MemoryStore{pool: pool, cfg: cfg}
+	logger := cfg.logger
+	if logger == nil {
+		logger = nopLogger
+	}
+	return &MemoryStore{pool: pool, cfg: cfg, logger: logger}
 }
 
 // vectorType returns "vector" or "vector(N)" depending on config.
@@ -60,6 +67,8 @@ func (s *MemoryStore) hnswWithClause() string {
 // Requires WithEmbeddingDimension to be set — pgvector HNSW indexes need
 // typed vector(N) columns.
 func (s *MemoryStore) Init(ctx context.Context) error {
+	start := time.Now()
+	s.logger.Debug("postgres: memory init started")
 	if s.cfg.embeddingDimension <= 0 {
 		return fmt.Errorf("postgres: memory init: embedding dimension is required (use WithEmbeddingDimension)")
 	}
@@ -82,6 +91,7 @@ func (s *MemoryStore) Init(ctx context.Context) error {
 	}
 	for _, stmt := range stmts {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {
+			s.logger.Error("postgres: memory init failed", "error", err, "duration", time.Since(start))
 			return fmt.Errorf("postgres: memory init: %w", err)
 		}
 	}
@@ -92,12 +102,15 @@ func (s *MemoryStore) Init(ctx context.Context) error {
 		}
 	}
 
+	s.logger.Info("postgres: memory init completed", "duration", time.Since(start))
 	return nil
 }
 
 // UpsertFact inserts a new fact or merges with an existing one if cosine
 // similarity exceeds 0.85. Merging updates the text and bumps confidence.
 func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, embedding []float32) error {
+	start := time.Now()
+	s.logger.Debug("postgres: upsert fact", "category", category, "embedding_dim", len(embedding))
 	now := oasis.NowUnix()
 	embStr := serializeEmbedding(embedding)
 
@@ -114,6 +127,7 @@ func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, emb
 		 LIMIT 1`,
 		embStr)
 	if err != nil {
+		s.logger.Error("postgres: upsert fact search failed", "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: upsert fact search: %w", err)
 	}
 	defer rows.Close()
@@ -135,8 +149,10 @@ func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, emb
 			`UPDATE user_facts SET fact=$1, category=$2, embedding=$3::vector, confidence=$4, updated_at=$5 WHERE id=$6`,
 			fact, category, embStr, newConf, now, bestID)
 		if err != nil {
+			s.logger.Error("postgres: upsert fact merge failed", "id", bestID, "error", err, "duration", time.Since(start))
 			return fmt.Errorf("postgres: merge fact: %w", err)
 		}
+		s.logger.Debug("postgres: upsert fact merged", "id", bestID, "similarity", bestScore, "duration", time.Since(start))
 		return nil
 	}
 
@@ -146,14 +162,18 @@ func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, emb
 		 VALUES ($1, $2, $3, 1.0, $4::vector, $5, $6)`,
 		id, fact, category, embStr, now, now)
 	if err != nil {
+		s.logger.Error("postgres: upsert fact insert failed", "id", id, "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: insert fact: %w", err)
 	}
+	s.logger.Debug("postgres: upsert fact inserted", "id", id, "duration", time.Since(start))
 	return nil
 }
 
 // SearchFacts returns facts semantically similar to the query embedding,
 // sorted by score descending. Only facts with confidence >= 0.3 are returned.
 func (s *MemoryStore) SearchFacts(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredFact, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: search facts", "top_k", topK, "embedding_dim", len(embedding))
 	embStr := serializeEmbedding(embedding)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, fact, category, confidence, created_at, updated_at,
@@ -164,6 +184,7 @@ func (s *MemoryStore) SearchFacts(ctx context.Context, embedding []float32, topK
 		 LIMIT $2`,
 		embStr, topK)
 	if err != nil {
+		s.logger.Error("postgres: search facts failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: search facts: %w", err)
 	}
 	defer rows.Close()
@@ -177,11 +198,14 @@ func (s *MemoryStore) SearchFacts(ctx context.Context, embedding []float32, topK
 		}
 		results = append(results, oasis.ScoredFact{Fact: f, Score: score})
 	}
+	s.logger.Debug("postgres: search facts ok", "count", len(results), "duration", time.Since(start))
 	return results, rows.Err()
 }
 
 // BuildContext builds a markdown summary of known user facts for LLM context.
 func (s *MemoryStore) BuildContext(ctx context.Context, queryEmbedding []float32) (string, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: build context", "has_embedding", len(queryEmbedding) > 0)
 	var facts []oasis.ScoredFact
 	var err error
 
@@ -206,16 +230,20 @@ func (s *MemoryStore) BuildContext(ctx context.Context, queryEmbedding []float32
 	for _, sf := range facts {
 		fmt.Fprintf(&b, "- %s [%s]\n", sf.Fact.Fact, sf.Fact.Category)
 	}
+	s.logger.Debug("postgres: build context ok", "fact_count", len(facts), "duration", time.Since(start))
 	return b.String(), nil
 }
 
 func (s *MemoryStore) getTopFacts(ctx context.Context, limit int) ([]oasis.Fact, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: get top facts", "limit", limit)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, fact, category, confidence, created_at, updated_at
 		 FROM user_facts WHERE confidence >= 0.3
 		 ORDER BY confidence DESC, updated_at DESC
 		 LIMIT $1`, limit)
 	if err != nil {
+		s.logger.Error("postgres: get top facts failed", "error", err, "duration", time.Since(start))
 		return nil, err
 	}
 	defer rows.Close()
@@ -228,31 +256,49 @@ func (s *MemoryStore) getTopFacts(ctx context.Context, limit int) ([]oasis.Fact,
 		}
 		facts = append(facts, f)
 	}
+	s.logger.Debug("postgres: get top facts ok", "count", len(facts), "duration", time.Since(start))
 	return facts, nil
 }
 
 // DeleteFact removes a single fact by its ID.
 func (s *MemoryStore) DeleteFact(ctx context.Context, factID string) error {
+	start := time.Now()
+	s.logger.Debug("postgres: delete fact", "id", factID)
 	_, err := s.pool.Exec(ctx, `DELETE FROM user_facts WHERE id = $1`, factID)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: delete fact failed", "id", factID, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: delete fact ok", "id", factID, "duration", time.Since(start))
+	return nil
 }
 
 // DeleteMatchingFacts removes facts whose text matches a LIKE pattern.
 func (s *MemoryStore) DeleteMatchingFacts(ctx context.Context, pattern string) error {
+	start := time.Now()
+	s.logger.Debug("postgres: delete matching facts", "pattern", pattern)
 	_, err := s.pool.Exec(ctx, `DELETE FROM user_facts WHERE fact LIKE $1`, "%"+pattern+"%")
-	return err
+	if err != nil {
+		s.logger.Error("postgres: delete matching facts failed", "pattern", pattern, "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: delete matching facts ok", "pattern", pattern, "duration", time.Since(start))
+	return nil
 }
 
 // DecayOldFacts reduces confidence of stale facts and prunes very low ones.
 // Facts older than 7 days get confidence * 0.95. Facts with confidence < 0.3
 // and age > 30 days are deleted.
 func (s *MemoryStore) DecayOldFacts(ctx context.Context) error {
+	start := time.Now()
+	s.logger.Debug("postgres: decay old facts")
 	now := oasis.NowUnix()
 
 	sevenDaysAgo := now - (7 * 86400)
 	if _, err := s.pool.Exec(ctx,
 		`UPDATE user_facts SET confidence = confidence * 0.95 WHERE updated_at < $1 AND confidence > 0.3`,
 		sevenDaysAgo); err != nil {
+		s.logger.Error("postgres: decay old facts update failed", "error", err, "duration", time.Since(start))
 		return fmt.Errorf("postgres: decay facts: %w", err)
 	}
 
@@ -260,5 +306,10 @@ func (s *MemoryStore) DecayOldFacts(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx,
 		`DELETE FROM user_facts WHERE confidence < 0.3 AND updated_at < $1`,
 		thirtyDaysAgo)
-	return err
+	if err != nil {
+		s.logger.Error("postgres: decay old facts prune failed", "error", err, "duration", time.Since(start))
+		return err
+	}
+	s.logger.Debug("postgres: decay old facts ok", "duration", time.Since(start))
+	return nil
 }

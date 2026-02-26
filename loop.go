@@ -149,6 +149,9 @@ const maxParallelDispatch = 10
 // When ch is nil, it operates in blocking mode (Execute). When ch is non-nil,
 // it emits StreamEvent values and closes ch when done (ExecuteStream).
 func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
+	if cfg.logger == nil {
+		cfg.logger = nopLogger
+	}
 	var totalUsage Usage
 	var steps []StepTrace
 
@@ -214,6 +217,8 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	var accumulatedAttachmentBytes int64
 
 	for i := 0; i < cfg.maxIter; i++ {
+		cfg.logger.Debug("loop iteration started", "agent", cfg.name, "iteration", i, "tools", len(cfg.tools), "messages", len(messages), "runes", messageRuneCount)
+
 		// Start an iteration span if tracing is enabled.
 		iterCtx := ctx
 		var iterSpan Span
@@ -232,6 +237,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 		// PreProcessor hook.
 		if err := cfg.processors.RunPreLLM(iterCtx, &req); err != nil {
+			cfg.logger.Error("pre-processor failed", "agent", cfg.name, "iteration", i, "error", err)
 			endIter()
 			safeCloseCh()
 			if s := checkSuspendLoop(err, cfg, messages, task); s != nil {
@@ -244,10 +250,13 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		var err error
 
 		req.Tools = cfg.tools
+		llmStart := time.Now()
 		if len(cfg.tools) > 0 {
+			cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(cfg.tools))
 			resp, err = cfg.provider.Chat(iterCtx, req)
 		} else if ch != nil {
 			// No tools, streaming — stream the response directly.
+			cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
 			resp, err = cfg.provider.ChatStream(iterCtx, req, ch)
 			if err != nil {
 				endIter()
@@ -273,14 +282,21 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			cfg.mem.persistMessages(iterCtx, cfg.name, task, task.Input, resp.Content, steps)
 			return AgentResult{Output: resp.Content, Thinking: resp.Thinking, Attachments: mergeAttachments(accumulatedAttachments, resp.Attachments), Usage: totalUsage, Steps: steps}, nil
 		} else {
+			cfg.logger.Debug("calling LLM (no tools)", "agent", cfg.name, "iteration", i)
 			resp, err = cfg.provider.Chat(iterCtx, req)
 		}
 
 		if err != nil {
+			cfg.logger.Error("LLM call failed", "agent", cfg.name, "iteration", i, "error", err, "duration", time.Since(llmStart))
 			endIter()
 			safeCloseCh()
 			return AgentResult{Usage: totalUsage, Steps: steps}, err
 		}
+		cfg.logger.Debug("LLM call completed", "agent", cfg.name, "iteration", i,
+			"duration", time.Since(llmStart),
+			"input_tokens", resp.Usage.InputTokens,
+			"output_tokens", resp.Usage.OutputTokens,
+			"tool_calls", len(resp.ToolCalls))
 		totalUsage.InputTokens += resp.Usage.InputTokens
 		totalUsage.OutputTokens += resp.Usage.OutputTokens
 
@@ -307,6 +323,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 		// No tool calls — final response.
 		if len(resp.ToolCalls) == 0 {
+			cfg.logger.Debug("final response (no tool calls)", "agent", cfg.name, "iteration", i)
 			content := resp.Content
 			if content == "" {
 				content = lastAgentOutput
@@ -375,12 +392,25 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		}
 
 		// Execute tool calls in parallel.
+		toolNames := make([]string, len(resp.ToolCalls))
+		for ti, tc := range resp.ToolCalls {
+			toolNames[ti] = tc.Name
+		}
+		cfg.logger.Info("dispatching tool calls", "agent", cfg.name, "iteration", i, "tools", toolNames)
+		dispatchStart := time.Now()
 		results := dispatchParallel(iterCtx, resp.ToolCalls, cfg.dispatch)
+		cfg.logger.Debug("tool dispatch completed", "agent", cfg.name, "iteration", i, "duration", time.Since(dispatchStart))
 
 		// Process results sequentially (PostToolProcessor + message assembly + trace collection).
 		for j, tc := range resp.ToolCalls {
 			totalUsage.InputTokens += results[j].usage.InputTokens
 			totalUsage.OutputTokens += results[j].usage.OutputTokens
+
+			if results[j].isError {
+				cfg.logger.Warn("tool call returned error", "agent", cfg.name, "tool", tc.Name, "error", results[j].content, "duration", results[j].duration)
+			} else {
+				cfg.logger.Debug("tool call result", "agent", cfg.name, "tool", tc.Name, "duration", results[j].duration, "result_len", len(results[j].content))
+			}
 
 			// Emit tool-call-result event.
 			if ch != nil {
@@ -440,6 +470,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		// Compress context if over budget (within the iteration span so
 		// compression traces are children of the iteration that triggered them).
 		if compressThreshold > 0 && messageRuneCount > compressThreshold {
+			cfg.logger.Info("context compression triggered", "agent", cfg.name, "iteration", i, "runes", messageRuneCount, "threshold", compressThreshold)
 			messages, messageRuneCount = compressMessages(iterCtx, cfg, task, messages, 2)
 		}
 		endIter()
@@ -469,9 +500,13 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		resp, err = cfg.provider.Chat(synthCtx, synthReq)
 	}
 	if err != nil {
+		cfg.logger.Error("synthesis LLM call failed", "agent", cfg.name, "error", err)
 		safeCloseCh()
 		return AgentResult{Usage: totalUsage, Steps: steps}, err
 	}
+	cfg.logger.Info("synthesis completed", "agent", cfg.name,
+		"input_tokens", resp.Usage.InputTokens,
+		"output_tokens", resp.Usage.OutputTokens)
 	totalUsage.InputTokens += resp.Usage.InputTokens
 	totalUsage.OutputTokens += resp.Usage.OutputTokens
 

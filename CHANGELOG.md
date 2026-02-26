@@ -12,6 +12,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Structured logging across the framework** — comprehensive `slog` debug logging added throughout the agent loop, network, store, and ingest layers. Every operation emits timing, key parameters, and error context. Opt-in via existing logger options (`WithLogger`, `WithMemoryLogger`)
+
 - **Contextual enrichment** — optional LLM-based enrichment step in the ingest pipeline. Each chunk is sent to an LLM alongside the full document text; the LLM returns a 1-2 sentence context prefix prepended to `chunk.Content` before embedding, improving retrieval precision by ~35%
   - `WithContextualEnrichment(provider)` — enable contextual enrichment
   - `WithContextWorkers(n)` — max concurrent LLM calls (default 3)

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -34,6 +35,7 @@ type chunkerConfig struct {
 	maxTokens            int
 	overlapTokens        int
 	breakpointPercentile int
+	logger               *slog.Logger
 }
 
 func defaultChunkerConfig() chunkerConfig {
@@ -56,6 +58,12 @@ func WithOverlapTokens(n int) ChunkerOption {
 // of similarity drops). Lower = fewer splits. Higher = more splits.
 func WithBreakpointPercentile(p int) ChunkerOption {
 	return func(c *chunkerConfig) { c.breakpointPercentile = p }
+}
+
+// WithChunkerLogger sets the structured logger for chunkers that support it
+// (e.g. SemanticChunker). Chunkers that don't do I/O ignore this option.
+func WithChunkerLogger(l *slog.Logger) ChunkerOption {
+	return func(c *chunkerConfig) { c.logger = l }
 }
 
 // --- RecursiveChunker ---
