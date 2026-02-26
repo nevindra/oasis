@@ -12,6 +12,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Ingest checkpoint & resume** — the pipeline persists progress after each stage (extracting → chunking → enriching → embedding → storing → graphing). `ResumeIngest(ctx, checkpointID)` picks up from the last completed stage. `CheckpointStore` optional interface (root package) discovered via type assertion; silently disabled when not implemented. `ingest_checkpoints` table added to `store/sqlite` and `store/postgres` via `Init()`. `IngestCheckpoint` / `CheckpointStatus` types added to root `oasis` package
+- **`IngestBatch` / `ResumeBatch`** — ingest multiple documents in one call; each tracked independently. On interruption, `BatchResult.Checkpoint` is non-empty — pass it back to `ResumeBatch` with the same items to continue. `WithBatchConcurrency(n)` for parallel processing (default sequential). `WithBatchCrossDocEdges(true)` runs cross-document extraction automatically after the batch. New types: `BatchItem`, `BatchResult`, `BatchError`
+- **`WithExtractRetries(n)`** — retry custom extractors with exponential backoff + jitter; context cancellation stops immediately
+- **`ResumeCrossDocExtraction`** — cross-document extraction now uses `CheckpointStore` for resume tracking. `CrossDocWithResume(true)` saves per-document progress; call `ResumeCrossDocExtraction(ctx, checkpointID)` to continue after interruption
+
 - **Structured logging across the framework** — comprehensive `slog` debug logging added throughout the agent loop, network, store, and ingest layers. Every operation emits timing, key parameters, and error context. Opt-in via existing logger options (`WithLogger`, `WithMemoryLogger`)
 
 - **Contextual enrichment** — optional LLM-based enrichment step in the ingest pipeline. Each chunk is sent to an LLM alongside the full document text; the LLM returns a 1-2 sentence context prefix prepended to `chunk.Content` before embedding, improving retrieval precision by ~35%

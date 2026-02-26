@@ -21,6 +21,110 @@ result, _ := ingestor.IngestReader(ctx, resp.Body, "page.html")
 fmt.Printf("Stored %d chunks for document %s\n", result.ChunkCount, result.DocumentID)
 ```
 
+## Retry
+
+Transient failures (rate limits, network blips) are handled at two independent layers.
+
+### Provider retry — embedding and LLM calls
+
+Wrap providers before passing them to `NewIngestor`. This covers all embedding calls, contextual enrichment, and graph extraction:
+
+```go
+llm := oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryMaxAttempts(3))
+emb := oasis.WithEmbeddingRetry(gemini.NewEmbedding(apiKey, embModel), oasis.RetryMaxAttempts(3))
+
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithContextualEnrichment(llm),
+    ingest.WithGraphExtraction(llm),
+)
+```
+
+### Extractor retry — custom extractors
+
+Custom extractors that call external services (OCR, conversion APIs) get their own retry:
+
+```go
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithExtractor(ingest.TypePDF, myOCRExtractor{}),
+    ingest.WithExtractRetries(3), // up to 3 total attempts, exponential backoff
+)
+```
+
+Context cancellation always stops the retry loop immediately.
+
+## Resume After Crash
+
+The ingestor automatically checkpoints after each pipeline stage. If the process dies mid-run (e.g., embedding API timeout at batch 49 of 50), resume from where it left off:
+
+```go
+// See all stalled ingestions
+checkpoints, _ := ingestor.ListCheckpoints(ctx)
+for _, cp := range checkpoints {
+    fmt.Printf("stalled: %s (stage: %s)\n", cp.Source, cp.Status)
+}
+
+// Resume the first one
+result, err := ingestor.ResumeIngest(ctx, checkpoints[0].ID)
+```
+
+`ResumeIngest` skips all completed stages and picks up from the first unfinished one. No re-extraction, no re-embedding of already-embedded batches.
+
+> **Requirement:** The Store must implement `CheckpointStore`. Both `store/sqlite` and `store/postgres` do. If the Store doesn't support it, checkpointing is silently disabled — retry still works, but crashed ingestions cannot be resumed.
+
+> **Note:** A checkpoint stalled at `status=extracting` cannot be resumed because the original file bytes weren't saved. Call `IngestFile` again with the same file.
+
+## Batch Ingestion
+
+`IngestBatch` ingests multiple documents in one call. Each document is tracked independently — one failure doesn't abort the rest.
+
+```go
+items := []ingest.BatchItem{
+    {Data: pdfBytes,  Filename: "report.pdf"},
+    {Data: mdBytes,   Filename: "readme.md", Title: "README"},
+    {Data: jsonBytes, Filename: "data.json"},
+}
+
+result, err := ingestor.IngestBatch(ctx, items)
+
+fmt.Printf("succeeded: %d, failed: %d\n", len(result.Succeeded), len(result.Failed))
+for _, fe := range result.Failed {
+    fmt.Printf("  failed: %s — %v\n", fe.Item.Filename, fe.Error)
+}
+```
+
+### Resume an interrupted batch
+
+If the batch is interrupted, `result.Checkpoint` is non-empty. Pass it with the same item list to continue:
+
+```go
+if result.Checkpoint != "" {
+    result, err = ingestor.ResumeBatch(ctx, result.Checkpoint, items)
+}
+```
+
+Already-completed documents are skipped automatically. Documents that were mid-pipeline resume from their own single-doc checkpoint.
+
+### Concurrent batch processing
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithBatchConcurrency(4), // 4 documents in parallel
+)
+result, err := ingestor.IngestBatch(ctx, items)
+```
+
+**Default is sequential.** In sequential mode, chunks from all documents are pooled into shared embedding batches — Document A (30 chunks) + Document B (34 chunks) = 1 API call instead of 2. In concurrent mode, parallelism compensates for the loss of pooling.
+
+### Run cross-document edges after a batch
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithGraphExtraction(llm),
+    ingest.WithBatchCrossDocEdges(true),
+)
+result, err := ingestor.IngestBatch(ctx, items)
+```
+
 ## Markdown-aware Chunking
 
 For markdown documents, use MarkdownChunker to split at heading boundaries:
@@ -100,6 +204,7 @@ func (MyExtractor) Extract(content []byte) (string, error) {
 
 ingestor := ingest.NewIngestor(store, embedding,
     ingest.WithExtractor("application/custom", MyExtractor{}),
+    ingest.WithExtractRetries(3), // retry if the external service is flaky
 )
 ```
 
@@ -136,6 +241,34 @@ ingestor := ingest.NewIngestor(store, embedding,
 )
 ```
 
+### Cross-document edges
+
+Discovers relationships between chunks across different documents. Call after a batch of documents is ingested:
+
+```go
+count, err := ingestor.ExtractCrossDocumentEdges(ctx,
+    ingest.CrossDocWithSimilarityThreshold(0.6),
+    ingest.CrossDocWithMaxPairsPerChunk(5),
+)
+```
+
+For large sets that may be interrupted, use resume mode:
+
+```go
+// Run with progress tracking
+count, err := ingestor.ExtractCrossDocumentEdges(ctx,
+    ingest.CrossDocWithResume(true),
+)
+
+// If interrupted, resume from the saved checkpoint
+checkpoints, _ := ingestor.ListCheckpoints(ctx)
+for _, cp := range checkpoints {
+    if cp.Type == "crossdoc" {
+        count, err = ingestor.ResumeCrossDocExtraction(ctx, cp.ID)
+    }
+}
+```
+
 See [RAG Pipeline: Graph RAG](rag-pipeline.md#graph-rag) for the full Graph RAG walkthrough.
 
 ## Managing Ingested Documents
@@ -144,7 +277,7 @@ List and delete documents after ingestion:
 
 ```go
 // List all ingested documents
-docs, _ := store.ListDocuments(ctx)
+docs, _ := store.ListDocuments(ctx, 0)
 for _, doc := range docs {
     fmt.Printf("%s: %s (%s)\n", doc.ID, doc.Title, doc.Source)
 }
@@ -166,6 +299,6 @@ ingestor := ingest.NewIngestor(store, embedding,
 
 ## See Also
 
-- [Ingest Concept](../concepts/ingest.md) — pipeline architecture
+- [Ingest Concept](../concepts/ingest.md) — pipeline architecture, checkpoint internals, options reference
 - [Store Concept](../concepts/store.md) — where chunks are stored
 - [RAG Pipeline](rag-pipeline.md) — end-to-end RAG walkthrough

@@ -15,7 +15,10 @@ type DocumentChunkLister interface {
 	GetChunksByDocument(ctx context.Context, docID string) ([]oasis.Chunk, error)
 }
 
-const crossDocConfigKey = "crossdoc:processed"
+// crossDocState is the JSON payload persisted in an IngestCheckpoint of type "crossdoc".
+type crossDocState struct {
+	ProcessedDocIDs []string `json:"processed_doc_ids"`
+}
 
 // ExtractCrossDocumentEdges discovers and stores edges between chunks from
 // different documents. It finds similar chunks across documents via vector search,
@@ -25,9 +28,9 @@ const crossDocConfigKey = "crossdoc:processed"
 // implement DocumentChunkLister (to list chunks per document). Call it after
 // ingesting a batch of documents — it is not run automatically during IngestFile/IngestText.
 //
-// When CrossDocWithResume(true) is set, processed documents are tracked in the
-// Store's config and skipped on subsequent runs. Progress is saved after each
-// document, so interrupted runs can be resumed without losing progress.
+// When CrossDocWithResume(true) is set, processed documents are tracked via
+// CheckpointStore (if available) and skipped on subsequent runs. Progress is
+// saved after each document so interrupted runs can be resumed.
 //
 // Returns the number of edges created.
 func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...CrossDocOption) (int, error) {
@@ -66,6 +69,96 @@ func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...Cros
 			"document_filter_count", len(cfg.documentIDs))
 	}
 
+	// Load or create the crossdoc checkpoint.
+	var cpID string
+	processedDocs := make(map[string]bool)
+
+	if cfg.resume {
+		cs := ing.checkpointStoreOf()
+		if cs != nil {
+			cps, err := cs.ListCheckpoints(ctx)
+			if err == nil {
+				for _, cp := range cps {
+					if cp.Type == "crossdoc" {
+						cpID = cp.ID
+						var state crossDocState
+						if cp.BatchData != "" {
+							if jerr := json.Unmarshal([]byte(cp.BatchData), &state); jerr == nil {
+								for _, id := range state.ProcessedDocIDs {
+									processedDocs[id] = true
+								}
+							}
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
+	totalEdges, err := ing.runCrossDoc(ctx, cfg, gs, dcl, cpID, processedDocs)
+	return totalEdges, err
+}
+
+// ResumeCrossDocExtraction resumes a previously interrupted cross-document
+// extraction using a checkpoint ID from ListCheckpoints.
+func (ing *Ingestor) ResumeCrossDocExtraction(ctx context.Context, checkpointID string, opts ...CrossDocOption) (int, error) {
+	cs := ing.checkpointStoreOf()
+	if cs == nil {
+		return 0, fmt.Errorf("ingest: resume cross-doc requires store to implement CheckpointStore")
+	}
+	cp, err := cs.LoadCheckpoint(ctx, checkpointID)
+	if err != nil {
+		return 0, fmt.Errorf("ingest: load cross-doc checkpoint: %w", err)
+	}
+	if cp.Type != "crossdoc" {
+		return 0, fmt.Errorf("ingest: checkpoint %s is type %q, not \"crossdoc\"", checkpointID, cp.Type)
+	}
+
+	var state crossDocState
+	if cp.BatchData != "" {
+		_ = json.Unmarshal([]byte(cp.BatchData), &state)
+	}
+	processedDocs := make(map[string]bool, len(state.ProcessedDocIDs))
+	for _, id := range state.ProcessedDocIDs {
+		processedDocs[id] = true
+	}
+
+	if ing.graphProvider == nil {
+		return 0, fmt.Errorf("cross-document extraction requires WithGraphExtraction")
+	}
+	gs, ok := ing.store.(oasis.GraphStore)
+	if !ok {
+		return 0, nil
+	}
+	dcl, ok := ing.store.(DocumentChunkLister)
+	if !ok {
+		return 0, fmt.Errorf("cross-document extraction requires store to implement DocumentChunkLister")
+	}
+
+	cfg := crossDocConfig{
+		similarityThreshold: 0.5,
+		maxPairsPerChunk:    3,
+		batchSize:           5,
+		resume:              true,
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	return ing.runCrossDoc(ctx, cfg, gs, dcl, checkpointID, processedDocs)
+}
+
+// runCrossDoc is the shared implementation for ExtractCrossDocumentEdges and
+// ResumeCrossDocExtraction.
+func (ing *Ingestor) runCrossDoc(
+	ctx context.Context,
+	cfg crossDocConfig,
+	gs oasis.GraphStore,
+	dcl DocumentChunkLister,
+	cpID string,
+	processedDocs map[string]bool,
+) (int, error) {
 	// 1. Get documents to process.
 	docs, err := ing.store.ListDocuments(ctx, 0)
 	if err != nil {
@@ -87,15 +180,6 @@ func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...Cros
 		docs = filtered
 	}
 
-	// Load processed doc IDs for resume.
-	processedDocs := make(map[string]bool)
-	if cfg.resume {
-		processedDocs, err = ing.loadProcessedDocs(ctx)
-		if err != nil && ing.logger != nil {
-			ing.logger.Warn("cross-doc: failed to load resume state, starting fresh", "err", err)
-		}
-	}
-
 	// Filter out already-processed docs.
 	if len(processedDocs) > 0 {
 		var remaining []oasis.Document
@@ -115,12 +199,50 @@ func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...Cros
 		ing.logger.Info("cross-doc: documents to process", "doc_count", len(docs))
 	}
 
-	// 2. Process each document: discover pairs → extract edges → store → save progress.
+	// Ensure a checkpoint exists for resume tracking.
+	if cfg.resume {
+		cs := ing.checkpointStoreOf()
+		if cs != nil && cpID == "" {
+			now := oasis.NowUnix()
+			cp := oasis.IngestCheckpoint{
+				ID:        oasis.NewID(),
+				Type:      "crossdoc",
+				Source:    "cross-doc extraction",
+				Status:    oasis.CheckpointEmbedding,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			ing.saveCheckpoint(ctx, cp)
+			cpID = cp.ID
+		}
+	}
+
+	saveCrossDocProgress := func() {
+		if !cfg.resume || cpID == "" {
+			return
+		}
+		ids := make([]string, 0, len(processedDocs))
+		for id := range processedDocs {
+			ids = append(ids, id)
+		}
+		data, _ := json.Marshal(crossDocState{ProcessedDocIDs: ids})
+		cp := oasis.IngestCheckpoint{
+			ID:        cpID,
+			Type:      "crossdoc",
+			Source:    "cross-doc extraction",
+			Status:    oasis.CheckpointEmbedding,
+			BatchData: string(data),
+			UpdatedAt: oasis.NowUnix(),
+		}
+		ing.saveCheckpoint(ctx, cp)
+	}
+
+	// 2. Process each document.
 	type chunkPair struct {
 		local  oasis.Chunk
 		remote oasis.Chunk
 	}
-	globalSeen := make(map[string]bool) // "localID:remoteID" across all docs
+	globalSeen := make(map[string]bool)
 	totalEdges := 0
 
 	for i, doc := range docs {
@@ -139,18 +261,15 @@ func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...Cros
 			continue
 		}
 
-		// Discover pairs for this document.
 		var pairs []chunkPair
 		for _, c := range chunks {
 			if len(c.Embedding) == 0 {
 				continue
 			}
-
 			candidates, err := ing.store.SearchChunks(ctx, c.Embedding, cfg.maxPairsPerChunk, oasis.ByExcludeDocument(doc.ID))
 			if err != nil {
 				continue
 			}
-
 			for _, cand := range candidates {
 				if cand.Score < cfg.similarityThreshold {
 					continue
@@ -166,15 +285,11 @@ func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...Cros
 		}
 
 		if len(pairs) == 0 {
-			// No pairs — mark as processed and move on.
-			if cfg.resume {
-				processedDocs[doc.ID] = true
-				_ = ing.saveProcessedDocs(ctx, processedDocs)
-			}
+			processedDocs[doc.ID] = true
+			saveCrossDocProgress()
 			continue
 		}
 
-		// Collect unique chunks for LLM extraction.
 		var batchChunks []oasis.Chunk
 		added := make(map[string]bool)
 		for _, p := range pairs {
@@ -188,7 +303,6 @@ func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...Cros
 			}
 		}
 
-		// Extract edges via LLM.
 		edges, err := extractGraphEdges(ctx, ing.graphProvider, batchChunks, cfg.batchSize, 0, ing.graphWorkers, ing.logger)
 		if err != nil {
 			if ing.logger != nil {
@@ -219,13 +333,13 @@ func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...Cros
 				"progress", fmt.Sprintf("%d/%d", i+1, len(docs)))
 		}
 
-		// Save progress.
-		if cfg.resume {
-			processedDocs[doc.ID] = true
-			if err := ing.saveProcessedDocs(ctx, processedDocs); err != nil && ing.logger != nil {
-				ing.logger.Warn("cross-doc: failed to save progress", "err", err)
-			}
-		}
+		processedDocs[doc.ID] = true
+		saveCrossDocProgress()
+	}
+
+	// Delete checkpoint on successful completion.
+	if cpID != "" {
+		ing.deleteCheckpoint(ctx, cpID)
 	}
 
 	if ing.logger != nil {
@@ -235,32 +349,4 @@ func (ing *Ingestor) ExtractCrossDocumentEdges(ctx context.Context, opts ...Cros
 	}
 
 	return totalEdges, nil
-}
-
-func (ing *Ingestor) loadProcessedDocs(ctx context.Context) (map[string]bool, error) {
-	raw, err := ing.store.GetConfig(ctx, crossDocConfigKey)
-	if err != nil || raw == "" {
-		return make(map[string]bool), err
-	}
-	var ids []string
-	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
-		return make(map[string]bool), err
-	}
-	m := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		m[id] = true
-	}
-	return m, nil
-}
-
-func (ing *Ingestor) saveProcessedDocs(ctx context.Context, docs map[string]bool) error {
-	ids := make([]string, 0, len(docs))
-	for id := range docs {
-		ids = append(ids, id)
-	}
-	data, err := json.Marshal(ids)
-	if err != nil {
-		return err
-	}
-	return ing.store.SetConfig(ctx, crossDocConfigKey, string(data))
 }

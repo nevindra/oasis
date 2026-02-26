@@ -156,6 +156,29 @@ func WithOnError(fn func(source string, err error)) Option {
 	return func(ing *Ingestor) { ing.onError = fn }
 }
 
+// WithExtractRetries sets the maximum number of attempts for custom extractor
+// calls (default 1, meaning no retry). Custom extractors may call external
+// services (OCR, LLM-based conversion, document APIs) that can fail transiently.
+// Built-in extractors are deterministic and do not benefit from retry.
+// Retries use exponential backoff with jitter; context cancellation is respected.
+func WithExtractRetries(n int) Option {
+	return func(ing *Ingestor) { ing.extractRetries = n }
+}
+
+// WithBatchConcurrency sets the number of documents that are ingested
+// concurrently during IngestBatch (default 1, sequential).
+// In sequential mode chunks are pooled across documents into shared embedding
+// batches; in concurrent mode each goroutine runs an independent pipeline.
+func WithBatchConcurrency(n int) Option {
+	return func(ing *Ingestor) { ing.batchConcurrency = n }
+}
+
+// WithBatchCrossDocEdges enables cross-document edge extraction automatically
+// at the end of an IngestBatch call (default false).
+func WithBatchCrossDocEdges(b bool) Option {
+	return func(ing *Ingestor) { ing.batchCrossDocEdges = b }
+}
+
 // CrossDocOption configures ExtractCrossDocumentEdges.
 type CrossDocOption func(*crossDocConfig)
 

@@ -60,6 +60,18 @@ type GraphStore interface {
 	PruneOrphanEdges(ctx context.Context) (int, error)
 }
 
+// CheckpointStore is an optional Store capability for ingest pipeline checkpoints.
+// Store implementations that support checkpoint persistence can implement this
+// interface; callers discover it via type assertion. If the Store does not
+// implement CheckpointStore, checkpointing is silently disabled — retry still
+// works, but crashed ingestions cannot be resumed.
+type CheckpointStore interface {
+	SaveCheckpoint(ctx context.Context, cp IngestCheckpoint) error
+	LoadCheckpoint(ctx context.Context, id string) (IngestCheckpoint, error)
+	DeleteCheckpoint(ctx context.Context, id string) error
+	ListCheckpoints(ctx context.Context) ([]IngestCheckpoint, error)
+}
+
 // RetrieverOption configures a HybridRetriever.
 type RetrieverOption func(*retrieverConfig)
 

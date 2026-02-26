@@ -81,6 +81,7 @@ func WithEFSearch(ef int) Option {
 var _ oasis.Store = (*Store)(nil)
 var _ oasis.KeywordSearcher = (*Store)(nil)
 var _ oasis.GraphStore = (*Store)(nil)
+var _ oasis.CheckpointStore = (*Store)(nil)
 
 // nopLogger is a logger that discards all output.
 var nopLogger = slog.New(pgDiscardHandler{})
@@ -234,6 +235,15 @@ func (s *Store) Init(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_chunk_edges_source ON chunk_edges(source_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_chunk_edges_target ON chunk_edges(target_id)`,
 		`ALTER TABLE chunk_edges ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''`,
+
+		`CREATE TABLE IF NOT EXISTS ingest_checkpoints (
+			id         TEXT PRIMARY KEY,
+			type       TEXT NOT NULL,
+			status     TEXT NOT NULL,
+			data       BYTEA NOT NULL,
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL
+		)`,
 	}
 
 	for _, stmt := range stmts {
@@ -1402,6 +1412,77 @@ func scanScheduledActions(rows pgx.Rows) ([]oasis.ScheduledAction, error) {
 		actions = append(actions, a)
 	}
 	return actions, rows.Err()
+}
+
+// --- CheckpointStore ---
+
+// SaveCheckpoint upserts an ingest checkpoint by ID.
+func (s *Store) SaveCheckpoint(ctx context.Context, cp oasis.IngestCheckpoint) error {
+	data, err := json.Marshal(cp)
+	if err != nil {
+		return fmt.Errorf("postgres: save checkpoint: marshal: %w", err)
+	}
+	_, err = s.pool.Exec(ctx,
+		`INSERT INTO ingest_checkpoints (id, type, status, data, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT(id) DO UPDATE SET
+		   type       = EXCLUDED.type,
+		   status     = EXCLUDED.status,
+		   data       = EXCLUDED.data,
+		   updated_at = EXCLUDED.updated_at`,
+		cp.ID, cp.Type, string(cp.Status), data, cp.CreatedAt, cp.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("postgres: save checkpoint: %w", err)
+	}
+	return nil
+}
+
+// LoadCheckpoint retrieves an ingest checkpoint by ID.
+func (s *Store) LoadCheckpoint(ctx context.Context, id string) (oasis.IngestCheckpoint, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT data FROM ingest_checkpoints WHERE id = $1`, id)
+	var blob []byte
+	if err := row.Scan(&blob); err != nil {
+		return oasis.IngestCheckpoint{}, fmt.Errorf("postgres: load checkpoint %s: %w", id, err)
+	}
+	var cp oasis.IngestCheckpoint
+	if err := json.Unmarshal(blob, &cp); err != nil {
+		return oasis.IngestCheckpoint{}, fmt.Errorf("postgres: load checkpoint %s: unmarshal: %w", id, err)
+	}
+	return cp, nil
+}
+
+// DeleteCheckpoint removes an ingest checkpoint by ID.
+func (s *Store) DeleteCheckpoint(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM ingest_checkpoints WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("postgres: delete checkpoint %s: %w", id, err)
+	}
+	return nil
+}
+
+// ListCheckpoints returns all stored ingest checkpoints.
+func (s *Store) ListCheckpoints(ctx context.Context) ([]oasis.IngestCheckpoint, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT data FROM ingest_checkpoints ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list checkpoints: %w", err)
+	}
+	defer rows.Close()
+	var out []oasis.IngestCheckpoint
+	for rows.Next() {
+		var blob []byte
+		if err := rows.Scan(&blob); err != nil {
+			return nil, fmt.Errorf("postgres: list checkpoints: scan: %w", err)
+		}
+		var cp oasis.IngestCheckpoint
+		if err := json.Unmarshal(blob, &cp); err != nil {
+			return nil, fmt.Errorf("postgres: list checkpoints: unmarshal: %w", err)
+		}
+		out = append(out, cp)
+	}
+	return out, rows.Err()
 }
 
 // serializeEmbedding converts []float32 to a string like "[0.1,0.2,0.3]"

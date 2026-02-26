@@ -335,6 +335,45 @@ Implemented by `store/sqlite`, `store/libsql` (FTS5), and `store/postgres` (GIN/
 
 ---
 
+## CheckpointStore
+
+**File:** `retriever.go`
+
+Optional Store capability for ingest pipeline checkpoint persistence. Discovered via type assertion. When a Store implements `CheckpointStore`, the ingest pipeline automatically saves progress after each stage and can resume crashed ingestions via `ResumeIngest`, `ResumeBatch`, and `ResumeCrossDocExtraction`. If the Store does not implement this interface, checkpointing is silently disabled — retry still works, but crashes cannot be resumed.
+
+```go
+type CheckpointStore interface {
+    SaveCheckpoint(ctx context.Context, cp IngestCheckpoint) error
+    LoadCheckpoint(ctx context.Context, id string) (IngestCheckpoint, error)
+    DeleteCheckpoint(ctx context.Context, id string) error
+    ListCheckpoints(ctx context.Context) ([]IngestCheckpoint, error)
+}
+```
+
+Checkpoints are stored as JSON blobs in the `ingest_checkpoints` table. The table is created by `Store.Init()` and is non-breaking — existing databases are upgraded automatically on the next `Init()` call.
+
+| Implementation | Supported |
+|----------------|-----------|
+| `store/sqlite` | Yes |
+| `store/postgres` | Yes |
+
+---
+
+## DocumentChunkLister
+
+**Package:** `github.com/nevindra/oasis/ingest`
+**File:** `ingest/crossdoc.go`
+
+Optional Store capability required for cross-document edge extraction. Discovered via type assertion by `ExtractCrossDocumentEdges`.
+
+```go
+type DocumentChunkLister interface {
+    GetChunksByDocument(ctx context.Context, docID string) ([]oasis.Chunk, error)
+}
+```
+
+---
+
 ## CodeRunner
 
 **File:** `code.go`

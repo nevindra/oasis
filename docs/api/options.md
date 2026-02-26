@@ -135,6 +135,10 @@ Configures `NewHybridRetriever`.
 
 **Package:** `github.com/nevindra/oasis/ingest`
 
+### Ingestor options
+
+Passed to `ingest.NewIngestor(store, embedding, ...Option)`.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `WithChunker(c Chunker)` | RecursiveChunker | Custom chunker (flat strategy) |
@@ -143,21 +147,49 @@ Configures `NewHybridRetriever`.
 | `WithStrategy(s ChunkStrategy)` | `StrategyFlat` | Chunking strategy |
 | `WithParentTokens(n int)` | 1024 | Parent chunk size |
 | `WithChildTokens(n int)` | 256 | Child chunk size |
-| `WithBatchSize(n int)` | 64 | Chunks per Embed() call |
+| `WithBatchSize(n int)` | 64 | Chunks per `Embed()` call |
 | `WithMaxContentSize(n int)` | 50 MB | Max input content size in bytes (0 to disable) |
 | `WithExtractor(ct ContentType, e Extractor)` | — | Register or override an extractor for a content type |
+| `WithExtractRetries(n int)` | 1 (no retry) | Max attempts for custom extractor calls; uses exponential backoff with jitter; context cancellation bypasses immediately |
 | `WithOnSuccess(fn func(IngestResult))` | nil | Callback invoked after each successful ingestion |
 | `WithOnError(fn func(source string, err error))` | nil | Callback invoked on ingestion failure |
-| `WithIngestorTracer(t oasis.Tracer)` | nil | Enable ingest.document spans |
+| `WithBatchConcurrency(n int)` | 1 (sequential) | Parallel document limit for `IngestBatch`; sequential mode pools chunks into shared embedding batches |
+| `WithBatchCrossDocEdges(b bool)` | false | Run `ExtractCrossDocumentEdges` automatically after `IngestBatch` completes |
+| `WithGraphExtraction(p Provider)` | disabled | Enable LLM-based graph edge extraction |
+| `WithMinEdgeWeight(w float32)` | 0.0 | Minimum weight threshold for storing edges |
+| `WithMaxEdgesPerChunk(n int)` | unlimited | Cap on edges extracted per chunk |
+| `WithGraphBatchSize(n int)` | 5 | Chunks per graph extraction LLM call |
+| `WithGraphBatchOverlap(n int)` | 0 | Chunk overlap between consecutive graph extraction batches |
+| `WithGraphExtractionWorkers(n int)` | 3 | Max concurrent LLM calls for graph extraction |
+| `WithCrossDocumentEdges(b bool)` | false | Allow edges between chunks from different documents |
+| `WithSequenceEdges(b bool)` | false | Add sequence edges between consecutive chunks |
+| `WithContextualEnrichment(p Provider)` | disabled | Enable LLM-based contextual enrichment per chunk |
+| `WithContextWorkers(n int)` | 3 | Max concurrent LLM calls for contextual enrichment |
+| `WithContextMaxDocBytes(n int)` | 100,000 | Max document bytes sent to LLM for context (0 = unlimited) |
+| `WithIngestorTracer(t oasis.Tracer)` | nil | Enable `ingest.document` spans |
 | `WithIngestorLogger(l *slog.Logger)` | nil | Enable structured logging for ingestion |
 
-Chunker options:
+### Chunker options
+
+Passed to `NewRecursiveChunker`, `NewMarkdownChunker`, or `NewSemanticChunker`.
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `WithMaxTokens(n int)` | 512 | Max tokens per chunk |
 | `WithOverlapTokens(n int)` | 50 | Overlap between consecutive chunks |
-| `WithBreakpointPercentile(p int)` | 25 | Similarity percentile for semantic split detection (SemanticChunker) |
+| `WithBreakpointPercentile(p int)` | 25 | Similarity percentile for semantic split detection (SemanticChunker only) |
+
+### CrossDocOption
+
+Passed to `ExtractCrossDocumentEdges` and `ResumeCrossDocExtraction`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `CrossDocWithDocumentIDs(ids ...string)` | all docs | Scope extraction to specific document IDs |
+| `CrossDocWithSimilarityThreshold(t float32)` | 0.5 | Minimum cosine similarity to consider a chunk pair |
+| `CrossDocWithMaxPairsPerChunk(n int)` | 3 | Max cross-document candidates per chunk |
+| `CrossDocWithBatchSize(n int)` | 5 | Chunks per LLM extraction call |
+| `CrossDocWithResume(b bool)` | false | Track per-document progress via `CheckpointStore`; required to call `ResumeCrossDocExtraction` |
 
 ## Gemini Options
 

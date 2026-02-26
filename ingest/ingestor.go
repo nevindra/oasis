@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -58,6 +59,13 @@ type Ingestor struct {
 	// observability
 	tracer oasis.Tracer
 	logger *slog.Logger
+
+	// retry config
+	extractRetries int // max attempts for extractor calls (0 = no retry, i.e. 1 attempt)
+
+	// batch config
+	batchConcurrency   int
+	batchCrossDocEdges bool
 
 	// lifecycle hooks
 	onSuccess func(IngestResult)
@@ -135,6 +143,18 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 			"content_bytes", len(text))
 	}
 
+	cp := oasis.IngestCheckpoint{
+		ID:            oasis.NewID(),
+		Type:          "document",
+		Source:        source,
+		Status:        oasis.CheckpointChunking,
+		ContentType:   string(TypePlainText),
+		ExtractedText: text,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	ing.saveCheckpoint(ctx, cp)
+
 	doc := oasis.Document{
 		ID:        docID,
 		Title:     title,
@@ -152,6 +172,9 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 		ing.notifyError(source, err)
 		return IngestResult{}, err
 	}
+
+	cp.Status = oasis.CheckpointStoring
+	ing.saveCheckpoint(ctx, cp)
 
 	if ing.logger != nil {
 		ing.logger.Debug("storing document",
@@ -172,6 +195,9 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 		ing.logger.Debug("document stored", "doc_id", docID)
 	}
 
+	cp.Status = oasis.CheckpointGraphing
+	ing.saveCheckpoint(ctx, cp)
+
 	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
 		err = fmt.Errorf("graph extraction: %w", err)
 		if ing.logger != nil {
@@ -181,6 +207,8 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 		ing.notifyError(source, err)
 		return IngestResult{}, err
 	}
+
+	ing.deleteCheckpoint(ctx, cp.ID)
 
 	result := IngestResult{
 		DocumentID: docID,
@@ -245,7 +273,9 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		extractor = PlainTextExtractor{}
 	}
 
+	now := oasis.NowUnix()
 	docID := oasis.NewID()
+
 	if ing.logger != nil {
 		ing.logger.Info("ingest started",
 			"doc_id", docID,
@@ -254,6 +284,17 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 			"strategy", strategyName(ing.strategy),
 			"content_bytes", len(content))
 	}
+
+	cp := oasis.IngestCheckpoint{
+		ID:          oasis.NewID(),
+		Type:        "document",
+		Source:      filename,
+		Status:      oasis.CheckpointExtracting,
+		ContentType: string(ct),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	ing.saveCheckpoint(ctx, cp)
 
 	var text string
 	var pageMeta []PageMeta
@@ -264,7 +305,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 			ing.logger.Debug("extracting with metadata extractor",
 				"doc_id", docID, "content_type", string(ct))
 		}
-		result, err := safeExtractWithMeta(me, content)
+		result, err := ing.extractWithMetaRetry(me, content)
 		if err != nil {
 			err = fmt.Errorf("extract %s: %w", ct, err)
 			if ing.logger != nil {
@@ -287,7 +328,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 				"doc_id", docID, "content_type", string(ct))
 		}
 		var err error
-		text, err = safeExtract(extractor, content)
+		text, err = ing.extractWithRetry(extractor, content)
 		if err != nil {
 			err = fmt.Errorf("extract %s: %w", ct, err)
 			if ing.logger != nil {
@@ -303,7 +344,15 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		}
 	}
 
-	now := oasis.NowUnix()
+	// Persist extracted text so the pipeline can resume past this stage.
+	if pageMeta != nil {
+		if metaJSON, err := json.Marshal(pageMeta); err == nil {
+			cp.PageMetaJSON = string(metaJSON)
+		}
+	}
+	cp.ExtractedText = text
+	cp.Status = oasis.CheckpointChunking
+	ing.saveCheckpoint(ctx, cp)
 
 	doc := oasis.Document{
 		ID:        docID,
@@ -322,6 +371,9 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		ing.notifyError(filename, err)
 		return IngestResult{}, err
 	}
+
+	cp.Status = oasis.CheckpointStoring
+	ing.saveCheckpoint(ctx, cp)
 
 	if ing.logger != nil {
 		ing.logger.Debug("storing document",
@@ -342,6 +394,9 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		ing.logger.Debug("document stored", "doc_id", docID)
 	}
 
+	cp.Status = oasis.CheckpointGraphing
+	ing.saveCheckpoint(ctx, cp)
+
 	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
 		err = fmt.Errorf("graph extraction: %w", err)
 		if ing.logger != nil {
@@ -351,6 +406,8 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		ing.notifyError(filename, err)
 		return IngestResult{}, err
 	}
+
+	ing.deleteCheckpoint(ctx, cp.ID)
 
 	result := IngestResult{
 		DocumentID: docID,

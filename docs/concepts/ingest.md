@@ -2,6 +2,8 @@
 
 The ingest pipeline handles the full journey from raw content to searchable vector-indexed chunks: **extract → chunk → embed → store**.
 
+A **checkpoint** is saved after each pipeline stage. If the process crashes or the context is cancelled mid-run, `ResumeIngest` restarts from the last completed stage — no work is repeated.
+
 ## Pipeline
 
 ```mermaid
@@ -68,6 +70,19 @@ ingestor := ingest.NewIngestor(store, embedding,
     ingest.WithExtractor(ingest.TypePDF, myCustomPDFExtractor{}),
 )
 ```
+
+### Extractor Retry
+
+Custom extractors often call external services (OCR APIs, LLM-based document conversion). Use `WithExtractRetries` so transient failures are retried with exponential backoff before the ingestion aborts:
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithExtractor(ingest.TypePDF, myOCRExtractor{}),
+    ingest.WithExtractRetries(3), // up to 3 total attempts
+)
+```
+
+Context cancellation (`context.Canceled`, `context.DeadlineExceeded`) bypasses the retry loop immediately. Built-in extractors are deterministic and are not affected by this setting.
 
 ### MetadataExtractor
 
@@ -244,9 +259,164 @@ ingestor := ingest.NewIngestor(store, embedding,
 )
 ```
 
-Graph extraction runs after embedding and storage. The Store must implement `GraphStore` (all three shipped backends do). Extraction degrades gracefully — individual batch failures are logged and skipped, stores without `GraphStore` skip silently.
+Graph extraction runs after embedding and storage. The Store must implement `GraphStore` (both shipped backends do). Extraction degrades gracefully — individual batch failures are logged and skipped, stores without `GraphStore` skip silently.
 
 For the full deep-dive — extraction internals, relationship types, edge pruning, score blending, `GraphRetriever` configuration, and decision guides — see **[Graph RAG](graph-rag.md)**.
+
+## Retry
+
+The ingest pipeline has two independent retry layers that complement each other.
+
+### Provider-level retry (embedding + LLM)
+
+Wrap providers before passing them to `NewIngestor`. This handles transient HTTP errors (429 rate limits, 503 unavailable) for all embedding calls, contextual enrichment, and graph extraction:
+
+```go
+llm := oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryMaxAttempts(3))
+emb := oasis.WithEmbeddingRetry(gemini.NewEmbedding(apiKey, embModel), oasis.RetryMaxAttempts(3))
+
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithContextualEnrichment(llm),
+    ingest.WithGraphExtraction(llm),
+)
+```
+
+### Extractor-level retry (custom extractors)
+
+Custom extractors that call external services get their own retry via `WithExtractRetries`:
+
+```go
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithExtractor(ingest.TypePDF, myOCRExtractor{}),
+    ingest.WithExtractRetries(3),
+)
+```
+
+## Checkpoints & Resume
+
+The ingest pipeline automatically saves a checkpoint to the store after each stage. If the process crashes (e.g., embedding API timeout at batch 49/50), you can resume from the last saved stage rather than restarting from scratch.
+
+**Requirements:** The Store must implement `CheckpointStore` (`store/sqlite` and `store/postgres` both do). If the Store doesn't implement it, checkpointing is silently disabled — retry still works, but crashed ingestions cannot be resumed.
+
+### Checkpoint stages
+
+The checkpoint `Status` field tracks which stage completed last:
+
+| Status | Meaning | Can resume? |
+|--------|---------|-------------|
+| `extracting` | Crash before extraction finished | No — original bytes not persisted; re-run `IngestFile` |
+| `chunking` | Extraction done, text saved | Yes — re-chunks and re-embeds from saved text |
+| `storing` | All embedding done | Yes — re-stores and re-graphs from saved chunks |
+| `graphing` | Document stored | Yes — re-runs graph extraction only |
+| *(deleted)* | Fully complete | N/A |
+
+### Resuming a single document
+
+```go
+// List all incomplete ingestions
+checkpoints, _ := ingestor.ListCheckpoints(ctx)
+for _, cp := range checkpoints {
+    fmt.Printf("stalled: %s (stage: %s)\n", cp.Source, cp.Status)
+}
+
+// Resume the first stalled ingestion
+result, err := ingestor.ResumeIngest(ctx, checkpoints[0].ID)
+```
+
+`ResumeIngest` skips all completed stages and continues from the first unfinished one. For example, if the pipeline crashed mid-embedding, it restores the saved chunks and resumes embedding from the right batch.
+
+## Batch Ingestion
+
+`IngestBatch` ingests multiple documents in a single call with per-document tracking. One document failing doesn't abort the rest.
+
+```go
+items := []ingest.BatchItem{
+    {Data: pdfBytes,  Filename: "report.pdf"},
+    {Data: mdBytes,   Filename: "readme.md", Title: "README"},
+    {Data: jsonBytes, Filename: "data.json"},
+}
+
+result, err := ingestor.IngestBatch(ctx, items)
+
+fmt.Printf("succeeded: %d, failed: %d\n", len(result.Succeeded), len(result.Failed))
+for _, fe := range result.Failed {
+    fmt.Printf("  %s: %v\n", fe.Item.Filename, fe.Error)
+}
+```
+
+`BatchResult` fields:
+
+```go
+type BatchResult struct {
+    Succeeded  []IngestResult // documents that completed successfully
+    Failed     []BatchError   // documents that failed after all retries
+    Checkpoint string         // non-empty if any documents failed or batch was interrupted
+}
+```
+
+### Resuming an interrupted batch
+
+If the batch is interrupted (context cancelled, process crash), `result.Checkpoint` is non-empty. Pass it with the original item list to continue:
+
+```go
+if result.Checkpoint != "" {
+    result, err = ingestor.ResumeBatch(ctx, result.Checkpoint, items)
+}
+```
+
+`ResumeBatch` skips documents already recorded as completed. Documents that were mid-pipeline (e.g., mid-embedding) resume from their own single-doc checkpoint.
+
+### Concurrent batch processing
+
+```go
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithBatchConcurrency(4), // process 4 documents in parallel
+)
+result, err := ingestor.IngestBatch(ctx, items)
+```
+
+**Sequential mode advantage (default):** In sequential mode, chunks from multiple documents are pooled into shared embedding batches. Document A (30 chunks) + Document B (34 chunks) = 1 embedding call of 64 chunks instead of 2 calls.
+
+### Cross-document edges after a batch
+
+```go
+ingestor := ingest.NewIngestor(store, emb,
+    ingest.WithGraphExtraction(llm),
+    ingest.WithBatchCrossDocEdges(true), // run ExtractCrossDocumentEdges automatically
+)
+result, err := ingestor.IngestBatch(ctx, items)
+```
+
+## Cross-Document Edge Extraction
+
+Discovers semantic relationships between chunks from different documents. Requires `WithGraphExtraction` and a Store that implements `DocumentChunkLister`.
+
+```go
+count, err := ingestor.ExtractCrossDocumentEdges(ctx,
+    ingest.CrossDocWithSimilarityThreshold(0.6),
+    ingest.CrossDocWithMaxPairsPerChunk(5),
+)
+fmt.Printf("created %d cross-document edges\n", count)
+```
+
+### Resuming cross-doc extraction
+
+For large document sets that may be interrupted:
+
+```go
+// First run — tracks progress per document
+count, err := ingestor.ExtractCrossDocumentEdges(ctx,
+    ingest.CrossDocWithResume(true),
+)
+
+// If interrupted, find the checkpoint and resume
+checkpoints, _ := ingestor.ListCheckpoints(ctx)
+for _, cp := range checkpoints {
+    if cp.Type == "crossdoc" {
+        count, err = ingestor.ResumeCrossDocExtraction(ctx, cp.ID)
+    }
+}
+```
 
 ## Ingestor Options
 
@@ -261,8 +431,11 @@ For the full deep-dive — extraction internals, relationship types, edge prunin
 | `WithBatchSize(n)` | 64 | Chunks per `Embed()` call |
 | `WithMaxContentSize(n)` | 50 MB | Max input content size in bytes (0 to disable) |
 | `WithExtractor(ct, e)` | — | Override or add a custom extractor for a content type |
+| `WithExtractRetries(n)` | 1 (no retry) | Max attempts for custom extractor calls; uses exponential backoff |
 | `WithOnSuccess(fn)` | nil | Callback invoked after each successful ingestion with the `IngestResult` |
 | `WithOnError(fn)` | nil | Callback invoked when ingestion fails with `(source string, err error)` |
+| `WithBatchConcurrency(n)` | 1 (sequential) | Parallel document limit for `IngestBatch` |
+| `WithBatchCrossDocEdges(b)` | false | Run `ExtractCrossDocumentEdges` automatically after `IngestBatch` |
 | `WithGraphExtraction(p)` | disabled | Enable LLM-based graph edge extraction |
 | `WithMinEdgeWeight(w)` | 0.0 | Minimum weight threshold for storing edges |
 | `WithMaxEdgesPerChunk(n)` | unlimited | Cap on edges extracted per chunk |
@@ -282,6 +455,16 @@ Chunker options (shared by all chunker constructors):
 | `WithMaxTokens(n)` | 512 | Max tokens per chunk (approximated as n*4 bytes) |
 | `WithOverlapTokens(n)` | 50 | Overlap between consecutive chunks |
 | `WithBreakpointPercentile(p)` | 25 | Similarity percentile for semantic split detection (SemanticChunker only) |
+
+CrossDoc options (passed to `ExtractCrossDocumentEdges` and `ResumeCrossDocExtraction`):
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `CrossDocWithDocumentIDs(ids...)` | all docs | Scope extraction to specific document IDs |
+| `CrossDocWithSimilarityThreshold(t)` | 0.5 | Minimum cosine similarity to consider a chunk pair |
+| `CrossDocWithMaxPairsPerChunk(n)` | 3 | Max cross-document candidates per chunk |
+| `CrossDocWithBatchSize(n)` | 5 | Chunks per LLM extraction call |
+| `CrossDocWithResume(b)` | false | Track progress per document; enables `ResumeCrossDocExtraction` |
 
 ## Batched Embedding
 

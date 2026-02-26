@@ -101,6 +101,87 @@ type ChunkFilter struct {
 
 `ChunkFilter` restricts which chunks are considered during vector and keyword search. Pass to `Store.SearchChunks`, `KeywordSearcher.SearchChunksKeyword`, or `HybridRetriever` via `WithFilters`. See [Store: Chunk Filtering](../concepts/store.md#chunk-filtering) for usage examples and backend details.
 
+## Ingest Checkpoint Types
+
+**File:** `ingest_checkpoint.go`
+
+```go
+// IngestCheckpoint records the state of an in-progress document ingestion.
+// Written after each pipeline stage; deleted on successful completion.
+type IngestCheckpoint struct {
+    ID              string           `json:"id"`      // UUIDv7
+    Type            string           `json:"type"`    // "document", "batch", or "crossdoc"
+    Source          string           `json:"source"`  // filename or source URL
+    Status          CheckpointStatus `json:"status"`
+
+    // Populated after extraction — persisted so the pipeline can skip re-extraction on resume.
+    ContentType     string `json:"content_type,omitempty"`
+    ExtractedText   string `json:"extracted_text,omitempty"`
+
+    // Serialised chunks — populated after chunking is complete.
+    ChunksJSON      string `json:"chunks_json,omitempty"`
+
+    // Number of embedding batches already written into ChunksJSON.
+    // Resume skips the first EmbeddedBatches * batchSize chunks.
+    EmbeddedBatches int    `json:"embedded_batches,omitempty"`
+
+    // Serialised []PageMeta from the extractor.
+    PageMetaJSON    string `json:"page_meta_json,omitempty"`
+
+    // Type-specific payload (e.g. completed document IDs for batch checkpoints).
+    BatchData       string `json:"batch_data,omitempty"`
+
+    CreatedAt int64 `json:"created_at"`
+    UpdatedAt int64 `json:"updated_at"`
+}
+
+type CheckpointStatus string
+
+const (
+    CheckpointExtracting CheckpointStatus = "extracting"
+    CheckpointChunking   CheckpointStatus = "chunking"
+    CheckpointEnriching  CheckpointStatus = "enriching"
+    CheckpointEmbedding  CheckpointStatus = "embedding"
+    CheckpointStoring    CheckpointStatus = "storing"
+    CheckpointGraphing   CheckpointStatus = "graphing"
+)
+```
+
+`Type` distinguishes the three checkpoint varieties:
+
+| Type | Created by | Resumed by |
+|------|-----------|------------|
+| `"document"` | `IngestFile`, `IngestText` | `ResumeIngest` |
+| `"batch"` | `IngestBatch` | `ResumeBatch` |
+| `"crossdoc"` | `ExtractCrossDocumentEdges` (with `CrossDocWithResume`) | `ResumeCrossDocExtraction` |
+
+## Ingest Batch Types
+
+**Package:** `github.com/nevindra/oasis/ingest`
+**File:** `ingest/batch.go`
+
+```go
+// BatchItem is a single document submitted for batch ingestion.
+type BatchItem struct {
+    Data     []byte // raw file content
+    Filename string // used for content-type detection and as source
+    Title    string // optional; defaults to Filename when empty
+}
+
+// BatchResult is the outcome of IngestBatch or ResumeBatch.
+type BatchResult struct {
+    Succeeded  []IngestResult // documents that completed successfully
+    Failed     []BatchError   // documents that failed after all retries
+    Checkpoint string         // non-empty when any documents failed or the batch was interrupted; pass to ResumeBatch
+}
+
+// BatchError pairs a failed BatchItem with the error that caused the failure.
+type BatchError struct {
+    Item  BatchItem
+    Error error
+}
+```
+
 ## Ingest Types
 
 **Package:** `github.com/nevindra/oasis/ingest`
