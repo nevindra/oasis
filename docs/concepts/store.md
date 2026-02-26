@@ -146,12 +146,11 @@ Close() error    // clean up connections
 
 All three packages also ship a `MemoryStore` implementation in the same package — see [Memory](memory.md).
 
-**SQLite / libSQL:**
+**SQLite:**
 
-- Store embeddings as JSON-serialized `[]float32` (SQLite) or `F32_BLOB(N)` (libSQL)
-- Perform brute-force cosine similarity in-process (SQLite) or DiskANN (libSQL)
+- Store embeddings as binary little-endian `[]float32` blobs (~5x smaller than JSON)
+- In-memory vector index: embeddings are lazy-loaded into memory on first `SearchChunks` call, eliminating per-query blob deserialization. Content is fetched only for the final top-K results
 - Create tables via `CREATE TABLE IF NOT EXISTS` in `Init()`
-- libSQL options: `WithEmbeddingDimension(dim)` — default 1536
 
 **PostgreSQL (pgvector):**
 
@@ -408,7 +407,7 @@ CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (em
 
 ## GraphStore
 
-`GraphStore` is an optional Store capability for storing and querying knowledge graph edges between chunks. Discovered via type assertion — all three shipped backends implement it.
+`GraphStore` is an optional Store capability for storing and querying knowledge graph edges between chunks. Discovered via type assertion — both shipped backends implement it.
 
 ```go
 type GraphStore interface {
@@ -433,6 +432,16 @@ type ChunkEdge struct {
 Eight relationship types are extracted during ingestion via `WithGraphExtraction(provider)` on the Ingestor. Edges are stored in the `chunk_edges` table and cascade-deleted when the parent document is removed. Orphan edges (where one side's chunk no longer exists) are cleaned up by `PruneOrphanEdges`.
 
 The [GraphRetriever](retrieval.md) uses `GraphStore` to perform multi-hop BFS traversal, discovering related content that vector similarity alone would miss.
+
+### BidirectionalGraphStore
+
+```go
+type BidirectionalGraphStore interface {
+    GetBothEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
+}
+```
+
+Optional capability that fetches both outgoing and incoming edges in a single query. When `WithBidirectional(true)` is set, `GraphRetriever` uses this automatically to reduce round-trips from 2 to 1 per hop. Both shipped backends implement it.
 
 ### Discovering GraphStore
 

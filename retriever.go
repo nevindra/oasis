@@ -7,16 +7,18 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // RetrievalResult is a scored piece of content from a knowledge base search.
 // Score is in [0, 1]; higher means more relevant.
 type RetrievalResult struct {
-	Content        string  `json:"content"`
-	Score          float32 `json:"score"`
-	ChunkID        string  `json:"chunk_id"`
-	DocumentID     string  `json:"document_id"`
-	DocumentTitle  string  `json:"document_title"`
+	Content        string        `json:"content"`
+	Score          float32       `json:"score"`
+	ChunkID        string        `json:"chunk_id"`
+	ParentID       string        `json:"parent_id,omitempty"`
+	DocumentID     string        `json:"document_id"`
+	DocumentTitle  string        `json:"document_title"`
 	DocumentSource string        `json:"document_source"`
 	GraphContext   []EdgeContext `json:"graph_context,omitempty"`
 }
@@ -58,6 +60,14 @@ type GraphStore interface {
 	GetEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
 	GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
 	PruneOrphanEdges(ctx context.Context) (int, error)
+}
+
+// BidirectionalGraphStore is an optional GraphStore capability that fetches
+// both outgoing and incoming edges in a single query. When the Store implements
+// this interface, GraphRetriever uses it to reduce the number of database
+// round-trips per hop from 2 to 1 when bidirectional traversal is enabled.
+type BidirectionalGraphStore interface {
+	GetBothEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
 }
 
 // CheckpointStore is an optional Store capability for ingest pipeline checkpoints.
@@ -164,9 +174,16 @@ const rrfK = 60
 
 // reciprocalRankFusion merges vector and keyword search results using
 // Reciprocal Rank Fusion. keywordWeight is in [0,1]; vectorWeight = 1 - keywordWeight.
+// Scores are normalized to [0, 1] so that WithMinRetrievalScore and ScoreReranker
+// thresholds work correctly.
 // Returns results sorted by fused score descending.
 func reciprocalRankFusion(vector, keyword []ScoredChunk, keywordWeight float32) []RetrievalResult {
 	vectorWeight := 1 - keywordWeight
+
+	// The maximum possible RRF contribution from a single list is 1/(rrfK+1)
+	// (rank 0). Since weights sum to 1, the maximum fused score is 1/(rrfK+1).
+	// Normalize by this factor so scores are in [0, 1].
+	normalizer := float32(rrfK + 1)
 
 	type entry struct {
 		chunk Chunk
@@ -195,8 +212,9 @@ func reciprocalRankFusion(vector, keyword []ScoredChunk, keywordWeight float32) 
 	for _, e := range merged {
 		results = append(results, RetrievalResult{
 			Content:    e.chunk.Content,
-			Score:      e.score,
+			Score:      e.score * normalizer,
 			ChunkID:    e.chunk.ID,
+			ParentID:   e.chunk.ParentID,
 			DocumentID: e.chunk.DocumentID,
 		})
 	}
@@ -263,17 +281,62 @@ func (h *HybridRetriever) retrieveInner(ctx context.Context, query string, topK 
 	if len(embs) == 0 {
 		return nil, fmt.Errorf("embed query: no embedding returned")
 	}
+	return h.retrieveWithEmbedding(ctx, embs[0], query, topK)
+}
 
+// RetrieveWithEmbedding is like Retrieve but accepts a pre-computed query
+// embedding, avoiding a redundant Embed call. Useful when the caller has
+// already embedded the query for other purposes (e.g., message search).
+func (h *HybridRetriever) RetrieveWithEmbedding(ctx context.Context, queryEmbedding []float32, query string, topK int) ([]RetrievalResult, error) {
+	if h.cfg.tracer != nil {
+		var span Span
+		ctx, span = h.cfg.tracer.Start(ctx, "retriever.retrieve",
+			StringAttr("retriever.type", "hybrid"),
+			IntAttr("topK", topK))
+		defer func() { span.End() }()
+
+		results, err := h.retrieveWithEmbedding(ctx, queryEmbedding, query, topK)
+		if err != nil {
+			span.Error(err)
+		} else {
+			span.SetAttr(IntAttr("result_count", len(results)))
+		}
+		return results, err
+	}
+	return h.retrieveWithEmbedding(ctx, queryEmbedding, query, topK)
+}
+
+func (h *HybridRetriever) retrieveWithEmbedding(ctx context.Context, queryEmbedding []float32, query string, topK int) ([]RetrievalResult, error) {
 	fetchK := max(topK*h.cfg.overfetchMultiplier, topK)
 
-	vectorResults, err := h.store.SearchChunks(ctx, embs[0], fetchK, h.cfg.filters...)
-	if err != nil {
-		return nil, fmt.Errorf("vector search: %w", err)
-	}
+	var (
+		vectorResults  []ScoredChunk
+		keywordResults []ScoredChunk
+		vectorErr      error
+	)
+	ks, hasKeyword := h.store.(KeywordSearcher)
 
-	var keywordResults []ScoredChunk
-	if ks, ok := h.store.(KeywordSearcher); ok {
-		keywordResults, _ = ks.SearchChunksKeyword(ctx, query, fetchK, h.cfg.filters...)
+	if hasKeyword {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			vectorResults, vectorErr = h.store.SearchChunks(ctx, queryEmbedding, fetchK, h.cfg.filters...)
+		}()
+		go func() {
+			defer wg.Done()
+			var kwErr error
+			keywordResults, kwErr = ks.SearchChunksKeyword(ctx, query, fetchK, h.cfg.filters...)
+			if kwErr != nil && h.cfg.logger != nil {
+				h.cfg.logger.Warn("keyword search failed, falling back to vector-only", "err", kwErr)
+			}
+		}()
+		wg.Wait()
+	} else {
+		vectorResults, vectorErr = h.store.SearchChunks(ctx, queryEmbedding, fetchK, h.cfg.filters...)
+	}
+	if vectorErr != nil {
+		return nil, fmt.Errorf("vector search: %w", vectorErr)
 	}
 
 	var results []RetrievalResult
@@ -284,10 +347,10 @@ func (h *HybridRetriever) retrieveInner(ctx context.Context, query string, topK 
 	}
 
 	results = resolveParentChunks(ctx, h.store, results)
-
 	populateDocumentMeta(ctx, h.store, results)
 
 	if h.cfg.reranker != nil {
+		var err error
 		results, err = h.cfg.reranker.Rerank(ctx, query, results, topK)
 		if err != nil {
 			return nil, fmt.Errorf("rerank: %w", err)
@@ -322,33 +385,21 @@ type DocumentGetter interface {
 
 // resolveParentChunks replaces child chunks with their parent's richer content.
 // If multiple children map to the same parent, the highest-scored child wins.
+// Uses ParentID already present on RetrievalResult (populated by SearchChunks),
+// avoiding an extra GetChunksByIDs round-trip.
 // Errors are non-fatal — on failure, results pass through unmodified.
 func resolveParentChunks(ctx context.Context, store Store, results []RetrievalResult) []RetrievalResult {
 	if len(results) == 0 {
 		return results
 	}
 
-	chunkIDs := make([]string, len(results))
-	for i, r := range results {
-		chunkIDs[i] = r.ChunkID
-	}
-
-	chunks, err := store.GetChunksByIDs(ctx, chunkIDs)
-	if err != nil {
-		return results // degrade gracefully
-	}
-
-	chunkMap := make(map[string]Chunk, len(chunks))
-	for _, c := range chunks {
-		chunkMap[c.ID] = c
-	}
-
-	parentIDs := make(map[string]bool)
+	// Collect unique parent IDs directly from results.
+	parentSet := make(map[string]bool)
 	var pIDs []string
-	for _, c := range chunks {
-		if c.ParentID != "" && !parentIDs[c.ParentID] {
-			parentIDs[c.ParentID] = true
-			pIDs = append(pIDs, c.ParentID)
+	for _, r := range results {
+		if r.ParentID != "" && !parentSet[r.ParentID] {
+			parentSet[r.ParentID] = true
+			pIDs = append(pIDs, r.ParentID)
 		}
 	}
 
@@ -366,22 +417,27 @@ func resolveParentChunks(ctx context.Context, store Store, results []RetrievalRe
 		parentMap[p.ID] = p
 	}
 
+	// Sort by score descending so the highest-scored child wins when
+	// multiple children share the same parent.
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
 	seen := make(map[string]bool)
 	var resolved []RetrievalResult
 
 	for _, r := range results {
-		c, ok := chunkMap[r.ChunkID]
-		if !ok || c.ParentID == "" {
+		if r.ParentID == "" {
 			resolved = append(resolved, r)
 			continue
 		}
 
-		if seen[c.ParentID] {
+		if seen[r.ParentID] {
 			continue
 		}
-		seen[c.ParentID] = true
+		seen[r.ParentID] = true
 
-		parent, ok := parentMap[c.ParentID]
+		parent, ok := parentMap[r.ParentID]
 		if !ok {
 			resolved = append(resolved, r)
 			continue
@@ -391,6 +447,7 @@ func resolveParentChunks(ctx context.Context, store Store, results []RetrievalRe
 			Content:      parent.Content,
 			Score:        r.Score,
 			ChunkID:      parent.ID,
+			ParentID:     parent.ParentID,
 			DocumentID:   parent.DocumentID,
 			GraphContext: r.GraphContext,
 		})
@@ -436,6 +493,29 @@ func populateDocumentMeta(ctx context.Context, store Store, results []RetrievalR
 			results[i].DocumentSource = d.Source
 		}
 	}
+}
+
+// extractJSON extracts a JSON object from text that may be wrapped in markdown
+// code fences (```json ... ```). Returns the original string if no fences found.
+func extractJSON(s string) string {
+	// Try to find content between code fences.
+	if start := strings.Index(s, "```"); start >= 0 {
+		// Skip the opening fence line.
+		inner := s[start+3:]
+		if nl := strings.IndexByte(inner, '\n'); nl >= 0 {
+			inner = inner[nl+1:]
+		}
+		if end := strings.Index(inner, "```"); end >= 0 {
+			return strings.TrimSpace(inner[:end])
+		}
+	}
+	// Try to find a bare JSON object.
+	if start := strings.IndexByte(s, '{'); start >= 0 {
+		if end := strings.LastIndexByte(s, '}'); end > start {
+			return s[start : end+1]
+		}
+	}
+	return s
 }
 
 // --- LLMReranker ---
@@ -487,7 +567,8 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Retrie
 			Score float64 `json:"score"`
 		} `json:"scores"`
 	}
-	if err := json.Unmarshal([]byte(resp.Content), &parsed); err != nil {
+	raw := extractJSON(resp.Content)
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return results, nil // degrade gracefully
 	}
 
@@ -685,7 +766,10 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 	// Keyword search for seed diversity (if store supports it and weight > 0).
 	if g.cfg.seedKeywordWeight > 0 {
 		if ks, ok := g.store.(KeywordSearcher); ok {
-			kwResults, _ := ks.SearchChunksKeyword(ctx, query, g.cfg.seedTopK, g.cfg.filters...)
+			kwResults, kwErr := ks.SearchChunksKeyword(ctx, query, g.cfg.seedTopK, g.cfg.filters...)
+			if kwErr != nil && g.cfg.logger != nil {
+				g.cfg.logger.Warn("seed keyword search failed, using vector-only seeds", "err", kwErr)
+			}
 			if len(kwResults) > 0 {
 				rrfResults := reciprocalRankFusion(seeds, kwResults, g.cfg.seedKeywordWeight)
 				mergedSeeds := make([]ScoredChunk, 0, len(rrfResults))
@@ -740,16 +824,25 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 				decay = g.cfg.hopDecay[hop]
 			}
 
-			edges, err := gs.GetEdges(ctx, currentIDs)
+			var edges []ChunkEdge
+			if g.cfg.bidirectional {
+				// Use single-query BidirectionalGraphStore when available.
+				if bgs, ok := gs.(BidirectionalGraphStore); ok {
+					edges, err = bgs.GetBothEdges(ctx, currentIDs)
+				} else {
+					edges, err = gs.GetEdges(ctx, currentIDs)
+					if err == nil {
+						incoming, ierr := gs.GetIncomingEdges(ctx, currentIDs)
+						if ierr == nil {
+							edges = append(edges, incoming...)
+						}
+					}
+				}
+			} else {
+				edges, err = gs.GetEdges(ctx, currentIDs)
+			}
 			if err != nil {
 				break // degrade gracefully
-			}
-
-			if g.cfg.bidirectional {
-				incoming, err := gs.GetIncomingEdges(ctx, currentIDs)
-				if err == nil {
-					edges = append(edges, incoming...)
-				}
 			}
 
 			var nextIDs []string
@@ -848,6 +941,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 			Content:      c.Content,
 			Score:        s.score,
 			ChunkID:      c.ID,
+			ParentID:     c.ParentID,
 			DocumentID:   c.DocumentID,
 			GraphContext: s.graphContext,
 		})

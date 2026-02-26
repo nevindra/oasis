@@ -17,26 +17,31 @@ func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
 	}
 	start := time.Now()
 	s.logger.Debug("postgres: store edges", "count", len(edges))
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("postgres: begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
 
-	for _, e := range edges {
-		_, err := tx.Exec(ctx,
-			`INSERT INTO chunk_edges (id, source_id, target_id, relation, weight, description)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 ON CONFLICT (source_id, target_id, relation) DO UPDATE SET weight = EXCLUDED.weight, description = EXCLUDED.description`,
-			e.ID, e.SourceID, e.TargetID, string(e.Relation), e.Weight, e.Description,
-		)
-		if err != nil {
-			s.logger.Error("postgres: store edge failed", "id", e.ID, "error", err, "duration", time.Since(start))
-			return fmt.Errorf("postgres: store edge: %w", err)
-		}
+	ids := make([]string, len(edges))
+	sourceIDs := make([]string, len(edges))
+	targetIDs := make([]string, len(edges))
+	relations := make([]string, len(edges))
+	weights := make([]float32, len(edges))
+	descriptions := make([]string, len(edges))
+	for i, e := range edges {
+		ids[i] = e.ID
+		sourceIDs[i] = e.SourceID
+		targetIDs[i] = e.TargetID
+		relations[i] = string(e.Relation)
+		weights[i] = e.Weight
+		descriptions[i] = e.Description
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
+
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO chunk_edges (id, source_id, target_id, relation, weight, description)
+		 SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::real[], $6::text[])
+		 ON CONFLICT (source_id, target_id, relation) DO UPDATE SET weight = EXCLUDED.weight, description = EXCLUDED.description`,
+		ids, sourceIDs, targetIDs, relations, weights, descriptions,
+	)
+	if err != nil {
+		s.logger.Error("postgres: store edges failed", "count", len(edges), "error", err, "duration", time.Since(start))
+		return fmt.Errorf("postgres: store edges: %w", err)
 	}
 	s.logger.Debug("postgres: store edges ok", "count", len(edges), "duration", time.Since(start))
 	return nil
@@ -79,6 +84,28 @@ func (s *Store) GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]oasi
 	defer rows.Close()
 	edges, err := scanEdgesPg(rows)
 	s.logger.Debug("postgres: get incoming edges ok", "count", len(edges), "duration", time.Since(start))
+	return edges, err
+}
+
+// GetBothEdges returns both outgoing and incoming edges for the given chunk IDs
+// in a single query. Implements oasis.BidirectionalGraphStore.
+func (s *Store) GetBothEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkEdge, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	start := time.Now()
+	s.logger.Debug("postgres: get both edges", "chunk_count", len(chunkIDs))
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, source_id, target_id, relation, weight, description FROM chunk_edges WHERE source_id = ANY($1) OR target_id = ANY($1)`,
+		chunkIDs,
+	)
+	if err != nil {
+		s.logger.Error("postgres: get both edges failed", "error", err, "duration", time.Since(start))
+		return nil, fmt.Errorf("postgres: get both edges: %w", err)
+	}
+	defer rows.Close()
+	edges, err := scanEdgesPg(rows)
+	s.logger.Debug("postgres: get both edges ok", "count", len(edges), "duration", time.Since(start))
 	return edges, err
 }
 

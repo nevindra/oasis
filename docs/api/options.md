@@ -161,7 +161,7 @@ Passed to `ingest.NewIngestor(store, embedding, ...Option)`.
 | `WithGraphBatchSize(n int)` | 5 | Chunks per graph extraction LLM call |
 | `WithGraphBatchOverlap(n int)` | 0 | Chunk overlap between consecutive graph extraction batches |
 | `WithGraphExtractionWorkers(n int)` | 3 | Max concurrent LLM calls for graph extraction |
-| `WithCrossDocumentEdges(b bool)` | false | Allow edges between chunks from different documents |
+| `WithGraphDocContext(n int)` | 0 (disabled) | Max bytes of source document text included in graph extraction prompt for structural awareness |
 | `WithSequenceEdges(b bool)` | false | Add sequence edges between consecutive chunks |
 | `WithContextualEnrichment(p Provider)` | disabled | Enable LLM-based contextual enrichment per chunk |
 | `WithContextWorkers(n int)` | 3 | Max concurrent LLM calls for contextual enrichment |

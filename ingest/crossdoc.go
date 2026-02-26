@@ -307,7 +307,7 @@ func (ing *Ingestor) runCrossDoc(
 			}
 		}
 
-		edges, err := extractGraphEdges(ctx, ing.graphProvider, batchChunks, cfg.batchSize, 0, ing.graphWorkers, ing.logger)
+		edges, err := extractGraphEdges(ctx, ing.graphProvider, batchChunks, cfg.batchSize, 0, ing.graphWorkers, "", ing.logger)
 		if err != nil {
 			if ing.logger != nil {
 				ing.logger.Error("cross-doc: edge extraction failed", "doc", doc.Source, "err", err)

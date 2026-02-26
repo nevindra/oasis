@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/nevindra/oasis"
@@ -78,6 +79,7 @@ func WithEFSearch(ef int) Option {
 var _ oasis.Store = (*Store)(nil)
 var _ oasis.KeywordSearcher = (*Store)(nil)
 var _ oasis.GraphStore = (*Store)(nil)
+var _ oasis.BidirectionalGraphStore = (*Store)(nil)
 var _ oasis.CheckpointStore = (*Store)(nil)
 
 // nopLogger is a logger that discards all output.
@@ -89,6 +91,33 @@ func (pgDiscardHandler) Enabled(context.Context, slog.Level) bool  { return fals
 func (pgDiscardHandler) Handle(context.Context, slog.Record) error { return nil }
 func (d pgDiscardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
 func (d pgDiscardHandler) WithGroup(string) slog.Handler           { return d }
+
+// ConfigurePoolConfig applies store settings that require per-connection
+// setup to a pgxpool.Config. Call this before pgxpool.NewWithConfig so
+// every connection in the pool inherits the settings.
+//
+// Currently applies: hnsw.ef_search (HNSW query-time candidate list size).
+// If no relevant options are set, cfg is returned unmodified.
+func ConfigurePoolConfig(cfg *pgxpool.Config, opts ...Option) {
+	var pgCfg pgConfig
+	for _, o := range opts {
+		o(&pgCfg)
+	}
+	if pgCfg.hnswEFSearch <= 0 {
+		return
+	}
+	existing := cfg.AfterConnect
+	efSearch := pgCfg.hnswEFSearch
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if existing != nil {
+			if err := existing(ctx, conn); err != nil {
+				return err
+			}
+		}
+		_, err := conn.Exec(ctx, fmt.Sprintf("SET hnsw.ef_search = %d", efSearch))
+		return err
+	}
+}
 
 // New creates a Store using an existing pgxpool.Pool.
 // The caller owns the pool and is responsible for closing it.
@@ -246,16 +275,6 @@ func (s *Store) Init(ctx context.Context) error {
 	for _, stmt := range stmts {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("postgres: init: %w", err)
-		}
-	}
-
-	if s.cfg.hnswEFSearch > 0 {
-		// SET (session-level) is used here because SET LOCAL only applies
-		// within a transaction. With a connection pool each checkout gets its
-		// own session, so SET persists for the session lifetime which is the
-		// closest we can get to a pool-wide default.
-		if _, err := s.pool.Exec(ctx, fmt.Sprintf("SET hnsw.ef_search = %d", s.cfg.hnswEFSearch)); err != nil {
-			return fmt.Errorf("postgres: set ef_search: %w", err)
 		}
 	}
 

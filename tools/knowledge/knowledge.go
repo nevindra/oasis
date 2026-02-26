@@ -67,6 +67,12 @@ func (k *KnowledgeTool) Definitions() []oasis.ToolDefinition {
 	}}
 }
 
+// embeddingRetriever is an optional optimization for retrievers that accept
+// a pre-computed query embedding, avoiding a redundant Embed call.
+type embeddingRetriever interface {
+	RetrieveWithEmbedding(ctx context.Context, queryEmbedding []float32, query string, topK int) ([]oasis.RetrievalResult, error)
+}
+
 func (k *KnowledgeTool) Execute(ctx context.Context, _ string, args json.RawMessage) (oasis.ToolResult, error) {
 	var params struct {
 		Query string `json:"query"`
@@ -75,23 +81,30 @@ func (k *KnowledgeTool) Execute(ctx context.Context, _ string, args json.RawMess
 		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
 
-	// Retrieve from knowledge base via Retriever
-	chunks, err := k.retriever.Retrieve(ctx, params.Query, k.topK)
-	if err != nil {
-		return oasis.ToolResult{Error: "retrieval error: " + err.Error()}, nil
-	}
-
-	// Search past conversations
+	// Embed query once — reused for both chunk retrieval and message search.
 	embs, err := k.embedding.Embed(ctx, []string{params.Query})
 	if err != nil {
 		return oasis.ToolResult{Error: "embedding error: " + err.Error()}, nil
 	}
-	var messages []oasis.ScoredMessage
-	if len(embs) > 0 {
-		messages, err = k.store.SearchMessages(ctx, embs[0], 5)
-		if err != nil {
-			return oasis.ToolResult{Error: "message search error: " + err.Error()}, nil
-		}
+	if len(embs) == 0 {
+		return oasis.ToolResult{Error: "embedding error: no embedding returned"}, nil
+	}
+
+	// Retrieve from knowledge base — use pre-computed embedding if supported.
+	var chunks []oasis.RetrievalResult
+	if er, ok := k.retriever.(embeddingRetriever); ok {
+		chunks, err = er.RetrieveWithEmbedding(ctx, embs[0], params.Query, k.topK)
+	} else {
+		chunks, err = k.retriever.Retrieve(ctx, params.Query, k.topK)
+	}
+	if err != nil {
+		return oasis.ToolResult{Error: "retrieval error: " + err.Error()}, nil
+	}
+
+	// Search past conversations using the same embedding.
+	messages, err := k.store.SearchMessages(ctx, embs[0], 5)
+	if err != nil {
+		return oasis.ToolResult{Error: "message search error: " + err.Error()}, nil
 	}
 
 	var out strings.Builder

@@ -35,17 +35,16 @@ func (s *Store) CreateSkill(ctx context.Context, skill oasis.Skill) error {
 		v := string(data)
 		refsJSON = &v
 	}
-	var embJSON *string
+	var embBlob []byte
 	if len(skill.Embedding) > 0 {
-		v := serializeEmbedding(skill.Embedding)
-		embJSON = &v
+		embBlob = serializeEmbedding(skill.Embedding)
 	}
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO skills (id, name, description, instructions, tools, model, tags, created_by, refs, embedding, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		skill.ID, skill.Name, skill.Description, skill.Instructions,
-		toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embJSON, skill.CreatedAt, skill.UpdatedAt)
+		toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embBlob, skill.CreatedAt, skill.UpdatedAt)
 	if err != nil {
 		s.logger.Error("sqlite: create skill failed", "id", skill.ID, "error", err, "duration", time.Since(start))
 		return err
@@ -150,15 +149,14 @@ func (s *Store) UpdateSkill(ctx context.Context, skill oasis.Skill) error {
 		v := string(data)
 		refsJSON = &v
 	}
-	var embJSON *string
+	var embBlob []byte
 	if len(skill.Embedding) > 0 {
-		v := serializeEmbedding(skill.Embedding)
-		embJSON = &v
+		embBlob = serializeEmbedding(skill.Embedding)
 	}
 
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE skills SET name=?, description=?, instructions=?, tools=?, model=?, tags=?, created_by=?, refs=?, embedding=?, updated_at=? WHERE id=?`,
-		skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embJSON, skill.UpdatedAt, skill.ID)
+		skill.Name, skill.Description, skill.Instructions, toolsJSON, skill.Model, tagsJSON, skill.CreatedBy, refsJSON, embBlob, skill.UpdatedAt, skill.ID)
 	if err != nil {
 		s.logger.Error("sqlite: update skill failed", "id", skill.ID, "error", err, "duration", time.Since(start))
 		return err
@@ -199,8 +197,8 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 	for rows.Next() {
 		var sk oasis.Skill
 		var tools, model, tags, createdBy, refs sql.NullString
-		var embJSON string
-		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &createdBy, &refs, &embJSON, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		var embBlob []byte
+		if err := rows.Scan(&sk.ID, &sk.Name, &sk.Description, &sk.Instructions, &tools, &model, &tags, &createdBy, &refs, &embBlob, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan skill: %w", err)
 		}
 		scanned++
@@ -219,7 +217,7 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		if refs.Valid {
 			_ = json.Unmarshal([]byte(refs.String), &sk.References)
 		}
-		stored, err := deserializeEmbedding(embJSON)
+		stored, err := deserializeEmbedding(embBlob)
 		if err != nil {
 			continue
 		}

@@ -114,10 +114,9 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 	}
 
 	for _, chunk := range chunks {
-		var embJSON *string
+		var embBlob []byte
 		if len(chunk.Embedding) > 0 {
-			v := serializeEmbedding(chunk.Embedding)
-			embJSON = &v
+			embBlob = serializeEmbedding(chunk.Embedding)
 		}
 		var parentID *string
 		if chunk.ParentID != "" {
@@ -132,8 +131,7 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 		_, err = tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO chunks (id, document_id, parent_id, content, chunk_index, embedding, metadata)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, embJSON, metaJSON,
-		)
+			chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, embBlob, metaJSON)
 		if err != nil {
 			s.logger.Error("sqlite: insert chunk failed", "chunk_id", chunk.ID, "doc_id", doc.ID, "error", err)
 			return fmt.Errorf("insert chunk: %w", err)
@@ -150,6 +148,10 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 		s.logger.Error("sqlite: store document commit failed", "id", doc.ID, "error", err)
 		return fmt.Errorf("commit tx: %w", err)
 	}
+
+	// Keep in-memory vector index in sync.
+	s.vecAdd(chunks)
+
 	s.logger.Debug("sqlite: store document ok", "id", doc.ID, "chunks", len(chunks), "duration", time.Since(start))
 	return nil
 }
@@ -217,71 +219,108 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 		s.logger.Error("sqlite: delete document commit failed", "id", id, "error", err)
 		return err
 	}
+
+	// Keep in-memory vector index in sync.
+	s.vecRemoveByDocument(id)
+
 	s.logger.Debug("sqlite: delete document ok", "id", id, "duration", time.Since(start))
 	return nil
 }
 
-// SearchChunks performs brute-force cosine similarity search over chunks.
+// SearchChunks performs cosine similarity search using an in-memory vector index.
+// On the first call, embeddings are loaded from disk into memory. Subsequent calls
+// score against the cached embeddings without touching SQLite, then fetch full
+// chunk content only for the top-K results.
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
 	start := time.Now()
 	s.logger.Debug("sqlite: search chunks", "top_k", topK, "embedding_dim", len(embedding), "filters", len(filters))
 
+	// Ensure in-memory vector index is loaded.
+	if err := s.loadVecIndex(ctx); err != nil {
+		return nil, fmt.Errorf("load vec index: %w", err)
+	}
+
 	whereExtra, filterArgs, needsDocJoin := buildChunkFilters(filters)
 
-	var query string
-	if needsDocJoin {
-		query = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.embedding, c.metadata
-			FROM chunks c JOIN documents d ON d.id = c.document_id
-			WHERE c.embedding IS NOT NULL` + whereExtra
-	} else {
-		query = `SELECT c.id, c.document_id, c.parent_id, c.content, c.chunk_index, c.embedding, c.metadata
-			FROM chunks c WHERE c.embedding IS NOT NULL` + whereExtra
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, filterArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("search chunks: %w", err)
-	}
-	defer rows.Close()
-
-	var results []oasis.ScoredChunk
-	scanned := 0
-
-	for rows.Next() {
-		var c oasis.Chunk
-		var parentID sql.NullString
-		var embJSON string
-		var metaJSON sql.NullString
-		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &embJSON, &metaJSON); err != nil {
-			return nil, fmt.Errorf("scan chunk: %w", err)
+	// If filters are present, query SQL for matching chunk IDs only,
+	// then score those against the in-memory index.
+	var allowedIDs map[string]bool
+	if whereExtra != "" {
+		var q string
+		if needsDocJoin {
+			q = `SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id
+				WHERE c.embedding IS NOT NULL` + whereExtra
+		} else {
+			q = `SELECT c.id FROM chunks c WHERE c.embedding IS NOT NULL` + whereExtra
 		}
-		scanned++
-		if parentID.Valid {
-			c.ParentID = parentID.String
-		}
-		if metaJSON.Valid {
-			c.Metadata = &oasis.ChunkMeta{}
-			_ = json.Unmarshal([]byte(metaJSON.String), c.Metadata)
-		}
-		stored, err := deserializeEmbedding(embJSON)
+		rows, err := s.db.QueryContext(ctx, q, filterArgs...)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("search chunks filter: %w", err)
 		}
-		results = append(results, oasis.ScoredChunk{Chunk: c, Score: cosineSimilarity(embedding, stored)})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate chunks: %w", err)
+		defer rows.Close()
+		allowedIDs = make(map[string]bool)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return nil, fmt.Errorf("scan filter id: %w", err)
+			}
+			allowedIDs[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate filter ids: %w", err)
+		}
 	}
 
+	// Score against in-memory embeddings — no blob deserialization per query.
+	scored := s.vecSearch(embedding, topK, allowedIDs)
+
+	if len(scored) == 0 {
+		s.logger.Debug("sqlite: search chunks ok", "scanned", 0, "returned", 0, "duration", time.Since(start))
+		return nil, nil
+	}
+
+	// Fetch full chunk data only for top-K results.
+	ids := make([]string, len(scored))
+	scoreMap := make(map[string]float32, len(scored))
+	for i, sc := range scored {
+		ids[i] = sc.ID
+		scoreMap[sc.ID] = sc.Score
+	}
+
+	chunks, err := s.GetChunksByIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("fetch top-k chunks: %w", err)
+	}
+
+	results := make([]oasis.ScoredChunk, 0, len(chunks))
+	for _, c := range chunks {
+		results = append(results, oasis.ScoredChunk{Chunk: c, Score: scoreMap[c.ID]})
+	}
+
+	// Re-sort since GetChunksByIDs doesn't preserve order.
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
 	})
 
-	if len(results) > topK {
-		results = results[:topK]
-	}
-	s.logger.Debug("sqlite: search chunks ok", "scanned", scanned, "returned", len(results), "duration", time.Since(start))
+	s.logger.Debug("sqlite: search chunks ok", "index_size", len(s.vecIndex), "returned", len(results), "duration", time.Since(start))
 	return results, nil
+}
+
+// sanitizeFTS5Query escapes FTS5 metacharacters so the query is treated as
+// literal search terms. FTS5 special characters (", *, +, -, ^, (, )) are
+// replaced with spaces. The result is trimmed; if empty, returns "".
+func sanitizeFTS5Query(query string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	for _, r := range query {
+		switch r {
+		case '"', '*', '+', '-', '^', '(', ')', '{', '}':
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // SearchChunksKeyword performs full-text keyword search over document chunks
@@ -289,6 +328,11 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
 	start := time.Now()
 	s.logger.Debug("sqlite: search chunks keyword", "query", query, "top_k", topK, "filters", len(filters))
+
+	query = sanitizeFTS5Query(query)
+	if query == "" {
+		return nil, nil
+	}
 
 	whereExtra, filterArgs, needsDocJoin := buildChunkFilters(filters)
 
@@ -346,13 +390,29 @@ func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int,
 
 // GetChunksByDocument returns all chunks belonging to a specific document,
 // including their embeddings. This implements ingest.DocumentChunkLister.
+// When the in-memory vector index is loaded, embeddings are sourced from
+// memory instead of deserializing blobs — significantly faster for cross-doc extraction.
 func (s *Store) GetChunksByDocument(ctx context.Context, docID string) ([]oasis.Chunk, error) {
 	start := time.Now()
 	s.logger.Debug("sqlite: get chunks by document", "doc_id", docID)
 
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, document_id, parent_id, content, chunk_index, embedding, metadata
-		 FROM chunks WHERE document_id = ? ORDER BY chunk_index`, docID)
+	// Check if in-memory index is available for fast embedding lookup.
+	// When available, skip the embedding column entirely to avoid copying
+	// large blobs from SQLite only to discard them.
+	s.vecMu.RLock()
+	useVecIndex := s.vecReady
+	s.vecMu.RUnlock()
+
+	var q string
+	if useVecIndex {
+		q = `SELECT id, document_id, parent_id, content, chunk_index, metadata
+		     FROM chunks WHERE document_id = ? ORDER BY chunk_index`
+	} else {
+		q = `SELECT id, document_id, parent_id, content, chunk_index, embedding, metadata
+		     FROM chunks WHERE document_id = ? ORDER BY chunk_index`
+	}
+
+	rows, err := s.db.QueryContext(ctx, q, docID)
 	if err != nil {
 		return nil, fmt.Errorf("get chunks by document: %w", err)
 	}
@@ -362,16 +422,29 @@ func (s *Store) GetChunksByDocument(ctx context.Context, docID string) ([]oasis.
 	for rows.Next() {
 		var c oasis.Chunk
 		var parentID sql.NullString
-		var embJSON sql.NullString
 		var metaJSON sql.NullString
-		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &embJSON, &metaJSON); err != nil {
-			return nil, fmt.Errorf("scan chunk: %w", err)
+
+		if useVecIndex {
+			if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &metaJSON); err != nil {
+				return nil, fmt.Errorf("scan chunk: %w", err)
+			}
+			s.vecMu.RLock()
+			if entry, ok := s.vecIndex[c.ID]; ok {
+				c.Embedding = entry.embedding
+			}
+			s.vecMu.RUnlock()
+		} else {
+			var embBlob []byte
+			if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &embBlob, &metaJSON); err != nil {
+				return nil, fmt.Errorf("scan chunk: %w", err)
+			}
+			if embBlob != nil {
+				c.Embedding, _ = deserializeEmbedding(embBlob)
+			}
 		}
+
 		if parentID.Valid {
 			c.ParentID = parentID.String
-		}
-		if embJSON.Valid {
-			c.Embedding, _ = deserializeEmbedding(embJSON.String)
 		}
 		if metaJSON.Valid {
 			c.Metadata = &oasis.ChunkMeta{}

@@ -21,7 +21,7 @@ func TestExtractCrossDocumentEdges(t *testing.T) {
 	}
 
 	provider := &mockGraphProvider{
-		response: `{"edges":[{"source":"c1","target":"c2","relation":"similar_to","weight":0.8,"description":"both cover OAuth"}]}`,
+		response: `{"edges":[{"source":"c1","target":"c2","relation":"references","weight":0.8,"description":"both cover OAuth"}]}`,
 	}
 
 	emb := &mockEmbeddingProvider{embedding: []float32{0.5, 0.5}}

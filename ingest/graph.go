@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -19,7 +20,6 @@ var validRelations = map[string]oasis.RelationType{
 	"depends_on":  oasis.RelDependsOn,
 	"contradicts": oasis.RelContradicts,
 	"part_of":     oasis.RelPartOf,
-	"similar_to":  oasis.RelSimilarTo,
 	"sequence":    oasis.RelSequence,
 	"caused_by":   oasis.RelCausedBy,
 }
@@ -27,33 +27,40 @@ var validRelations = map[string]oasis.RelationType{
 const graphExtractionPrompt = `You are a knowledge graph extractor. Analyze the following text chunks and identify relationships between them.
 
 For each relationship found, output a JSON edge with:
-- "source": the chunk ID that holds the relationship
-- "target": the chunk ID being referenced
-- "relation": one of: references, elaborates, depends_on, contradicts, part_of, sequence, caused_by
+- "source": the source chunk ID (see directionality below)
+- "target": the target chunk ID (see directionality below)
+- "relation": one of: references, elaborates, depends_on, contradicts, part_of, caused_by
 - "weight": confidence score from 0.0 to 1.0
 - "description": a brief explanation of why this relationship exists (1 sentence)
 
-Relationship type definitions:
-- references: chunk A cites or mentions content from chunk B
-- elaborates: chunk A provides more detail on chunk B's topic
-- depends_on: chunk A assumes knowledge from chunk B
-- contradicts: chunk A conflicts with chunk B
-- part_of: chunk A is a component or subset of chunk B
-- sequence: chunk A follows chunk B in logical order
-- caused_by: chunk A is a consequence of chunk B
+Relationship types and directionality (source → target):
+- references: source cites or mentions content from target
+- elaborates: source provides more detail on target's topic (source is the detailed chunk, target is the summary)
+- depends_on: source assumes knowledge from target (source is the dependent chunk, target is the prerequisite)
+- contradicts: source conflicts with target (either direction is valid; pick the chunk making the stronger claim as source)
+- part_of: source is a component or subset of target (source is the part, target is the whole)
+- caused_by: source is a consequence of target (source is the effect, target is the cause)
 
 Output ONLY valid JSON in this format:
 {"edges":[{"source":"chunk_id","target":"chunk_id","relation":"type","weight":0.0,"description":"why this relationship exists"}]}
 
 If no relationships exist, output: {"edges":[]}
-
-Chunks:
 `
 
-// extractGraphEdges sends chunks to an LLM in batches and extracts relationship edges.
-// overlap controls how many chunks overlap between consecutive batches (0 = no overlap).
-// workers controls max concurrent LLM calls (<=1 = sequential).
-func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize, overlap, workers int, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
+const graphDocContextSection = `
+The chunks below come from the following document. Use the document's structure (headings, sections) to identify cross-section relationships that the chunks alone might not reveal.
+
+<document_context>
+%s
+</document_context>
+`
+
+// extractGraphEdges sends chunks to an LLM in sliding-window batches and extracts
+// relationship edges. overlap controls how many chunks overlap between consecutive
+// batches (0 = no overlap). workers controls max concurrent LLM calls (<=1 = sequential).
+// docContext, when non-empty, is included in the prompt to give the LLM structural
+// context about the source document.
+func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize, overlap, workers int, docContext string, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
 	if len(chunks) < 2 {
 		if logger != nil {
 			logger.Info("graph extraction skipped: fewer than 2 chunks",
@@ -64,55 +71,63 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 	if batchSize <= 0 {
 		batchSize = 5
 	}
-	if workers <= 0 {
-		workers = 1
-	}
 
 	stride := batchSize
 	if overlap > 0 && overlap < batchSize {
 		stride = batchSize - overlap
 	}
 
-	// Build all batch windows upfront.
-	type batch struct {
-		chunks []oasis.Chunk
-		index  int
-	}
-	var batches []batch
+	// Build sliding-window batches.
+	var batches [][]oasis.Chunk
 	for i := 0; i < len(chunks); i += stride {
 		end := min(i+batchSize, len(chunks))
 		b := chunks[i:end]
 		if len(b) < 2 {
 			continue
 		}
-		batches = append(batches, batch{chunks: b, index: len(batches)})
+		batches = append(batches, b)
 	}
 
+	if logger != nil {
+		logger.Debug("graph extraction: sliding window batches built",
+			"total_batches", len(batches), "stride", stride,
+			"chunk_count", len(chunks))
+	}
+
+	return extractFromBatches(ctx, provider, batches, workers, docContext, logger)
+}
+
+// extractFromBatches runs pre-formed chunk batches through an LLM worker pool
+// for relationship extraction. Each batch is sent as one prompt.
+// docContext, when non-empty, is prepended to each prompt for structural awareness.
+func extractFromBatches(ctx context.Context, provider oasis.Provider, batches [][]oasis.Chunk, workers int, docContext string, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
 	if len(batches) == 0 {
 		if logger != nil {
-			logger.Debug("graph extraction skipped: no valid batches formed")
+			logger.Debug("graph extraction skipped: no valid batches")
 		}
 		return nil, nil
 	}
-
-	// Worker pool.
-	numWorkers := min(workers, len(batches))
-
-	if logger != nil {
-		logger.Debug("graph extraction: batch windows built",
-			"total_batches", len(batches), "stride", stride,
-			"chunk_count", len(chunks))
-		logger.Info("graph extraction worker pool started",
-			"batches", len(batches), "workers", numWorkers,
-			"batch_size", batchSize, "stride", stride)
+	if workers <= 0 {
+		workers = 1
 	}
 
+	type indexedBatch struct {
+		chunks []oasis.Chunk
+		index  int
+	}
 	type batchResult struct {
 		edges  []oasis.ChunkEdge
 		failed bool
 	}
 
-	work := make(chan batch, len(batches))
+	numWorkers := min(workers, len(batches))
+
+	if logger != nil {
+		logger.Info("graph extraction worker pool started",
+			"batches", len(batches), "workers", numWorkers)
+	}
+
+	work := make(chan indexedBatch, len(batches))
 	results := make(chan batchResult, len(batches))
 
 	for w := 0; w < numWorkers; w++ {
@@ -129,6 +144,10 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 
 				var prompt strings.Builder
 				prompt.WriteString(graphExtractionPrompt)
+				if docContext != "" {
+					fmt.Fprintf(&prompt, graphDocContextSection, docContext)
+				}
+				prompt.WriteString("\nChunks:\n")
 				for _, c := range b.chunks {
 					fmt.Fprintf(&prompt, "\n[%s]: %s\n", c.ID, c.Content)
 				}
@@ -167,10 +186,12 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 							"prompt_bytes", prompt.Len())
 					}
 
+					temp := 0.0
 					resp, err := provider.Chat(ctx, oasis.ChatRequest{
 						Messages: []oasis.ChatMessage{
 							{Role: "user", Content: prompt.String()},
 						},
+						GenerationParams: &oasis.GenerationParams{Temperature: &temp},
 					})
 					if err != nil {
 						if logger != nil {
@@ -225,13 +246,11 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 		}()
 	}
 
-	// Send all batches.
-	for _, b := range batches {
-		work <- b
+	for i, b := range batches {
+		work <- indexedBatch{chunks: b, index: i}
 	}
 	close(work)
 
-	// Collect results.
 	var allEdges []oasis.ChunkEdge
 	failedBatches := 0
 	for range batches {
@@ -404,10 +423,11 @@ func pruneEdges(edges []oasis.ChunkEdge, minWeight float32, maxPerChunk int) []o
 }
 
 // buildSemanticBatches groups chunks into batches based on embedding similarity
-// rather than sequential position. Each chunk's nearest neighbors (by cosine
-// similarity) are grouped together, producing batches where chunks are
-// semantically related — improving LLM extraction quality.
-func buildSemanticBatches(chunks []oasis.Chunk, batchSize int) [][]oasis.Chunk {
+// rather than sequential position. Uses centroid-based assignment: each chunk is
+// compared against existing batch centroids (O(N·K) where K = batches) instead
+// of all-pairs comparison (O(N²)). Produces batches where chunks are semantically
+// related — improving LLM extraction quality.
+func buildSemanticBatches(chunks []oasis.Chunk, batchSize int, logger *slog.Logger) [][]oasis.Chunk {
 	if len(chunks) < 2 {
 		return nil
 	}
@@ -426,52 +446,69 @@ func buildSemanticBatches(chunks []oasis.Chunk, batchSize int) [][]oasis.Chunk {
 		return nil
 	}
 
-	assigned := make(map[string]bool, len(embedded))
-	var batches [][]oasis.Chunk
+	// Centroid-based greedy assignment: for each chunk, find the most similar
+	// non-full batch by comparing against batch centroids (mean embedding).
+	// This is O(N·K·dim) where K grows as batches are created, vs O(N²·dim)
+	// for the all-pairs approach.
+	type centroidBatch struct {
+		chunks   []oasis.Chunk
+		centroid []float32
+	}
 
-	for _, seed := range embedded {
-		if assigned[seed.ID] {
-			continue
-		}
+	dim := len(embedded[0].Embedding)
+	var batches []*centroidBatch
 
-		// Score all unassigned chunks by cosine similarity to seed.
-		type scored struct {
-			chunk oasis.Chunk
-			sim   float64
-		}
-		var candidates []scored
-		for _, c := range embedded {
-			if assigned[c.ID] || c.ID == seed.ID {
+	for _, c := range embedded {
+		bestIdx := -1
+		bestSim := float64(-1)
+
+		for i, b := range batches {
+			if len(b.chunks) >= batchSize {
 				continue
 			}
-			sim := cosineSimilarity(seed.Embedding, c.Embedding)
-			candidates = append(candidates, scored{chunk: c, sim: sim})
+			sim := cosineSimilarity(c.Embedding, b.centroid)
+			if sim > bestSim {
+				bestSim = sim
+				bestIdx = i
+			}
 		}
 
-		sort.Slice(candidates, func(i, j int) bool {
-			return candidates[i].sim > candidates[j].sim
-		})
-
-		batch := []oasis.Chunk{seed}
-		assigned[seed.ID] = true
-
-		for _, sc := range candidates {
-			if len(batch) >= batchSize {
-				break
+		if bestIdx >= 0 {
+			b := batches[bestIdx]
+			b.chunks = append(b.chunks, c)
+			// Update running centroid: new_centroid = old_centroid + (new_vec - old_centroid) / n
+			n := float32(len(b.chunks))
+			for d := range dim {
+				b.centroid[d] += (c.Embedding[d] - b.centroid[d]) / n
 			}
-			if assigned[sc.chunk.ID] {
-				continue
-			}
-			batch = append(batch, sc.chunk)
-			assigned[sc.chunk.ID] = true
-		}
-
-		if len(batch) >= 2 {
-			batches = append(batches, batch)
+		} else {
+			// Start new batch with this chunk as seed centroid.
+			centroid := make([]float32, dim)
+			copy(centroid, c.Embedding)
+			batches = append(batches, &centroidBatch{
+				chunks:   []oasis.Chunk{c},
+				centroid: centroid,
+			})
 		}
 	}
 
-	return batches
+	// Collect batches with >= 2 chunks; singletons are excluded from
+	// graph extraction since relationship extraction needs at least 2 chunks.
+	var result [][]oasis.Chunk
+	var droppedChunks int
+	for _, b := range batches {
+		if len(b.chunks) >= 2 {
+			result = append(result, b.chunks)
+		} else {
+			droppedChunks += len(b.chunks)
+		}
+	}
+	if droppedChunks > 0 && logger != nil {
+		logger.Warn("semantic batching: singleton chunks excluded from graph extraction",
+			"dropped_chunks", droppedChunks,
+			"batches_kept", len(result))
+	}
+	return result
 }
 
 // cosineSimilarity computes the cosine similarity between two vectors.
@@ -488,17 +525,6 @@ func cosineSimilarity(a, b []float32) float64 {
 	if normA == 0 || normB == 0 {
 		return 0
 	}
-	return dot / (sqrt(normA) * sqrt(normB))
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
-// sqrt returns the square root (avoids importing math for a single call).
-func sqrt(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	z := x
-	for i := 0; i < 20; i++ {
-		z = (z + x/z) / 2
-	}
-	return z
-}

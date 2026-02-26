@@ -21,10 +21,10 @@ func testMemoryStore(t *testing.T) *MemoryStore {
 // insertMemFact inserts a fact directly into the DB for test setup.
 func insertMemFact(t *testing.T, ms *MemoryStore, id, fact, category string, confidence float64, embedding []float32, createdAt, updatedAt int64) {
 	t.Helper()
-	embJSON := serializeEmbedding(embedding)
+	embBlob := serializeEmbedding(embedding)
 	_, err := ms.db.ExecContext(context.Background(),
 		`INSERT INTO user_facts (id, fact, category, confidence, embedding, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, fact, category, confidence, embJSON, createdAt, updatedAt)
+		id, fact, category, confidence, embBlob, createdAt, updatedAt)
 	if err != nil {
 		t.Fatalf("insertMemFact: %v", err)
 	}

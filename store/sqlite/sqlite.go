@@ -1,5 +1,6 @@
 // Package sqlite implements oasis.Store using pure-Go SQLite
-// with in-process brute-force vector search. Zero CGO required.
+// with an in-memory vector index for fast cosine similarity search.
+// Zero CGO required.
 package sqlite
 
 import (
@@ -7,6 +8,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/nevindra/oasis"
@@ -25,16 +27,29 @@ func WithLogger(l *slog.Logger) StoreOption {
 }
 
 // Store implements oasis.Store backed by a local SQLite file.
-// Embeddings are stored as JSON text and vector search is done
-// in-process using brute-force cosine similarity.
+// Embeddings are cached in memory after first load for fast vector search
+// without per-query blob deserialization.
 type Store struct {
 	db     *sql.DB
 	logger *slog.Logger
+
+	// In-memory vector index: eliminates per-query embedding deserialization.
+	// Lazy-loaded on first SearchChunks call, updated on Store/Delete operations.
+	vecMu    sync.RWMutex
+	vecIndex map[string]vecEntry
+	vecReady bool
+}
+
+// vecEntry holds the cached embedding and document ID for a chunk.
+type vecEntry struct {
+	embedding  []float32
+	documentID string
 }
 
 var _ oasis.Store = (*Store)(nil)
 var _ oasis.KeywordSearcher = (*Store)(nil)
 var _ oasis.GraphStore = (*Store)(nil)
+var _ oasis.BidirectionalGraphStore = (*Store)(nil)
 var _ oasis.CheckpointStore = (*Store)(nil)
 
 // nopLogger is a logger that discards all output.
@@ -48,17 +63,21 @@ func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
 func (d discardHandler) WithGroup(string) slog.Handler           { return d }
 
 // New creates a Store using a local SQLite file at dbPath.
-// It opens a single shared connection pool with SetMaxOpenConns(1) so that
-// all goroutines serialize through one connection, eliminating SQLITE_BUSY
-// errors caused by concurrent writers opening independent connections.
+// WAL journal mode is enabled for concurrent reader/writer access, and the
+// connection pool is sized to 4 so that readers don't block on a single writer.
+// A 5-second busy timeout prevents SQLITE_BUSY errors under writer contention.
 func New(dbPath string, opts ...StoreOption) *Store {
-	db, err := sql.Open("sqlite", dbPath)
+	// Pragmas in the DSN are applied to every connection the pool opens,
+	// ensuring WAL mode and busy timeout are set uniformly.
+	dsn := dbPath + "?_pragma=journal_mode%3DWAL&_pragma=busy_timeout%3D5000"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		// sql.Open only fails when the driver is not registered; with the
 		// blank import above that never happens.
 		panic(fmt.Sprintf("sqlite: open driver: %v", err))
 	}
-	db.SetMaxOpenConns(1)
+
+	db.SetMaxOpenConns(4)
 	s := &Store{db: db, logger: nopLogger}
 	for _, o := range opts {
 		o(s)

@@ -177,7 +177,7 @@ func (ing *Ingestor) resumeFromCheckpoint(ctx context.Context, cp oasis.IngestCh
 	// --- graph ---
 	cp.Status = oasis.CheckpointGraphing
 	ing.saveCheckpoint(ctx, cp)
-	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
+	if err := ing.extractAndStoreEdges(ctx, chunks, text); err != nil {
 		ing.notifyError(source, err)
 		return IngestResult{}, fmt.Errorf("graph extraction: %w", err)
 	}
@@ -201,7 +201,7 @@ func (ing *Ingestor) resumeFromCheckpoint(ctx context.Context, cp oasis.IngestCh
 
 // extractWithRetry calls the extractor, retrying on any non-cancellation error
 // up to ing.extractRetries attempts with exponential backoff.
-func (ing *Ingestor) extractWithRetry(extractor Extractor, content []byte) (string, error) {
+func (ing *Ingestor) extractWithRetry(ctx context.Context, extractor Extractor, content []byte) (string, error) {
 	maxAttempts := ing.extractRetries
 	if maxAttempts <= 1 {
 		return safeExtract(extractor, content)
@@ -219,14 +219,18 @@ func (ing *Ingestor) extractWithRetry(extractor Extractor, content []byte) (stri
 		last = err
 		if i < maxAttempts-1 {
 			delay := extractRetryBackoff(base, i)
-			time.Sleep(delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
 		}
 	}
 	return "", last
 }
 
 // extractWithMetaRetry is the retry-aware variant for MetadataExtractor.
-func (ing *Ingestor) extractWithMetaRetry(me MetadataExtractor, content []byte) (ExtractResult, error) {
+func (ing *Ingestor) extractWithMetaRetry(ctx context.Context, me MetadataExtractor, content []byte) (ExtractResult, error) {
 	maxAttempts := ing.extractRetries
 	if maxAttempts <= 1 {
 		return safeExtractWithMeta(me, content)
@@ -244,7 +248,11 @@ func (ing *Ingestor) extractWithMetaRetry(me MetadataExtractor, content []byte) 
 		last = err
 		if i < maxAttempts-1 {
 			delay := extractRetryBackoff(base, i)
-			time.Sleep(delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return ExtractResult{}, ctx.Err()
+			}
 		}
 	}
 	return ExtractResult{}, last

@@ -16,10 +16,9 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 	start := time.Now()
 	s.logger.Debug("sqlite: store message", "id", msg.ID, "thread_id", msg.ThreadID, "role", msg.Role, "has_embedding", len(msg.Embedding) > 0)
 
-	var embJSON *string
+	var embBlob []byte
 	if len(msg.Embedding) > 0 {
-		v := serializeEmbedding(msg.Embedding)
-		embJSON = &v
+		embBlob = serializeEmbedding(msg.Embedding)
 	}
 	var metaJSON *string
 	if len(msg.Metadata) > 0 {
@@ -31,7 +30,7 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO messages (id, thread_id, role, content, embedding, metadata, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		msg.ID, msg.ThreadID, msg.Role, msg.Content, embJSON, metaJSON, msg.CreatedAt,
+		msg.ID, msg.ThreadID, msg.Role, msg.Content, embBlob, metaJSON, msg.CreatedAt,
 	)
 	if err != nil {
 		s.logger.Error("sqlite: store message failed", "id", msg.ID, "error", err, "duration", time.Since(start))
@@ -106,16 +105,16 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 
 	for rows.Next() {
 		var m oasis.Message
-		var embJSON string
+		var embBlob []byte
 		var metaJSON sql.NullString
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &embJSON, &metaJSON, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Role, &m.Content, &embBlob, &metaJSON, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 		scanned++
 		if metaJSON.Valid {
 			_ = json.Unmarshal([]byte(metaJSON.String), &m.Metadata)
 		}
-		stored, err := deserializeEmbedding(embJSON)
+		stored, err := deserializeEmbedding(embBlob)
 		if err != nil {
 			continue
 		}

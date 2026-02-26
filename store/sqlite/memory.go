@@ -73,7 +73,7 @@ func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, emb
 	start := time.Now()
 	s.logger.Debug("sqlite: upsert fact", "category", category, "embedding_dim", len(embedding))
 	now := oasis.NowUnix()
-	embJSON := serializeEmbedding(embedding)
+	embBlob := serializeEmbedding(embedding)
 
 	// Brute-force: check existing facts for similarity.
 	rows, err := s.db.QueryContext(ctx, `SELECT id, fact, confidence, embedding FROM user_facts WHERE confidence >= 0.3`)
@@ -90,12 +90,13 @@ func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, emb
 	var best *candidate
 
 	for rows.Next() {
-		var id, factText, embText string
+		var id, factText string
+		var storedEmb []byte
 		var conf float64
-		if err := rows.Scan(&id, &factText, &conf, &embText); err != nil {
+		if err := rows.Scan(&id, &factText, &conf, &storedEmb); err != nil {
 			continue
 		}
-		existing, parseErr := deserializeEmbedding(embText)
+		existing, parseErr := deserializeEmbedding(storedEmb)
 		if parseErr != nil || len(existing) == 0 {
 			continue
 		}
@@ -114,7 +115,7 @@ func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, emb
 		}
 		_, err = s.db.ExecContext(ctx,
 			`UPDATE user_facts SET fact=?, category=?, embedding=?, confidence=?, updated_at=? WHERE id=?`,
-			fact, category, embJSON, newConf, now, best.id)
+			fact, category, embBlob, newConf, now, best.id)
 		if err != nil {
 			s.logger.Error("sqlite: upsert fact merge failed", "id", best.id, "error", err, "duration", time.Since(start))
 			return err
@@ -127,7 +128,7 @@ func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, emb
 	id := oasis.NewID()
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO user_facts (id, fact, category, confidence, embedding, created_at, updated_at) VALUES (?, ?, ?, 1.0, ?, ?, ?)`,
-		id, fact, category, embJSON, now, now)
+		id, fact, category, embBlob, now, now)
 	if err != nil {
 		s.logger.Error("sqlite: upsert fact insert failed", "id", id, "error", err, "duration", time.Since(start))
 		return err
@@ -152,11 +153,11 @@ func (s *MemoryStore) SearchFacts(ctx context.Context, embedding []float32, topK
 
 	for rows.Next() {
 		var f oasis.Fact
-		var embText string
-		if err := rows.Scan(&f.ID, &f.Fact, &f.Category, &f.Confidence, &embText, &f.CreatedAt, &f.UpdatedAt); err != nil {
+		var embBlob []byte
+		if err := rows.Scan(&f.ID, &f.Fact, &f.Category, &f.Confidence, &embBlob, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			continue
 		}
-		emb, parseErr := deserializeEmbedding(embText)
+		emb, parseErr := deserializeEmbedding(embBlob)
 		if parseErr != nil || len(emb) == 0 {
 			continue
 		}

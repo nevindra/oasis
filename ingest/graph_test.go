@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func TestExtractGraphEdges(t *testing.T) {
 		response: `{"edges":[{"source":"c2","target":"c1","relation":"references","weight":0.9,"description":"mentions Go's creation"},{"source":"c3","target":"c2","relation":"elaborates","weight":0.8,"description":"expands on concurrency details"}]}`,
 	}
 
-	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, nil)
+	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, "", nil)
 	if err != nil {
 		t.Fatalf("extractGraphEdges: %v", err)
 	}
@@ -167,7 +168,7 @@ func TestExtractGraphEdges_SlidingWindow(t *testing.T) {
 		onChat:   func() { callCount++ },
 	}
 
-	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 2, 1, nil)
+	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 2, 1, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +228,7 @@ func TestExtractGraphEdges_Parallel(t *testing.T) {
 		},
 	}
 
-	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 3, nil)
+	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 3, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +259,7 @@ func TestExtractGraphEdges_CancelContext(t *testing.T) {
 		},
 	}
 
-	_, err := extractGraphEdges(ctx, provider, chunks, 5, 0, 1, nil)
+	_, err := extractGraphEdges(ctx, provider, chunks, 5, 0, 1, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,12 +271,85 @@ func TestExtractGraphEdges_CancelContext(t *testing.T) {
 	}
 }
 
+func TestExtractGraphEdges_WithDocContext(t *testing.T) {
+	chunks := []oasis.Chunk{
+		{ID: "c1", Content: "Error handling in Go uses explicit return values."},
+		{ID: "c2", Content: "The retry policy builds on the error handling pattern."},
+	}
+
+	var capturedPrompt string
+	provider := &mockGraphProvider{
+		response: `{"edges":[{"source":"c2","target":"c1","relation":"depends_on","weight":0.9,"description":"retry depends on error handling"}]}`,
+		onChat: func() {},
+	}
+	provider.capturePrompt = &capturedPrompt
+
+	docContext := "# Go Programming Guide\n## Chapter 2: Error Handling\nThis chapter covers...\n## Chapter 3: Retry Policies\nBuilds on error handling..."
+
+	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, docContext, nil)
+	if err != nil {
+		t.Fatalf("extractGraphEdges: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("got %d edges, want 1", len(edges))
+	}
+
+	// Verify the prompt includes document context.
+	if !strings.Contains(capturedPrompt, "<document_context>") {
+		t.Error("prompt should contain <document_context> tag")
+	}
+	if !strings.Contains(capturedPrompt, "Go Programming Guide") {
+		t.Error("prompt should contain document text")
+	}
+	if !strings.Contains(capturedPrompt, "Chapter 3: Retry Policies") {
+		t.Error("prompt should contain document headings")
+	}
+	// Verify chunks are still present.
+	if !strings.Contains(capturedPrompt, "[c1]") {
+		t.Error("prompt should contain chunk IDs")
+	}
+}
+
+func TestExtractGraphEdges_WithoutDocContext(t *testing.T) {
+	chunks := []oasis.Chunk{
+		{ID: "c1", Content: "First chunk."},
+		{ID: "c2", Content: "Second chunk."},
+	}
+
+	var capturedPrompt string
+	provider := &mockGraphProvider{
+		response: `{"edges":[]}`,
+	}
+	provider.capturePrompt = &capturedPrompt
+
+	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Without doc context, prompt should NOT contain document_context tags.
+	if strings.Contains(capturedPrompt, "<document_context>") {
+		t.Error("prompt should NOT contain <document_context> when docContext is empty")
+	}
+	// But should still have the extraction prompt and chunks.
+	if !strings.Contains(capturedPrompt, "knowledge graph extractor") {
+		t.Error("prompt should contain base extraction prompt")
+	}
+	if !strings.Contains(capturedPrompt, "[c1]") {
+		t.Error("prompt should contain chunk IDs")
+	}
+}
+
 type mockGraphProvider struct {
-	response string
-	onChat   func()
+	response      string
+	onChat        func()
+	capturePrompt *string
 }
 
 func (m *mockGraphProvider) Chat(_ context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
+	if m.capturePrompt != nil && len(req.Messages) > 0 {
+		*m.capturePrompt = req.Messages[0].Content
+	}
 	if m.onChat != nil {
 		m.onChat()
 	}

@@ -150,6 +150,18 @@ Key implementation details:
 var _ oasis.GraphStore = (*Store)(nil)
 ```
 
+### Optional: BidirectionalGraphStore
+
+For better performance when `WithBidirectional(true)` is used on `GraphRetriever`, implement `BidirectionalGraphStore` to fetch both outgoing and incoming edges in a single query:
+
+```go
+type BidirectionalGraphStore interface {
+    GetBothEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
+}
+```
+
+This reduces database round-trips from 2 to 1 per hop. The `GraphRetriever` discovers this via type assertion and falls back to separate `GetEdges` + `GetIncomingEdges` calls if not implemented.
+
 ## Implementing MemoryStore
 
 For user memory support, implement `MemoryStore`:

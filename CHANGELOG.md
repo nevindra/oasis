@@ -8,11 +8,39 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Removed
 
-- **`store/libsql`** — removed libsql store backend to reduce maintenance surface. Use `store/sqlite` or `store/postgres` instead
+- **`similar_to` from graph extraction `validRelations`** — the LLM prompt never lists `similar_to` as a valid relation, so parsing it was dead code. Test mock updated to use `references` _(RAG review #4.2)_
+- **`store/libsql`** — removed libsql store backend. Use `store/sqlite` or `store/postgres` instead
+- **`WithCrossDocumentEdges`** — removed dead ingest option (field was never read). Use `WithBatchCrossDocEdges` instead
+
+### Changed
+
+- **SQLite WAL mode + connection pool** — `store/sqlite` now enables WAL journal mode and `busy_timeout=5000` via DSN pragmas, with `MaxOpenConns(4)`. Readers no longer block on writers; concurrent ingestion + search runs without serialization. Previously `MaxOpenConns(1)` with default DELETE journal mode serialized all operations through a single connection _(RAG review #2.1)_
+- **`GetChunksByDocument` skips embedding blob when vec index loaded** — uses a query without the `embedding` column when the in-memory vector index is ready, avoiding ~3 MB of wasted blob I/O per 500-chunk document _(RAG review #1.2)_
+- **`buildSemanticBatches` accepts logger** — singleton batches (chunks with no similar neighbor) are now logged as warnings with dropped chunk count instead of being silently discarded _(RAG review #4.4)_
+- **Semantic batch parallelism** — semantic batching (`WithSemanticBatching`) now processes all batches through the configured `WithGraphExtractionWorkers` worker pool instead of sequentially (workers=1). For 200 batches with workers=3, extraction is ~3x faster
+- **O(N·K) semantic batch construction** — replaced O(N²) greedy nearest-neighbor algorithm with centroid-based assignment. Each chunk is compared against batch centroids (mean embeddings) instead of all other chunks, reducing batch formation time significantly for large document sets
+- **SQLite in-memory vector index** — `SearchChunks` now uses a lazily-loaded in-memory embedding cache. Embeddings are loaded once from disk and scored in memory on subsequent calls, eliminating per-query blob deserialization and SQL overhead. Content is fetched only for the final top-K results. `GetChunksByDocument` also reads from the cache when available, accelerating cross-document edge extraction
+- **SQLite `StoreEdges` upsert** — changed from `INSERT OR REPLACE` to `ON CONFLICT DO UPDATE`, preserving the original edge ID on conflict (matching Postgres behavior)
+- **Graph extraction: `Temperature: 0`** — LLM calls for graph edge extraction now use `Temperature: 0` for deterministic, consistent JSON output
+- **Graph extraction prompt** — improved directionality guidance for asymmetric relations (`depends_on`, `elaborates`, `caused_by`, `part_of`); removed `sequence` from prompted types (handled deterministically by `WithSequenceEdges`)
+- **`StoreEdges` batched inserts** — SQLite uses multi-value INSERT (150 rows/batch); Postgres uses `unnest`-based bulk insert. Both reduce N round-trips to 1 (or ceil(N/150) for SQLite)
+- **`resolveParentChunks` sort-before-dedup** — results are sorted by score before parent deduplication so the highest-scored child wins when siblings share a parent
+- **`cosineSimilarity` uses `math.Sqrt`** — replaced hand-rolled Newton's method
+- **RRF scores normalized to `[0, 1]`** — `reciprocalRankFusion` now scales scores so rank-0 in both lists = 1.0, fixing `WithMinRetrievalScore` and `ScoreReranker` silently dropping all results
+- **Vector + keyword search run in parallel** — `HybridRetriever` runs both searches concurrently when the store supports `KeywordSearcher`
+- **`LLMReranker` handles markdown-wrapped JSON** — extracts JSON from `` ```json ``` `` code fences instead of silently degrading
+- **Binary embedding storage (SQLite)** — embeddings stored as little-endian float32 bytes instead of JSON text (~5x smaller I/O per vector scan)
+- **`resolveParentChunks` skips redundant DB call** — `ParentID` is now carried through `RetrievalResult` from `SearchChunks`, eliminating one `GetChunksByIDs` round-trip per retrieval
+- **`hnsw.ef_search` per-connection** — new `ConfigurePoolConfig` applies `SET hnsw.ef_search` via `AfterConnect` hook so all pool connections inherit the setting (previously only one session got it)
 
 ### Fixed
 
+- **Extractor retry respects context cancellation** — `extractWithRetry` and `extractWithMetaRetry` now use `select { case <-time.After(delay): case <-ctx.Done(): }` instead of `time.Sleep(delay)`. Graceful shutdown no longer waits up to 10.5s for retry backoffs to complete _(RAG review #3.2)_
+- **Keyword search errors logged instead of swallowed** — `HybridRetriever` and `GraphRetriever` now log a warning when `SearchChunksKeyword` fails, instead of silently discarding the error via `_`. FTS misconfiguration is now visible _(RAG review #4.5)_
 - **`store/sqlite`, `store/postgres`: implement `DocumentChunkLister`** — add `GetChunksByDocument` method so `ExtractCrossDocumentEdges` no longer fails with "store to implement DocumentChunkLister"
+- **Parent resolution correctness** — `resolveParentChunks` previously used non-deterministic map iteration order, so the winning child among siblings was random instead of highest-scored
+- **FTS5 query sanitization** — `store/sqlite` now strips FTS5 metacharacters (`"`, `*`, `+`, `-`, `^`, `(`, `)`) from keyword queries. Previously queries like `C++` would crash FTS5 with a syntax error
+- **`KnowledgeTool` double embedding** — the query is now embedded once and reused for both chunk retrieval and message search. Added `HybridRetriever.RetrieveWithEmbedding` to accept pre-computed embeddings
 
 ### Added
 
@@ -20,9 +48,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`IngestBatch` / `ResumeBatch`** — ingest multiple documents in one call; each tracked independently. On interruption, `BatchResult.Checkpoint` is non-empty — pass it back to `ResumeBatch` with the same items to continue. `WithBatchConcurrency(n)` for parallel processing (default sequential). `WithBatchCrossDocEdges(true)` runs cross-document extraction automatically after the batch. New types: `BatchItem`, `BatchResult`, `BatchError`
 - **`WithExtractRetries(n)`** — retry custom extractors with exponential backoff + jitter; context cancellation stops immediately
 - **`ResumeCrossDocExtraction`** — cross-document extraction now uses `CheckpointStore` for resume tracking. `CrossDocWithResume(true)` saves per-document progress; call `ResumeCrossDocExtraction(ctx, checkpointID)` to continue after interruption
-
 - **Structured logging across the framework** — comprehensive `slog` debug logging added throughout the agent loop, network, store, and ingest layers. Every operation emits timing, key parameters, and error context. Opt-in via existing logger options (`WithLogger`, `WithMemoryLogger`)
-
 - **Contextual enrichment** — optional LLM-based enrichment step in the ingest pipeline. Each chunk is sent to an LLM alongside the full document text; the LLM returns a 1-2 sentence context prefix prepended to `chunk.Content` before embedding, improving retrieval precision by ~35%
   - `WithContextualEnrichment(provider)` — enable contextual enrichment
   - `WithContextWorkers(n)` — max concurrent LLM calls (default 3)
@@ -32,6 +58,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **RAG strategy guide and recipes** — new Strategy Guide section in `docs/guides/rag-pipeline.md` with decision flowchart, feature reference table, cost spectrum, and 6 named recipes covering FAQ, technical docs, legal corpus, multi-format libraries, research papers, and chatbot use cases
 - **`WithEmbeddingRetry`** — retry wrapper for `EmbeddingProvider`, matching the existing `WithRetry` for `Provider`. Retries transient HTTP errors (429, 503) with exponential backoff + jitter. Accepts the same `RetryOption` functions (`RetryMaxAttempts`, `RetryBaseDelay`, `RetryTimeout`)
 - **Detailed ingest pipeline logging** — `WithIngestorLogger` now emits structured `slog` logs at Info, Warn, and Error levels throughout the entire pipeline: file/text ingestion, chunking strategy selection, embedding batches, contextual enrichment progress (with enriched/failed/skipped counters), and graph extraction batch results
+- **`BidirectionalGraphStore` interface** — optional `GraphStore` capability with `GetBothEdges(ctx, chunkIDs)` that fetches outgoing and incoming edges in a single query. `GraphRetriever` uses it automatically when `WithBidirectional(true)` is set, reducing database round-trips from 2 to 1 per hop. Both `store/sqlite` and `store/postgres` implement it
+- **Document-aware graph extraction** — `WithGraphDocContext(n)` includes truncated source document text in the LLM graph extraction prompt. Gives the LLM structural context (headings, section hierarchy) to identify cross-section relationships that isolated chunks miss. Disabled by default; recommended 50,000 bytes for structured technical documents. Not used for cross-document extraction (chunks span multiple documents)
 
 ## [0.9.0] - 2026-02-25
 

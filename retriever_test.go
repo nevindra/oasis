@@ -134,6 +134,115 @@ func TestReciprocalRankFusion(t *testing.T) {
 	}
 }
 
+func TestReciprocalRankFusion_ScoresNormalized(t *testing.T) {
+	// A chunk at rank 0 in both lists should have a score of 1.0.
+	vector := []ScoredChunk{{Chunk: Chunk{ID: "a"}, Score: 0.9}}
+	keyword := []ScoredChunk{{Chunk: Chunk{ID: "a"}, Score: 0.9}}
+
+	got := reciprocalRankFusion(vector, keyword, 0.3)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	// With both lists contributing at rank 0: (0.7 + 0.3) / (rrfK+1) * (rrfK+1) = 1.0
+	if got[0].Score < 0.99 || got[0].Score > 1.01 {
+		t.Errorf("score = %f, want ~1.0 for rank-0 in both lists", got[0].Score)
+	}
+
+	// Vector-only: HybridRetriever passes keywordWeight=0 when no keyword results.
+	// vectorWeight = 1.0, so rank-0 score = 1.0 / (rrfK+1) * (rrfK+1) = 1.0.
+	vector = []ScoredChunk{{Chunk: Chunk{ID: "a"}, Score: 0.9}}
+	got = reciprocalRankFusion(vector, nil, 0)
+	if got[0].Score < 0.99 || got[0].Score > 1.01 {
+		t.Errorf("vector-only (kw=0) score = %f, want ~1.0", got[0].Score)
+	}
+
+	// With keywordWeight=0.3 but only vector results, score = vectorWeight * norm = 0.7.
+	got = reciprocalRankFusion(vector, nil, 0.3)
+	if got[0].Score < 0.69 || got[0].Score > 0.71 {
+		t.Errorf("vector-only (kw=0.3) score = %f, want ~0.7", got[0].Score)
+	}
+
+	// All scores must be in [0, 1].
+	vector = []ScoredChunk{
+		{Chunk: Chunk{ID: "a"}, Score: 0.9},
+		{Chunk: Chunk{ID: "b"}, Score: 0.7},
+		{Chunk: Chunk{ID: "c"}, Score: 0.5},
+	}
+	keyword = []ScoredChunk{
+		{Chunk: Chunk{ID: "b"}, Score: 0.8},
+		{Chunk: Chunk{ID: "d"}, Score: 0.6},
+	}
+	got = reciprocalRankFusion(vector, keyword, 0.3)
+	for _, r := range got {
+		if r.Score < 0 || r.Score > 1.01 {
+			t.Errorf("chunk %s: score %f out of [0, 1] range", r.ChunkID, r.Score)
+		}
+	}
+}
+
+func TestExtractJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "plain JSON",
+			input: `{"scores":[{"index":0,"score":5}]}`,
+			want:  `{"scores":[{"index":0,"score":5}]}`,
+		},
+		{
+			name:  "markdown code fence",
+			input: "```json\n{\"scores\":[{\"index\":0,\"score\":5}]}\n```",
+			want:  `{"scores":[{"index":0,"score":5}]}`,
+		},
+		{
+			name:  "markdown fence without language",
+			input: "```\n{\"scores\":[{\"index\":0,\"score\":5}]}\n```",
+			want:  `{"scores":[{"index":0,"score":5}]}`,
+		},
+		{
+			name:  "text before JSON",
+			input: "Here is the result: {\"scores\":[]}",
+			want:  `{"scores":[]}`,
+		},
+		{
+			name:  "no JSON at all",
+			input: "just some text",
+			want:  "just some text",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractJSON(tt.input)
+			if got != tt.want {
+				t.Errorf("extractJSON() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLLMReranker_MarkdownWrappedJSON(t *testing.T) {
+	provider := &mockProvider{
+		responses: []ChatResponse{
+			{Content: "```json\n{\"scores\":[{\"index\":0,\"score\":2},{\"index\":1,\"score\":8}]}\n```"},
+		},
+	}
+	r := NewLLMReranker(provider)
+	input := []RetrievalResult{
+		{ChunkID: "a", Content: "first", Score: 0.5},
+		{ChunkID: "b", Content: "second", Score: 0.5},
+	}
+	got, err := r.Rerank(context.Background(), "test", input, 5)
+	if err != nil {
+		t.Fatalf("Rerank() error = %v", err)
+	}
+	// "b" scored 8/10=0.8, "a" scored 2/10=0.2 → b should be first.
+	if got[0].ChunkID != "b" {
+		t.Errorf("got[0].ChunkID = %q, want %q", got[0].ChunkID, "b")
+	}
+}
+
 // --- Mock helpers for HybridRetriever tests ---
 
 type mockEmbeddingProvider struct {

@@ -38,17 +38,26 @@ The ingestor sends chunks to an LLM in batches and parses the response for relat
 
 **Step-by-step:**
 
-1. **Batch formation** — chunks are grouped into sliding window batches of `graphBatchSize` (default 5) with configurable overlap (`WithGraphBatchOverlap`). Each batch must contain at least 2 chunks. Overlap allows consecutive batches to share chunks, discovering cross-boundary relationships at the cost of more LLM calls. Alternatively, `WithSemanticBatching(true)` groups chunks by embedding similarity instead of sequential position — this produces higher-quality batches where semantically related chunks are processed together (overlap is ignored in this mode).
-2. **Prompt construction** — each batch is formatted into a structured prompt with chunk IDs and content:
+1. **Batch formation** — chunks are grouped into sliding window batches of `graphBatchSize` (default 5) with configurable overlap (`WithGraphBatchOverlap`). Each batch must contain at least 2 chunks. Overlap allows consecutive batches to share chunks, discovering cross-boundary relationships at the cost of more LLM calls. Alternatively, `WithSemanticBatching(true)` groups chunks by embedding similarity instead of sequential position — this produces higher-quality batches where semantically related chunks are processed together (overlap is ignored in this mode). Semantic batching uses centroid-based assignment (O(N·K) where K = number of batches) and processes all batches in parallel through the configured `WithGraphExtractionWorkers` pool.
+2. **Prompt construction** — each batch is formatted into a structured prompt with chunk IDs and content. When `WithGraphDocContext(n)` is configured, the prompt also includes a truncated copy of the source document text (up to `n` bytes), giving the LLM structural context like headings and section hierarchy. This significantly improves relationship discovery for large structured documents where related chunks may be far apart:
    ```
+   <document_context>
+   # Architecture Guide
+   ## Chapter 1: Authentication
+   ...
+   ## Chapter 2: Error Handling
+   ...
+   </document_context>
+
    [chunk_abc123]: Go is a programming language created by Google.
    [chunk_def456]: Go supports concurrency via goroutines.
    ```
-3. **Parallel LLM calls** — batches are processed concurrently by a worker pool (`WithGraphExtractionWorkers`, default 3). Each worker sends its batch to the configured `Provider` via `Chat()`. The prompt instructs the LLM to output JSON edges with source, target, relation type, confidence weight, and a brief description of the relationship. Failed batches are retried up to 3 times with exponential backoff (1s, 2s) before being skipped.
+   Document context is not included for cross-document extraction (chunks come from multiple documents).
+3. **Parallel LLM calls** — batches are processed concurrently by a worker pool (`WithGraphExtractionWorkers`, default 3). Each worker sends its batch to the configured `Provider` via `Chat()` with `Temperature: 0` for deterministic, consistent JSON output. The prompt instructs the LLM to output JSON edges with source, target, relation type, confidence weight, and a brief description of the relationship. The prompt includes explicit directionality guidance for asymmetric relations (e.g., `depends_on`: source is the dependent chunk, target is the prerequisite). Failed batches are retried up to 3 times with exponential backoff (1s, 2s) before being skipped.
 4. **Response parsing** — the JSON response is parsed and validated:
    - Source and target must reference valid chunk IDs from the current batch
    - Self-referencing edges (source == target) are rejected
-   - Relation must be one of the 7 prompted types (8 types are accepted for backward compatibility — `similar_to` is no longer prompted but still parsed if returned)
+   - Relation must be one of the 6 prompted types (`sequence` is excluded from the prompt since it is handled deterministically by `WithSequenceEdges`; `similar_to` and `sequence` are still accepted for backward compatibility if returned)
    - Weight must be in the range (0.0, 1.0]
 5. **Deduplication** — when overlapping batches produce duplicate edges (same source, target, and relation), only the highest-weight edge is kept.
 6. **Context cancellation** — workers check `ctx.Err()` before processing each batch, stopping early if the context is cancelled.
@@ -85,7 +94,7 @@ Pruning happens before `StoreEdges()`, so only high-value edges reach the databa
 
 ## Relationship Types
 
-The LLM identifies 8 typed relationships between chunks. Each is a `RelationType` constant:
+The LLM prompt targets 6 relationship types; 2 additional types exist for deterministic or backward-compatible use. Each is a `RelationType` constant:
 
 | Type | Constant | Meaning | Example |
 |------|----------|---------|---------|
@@ -94,8 +103,8 @@ The LLM identifies 8 typed relationships between chunks. Each is a `RelationType
 | `depends_on` | `RelDependsOn` | Chunk A assumes knowledge from chunk B | "Building on the OAuth flow described above..." |
 | `contradicts` | `RelContradicts` | Chunk A conflicts with chunk B | Two sections with conflicting recommendations |
 | `part_of` | `RelPartOf` | Chunk A is a component or subset of chunk B | A subsection of a broader topic |
-| `similar_to` | `RelSimilarTo` | Chunks cover overlapping topics (**deprecated** — no longer prompted, accepted for backward compatibility) | Two sections about related features |
-| `sequence` | `RelSequence` | Chunk A follows chunk B in logical order | Consecutive paragraphs, tutorial steps |
+| `similar_to` | `RelSimilarTo` | Chunks cover overlapping topics (**deprecated** — not prompted, accepted for backward compatibility) | Two sections about related features |
+| `sequence` | `RelSequence` | Chunk A follows chunk B in logical order (**not LLM-prompted** — created deterministically by `WithSequenceEdges`, accepted for backward compatibility if LLM returns it) | Consecutive paragraphs, tutorial steps |
 | `caused_by` | `RelCausedBy` | Chunk A is a consequence of chunk B | "This led to..." or cause-and-effect chains |
 
 Each edge carries a **confidence weight** (0.0–1.0) reflecting the LLM's certainty. Sequence edges always have weight 1.0.
@@ -130,15 +139,24 @@ type GraphStore interface {
 }
 ```
 
-`GraphStore` is an **optional** Store capability, discovered via type assertion. All three shipped backends implement it:
+`GraphStore` is an **optional** Store capability, discovered via type assertion. Both shipped backends implement it:
 
 | Backend | Storage | Edge Deletion |
 |---------|---------|---------------|
 | `store/sqlite` | `chunk_edges` table | Cascade on document delete + orphan pruning |
 | `store/postgres` | `chunk_edges` table | Cascade on document delete + orphan pruning |
-| `store/libsql` | `chunk_edges` table | Cascade on document delete + orphan pruning |
 
 If the Store doesn't implement `GraphStore`, graph extraction and retrieval silently skip — no error, no configuration needed.
+
+### BidirectionalGraphStore Interface
+
+```go
+type BidirectionalGraphStore interface {
+    GetBothEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
+}
+```
+
+`BidirectionalGraphStore` is an **optional** `GraphStore` capability that fetches both outgoing and incoming edges in a single query (`WHERE source_id IN (...) OR target_id IN (...)`). When `WithBidirectional(true)` is set, `GraphRetriever` automatically uses this interface if available, reducing database round-trips from 2 to 1 per hop. Both shipped backends implement it.
 
 ## Ingestion Configuration
 
@@ -151,6 +169,9 @@ ingestor := ingest.NewIngestor(store, embedding,
     ingest.WithGraphExtractionWorkers(3),      // parallel LLM calls (default 3)
     ingest.WithMinEdgeWeight(0.3),             // drop low-confidence edges
     ingest.WithMaxEdgesPerChunk(5),            // cap edges per source chunk
+
+    // Document-aware extraction (include document structure in LLM prompt)
+    ingest.WithGraphDocContext(50_000),        // max bytes of doc text in prompt (default 0 = disabled)
 
     // Semantic batching (group by similarity instead of position)
     ingest.WithSemanticBatching(true),         // embedding-based batch grouping
@@ -174,9 +195,9 @@ ingestor := ingest.NewIngestor(store, embedding,
 | `WithGraphExtractionWorkers(n)` | 3 | Max concurrent LLM calls for graph extraction. Set to 1 for sequential extraction |
 | `WithMinEdgeWeight(w)` | 0 (no filter) | Minimum confidence weight to keep an edge |
 | `WithMaxEdgesPerChunk(n)` | 0 (unlimited) | Maximum edges per source chunk (top N by weight) |
+| `WithGraphDocContext(n)` | 0 (disabled) | Max bytes of source document text included in the LLM extraction prompt. Gives the LLM structural context (headings, sections) for better cross-section relationship discovery. Recommended: 50,000 for structured technical documents |
 | `WithSequenceEdges(b)` | false | Auto-create `sequence` edges between consecutive chunks. No LLM required |
 | `WithSemanticBatching(b)` | false | Group chunks by embedding similarity instead of sequential position for LLM extraction. Produces higher-quality batches. When enabled, `WithGraphBatchOverlap` is ignored |
-| `WithCrossDocumentEdges(b)` | false | Enable automatic cross-document edge discovery during ingestion |
 
 ## Cross-Document Edge Extraction
 
@@ -255,7 +276,7 @@ sequenceDiagram
    - Track the best score per chunk (max of vector and graph scores)
    - Advance the frontier to newly discovered chunks
 5. **Fetch content** — graph-discovered chunks that weren't in the seed set are fetched via `GetChunksByIDs()`.
-6. **Parent resolution** — if a result chunk has a `ParentID`, its parent content replaces the child content for richer context.
+6. **Parent resolution** — if a result chunk has a `ParentID`, its parent content replaces the child content for richer context. When multiple children share the same parent, results are sorted by score first so the highest-scored child's metadata (score, graph context) is preserved.
 7. **Document metadata** — if the Store implements `DocumentGetter`, the `DocumentTitle` and `DocumentSource` fields are populated on each result.
 8. **Reranking** — if `WithGraphReranker` is configured, results are reranked before final selection.
 9. **Sort and trim** — results are sorted by blended score descending and trimmed to `topK`. With `WithGraphTopK`, a two-pool merge guarantees graph-discovered slots.
@@ -439,6 +460,7 @@ func main() {
     // 2. Ingest with graph extraction + sequence edges
     ingestor := ingest.NewIngestor(store, embedding,
         ingest.WithGraphExtraction(llm),
+        ingest.WithGraphDocContext(50_000),   // document-aware extraction
         ingest.WithSequenceEdges(true),
         ingest.WithMinEdgeWeight(0.3),
         ingest.WithMaxEdgesPerChunk(5),

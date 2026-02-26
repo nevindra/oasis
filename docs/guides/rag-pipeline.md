@@ -495,7 +495,6 @@ fmt.Printf("Created %d cross-document edges\n", count)
 | `WithMinEdgeWeight(w)` | 0 | Minimum edge weight to keep |
 | `WithMaxEdgesPerChunk(n)` | 0 (unlimited) | Cap edges per source chunk (top N by weight) |
 | `WithSequenceEdges(b)` | false | Auto-create sequence edges between consecutive chunks |
-| `WithCrossDocumentEdges(b)` | false | Enable automatic cross-document edge discovery during ingestion |
 
 ### GraphRetriever Options
 

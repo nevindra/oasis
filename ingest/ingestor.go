@@ -42,15 +42,15 @@ type Ingestor struct {
 	childChunker  Chunker
 
 	// graph extraction config
-	graphProvider     oasis.Provider
-	minEdgeWeight     float32
-	maxEdgesPerChunk  int
-	graphBatchSize    int
-	graphBatchOverlap int
-	graphWorkers      int
-	crossDocEdges     bool
-	sequenceEdges     bool
-	semanticBatching  bool
+	graphProvider        oasis.Provider
+	minEdgeWeight        float32
+	maxEdgesPerChunk     int
+	graphBatchSize       int
+	graphBatchOverlap    int
+	graphWorkers         int
+	graphDocContextBytes int
+	sequenceEdges        bool
+	semanticBatching     bool
 
 	// contextual enrichment config
 	contextProvider    oasis.Provider
@@ -199,7 +199,7 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 	cp.Status = oasis.CheckpointGraphing
 	ing.saveCheckpoint(ctx, cp)
 
-	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
+	if err := ing.extractAndStoreEdges(ctx, chunks, text); err != nil {
 		err = fmt.Errorf("graph extraction: %w", err)
 		if ing.logger != nil {
 			ing.logger.Error("graph extraction failed",
@@ -306,7 +306,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 			ing.logger.Debug("extracting with metadata extractor",
 				"doc_id", docID, "content_type", string(ct))
 		}
-		result, err := ing.extractWithMetaRetry(me, content)
+		result, err := ing.extractWithMetaRetry(ctx, me, content)
 		if err != nil {
 			err = fmt.Errorf("extract %s: %w", ct, err)
 			if ing.logger != nil {
@@ -329,7 +329,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 				"doc_id", docID, "content_type", string(ct))
 		}
 		var err error
-		text, err = ing.extractWithRetry(extractor, content)
+		text, err = ing.extractWithRetry(ctx, extractor, content)
 		if err != nil {
 			err = fmt.Errorf("extract %s: %w", ct, err)
 			if ing.logger != nil {
@@ -398,7 +398,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 	cp.Status = oasis.CheckpointGraphing
 	ing.saveCheckpoint(ctx, cp)
 
-	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
+	if err := ing.extractAndStoreEdges(ctx, chunks, text); err != nil {
 		err = fmt.Errorf("graph extraction: %w", err)
 		if ing.logger != nil {
 			ing.logger.Error("graph extraction failed",
@@ -435,7 +435,9 @@ func (ing *Ingestor) IngestReader(ctx context.Context, r io.Reader, filename str
 }
 
 // extractAndStoreEdges runs graph extraction if configured and stores edges.
-func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Chunk) error {
+// docText is the full document text used for document-aware extraction when
+// graphDocContextBytes > 0.
+func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Chunk, docText string) error {
 	if ing.graphProvider == nil && !ing.sequenceEdges {
 		return nil
 	}
@@ -448,11 +450,18 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 		return nil
 	}
 
+	// Build truncated document context for LLM extraction prompt.
+	var docContext string
+	if ing.graphDocContextBytes > 0 && docText != "" {
+		docContext = truncateDocText(docText, ing.graphDocContextBytes)
+	}
+
 	if ing.logger != nil {
 		ing.logger.Info("graph edge extraction started",
 			"chunk_count", len(chunks),
 			"sequence_edges", ing.sequenceEdges,
-			"llm_extraction", ing.graphProvider != nil)
+			"llm_extraction", ing.graphProvider != nil,
+			"doc_context_bytes", len(docContext))
 	}
 
 	var edges []oasis.ChunkEdge
@@ -476,19 +485,17 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 					"batch_size", ing.graphBatchSize,
 					"workers", ing.graphWorkers)
 			}
-			semBatches := buildSemanticBatches(chunks, ing.graphBatchSize)
+			semBatches := buildSemanticBatches(chunks, ing.graphBatchSize, ing.logger)
 			if ing.logger != nil {
 				ing.logger.Debug("semantic batches built",
 					"batch_count", len(semBatches))
 			}
-			for _, sb := range semBatches {
-				llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, sb, len(sb), 0, 1, ing.logger)
-				if err != nil {
-					if ing.logger != nil {
-						ing.logger.Warn("semantic batch extraction failed", "err", err)
-					}
-					continue
+			llmEdges, err := extractFromBatches(ctx, ing.graphProvider, semBatches, ing.graphWorkers, docContext, ing.logger)
+			if err != nil {
+				if ing.logger != nil {
+					ing.logger.Warn("semantic batch extraction failed", "err", err)
 				}
+			} else {
 				edges = append(edges, llmEdges...)
 			}
 			if ing.logger != nil {
@@ -503,7 +510,7 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 					"overlap", ing.graphBatchOverlap,
 					"workers", ing.graphWorkers)
 			}
-			llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.graphBatchOverlap, ing.graphWorkers, ing.logger)
+			llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.graphBatchOverlap, ing.graphWorkers, docContext, ing.logger)
 			if err != nil {
 				if ing.logger != nil {
 					ing.logger.Warn("LLM graph extraction failed", "err", err)

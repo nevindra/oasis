@@ -11,6 +11,10 @@ import (
 
 // --- GraphStore ---
 
+// storeEdgesBatchSize is the max rows per multi-value INSERT (SQLite has a
+// default SQLITE_MAX_VARIABLE_NUMBER of 999; 6 params per row → 166 rows max).
+const storeEdgesBatchSize = 150
+
 func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
 	if len(edges) == 0 {
 		return nil
@@ -24,17 +28,28 @@ func (s *Store) StoreEdges(ctx context.Context, edges []oasis.ChunkEdge) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	for _, e := range edges {
-		_, err := tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO chunk_edges (id, source_id, target_id, relation, weight, description)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			e.ID, e.SourceID, e.TargetID, string(e.Relation), e.Weight, e.Description,
-		)
-		if err != nil {
-			s.logger.Error("sqlite: store edge failed", "id", e.ID, "error", err)
-			return fmt.Errorf("store edge: %w", err)
+	for i := 0; i < len(edges); i += storeEdgesBatchSize {
+		end := min(i+storeEdgesBatchSize, len(edges))
+		batch := edges[i:end]
+
+		var sb strings.Builder
+		sb.WriteString(`INSERT INTO chunk_edges (id, source_id, target_id, relation, weight, description) VALUES `)
+		args := make([]any, 0, len(batch)*6)
+		for j, e := range batch {
+			if j > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString("(?,?,?,?,?,?)")
+			args = append(args, e.ID, e.SourceID, e.TargetID, string(e.Relation), e.Weight, e.Description)
+		}
+		sb.WriteString(` ON CONFLICT(source_id, target_id, relation) DO UPDATE SET weight = excluded.weight, description = excluded.description`)
+
+		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+			s.logger.Error("sqlite: store edges batch failed", "batch_size", len(batch), "error", err)
+			return fmt.Errorf("store edges batch: %w", err)
 		}
 	}
+
 	if err := tx.Commit(); err != nil {
 		s.logger.Error("sqlite: store edges commit failed", "error", err, "duration", time.Since(start))
 		return err
@@ -92,6 +107,39 @@ func (s *Store) GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]oasi
 		return nil, err
 	}
 	s.logger.Debug("sqlite: get incoming edges ok", "returned", len(edges), "duration", time.Since(start))
+	return edges, nil
+}
+
+// GetBothEdges returns both outgoing and incoming edges for the given chunk IDs
+// in a single query. Implements oasis.BidirectionalGraphStore.
+func (s *Store) GetBothEdges(ctx context.Context, chunkIDs []string) ([]oasis.ChunkEdge, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	start := time.Now()
+	s.logger.Debug("sqlite: get both edges", "chunk_count", len(chunkIDs))
+
+	placeholders := make([]string, len(chunkIDs))
+	args := make([]any, 0, len(chunkIDs)*2)
+	for i, id := range chunkIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	ph := strings.Join(placeholders, ",")
+	// Duplicate args for the OR clause.
+	for _, id := range chunkIDs {
+		args = append(args, id)
+	}
+	query := fmt.Sprintf(
+		`SELECT id, source_id, target_id, relation, weight, description FROM chunk_edges WHERE source_id IN (%s) OR target_id IN (%s)`,
+		ph, ph,
+	)
+	edges, err := s.scanEdges(ctx, query, args)
+	if err != nil {
+		s.logger.Error("sqlite: get both edges failed", "error", err, "duration", time.Since(start))
+		return nil, err
+	}
+	s.logger.Debug("sqlite: get both edges ok", "returned", len(edges), "duration", time.Since(start))
 	return edges, nil
 }
 

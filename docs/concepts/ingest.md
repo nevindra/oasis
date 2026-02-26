@@ -440,7 +440,6 @@ for _, cp := range checkpoints {
 | `WithMinEdgeWeight(w)` | 0.0 | Minimum weight threshold for storing edges |
 | `WithMaxEdgesPerChunk(n)` | unlimited | Cap on edges extracted per chunk |
 | `WithGraphBatchSize(n)` | 5 | Chunks per graph extraction LLM call |
-| `WithCrossDocumentEdges(b)` | false | Allow edges between chunks from different documents |
 | `WithSequenceEdges(b)` | false | Add sequence edges between consecutive chunks |
 | `WithContextualEnrichment(p)` | disabled | Enable LLM-based contextual enrichment per chunk |
 | `WithContextWorkers(n)` | 3 | Max concurrent LLM calls for contextual enrichment |

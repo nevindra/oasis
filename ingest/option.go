@@ -96,11 +96,6 @@ func WithGraphExtractionWorkers(n int) Option {
 	return func(ing *Ingestor) { ing.graphWorkers = n }
 }
 
-// WithCrossDocumentEdges enables cross-document relationship discovery (default false).
-func WithCrossDocumentEdges(b bool) Option {
-	return func(ing *Ingestor) { ing.crossDocEdges = b }
-}
-
 // WithSequenceEdges enables automatic creation of sequence edges between
 // consecutive chunks in the same document (default false). This is a
 // lightweight, non-LLM alternative that links chunk[i] → chunk[i+1] with
@@ -177,6 +172,16 @@ func WithBatchConcurrency(n int) Option {
 // at the end of an IngestBatch call (default false).
 func WithBatchCrossDocEdges(b bool) Option {
 	return func(ing *Ingestor) { ing.batchCrossDocEdges = b }
+}
+
+// WithGraphDocContext sets the maximum document text (in bytes) included in the
+// graph extraction prompt. When > 0, each LLM extraction call includes a
+// truncated copy of the source document, giving the LLM structural context
+// (headings, section hierarchy) to make better relationship decisions.
+// Default is 0 (disabled — no document context in prompt).
+// Recommended: 50_000 (~12K tokens) for structured technical documents.
+func WithGraphDocContext(maxBytes int) Option {
+	return func(ing *Ingestor) { ing.graphDocContextBytes = maxBytes }
 }
 
 // WithSemanticBatching enables embedding-based batching for graph extraction
