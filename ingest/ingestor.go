@@ -50,6 +50,11 @@ type Ingestor struct {
 	crossDocEdges     bool
 	sequenceEdges    bool
 
+	// contextual enrichment config
+	contextProvider    oasis.Provider
+	contextWorkers     int
+	contextMaxDocBytes int
+
 	// observability
 	tracer oasis.Tracer
 	logger *slog.Logger
@@ -81,8 +86,10 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 		mdParentChunker: NewMarkdownChunker(WithMaxTokens(1024)),
 		parentChunker:   NewRecursiveChunker(WithMaxTokens(1024)),
 		childChunker:    NewRecursiveChunker(WithMaxTokens(256)),
-		graphBatchSize:  5,
-		graphWorkers:    3,
+		graphBatchSize:     5,
+		graphWorkers:       3,
+		contextWorkers:     3,
+		contextMaxDocBytes: 100_000, // 100KB ≈ ~25K tokens
 	}
 	for _, o := range opts {
 		o(ing)
@@ -118,6 +125,16 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 	now := oasis.NowUnix()
 	docID := oasis.NewID()
 
+	if ing.logger != nil {
+		ing.logger.Info("ingest started",
+			"doc_id", docID,
+			"source", source,
+			"title", title,
+			"content_type", string(TypePlainText),
+			"strategy", strategyName(ing.strategy),
+			"content_bytes", len(text))
+	}
+
 	doc := oasis.Document{
 		ID:        docID,
 		Title:     title,
@@ -128,18 +145,35 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 
 	chunks, err := ing.chunkAndEmbed(ctx, text, docID, TypePlainText, source, nil)
 	if err != nil {
+		if ing.logger != nil {
+			ing.logger.Error("chunk and embed failed",
+				"doc_id", docID, "source", source, "err", err)
+		}
 		ing.notifyError(source, err)
 		return IngestResult{}, err
 	}
 
+	if ing.logger != nil {
+		ing.logger.Info("storing document",
+			"doc_id", docID, "chunk_count", len(chunks))
+	}
+
 	if err := ing.store.StoreDocument(ctx, doc, chunks); err != nil {
 		err = fmt.Errorf("store: %w", err)
+		if ing.logger != nil {
+			ing.logger.Error("store document failed",
+				"doc_id", docID, "source", source, "err", err)
+		}
 		ing.notifyError(source, err)
 		return IngestResult{}, err
 	}
 
 	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
 		err = fmt.Errorf("graph extraction: %w", err)
+		if ing.logger != nil {
+			ing.logger.Error("graph extraction failed",
+				"doc_id", docID, "source", source, "err", err)
+		}
 		ing.notifyError(source, err)
 		return IngestResult{}, err
 	}
@@ -148,6 +182,10 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 		DocumentID: docID,
 		Document:   doc,
 		ChunkCount: len(chunks),
+	}
+	if ing.logger != nil {
+		ing.logger.Info("ingest completed",
+			"doc_id", docID, "source", source, "chunk_count", len(chunks))
 	}
 	if ing.onSuccess != nil {
 		ing.onSuccess(result)
@@ -185,13 +223,32 @@ func (ing *Ingestor) IngestFile(ctx context.Context, content []byte, filename st
 func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename string, ct ContentType) (IngestResult, error) {
 	if ing.maxContentSize > 0 && len(content) > ing.maxContentSize {
 		err := fmt.Errorf("content size %d exceeds limit %d", len(content), ing.maxContentSize)
+		if ing.logger != nil {
+			ing.logger.Error("content size exceeds limit",
+				"source", filename, "content_bytes", len(content),
+				"max_bytes", ing.maxContentSize)
+		}
 		ing.notifyError(filename, err)
 		return IngestResult{}, err
 	}
 
 	extractor, ok := ing.extractors[ct]
 	if !ok {
+		if ing.logger != nil {
+			ing.logger.Warn("no extractor registered, falling back to plain text",
+				"source", filename, "content_type", string(ct))
+		}
 		extractor = PlainTextExtractor{}
+	}
+
+	docID := oasis.NewID()
+	if ing.logger != nil {
+		ing.logger.Info("ingest started",
+			"doc_id", docID,
+			"source", filename,
+			"content_type", string(ct),
+			"strategy", strategyName(ing.strategy),
+			"content_bytes", len(content))
 	}
 
 	var text string
@@ -199,26 +256,50 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 
 	// Use MetadataExtractor if available.
 	if me, ok := extractor.(MetadataExtractor); ok {
+		if ing.logger != nil {
+			ing.logger.Info("extracting with metadata extractor",
+				"doc_id", docID, "content_type", string(ct))
+		}
 		result, err := safeExtractWithMeta(me, content)
 		if err != nil {
 			err = fmt.Errorf("extract %s: %w", ct, err)
+			if ing.logger != nil {
+				ing.logger.Error("metadata extraction failed",
+					"doc_id", docID, "source", filename, "err", err)
+			}
 			ing.notifyError(filename, err)
 			return IngestResult{}, err
 		}
 		text = result.Text
 		pageMeta = result.Meta
+		if ing.logger != nil {
+			ing.logger.Info("extraction completed",
+				"doc_id", docID, "text_bytes", len(text),
+				"page_meta_count", len(pageMeta))
+		}
 	} else {
+		if ing.logger != nil {
+			ing.logger.Info("extracting with standard extractor",
+				"doc_id", docID, "content_type", string(ct))
+		}
 		var err error
 		text, err = safeExtract(extractor, content)
 		if err != nil {
 			err = fmt.Errorf("extract %s: %w", ct, err)
+			if ing.logger != nil {
+				ing.logger.Error("extraction failed",
+					"doc_id", docID, "source", filename, "err", err)
+			}
 			ing.notifyError(filename, err)
 			return IngestResult{}, err
+		}
+		if ing.logger != nil {
+			ing.logger.Info("extraction completed",
+				"doc_id", docID, "text_bytes", len(text))
 		}
 	}
 
 	now := oasis.NowUnix()
-	docID := oasis.NewID()
 
 	doc := oasis.Document{
 		ID:        docID,
@@ -230,18 +311,35 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 
 	chunks, err := ing.chunkAndEmbed(ctx, text, docID, ct, filename, pageMeta)
 	if err != nil {
+		if ing.logger != nil {
+			ing.logger.Error("chunk and embed failed",
+				"doc_id", docID, "source", filename, "err", err)
+		}
 		ing.notifyError(filename, err)
 		return IngestResult{}, err
 	}
 
+	if ing.logger != nil {
+		ing.logger.Info("storing document",
+			"doc_id", docID, "chunk_count", len(chunks))
+	}
+
 	if err := ing.store.StoreDocument(ctx, doc, chunks); err != nil {
 		err = fmt.Errorf("store: %w", err)
+		if ing.logger != nil {
+			ing.logger.Error("store document failed",
+				"doc_id", docID, "source", filename, "err", err)
+		}
 		ing.notifyError(filename, err)
 		return IngestResult{}, err
 	}
 
 	if err := ing.extractAndStoreEdges(ctx, chunks); err != nil {
 		err = fmt.Errorf("graph extraction: %w", err)
+		if ing.logger != nil {
+			ing.logger.Error("graph extraction failed",
+				"doc_id", docID, "source", filename, "err", err)
+		}
 		ing.notifyError(filename, err)
 		return IngestResult{}, err
 	}
@@ -250,6 +348,10 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		DocumentID: docID,
 		Document:   doc,
 		ChunkCount: len(chunks),
+	}
+	if ing.logger != nil {
+		ing.logger.Info("ingest completed",
+			"doc_id", docID, "source", filename, "chunk_count", len(chunks))
 	}
 	if ing.onSuccess != nil {
 		ing.onSuccess(result)
@@ -274,36 +376,94 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 
 	gs, ok := ing.store.(oasis.GraphStore)
 	if !ok {
-		return nil // store doesn't support graph, skip silently
+		if ing.logger != nil {
+			ing.logger.Warn("graph extraction skipped: store does not implement GraphStore")
+		}
+		return nil
+	}
+
+	if ing.logger != nil {
+		ing.logger.Info("graph edge extraction started",
+			"chunk_count", len(chunks),
+			"sequence_edges", ing.sequenceEdges,
+			"llm_extraction", ing.graphProvider != nil)
 	}
 
 	var edges []oasis.ChunkEdge
 
 	// Sequence edges: deterministic, no LLM needed.
 	if ing.sequenceEdges {
-		edges = append(edges, buildSequenceEdges(chunks)...)
+		seqEdges := buildSequenceEdges(chunks)
+		edges = append(edges, seqEdges...)
+		if ing.logger != nil {
+			ing.logger.Info("sequence edges built",
+				"edge_count", len(seqEdges))
+		}
 	}
 
 	// LLM-based extraction.
 	if ing.graphProvider != nil {
+		if ing.logger != nil {
+			ing.logger.Info("LLM graph extraction started",
+				"chunk_count", len(chunks),
+				"batch_size", ing.graphBatchSize,
+				"overlap", ing.graphBatchOverlap,
+				"workers", ing.graphWorkers)
+		}
 		llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.graphBatchOverlap, ing.graphWorkers, ing.logger)
-		if err != nil && ing.logger != nil {
-			ing.logger.Warn("graph extraction failed", "err", err)
+		if err != nil {
+			if ing.logger != nil {
+				ing.logger.Warn("LLM graph extraction failed", "err", err)
+			}
+		} else if ing.logger != nil {
+			ing.logger.Info("LLM graph extraction completed",
+				"edge_count", len(llmEdges))
 		}
 		edges = append(edges, llmEdges...)
 	}
 
+	beforeDedup := len(edges)
 	edges = deduplicateEdges(edges)
+	if ing.logger != nil && beforeDedup != len(edges) {
+		ing.logger.Info("edges deduplicated",
+			"before", beforeDedup, "after", len(edges))
+	}
 
 	if ing.minEdgeWeight > 0 || ing.maxEdgesPerChunk > 0 {
+		beforePrune := len(edges)
 		edges = pruneEdges(edges, ing.minEdgeWeight, ing.maxEdgesPerChunk)
+		if ing.logger != nil {
+			ing.logger.Info("edges pruned",
+				"before", beforePrune, "after", len(edges),
+				"min_weight", ing.minEdgeWeight,
+				"max_per_chunk", ing.maxEdgesPerChunk)
+		}
 	}
 
 	if len(edges) == 0 {
+		if ing.logger != nil {
+			ing.logger.Info("no edges to store after processing")
+		}
 		return nil
 	}
 
-	return gs.StoreEdges(ctx, edges)
+	if ing.logger != nil {
+		ing.logger.Info("storing edges", "edge_count", len(edges))
+	}
+
+	if err := gs.StoreEdges(ctx, edges); err != nil {
+		if ing.logger != nil {
+			ing.logger.Error("store edges failed",
+				"edge_count", len(edges), "err", err)
+		}
+		return err
+	}
+
+	if ing.logger != nil {
+		ing.logger.Info("edges stored successfully", "edge_count", len(edges))
+	}
+
+	return nil
 }
 
 // notifyError fires the onError hook if set.
@@ -365,12 +525,28 @@ func (ing *Ingestor) chunkAndEmbed(ctx context.Context, text, docID string, ct C
 // chunkFlat performs single-level chunking with batched embedding.
 func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct ContentType, source string, pageMeta []PageMeta) ([]oasis.Chunk, error) {
 	chunker := ing.selectChunker(ct)
+
+	if ing.logger != nil {
+		ing.logger.Info("chunking started",
+			"doc_id", docID, "strategy", "flat",
+			"content_type", string(ct), "text_bytes", len(text))
+	}
+
 	chunkTexts, err := chunkWith(ctx, chunker, text)
 	if err != nil {
 		return nil, fmt.Errorf("chunk: %w", err)
 	}
 	if len(chunkTexts) == 0 {
+		if ing.logger != nil {
+			ing.logger.Warn("chunker produced zero chunks",
+				"doc_id", docID, "source", source)
+		}
 		return nil, nil
+	}
+
+	if ing.logger != nil {
+		ing.logger.Info("chunking completed",
+			"doc_id", docID, "chunk_count", len(chunkTexts))
 	}
 
 	chunks := make([]oasis.Chunk, len(chunkTexts))
@@ -394,6 +570,20 @@ func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct Conte
 		}
 	}
 
+	if ing.contextProvider != nil {
+		if ing.logger != nil {
+			ing.logger.Info("contextual enrichment started",
+				"doc_id", docID, "chunk_count", len(chunks),
+				"workers", ing.contextWorkers)
+		}
+		docText := truncateDocText(text, ing.contextMaxDocBytes)
+		enrichChunksWithContext(ctx, ing.contextProvider, chunks, docText, ing.contextWorkers, ing.logger)
+		if ing.logger != nil {
+			ing.logger.Info("contextual enrichment completed",
+				"doc_id", docID, "chunk_count", len(chunks))
+		}
+	}
+
 	if err := ing.batchEmbed(ctx, chunks); err != nil {
 		return nil, err
 	}
@@ -410,12 +600,27 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 		parentChunker = ing.mdParentChunker
 	}
 
+	if ing.logger != nil {
+		ing.logger.Info("chunking started",
+			"doc_id", docID, "strategy", "parent_child",
+			"content_type", string(ct), "text_bytes", len(text))
+	}
+
 	parentTexts, err := chunkWith(ctx, parentChunker, text)
 	if err != nil {
 		return nil, fmt.Errorf("chunk parent: %w", err)
 	}
 	if len(parentTexts) == 0 {
+		if ing.logger != nil {
+			ing.logger.Warn("parent chunker produced zero chunks",
+				"doc_id", docID, "source", source)
+		}
 		return nil, nil
+	}
+
+	if ing.logger != nil {
+		ing.logger.Info("parent chunking completed",
+			"doc_id", docID, "parent_count", len(parentTexts))
 	}
 
 	var allChunks []oasis.Chunk
@@ -471,6 +676,26 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 			}
 			childChunks = append(childChunks, child)
 			chunkIdx++
+		}
+	}
+
+	if ing.logger != nil {
+		ing.logger.Info("child chunking completed",
+			"doc_id", docID, "parent_count", len(parentTexts),
+			"child_count", len(childChunks))
+	}
+
+	if ing.contextProvider != nil {
+		if ing.logger != nil {
+			ing.logger.Info("contextual enrichment started",
+				"doc_id", docID, "chunk_count", len(childChunks),
+				"workers", ing.contextWorkers)
+		}
+		docText := truncateDocText(text, ing.contextMaxDocBytes)
+		enrichChunksWithContext(ctx, ing.contextProvider, childChunks, docText, ing.contextWorkers, ing.logger)
+		if ing.logger != nil {
+			ing.logger.Info("contextual enrichment completed",
+				"doc_id", docID, "chunk_count", len(childChunks))
 		}
 	}
 
@@ -545,8 +770,17 @@ func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk) error
 		return nil
 	}
 
+	totalBatches := (len(chunks) + ing.batchSize - 1) / ing.batchSize
+	if ing.logger != nil {
+		ing.logger.Info("embedding started",
+			"chunk_count", len(chunks),
+			"batch_size", ing.batchSize,
+			"total_batches", totalBatches)
+	}
+
 	for i := 0; i < len(chunks); i += ing.batchSize {
 		end := min(i+ing.batchSize, len(chunks))
+		batchNum := i/ing.batchSize + 1
 
 		batch := chunks[i:end]
 		texts := make([]string, len(batch))
@@ -554,8 +788,19 @@ func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk) error
 			texts[j] = c.Content
 		}
 
+		if ing.logger != nil {
+			ing.logger.Info("embedding batch",
+				"batch", batchNum, "total_batches", totalBatches,
+				"chunks_in_batch", len(batch))
+		}
+
 		embeddings, err := ing.embedding.Embed(ctx, texts)
 		if err != nil {
+			if ing.logger != nil {
+				ing.logger.Error("embedding batch failed",
+					"batch", batchNum, "range", fmt.Sprintf("%d-%d", i, end),
+					"err", err)
+			}
 			return fmt.Errorf("embed batch %d-%d: %w", i, end, err)
 		}
 
@@ -564,6 +809,11 @@ func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk) error
 				chunks[i+j].Embedding = embeddings[j]
 			}
 		}
+	}
+
+	if ing.logger != nil {
+		ing.logger.Info("embedding completed",
+			"chunk_count", len(chunks), "batches_processed", totalBatches)
 	}
 
 	return nil

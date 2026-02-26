@@ -56,6 +56,25 @@ func TestParseEdgeResponse_NoDescription(t *testing.T) {
 	}
 }
 
+func TestParseEdgeResponse_MarkdownFenced(t *testing.T) {
+	chunks := []oasis.Chunk{
+		{ID: "c1", Content: "A"},
+		{ID: "c2", Content: "B"},
+	}
+	// LLM wraps JSON in markdown code fences.
+	fenced := "```json\n{\"edges\":[{\"source\":\"c1\",\"target\":\"c2\",\"relation\":\"references\",\"weight\":0.8}]}\n```"
+	edges, err := parseEdgeResponse(fenced, chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len = %d, want 1", len(edges))
+	}
+	if edges[0].SourceID != "c1" || edges[0].TargetID != "c2" {
+		t.Errorf("got %s→%s, want c1→c2", edges[0].SourceID, edges[0].TargetID)
+	}
+}
+
 func TestPruneEdges(t *testing.T) {
 	edges := []oasis.ChunkEdge{
 		{ID: "e1", SourceID: "c1", TargetID: "c2", Relation: oasis.RelReferences, Weight: 0.9},

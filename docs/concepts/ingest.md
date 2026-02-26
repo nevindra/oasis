@@ -10,7 +10,8 @@ flowchart LR
     EXTRACT --> PLAIN["Plain text<br>+ metadata"]
     PLAIN --> CHUNK[Chunker]
     CHUNK --> CHUNKS["Chunks []string"]
-    CHUNKS --> EMBED["EmbeddingProvider<br>(batched)"]
+    CHUNKS --> CONTEXT["Contextual Enrichment<br>(optional, LLM-based)"]
+    CONTEXT --> EMBED["EmbeddingProvider<br>(batched)"]
     EMBED --> VECTORS["Chunks + embeddings"]
     VECTORS --> STORE["Store<br>StoreDocument()"]
     VECTORS --> GRAPH["Graph Extraction<br>(optional, LLM-based)"]
@@ -181,6 +182,50 @@ ingestor := ingest.NewIngestor(store, embedding,
 )
 ```
 
+#### Semantic Parent Boundaries
+
+By default, parent chunks are split by token count (RecursiveChunker). For documents where topics don't align with fixed-size boundaries, use `SemanticChunker` as the parent chunker — parent boundaries will follow natural topic shifts instead of arbitrary token limits.
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithStrategy(ingest.StrategyParentChild),
+    ingest.WithParentChunker(ingest.NewSemanticChunker(embedding.Embed,
+        ingest.WithMaxTokens(1024),
+        ingest.WithBreakpointPercentile(25),
+    )),
+)
+```
+
+This produces semantically coherent parents — each parent covers a complete topic rather than cutting mid-paragraph. Children are still split with RecursiveChunker for precise embedding.
+
+## Contextual Enrichment
+
+When enabled, each chunk is sent to an LLM alongside the full document text. The LLM returns a 1-2 sentence context prefix that is prepended to `chunk.Content` before embedding. This embeds document-level positional context into each chunk's vector, improving retrieval precision by ~35% (per Anthropic's research).
+
+```go
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithContextualEnrichment(llm),      // enable contextual enrichment
+    ingest.WithContextWorkers(5),               // concurrent LLM calls (default 3)
+    ingest.WithContextMaxDocBytes(100_000),     // doc truncation limit (default 100KB)
+)
+```
+
+**How it works:** After chunking but before embedding, each chunk's content is enriched:
+
+```
+// Before enrichment:
+chunk.Content = "OAuth tokens expire after 1 hour."
+
+// After enrichment:
+chunk.Content = "This chunk is from the Authentication section of the API reference, discussing token lifecycle.\n\nOAuth tokens expire after 1 hour."
+```
+
+**Parent-child strategy:** Only child chunks are enriched (they're the ones embedded and searched). Parent chunks are left unchanged.
+
+**Graceful degradation:** Individual LLM failures are logged but don't block ingestion — the chunk keeps its original content.
+
+**Document truncation:** Documents exceeding `WithContextMaxDocBytes` (default 100KB) are truncated at the nearest word boundary before being sent to the LLM.
+
 ## Graph Extraction
 
 When enabled, the ingestor discovers relationships between chunks and stores them as weighted edges for [GraphRetriever](retrieval.md) traversal at query time. Two independent edge sources are available:
@@ -224,6 +269,9 @@ For the full deep-dive — extraction internals, relationship types, edge prunin
 | `WithGraphBatchSize(n)` | 5 | Chunks per graph extraction LLM call |
 | `WithCrossDocumentEdges(b)` | false | Allow edges between chunks from different documents |
 | `WithSequenceEdges(b)` | false | Add sequence edges between consecutive chunks |
+| `WithContextualEnrichment(p)` | disabled | Enable LLM-based contextual enrichment per chunk |
+| `WithContextWorkers(n)` | 3 | Max concurrent LLM calls for contextual enrichment |
+| `WithContextMaxDocBytes(n)` | 100,000 | Max document bytes sent to LLM for context (0 = unlimited) |
 | `WithIngestorTracer(t)` | nil | Attach a `Tracer` for span creation (`ingest.document`) |
 | `WithIngestorLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 

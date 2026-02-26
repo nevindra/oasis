@@ -110,6 +110,30 @@ func WithSequenceEdges(b bool) Option {
 	return func(ing *Ingestor) { ing.sequenceEdges = b }
 }
 
+// WithContextualEnrichment enables LLM-based contextual enrichment during
+// ingestion. Each chunk is sent to the provider alongside the full document
+// text, and the provider returns a 1-2 sentence context prefix that is
+// prepended to chunk.Content before embedding. This improves retrieval
+// precision by embedding document-level context into each chunk's vector.
+// For parent-child strategy, only child chunks are enriched.
+func WithContextualEnrichment(p oasis.Provider) Option {
+	return func(ing *Ingestor) { ing.contextProvider = p }
+}
+
+// WithContextWorkers sets the max concurrent LLM calls for contextual
+// enrichment (default 3). Set to 1 for sequential processing.
+func WithContextWorkers(n int) Option {
+	return func(ing *Ingestor) { ing.contextWorkers = n }
+}
+
+// WithContextMaxDocBytes sets the maximum document size in bytes sent to the
+// LLM for contextual enrichment (default 100,000 ≈ ~25K tokens). Documents
+// exceeding this limit are truncated at the nearest word boundary. Set to 0
+// to disable truncation.
+func WithContextMaxDocBytes(n int) Option {
+	return func(ing *Ingestor) { ing.contextMaxDocBytes = n }
+}
+
 // WithIngestorTracer sets the Tracer for an Ingestor.
 func WithIngestorTracer(t oasis.Tracer) Option {
 	return func(ing *Ingestor) { ing.tracer = t }

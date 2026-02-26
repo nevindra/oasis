@@ -286,3 +286,148 @@ func TestWithRetry_Chat_TimeoutAllowsSuccess(t *testing.T) {
 		t.Errorf("got %d calls, want 2", stub.calls)
 	}
 }
+
+// --- EmbeddingRetry tests ---
+
+type stubRetryEmbed struct {
+	calls   int
+	results []stubRetryEmbedResult
+}
+
+type stubRetryEmbedResult struct {
+	embeddings [][]float32
+	err        error
+}
+
+func (s *stubRetryEmbed) Name() string   { return "stub-embed" }
+func (s *stubRetryEmbed) Dimensions() int { return 3 }
+func (s *stubRetryEmbed) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	i := s.calls
+	s.calls++
+	if i < len(s.results) {
+		return s.results[i].embeddings, s.results[i].err
+	}
+	return nil, nil
+}
+
+var _ EmbeddingProvider = (*stubRetryEmbed)(nil)
+
+func TestWithEmbeddingRetry_SucceedsFirstAttempt(t *testing.T) {
+	vecs := [][]float32{{0.1, 0.2, 0.3}}
+	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
+		{embeddings: vecs},
+	}}
+	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
+
+	got, err := p.Embed(context.Background(), []string{"hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d embeddings, want 1", len(got))
+	}
+	if stub.calls != 1 {
+		t.Errorf("got %d calls, want 1", stub.calls)
+	}
+}
+
+func TestWithEmbeddingRetry_RetriesOn429(t *testing.T) {
+	vecs := [][]float32{{0.1, 0.2, 0.3}}
+	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
+		{err: &ErrHTTP{Status: 429, Body: "rate limited"}},
+		{embeddings: vecs},
+	}}
+	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
+
+	got, err := p.Embed(context.Background(), []string{"hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d embeddings, want 1", len(got))
+	}
+	if stub.calls != 2 {
+		t.Errorf("got %d calls, want 2", stub.calls)
+	}
+}
+
+func TestWithEmbeddingRetry_RetriesOn503(t *testing.T) {
+	vecs := [][]float32{{0.1, 0.2, 0.3}}
+	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
+		{err: &ErrHTTP{Status: 503, Body: "unavailable"}},
+		{embeddings: vecs},
+	}}
+	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
+
+	_, err := p.Embed(context.Background(), []string{"hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stub.calls != 2 {
+		t.Errorf("got %d calls, want 2", stub.calls)
+	}
+}
+
+func TestWithEmbeddingRetry_DoesNotRetryNonTransient(t *testing.T) {
+	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
+		{err: &ErrHTTP{Status: 400, Body: "bad request"}},
+	}}
+	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
+
+	_, err := p.Embed(context.Background(), []string{"hello"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if stub.calls != 1 {
+		t.Errorf("got %d calls, want 1 (no retry for 400)", stub.calls)
+	}
+}
+
+func TestWithEmbeddingRetry_ExhaustsMaxAttempts(t *testing.T) {
+	transient := stubRetryEmbedResult{err: &ErrHTTP{Status: 429, Body: "rate limited"}}
+	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{transient, transient, transient, transient}}
+	p := WithEmbeddingRetry(stub, RetryBaseDelay(0), RetryMaxAttempts(3))
+
+	_, err := p.Embed(context.Background(), []string{"hello"})
+	if err == nil {
+		t.Fatal("expected error after max attempts, got nil")
+	}
+	if stub.calls != 3 {
+		t.Errorf("got %d calls, want 3", stub.calls)
+	}
+}
+
+func TestWithEmbeddingRetry_RespectsRetryAfter(t *testing.T) {
+	vecs := [][]float32{{0.1, 0.2, 0.3}}
+	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
+		{err: &ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
+		{embeddings: vecs},
+	}}
+	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
+
+	start := time.Now()
+	_, err := p.Embed(context.Background(), []string{"hello"})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed < 80*time.Millisecond {
+		t.Errorf("retry was too fast: %v, expected at least ~100ms from Retry-After", elapsed)
+	}
+	if stub.calls != 2 {
+		t.Errorf("got %d calls, want 2", stub.calls)
+	}
+}
+
+func TestWithEmbeddingRetry_DelegatesNameAndDimensions(t *testing.T) {
+	stub := &stubRetryEmbed{}
+	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
+
+	if p.Name() != "stub-embed" {
+		t.Errorf("Name() = %q, want %q", p.Name(), "stub-embed")
+	}
+	if p.Dimensions() != 3 {
+		t.Errorf("Dimensions() = %d, want 3", p.Dimensions())
+	}
+}

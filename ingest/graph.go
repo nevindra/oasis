@@ -55,6 +55,10 @@ Chunks:
 // workers controls max concurrent LLM calls (<=1 = sequential).
 func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize, overlap, workers int, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
 	if len(chunks) < 2 {
+		if logger != nil {
+			logger.Info("graph extraction skipped: fewer than 2 chunks",
+				"chunk_count", len(chunks))
+		}
 		return nil, nil
 	}
 	if batchSize <= 0 {
@@ -85,11 +89,21 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 	}
 
 	if len(batches) == 0 {
+		if logger != nil {
+			logger.Info("graph extraction skipped: no valid batches formed")
+		}
 		return nil, nil
 	}
 
 	// Worker pool.
 	numWorkers := min(workers, len(batches))
+
+	if logger != nil {
+		logger.Info("graph extraction worker pool started",
+			"batches", len(batches), "workers", numWorkers,
+			"batch_size", batchSize, "stride", stride)
+	}
+
 	work := make(chan batch, len(batches))
 	results := make(chan []oasis.ChunkEdge, len(batches))
 
@@ -97,6 +111,10 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 		go func() {
 			for b := range work {
 				if ctx.Err() != nil {
+					if logger != nil {
+						logger.Warn("graph extraction: context cancelled, skipping batch",
+							"batch", b.index)
+					}
 					results <- nil
 					continue
 				}
@@ -114,7 +132,10 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 				})
 				if err != nil {
 					if logger != nil {
-						logger.Warn("graph extraction: LLM call failed", "batch", b.index, "err", err)
+						logger.Warn("graph extraction: LLM call failed",
+							"batch", b.index,
+							"chunk_count", len(b.chunks),
+							"err", err)
 					}
 					results <- nil
 					continue
@@ -123,10 +144,19 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 				edges, err := parseEdgeResponse(resp.Content, b.chunks)
 				if err != nil {
 					if logger != nil {
-						logger.Warn("graph extraction: parse failed", "batch", b.index, "err", err)
+						logger.Warn("graph extraction: parse failed",
+							"batch", b.index,
+							"response_bytes", len(resp.Content),
+							"err", err)
 					}
 					results <- nil
 					continue
+				}
+
+				if logger != nil {
+					logger.Info("graph extraction: batch completed",
+						"batch", b.index,
+						"edges_extracted", len(edges))
 				}
 				results <- edges
 			}
@@ -141,9 +171,25 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 
 	// Collect results.
 	var allEdges []oasis.ChunkEdge
+	failedBatches := 0
 	for range batches {
 		if edges := <-results; len(edges) > 0 {
 			allEdges = append(allEdges, edges...)
+		} else {
+			failedBatches++
+		}
+	}
+
+	if logger != nil {
+		if failedBatches > 0 {
+			logger.Warn("graph extraction completed with failures",
+				"total_edges", len(allEdges),
+				"successful_batches", len(batches)-failedBatches,
+				"failed_batches", failedBatches)
+		} else {
+			logger.Info("graph extraction completed",
+				"total_edges", len(allEdges),
+				"batches_processed", len(batches))
 		}
 	}
 
@@ -184,8 +230,18 @@ func parseEdgeResponse(content string, chunks []oasis.Chunk) ([]oasis.ChunkEdge,
 		} `json:"edges"`
 	}
 
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		return nil, err
+	raw := strings.TrimSpace(content)
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		// LLM sometimes wraps JSON in markdown fences — find the object.
+		start := strings.Index(raw, "{")
+		end := strings.LastIndex(raw, "}")
+		if start >= 0 && end > start {
+			if err2 := json.Unmarshal([]byte(raw[start:end+1]), &parsed); err2 != nil {
+				return nil, err2
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	validIDs := make(map[string]bool, len(chunks))

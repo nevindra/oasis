@@ -652,6 +652,41 @@ func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int,
 	return results, rows.Err()
 }
 
+// GetChunksByDocument returns all chunks belonging to a specific document,
+// including their embeddings. This implements ingest.DocumentChunkLister.
+func (s *Store) GetChunksByDocument(ctx context.Context, docID string) ([]oasis.Chunk, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, document_id, parent_id, content, chunk_index, embedding::text, metadata
+		 FROM chunks WHERE document_id = $1 ORDER BY chunk_index`, docID)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: get chunks by document: %w", err)
+	}
+	defer rows.Close()
+
+	var chunks []oasis.Chunk
+	for rows.Next() {
+		var c oasis.Chunk
+		var parentID *string
+		var embStr *string
+		var metaJSON []byte
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &embStr, &metaJSON); err != nil {
+			return nil, fmt.Errorf("postgres: scan chunk: %w", err)
+		}
+		if parentID != nil {
+			c.ParentID = *parentID
+		}
+		if embStr != nil {
+			c.Embedding = deserializeEmbedding(*embStr)
+		}
+		if metaJSON != nil {
+			c.Metadata = &oasis.ChunkMeta{}
+			_ = json.Unmarshal(metaJSON, c.Metadata)
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
 // GetChunksByIDs returns chunks matching the given IDs.
 func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk, error) {
 	if len(ids) == 0 {
@@ -1154,4 +1189,23 @@ func serializeEmbedding(embedding []float32) string {
 		parts[i] = strconv.FormatFloat(float64(v), 'f', -1, 32)
 	}
 	return "[" + strings.Join(parts, ",") + "]"
+}
+
+// deserializeEmbedding parses pgvector's text format "[0.1,0.2,0.3]" back to []float32.
+func deserializeEmbedding(s string) []float32 {
+	s = strings.TrimPrefix(s, "[")
+	s = strings.TrimSuffix(s, "]")
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]float32, 0, len(parts))
+	for _, p := range parts {
+		v, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
+		if err != nil {
+			continue
+		}
+		out = append(out, float32(v))
+	}
+	return out
 }

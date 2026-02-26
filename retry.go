@@ -202,5 +202,53 @@ func retryBackoff(base time.Duration, i int) time.Duration {
 	return exp + jitter
 }
 
-// compile-time check
-var _ Provider = (*retryProvider)(nil)
+// retryEmbeddingProvider wraps an EmbeddingProvider and automatically retries
+// transient HTTP errors (429, 503) with exponential backoff.
+type retryEmbeddingProvider struct {
+	inner       EmbeddingProvider
+	maxAttempts int
+	baseDelay   time.Duration
+	timeout     time.Duration
+}
+
+// WithEmbeddingRetry wraps p with automatic retry on transient HTTP errors (429, 503).
+// Accepts the same RetryOption functions as WithRetry. Compose with any EmbeddingProvider:
+//
+//	emb = oasis.WithEmbeddingRetry(gemini.NewEmbedding(apiKey, model))
+//	emb = oasis.WithEmbeddingRetry(gemini.NewEmbedding(apiKey, model), oasis.RetryMaxAttempts(5))
+func WithEmbeddingRetry(p EmbeddingProvider, opts ...RetryOption) EmbeddingProvider {
+	// Apply options to a temporary retryProvider to extract config values.
+	cfg := &retryProvider{maxAttempts: 3, baseDelay: time.Second}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return &retryEmbeddingProvider{
+		inner:       p,
+		maxAttempts: cfg.maxAttempts,
+		baseDelay:   cfg.baseDelay,
+		timeout:     cfg.timeout,
+	}
+}
+
+func (r *retryEmbeddingProvider) Name() string       { return r.inner.Name() }
+func (r *retryEmbeddingProvider) Dimensions() int     { return r.inner.Dimensions() }
+
+func (r *retryEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if r.timeout > 0 {
+		deadline := time.Now().Add(r.timeout)
+		if existing, ok := ctx.Deadline(); !ok || deadline.Before(existing) {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, deadline)
+			defer cancel()
+		}
+	}
+	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), func() ([][]float32, error) {
+		return r.inner.Embed(ctx, texts)
+	})
+}
+
+// compile-time checks
+var (
+	_ Provider          = (*retryProvider)(nil)
+	_ EmbeddingProvider = (*retryEmbeddingProvider)(nil)
+)

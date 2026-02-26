@@ -569,6 +569,41 @@ func (s *Store) SearchChunksKeyword(ctx context.Context, query string, topK int,
 	return results, rows.Err()
 }
 
+// GetChunksByDocument returns all chunks belonging to a specific document,
+// including their embeddings. This implements ingest.DocumentChunkLister.
+func (s *Store) GetChunksByDocument(ctx context.Context, docID string) ([]oasis.Chunk, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, document_id, parent_id, content, chunk_index, embedding, metadata
+		 FROM chunks WHERE document_id = ? ORDER BY chunk_index`, docID)
+	if err != nil {
+		return nil, fmt.Errorf("get chunks by document: %w", err)
+	}
+	defer rows.Close()
+
+	var chunks []oasis.Chunk
+	for rows.Next() {
+		var c oasis.Chunk
+		var parentID sql.NullString
+		var embJSON sql.NullString
+		var metaJSON sql.NullString
+		if err := rows.Scan(&c.ID, &c.DocumentID, &parentID, &c.Content, &c.ChunkIndex, &embJSON, &metaJSON); err != nil {
+			return nil, fmt.Errorf("scan chunk: %w", err)
+		}
+		if parentID.Valid {
+			c.ParentID = parentID.String
+		}
+		if embJSON.Valid {
+			c.Embedding, _ = deserializeEmbedding(embJSON.String)
+		}
+		if metaJSON.Valid {
+			c.Metadata = &oasis.ChunkMeta{}
+			_ = json.Unmarshal([]byte(metaJSON.String), c.Metadata)
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
 // GetChunksByIDs returns chunks matching the given IDs.
 func (s *Store) GetChunksByIDs(ctx context.Context, ids []string) ([]oasis.Chunk, error) {
 	if len(ids) == 0 {

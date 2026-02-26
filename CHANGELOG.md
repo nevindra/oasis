@@ -6,6 +6,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Fixed
+
+- **`store/sqlite`, `store/postgres`: implement `DocumentChunkLister`** — add `GetChunksByDocument` method so `ExtractCrossDocumentEdges` no longer fails with "store to implement DocumentChunkLister"
+
+### Added
+
+- **Contextual enrichment** — optional LLM-based enrichment step in the ingest pipeline. Each chunk is sent to an LLM alongside the full document text; the LLM returns a 1-2 sentence context prefix prepended to `chunk.Content` before embedding, improving retrieval precision by ~35%
+  - `WithContextualEnrichment(provider)` — enable contextual enrichment
+  - `WithContextWorkers(n)` — max concurrent LLM calls (default 3)
+  - `WithContextMaxDocBytes(n)` — document truncation limit (default 100KB)
+  - Bounded worker pool with graceful degradation — individual LLM failures are logged but don't block ingestion
+  - Parent-child strategy: only child chunks are enriched
+- **RAG strategy guide and recipes** — new Strategy Guide section in `docs/guides/rag-pipeline.md` with decision flowchart, feature reference table, cost spectrum, and 6 named recipes covering FAQ, technical docs, legal corpus, multi-format libraries, research papers, and chatbot use cases
+- **`WithEmbeddingRetry`** — retry wrapper for `EmbeddingProvider`, matching the existing `WithRetry` for `Provider`. Retries transient HTTP errors (429, 503) with exponential backoff + jitter. Accepts the same `RetryOption` functions (`RetryMaxAttempts`, `RetryBaseDelay`, `RetryTimeout`)
+- **Detailed ingest pipeline logging** — `WithIngestorLogger` now emits structured `slog` logs at Info, Warn, and Error levels throughout the entire pipeline: file/text ingestion, chunking strategy selection, embedding batches, contextual enrichment progress (with enriched/failed/skipped counters), and graph extraction batch results
+
 ## [0.9.0] - 2026-02-25
 
 ### Added
