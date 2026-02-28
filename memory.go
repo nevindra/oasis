@@ -144,11 +144,12 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 		embedProvider = m.trimmingEmbedding
 	}
 
+	limit := m.maxHistory
+	if limit <= 0 {
+		limit = defaultMaxHistory
+	}
+
 	if needsEmbed && needsHistory {
-		limit := m.maxHistory
-		if limit <= 0 {
-			limit = defaultMaxHistory
-		}
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
@@ -166,10 +167,6 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 			}
 		}
 		if needsHistory {
-			limit := m.maxHistory
-			if limit <= 0 {
-				limit = defaultMaxHistory
-			}
 			history, historyErr = m.store.GetMessages(ctx, threadID, limit)
 		}
 	}
@@ -566,9 +563,7 @@ func (m *agentMemory) generateTitleNewThread(ctx context.Context, agentName, use
 	if title == "" {
 		return
 	}
-	if r := []rune(title); len(r) > 100 {
-		title = string(r[:100])
-	}
+	title = truncateStr(title, 100)
 
 	// Read-then-update to preserve ChatID, Metadata, and other fields.
 	// ensureThread may have raced and already set fields on this thread.

@@ -67,22 +67,9 @@ func dispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, i
 	return DispatchResult{}, false
 }
 
-// dispatchTool executes a tool via the given executor and converts the result
-// to a DispatchResult. When executeToolStream is non-nil and ch is non-nil,
-// it uses the streaming executor instead.
-// Shared by LLMAgent and Network for the common tool path.
-func dispatchTool(ctx context.Context, executeTool toolExecFunc, executeToolStream toolExecStreamFunc, name string, args json.RawMessage, ch chan<- StreamEvent) DispatchResult {
-	if ch != nil && executeToolStream != nil {
-		result, err := executeToolStream(ctx, name, args, ch)
-		if err != nil {
-			return DispatchResult{Content: "error: " + err.Error(), IsError: true}
-		}
-		if result.Error != "" {
-			return DispatchResult{Content: "error: " + result.Error, IsError: true}
-		}
-		return DispatchResult{Content: result.Content}
-	}
-	result, err := executeTool(ctx, name, args)
+// toolResultToDispatch converts a ToolResult and error into a DispatchResult.
+// Centralizes the error-prefix convention used across all tool dispatch paths.
+func toolResultToDispatch(result ToolResult, err error) DispatchResult {
 	if err != nil {
 		return DispatchResult{Content: "error: " + err.Error(), IsError: true}
 	}
@@ -90,6 +77,17 @@ func dispatchTool(ctx context.Context, executeTool toolExecFunc, executeToolStre
 		return DispatchResult{Content: "error: " + result.Error, IsError: true}
 	}
 	return DispatchResult{Content: result.Content}
+}
+
+// dispatchTool executes a tool via the given executor and converts the result
+// to a DispatchResult. When executeToolStream is non-nil and ch is non-nil,
+// it uses the streaming executor instead.
+// Shared by LLMAgent and Network for the common tool path.
+func dispatchTool(ctx context.Context, executeTool toolExecFunc, executeToolStream toolExecStreamFunc, name string, args json.RawMessage, ch chan<- StreamEvent) DispatchResult {
+	if ch != nil && executeToolStream != nil {
+		return toolResultToDispatch(executeToolStream(ctx, name, args, ch))
+	}
+	return toolResultToDispatch(executeTool(ctx, name, args))
 }
 
 // loopConfig holds everything the shared runLoop needs to run.
@@ -158,14 +156,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	// safeCloseCh closes the streaming channel exactly once. All exit paths
 	// use this instead of raw close(ch), preventing double-close panics if
 	// a provider's ChatStream also closes the channel internally.
-	var closeOnce sync.Once
-	safeCloseCh := func() {
-		if ch != nil {
-			closeOnce.Do(func() {
-				defer func() { recover() }()
-				close(ch)
-			})
-		}
+	safeCloseCh := func() {}
+	if ch != nil {
+		safeCloseCh = onceClose(ch)
 	}
 
 	// Inject InputHandler into context for processors.
@@ -471,7 +464,7 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		// compression traces are children of the iteration that triggered them).
 		if compressThreshold > 0 && messageRuneCount > compressThreshold {
 			cfg.logger.Info("context compression triggered", "agent", cfg.name, "iteration", i, "runes", messageRuneCount, "threshold", compressThreshold)
-			messages, messageRuneCount = compressMessages(iterCtx, cfg, task, messages, 2)
+			messages, messageRuneCount = compressMessages(iterCtx, cfg, task, messages, 2, messageRuneCount)
 		}
 		endIter()
 	}
@@ -556,9 +549,10 @@ func runeCount(messages []ChatMessage) int {
 
 // compressMessages summarizes old tool-result messages via an LLM call.
 // Keeps the last preserveIters iterations of tool results intact.
+// currentRuneCount is the caller's tracked rune count (avoids redundant recomputation).
 // Returns the compressed message slice and new rune count, or the
 // original slice on error (degrade, don't die).
-func compressMessages(ctx context.Context, cfg loopConfig, task AgentTask, messages []ChatMessage, preserveIters int) ([]ChatMessage, int) {
+func compressMessages(ctx context.Context, cfg loopConfig, task AgentTask, messages []ChatMessage, preserveIters, currentRuneCount int) ([]ChatMessage, int) {
 	// Pick compression provider.
 	provider := cfg.provider
 	if cfg.compressModel != nil {
@@ -604,7 +598,7 @@ func compressMessages(ctx context.Context, cfg loopConfig, task AgentTask, messa
 		}
 	}
 	if len(toRemove) == 0 {
-		return messages, runeCount(messages)
+		return messages, currentRuneCount
 	}
 
 	// Start compression span if tracing.
@@ -612,7 +606,7 @@ func compressMessages(ctx context.Context, cfg loopConfig, task AgentTask, messa
 	if cfg.tracer != nil {
 		var span Span
 		compressCtx, span = cfg.tracer.Start(ctx, "agent.loop.compress",
-			IntAttr("original_runes", runeCount(messages)),
+			IntAttr("original_runes", currentRuneCount),
 			IntAttr("messages_compressed", len(toRemove)))
 		defer span.End()
 	}
@@ -626,11 +620,11 @@ func compressMessages(ctx context.Context, cfg loopConfig, task AgentTask, messa
 	})
 	if err != nil {
 		cfg.logger.Warn("context compression failed, continuing uncompressed", "error", err)
-		return messages, runeCount(messages)
+		return messages, currentRuneCount
 	}
 
 	// Build new message slice: keep non-removed messages, insert summary.
-	removeSet := make(map[int]bool, len(toRemove))
+	removeSet := make([]bool, len(messages))
 	for _, idx := range toRemove {
 		removeSet[idx] = true
 	}
@@ -650,7 +644,7 @@ func compressMessages(ctx context.Context, cfg loopConfig, task AgentTask, messa
 	newRuneCount := runeCount(compressed)
 	cfg.logger.Info("context compressed",
 		"agent", cfg.name,
-		"before_runes", runeCount(messages),
+		"before_runes", currentRuneCount,
 		"after_runes", newRuneCount,
 		"messages_removed", len(toRemove))
 
@@ -804,12 +798,6 @@ collect:
 				}
 			}
 			return results
-		}
-	}
-	// Fill any unseen results (e.g. channel closed early) with error markers.
-	for i := range results {
-		if !seen[i] {
-			results[i] = toolExecResult{content: "error: result not received", isError: true}
 		}
 	}
 	return results

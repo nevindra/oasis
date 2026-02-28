@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 )
 
@@ -109,8 +108,7 @@ func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, 
 	w.Header().Set("Connection", "keep-alive")
 
 	ch := make(chan StreamEvent, 64)
-	var closeOnce sync.Once
-	safeClose := func() { closeOnce.Do(func() { close(ch) }) }
+	safeClose := onceClose(ch)
 
 	type execResult struct {
 		result AgentResult

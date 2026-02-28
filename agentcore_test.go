@@ -391,17 +391,6 @@ func TestStartDrainTimeoutDrainsChannel(t *testing.T) {
 	}
 }
 
-// --- statusStr tests ---
-
-func TestStatusStr(t *testing.T) {
-	if s := statusStr(nil); s != "ok" {
-		t.Errorf("statusStr(nil) = %q, want %q", s, "ok")
-	}
-	if s := statusStr(context.Canceled); s != "error" {
-		t.Errorf("statusStr(err) = %q, want %q", s, "error")
-	}
-}
-
 // --- safeAgentError tests ---
 
 func TestSafeAgentError(t *testing.T) {

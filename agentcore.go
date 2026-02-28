@@ -208,43 +208,30 @@ func (c *agentCore) executeWithSpan(
 		}
 	}
 
+	var span Span
 	if c.tracer != nil {
-		var span Span
 		ctx, span = c.tracer.Start(ctx, "agent.execute",
 			StringAttr("agent.name", c.name),
 			StringAttr("agent.type", agentType))
 		defer span.End()
+	}
 
-		c.logger.Info(logKey+" started", logKey, c.name)
-		start := time.Now()
-		result, err := runLoop(ctx, buildCfg(ctx, task, ch), task, ch)
+	c.logger.Info(logKey+" started", logKey, c.name)
+	start := time.Now()
+	result, err := runLoop(ctx, buildCfg(ctx, task, ch), task, ch)
 
+	if span != nil {
 		span.SetAttr(
 			IntAttr("tokens.input", result.Usage.InputTokens),
 			IntAttr("tokens.output", result.Usage.OutputTokens))
 		if err != nil {
 			span.Error(err)
 			span.SetAttr(StringAttr("agent.status", "error"))
-			c.logger.Error(logKey+" failed", logKey, c.name,
-				"error", err,
-				"duration", time.Since(start),
-				"tokens.input", result.Usage.InputTokens,
-				"tokens.output", result.Usage.OutputTokens)
 		} else {
 			span.SetAttr(StringAttr("agent.status", "ok"))
-			c.logger.Info(logKey+" completed", logKey, c.name,
-				"duration", time.Since(start),
-				"tokens.input", result.Usage.InputTokens,
-				"tokens.output", result.Usage.OutputTokens,
-				"steps", len(result.Steps))
 		}
-		return result, err
 	}
 
-	// Non-tracing path: still log lifecycle events.
-	c.logger.Info(logKey+" started", logKey, c.name)
-	start := time.Now()
-	result, err := runLoop(ctx, buildCfg(ctx, task, ch), task, ch)
 	if err != nil {
 		c.logger.Error(logKey+" failed", logKey, c.name,
 			"error", err,
@@ -259,13 +246,6 @@ func (c *agentCore) executeWithSpan(
 			"steps", len(result.Steps))
 	}
 	return result, err
-}
-
-func statusStr(err error) string {
-	if err != nil {
-		return "error"
-	}
-	return "ok"
 }
 
 // --- Shared agent dispatch helpers ---
@@ -375,7 +355,8 @@ func startDrainTimeout(subCh <-chan StreamEvent, safeClose func(), logger *slog.
 
 // onceClose returns a function that closes the given channel exactly once.
 // Safe to call multiple times; subsequent calls are no-ops.
-func onceClose[T any](ch chan T) func() {
+// Accepts send-only channels (close is valid on chan<- T per Go spec).
+func onceClose[T any](ch chan<- T) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
