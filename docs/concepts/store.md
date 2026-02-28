@@ -140,8 +140,7 @@ Close() error    // clean up connections
 
 | Package | Constructor | Notes |
 | ------- | ----------- | ----- |
-| `store/sqlite` | `sqlite.New(path)` | Local pure-Go SQLite (`modernc.org/sqlite`) |
-| `store/libsql` | `libsql.New(path, opts...)` | Local/remote Turso/libSQL with DiskANN |
+| `store/sqlite` | `sqlite.New(path, opts...)` | Local pure-Go SQLite (`modernc.org/sqlite`) |
 | `store/postgres` | `postgres.New(pool, opts...)` | PostgreSQL + pgvector (HNSW indexes) |
 
 All three packages also ship a `MemoryStore` implementation in the same package — see [Memory](memory.md).
@@ -150,6 +149,11 @@ All three packages also ship a `MemoryStore` implementation in the same package 
 
 - Store embeddings as binary little-endian `[]float32` blobs (~5x smaller than JSON)
 - In-memory vector index: embeddings are lazy-loaded into memory on first `SearchChunks` call, eliminating per-query blob deserialization. Content is fetched only for the final top-K results
+- **Bounded vector index**: `WithMaxVecEntries(n)` caps the in-memory index. When exceeded, chunks from the oldest documents are evicted FIFO. Evicted chunks remain searchable via a disk-based fallback that queries SQLite directly. `SearchChunks` transparently merges in-memory and disk results. Default 0 means unlimited
+- Vector search uses a min-heap for top-K selection (O(N log K) instead of O(N log N)) with pre-computed L2 norms — only the dot product is computed per entry
+- `SearchChunksBatch` searches multiple embeddings in a single pass over the index, sharing filter queries across all embeddings. Used by cross-document extraction to avoid N separate index scans per document
+- `StoreDocument` uses multi-value INSERT batches (100 rows/batch) for chunks and FTS entries, reducing SQL round-trips from 3N+1 to ~3*(N/100)+1
+- Logs a warning when the vector index exceeds 50,000 entries — consider Postgres with pgvector HNSW for large corpora
 - Create tables via `CREATE TABLE IF NOT EXISTS` in `Init()`
 
 **PostgreSQL (pgvector):**
@@ -395,12 +399,12 @@ CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (em
 | **Idempotent init** | All DDL uses `IF NOT EXISTS`. Safe to call `Init()` on every startup. |
 | **Transactions** | `StoreDocument` (doc + chunks), `DeleteDocument` (edges + chunks + doc), `DeleteThread` (messages + thread), and `StoreEdges` (batch) run in transactions. |
 
-### SQLite / libSQL Differences
+### SQLite vs PostgreSQL Differences
 
-| Feature | SQLite / libSQL | PostgreSQL |
-| ------- | --------------- | ---------- |
-| Vector storage | JSON `[]float32` (SQLite) / `F32_BLOB(N)` (libSQL) | Native `vector` column |
-| Vector search | Brute-force in-process (SQLite) / DiskANN (libSQL) | HNSW index |
+| Feature | SQLite | PostgreSQL |
+| ------- | ------ | ---------- |
+| Vector storage | Binary little-endian `[]float32` blobs | Native `vector` column |
+| Vector search | Brute-force in-memory (bounded via `WithMaxVecEntries`) | HNSW index |
 | Full-text search | FTS5 virtual table (`chunks_fts`) | GIN index on `tsvector` |
 | Metadata | JSON TEXT, queried via `json_extract()` | JSONB, queried via `->>'key'` |
 | Message metadata | TEXT (JSON-serialized) | JSONB |
@@ -424,7 +428,7 @@ type GraphStore interface {
 type ChunkEdge struct {
     SourceChunkID string
     TargetChunkID string
-    Relation      RelationType  // references, elaborates, depends_on, contradicts, part_of, similar_to, sequence, caused_by
+    Relation      RelationType  // references, elaborates, depends_on, contradicts, part_of, sequence, caused_by
     Weight        float64       // edge strength [0, 1]
 }
 ```
@@ -453,6 +457,24 @@ if gs, ok := store.(oasis.GraphStore); ok {
 ```
 
 See [Ingest](ingest.md) for graph extraction during ingestion and [Retrieval](retrieval.md) for graph-augmented search.
+
+## DocumentMetaLister
+
+`DocumentMetaLister` is an optional Store capability for listing documents without loading full content. Discovered via type assertion — both shipped backends implement it.
+
+```go
+type DocumentMetaLister interface {
+    ListDocumentMeta(ctx context.Context, limit int) ([]Document, error)
+}
+```
+
+Returns `Document` structs with only `ID`, `Title`, `Source`, and `CreatedAt` populated — `Content` is empty. Use this instead of `ListDocuments` when you only need metadata (e.g., cross-document extraction only needs document IDs).
+
+```go
+if ml, ok := store.(oasis.DocumentMetaLister); ok {
+    docs, _ := ml.ListDocumentMeta(ctx, 0) // metadata only, no content
+}
+```
 
 ## See Also
 

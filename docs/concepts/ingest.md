@@ -391,10 +391,15 @@ result, err := ingestor.IngestBatch(ctx, items)
 
 Discovers semantic relationships between chunks from different documents. Requires `WithGraphExtraction` and a Store that implements `DocumentChunkLister`.
 
+When the Store also implements `BatchSearcher` (SQLite does), all chunk embeddings in a document are searched in a single pass over the vector index instead of N separate calls — significantly faster for documents with many chunks.
+
 ```go
 count, err := ingestor.ExtractCrossDocumentEdges(ctx,
     ingest.CrossDocWithSimilarityThreshold(0.6),
     ingest.CrossDocWithMaxPairsPerChunk(5),
+    ingest.CrossDocWithProgressFunc(func(processed, total int) {
+        fmt.Printf("cross-doc: %d/%d documents\n", processed, total)
+    }),
 )
 fmt.Printf("created %d cross-document edges\n", count)
 ```

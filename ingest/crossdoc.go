@@ -17,6 +17,14 @@ type DocumentChunkLister interface {
 	GetChunksByDocument(ctx context.Context, docID string) ([]oasis.Chunk, error)
 }
 
+// BatchSearcher is an optional Store capability for searching multiple
+// embeddings in a single pass over the vector index. When available,
+// cross-document extraction uses this instead of per-chunk SearchChunks
+// calls, reducing N index scans to 1.
+type BatchSearcher interface {
+	SearchChunksBatch(ctx context.Context, embeddings [][]float32, topK int, filters ...oasis.ChunkFilter) ([][]oasis.ScoredChunk, error)
+}
+
 // crossDocState is the JSON payload persisted in an IngestCheckpoint of type "crossdoc".
 type crossDocState struct {
 	ProcessedDocIDs []string `json:"processed_doc_ids"`
@@ -161,8 +169,16 @@ func (ing *Ingestor) runCrossDoc(
 	cpID string,
 	processedDocs map[string]bool,
 ) (int, error) {
-	// 1. Get documents to process.
-	docs, err := ing.store.ListDocuments(ctx, 0)
+	// 1. Get documents to process (metadata-only to avoid loading content).
+	var (
+		docs []oasis.Document
+		err  error
+	)
+	if ml, ok := ing.store.(oasis.DocumentMetaLister); ok {
+		docs, err = ml.ListDocumentMeta(ctx, 0)
+	} else {
+		docs, err = ing.store.ListDocuments(ctx, 0)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("list documents: %w", err)
 	}
@@ -239,6 +255,9 @@ func (ing *Ingestor) runCrossDoc(
 		ing.saveCheckpoint(ctx, cp)
 	}
 
+	// Discover optional batch search capability.
+	batchSearcher, hasBatch := ing.store.(BatchSearcher)
+
 	// 2. Process each document.
 	type chunkPair struct {
 		local  oasis.Chunk
@@ -248,6 +267,7 @@ func (ing *Ingestor) runCrossDoc(
 	var mu sync.Mutex
 	globalSeen := make(map[string]bool)
 	var totalEdges atomic.Int64
+	var processedCount atomic.Int64
 
 	processDoc := func(doc oasis.Document) {
 		chunks, err := dcl.GetChunksByDocument(ctx, doc.ID)
@@ -258,11 +278,52 @@ func (ing *Ingestor) runCrossDoc(
 			return
 		}
 
-		var pairs []chunkPair
+		// Collect chunks that have embeddings.
+		var embChunks []oasis.Chunk
+		var embeddings [][]float32
 		for _, c := range chunks {
-			if len(c.Embedding) == 0 {
-				continue
+			if len(c.Embedding) > 0 {
+				embChunks = append(embChunks, c)
+				embeddings = append(embeddings, c.Embedding)
 			}
+		}
+
+		// Search for cross-document candidates — batch or per-chunk.
+		var pairs []chunkPair
+		if hasBatch && len(embeddings) > 0 {
+			// Single-pass batch search: 1 index scan for all chunk embeddings.
+			batchResults, err := batchSearcher.SearchChunksBatch(ctx, embeddings, cfg.maxPairsPerChunk, oasis.ByExcludeDocument(doc.ID))
+			if err != nil {
+				if ing.logger != nil {
+					ing.logger.Warn("cross-doc: batch search failed, falling back to per-chunk", "doc", doc.Source, "err", err)
+				}
+				goto perChunkFallback
+			}
+			for qi, candidates := range batchResults {
+				c := embChunks[qi]
+				for _, cand := range candidates {
+					if cand.Score < cfg.similarityThreshold {
+						continue
+					}
+					key1 := c.ID + ":" + cand.ID
+					key2 := cand.ID + ":" + c.ID
+					mu.Lock()
+					seen := globalSeen[key1] || globalSeen[key2]
+					if !seen {
+						globalSeen[key1] = true
+					}
+					mu.Unlock()
+					if seen {
+						continue
+					}
+					pairs = append(pairs, chunkPair{local: c, remote: cand.Chunk})
+				}
+			}
+			goto pairsReady
+		}
+
+	perChunkFallback:
+		for _, c := range embChunks {
 			candidates, err := ing.store.SearchChunks(ctx, c.Embedding, cfg.maxPairsPerChunk, oasis.ByExcludeDocument(doc.ID))
 			if err != nil {
 				continue
@@ -286,11 +347,17 @@ func (ing *Ingestor) runCrossDoc(
 			}
 		}
 
+	pairsReady:
+
 		if len(pairs) == 0 {
 			mu.Lock()
 			processedDocs[doc.ID] = true
 			saveCrossDocProgress()
 			mu.Unlock()
+			n := int(processedCount.Add(1))
+			if cfg.progressFunc != nil {
+				cfg.progressFunc(n, len(docs))
+			}
 			return
 		}
 
@@ -340,6 +407,10 @@ func (ing *Ingestor) runCrossDoc(
 		processedDocs[doc.ID] = true
 		saveCrossDocProgress()
 		mu.Unlock()
+		n := int(processedCount.Add(1))
+		if cfg.progressFunc != nil {
+			cfg.progressFunc(n, len(docs))
+		}
 	}
 
 	numWorkers := max(cfg.workers, 1)

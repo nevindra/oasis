@@ -190,6 +190,8 @@ Passed to `ExtractCrossDocumentEdges` and `ResumeCrossDocExtraction`.
 | `CrossDocWithMaxPairsPerChunk(n int)` | 3 | Max cross-document candidates per chunk |
 | `CrossDocWithBatchSize(n int)` | 5 | Chunks per LLM extraction call |
 | `CrossDocWithResume(b bool)` | false | Track per-document progress via `CheckpointStore`; required to call `ResumeCrossDocExtraction` |
+| `CrossDocWithWorkers(n int)` | 1 | Documents processed concurrently during cross-document extraction |
+| `CrossDocWithProgressFunc(fn)` | nil | Callback `func(processed, total int)` invoked after each document completes |
 
 ## Gemini Options
 

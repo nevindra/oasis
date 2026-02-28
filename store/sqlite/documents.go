@@ -92,7 +92,13 @@ func buildChunkFilters(filters []oasis.ChunkFilter) (string, []any, bool) {
 	return " AND " + strings.Join(clauses, " AND "), args, needsDocJoin
 }
 
+// storeChunksBatchSize is the max rows per multi-value INSERT for chunks.
+// 7 params per row; SQLite default SQLITE_MAX_VARIABLE_NUMBER is 999 → 142 max.
+const storeChunksBatchSize = 100
+
 // StoreDocument inserts a document and all its chunks in a single transaction.
+// Chunks are inserted in batches using multi-value INSERT statements to reduce
+// round-trips from 3N+1 to ~3*(N/batchSize)+1 SQL statements.
 func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []oasis.Chunk) error {
 	start := time.Now()
 	s.logger.Debug("sqlite: store document", "id", doc.ID, "title", doc.Title, "source", doc.Source, "chunks", len(chunks))
@@ -113,34 +119,69 @@ func (s *Store) StoreDocument(ctx context.Context, doc oasis.Document, chunks []
 		return fmt.Errorf("insert document: %w", err)
 	}
 
-	for _, chunk := range chunks {
-		var embBlob []byte
-		if len(chunk.Embedding) > 0 {
-			embBlob = serializeEmbedding(chunk.Embedding)
+	// Insert chunks in batches.
+	for i := 0; i < len(chunks); i += storeChunksBatchSize {
+		end := min(i+storeChunksBatchSize, len(chunks))
+		batch := chunks[i:end]
+
+		// --- Batch chunk INSERT ---
+		var sb strings.Builder
+		sb.WriteString(`INSERT OR REPLACE INTO chunks (id, document_id, parent_id, content, chunk_index, embedding, metadata) VALUES `)
+		chunkArgs := make([]any, 0, len(batch)*7)
+		for j, chunk := range batch {
+			if j > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString("(?,?,?,?,?,?,?)")
+
+			var embBlob []byte
+			if len(chunk.Embedding) > 0 {
+				embBlob = serializeEmbedding(chunk.Embedding)
+			}
+			var parentID *string
+			if chunk.ParentID != "" {
+				parentID = &chunk.ParentID
+			}
+			var metaJSON *string
+			if chunk.Metadata != nil {
+				data, _ := json.Marshal(chunk.Metadata)
+				v := string(data)
+				metaJSON = &v
+			}
+			chunkArgs = append(chunkArgs, chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, embBlob, metaJSON)
 		}
-		var parentID *string
-		if chunk.ParentID != "" {
-			parentID = &chunk.ParentID
-		}
-		var metaJSON *string
-		if chunk.Metadata != nil {
-			data, _ := json.Marshal(chunk.Metadata)
-			v := string(data)
-			metaJSON = &v
-		}
-		_, err = tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO chunks (id, document_id, parent_id, content, chunk_index, embedding, metadata)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			chunk.ID, chunk.DocumentID, parentID, chunk.Content, chunk.ChunkIndex, embBlob, metaJSON)
-		if err != nil {
-			s.logger.Error("sqlite: insert chunk failed", "chunk_id", chunk.ID, "doc_id", doc.ID, "error", err)
-			return fmt.Errorf("insert chunk: %w", err)
+		if _, err := tx.ExecContext(ctx, sb.String(), chunkArgs...); err != nil {
+			s.logger.Error("sqlite: insert chunks batch failed", "batch_offset", i, "batch_size", len(batch), "doc_id", doc.ID, "error", err)
+			return fmt.Errorf("insert chunks batch: %w", err)
 		}
 
-		// Keep FTS index in sync.
-		_, _ = tx.ExecContext(ctx, `DELETE FROM chunks_fts WHERE chunk_id = ?`, chunk.ID)
-		if _, err2 := tx.ExecContext(ctx, `INSERT INTO chunks_fts(chunk_id, content) VALUES (?, ?)`, chunk.ID, chunk.Content); err2 != nil {
-			return fmt.Errorf("insert chunk fts: %w", err2)
+		// --- Batch FTS DELETE ---
+		var delSB strings.Builder
+		delSB.WriteString(`DELETE FROM chunks_fts WHERE chunk_id IN (`)
+		delArgs := make([]any, len(batch))
+		for j, chunk := range batch {
+			if j > 0 {
+				delSB.WriteByte(',')
+			}
+			delSB.WriteByte('?')
+			delArgs[j] = chunk.ID
+		}
+		delSB.WriteByte(')')
+		_, _ = tx.ExecContext(ctx, delSB.String(), delArgs...)
+
+		// --- Batch FTS INSERT ---
+		var ftsSB strings.Builder
+		ftsSB.WriteString(`INSERT INTO chunks_fts(chunk_id, content) VALUES `)
+		ftsArgs := make([]any, 0, len(batch)*2)
+		for j, chunk := range batch {
+			if j > 0 {
+				ftsSB.WriteByte(',')
+			}
+			ftsSB.WriteString("(?,?)")
+			ftsArgs = append(ftsArgs, chunk.ID, chunk.Content)
+		}
+		if _, err := tx.ExecContext(ctx, ftsSB.String(), ftsArgs...); err != nil {
+			return fmt.Errorf("insert chunks fts batch: %w", err)
 		}
 	}
 
@@ -183,6 +224,39 @@ func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document,
 		docs = append(docs, d)
 	}
 	s.logger.Debug("sqlite: list documents ok", "count", len(docs), "duration", time.Since(start))
+	return docs, rows.Err()
+}
+
+// ListDocumentMeta returns all documents without the Content field, ordered by
+// creation time (newest first). Use this instead of ListDocuments when only
+// ID, Title, Source, and CreatedAt are needed to avoid loading large document
+// bodies into memory.
+func (s *Store) ListDocumentMeta(ctx context.Context, limit int) ([]oasis.Document, error) {
+	start := time.Now()
+	s.logger.Debug("sqlite: list document meta", "limit", limit)
+
+	query := `SELECT id, title, source, created_at FROM documents ORDER BY created_at DESC`
+	var args []any
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		s.logger.Error("sqlite: list document meta failed", "error", err)
+		return nil, fmt.Errorf("list document meta: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []oasis.Document
+	for rows.Next() {
+		var d oasis.Document
+		if err := rows.Scan(&d.ID, &d.Title, &d.Source, &d.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan document meta: %w", err)
+		}
+		docs = append(docs, d)
+	}
+	s.logger.Debug("sqlite: list document meta ok", "count", len(docs), "duration", time.Since(start))
 	return docs, rows.Err()
 }
 
@@ -231,6 +305,10 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 // On the first call, embeddings are loaded from disk into memory. Subsequent calls
 // score against the cached embeddings without touching SQLite, then fetch full
 // chunk content only for the top-K results.
+//
+// When maxVecEntries is configured and some documents have been evicted from the
+// in-memory index, a disk-based fallback searches evicted chunks and merges
+// results with the in-memory top-K.
 func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int, filters ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
 	start := time.Now()
 	s.logger.Debug("sqlite: search chunks", "top_k", topK, "embedding_dim", len(embedding), "filters", len(filters))
@@ -274,6 +352,27 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 	// Score against in-memory embeddings — no blob deserialization per query.
 	scored := s.vecSearch(embedding, topK, allowedIDs)
 
+	// Disk fallback: if documents were evicted and we have room for more
+	// results, search evicted chunks from disk.
+	s.vecMu.RLock()
+	hasEvicted := s.vecHasEvicted()
+	var evictedDocIDs []string
+	if hasEvicted && len(scored) < topK {
+		evictedDocIDs = s.vecEvictedDocIDs()
+	}
+	s.vecMu.RUnlock()
+
+	if len(evictedDocIDs) > 0 {
+		s.logger.Debug("sqlite: disk fallback for evicted chunks",
+			"evicted_docs", len(evictedDocIDs), "in_memory_results", len(scored))
+		diskResults, err := s.vecDiskFallback(ctx, embedding, topK, evictedDocIDs, whereExtra, filterArgs)
+		if err != nil {
+			s.logger.Error("sqlite: disk fallback failed, using in-memory only", "error", err)
+		} else {
+			scored = mergeAndDedup(scored, diskResults, topK)
+		}
+	}
+
 	if len(scored) == 0 {
 		s.logger.Debug("sqlite: search chunks ok", "scanned", 0, "returned", 0, "duration", time.Since(start))
 		return nil, nil
@@ -304,6 +403,134 @@ func (s *Store) SearchChunks(ctx context.Context, embedding []float32, topK int,
 
 	s.logger.Debug("sqlite: search chunks ok", "index_size", len(s.vecIndex), "returned", len(results), "duration", time.Since(start))
 	return results, nil
+}
+
+// mergeAndDedup combines in-memory and disk results, removes duplicates, and
+// returns the top-K by score.
+func mergeAndDedup(a, b []oasis.ScoredChunk, topK int) []oasis.ScoredChunk {
+	seen := make(map[string]bool, len(a))
+	merged := make([]oasis.ScoredChunk, 0, len(a)+len(b))
+	for _, sc := range a {
+		seen[sc.ID] = true
+		merged = append(merged, sc)
+	}
+	for _, sc := range b {
+		if seen[sc.ID] {
+			continue
+		}
+		merged = append(merged, sc)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Score > merged[j].Score
+	})
+	if len(merged) > topK {
+		merged = merged[:topK]
+	}
+	return merged
+}
+
+// SearchChunksBatch performs cosine similarity search for multiple embeddings
+// in a single pass over the in-memory vector index. Filters (applied once) are
+// shared across all queries. This is much more efficient than calling
+// SearchChunks N times when searching for neighbors of many chunks in a
+// document (e.g. cross-document extraction).
+//
+// Returns one result slice per input embedding, each sorted by score descending.
+func (s *Store) SearchChunksBatch(ctx context.Context, embeddings [][]float32, topK int, filters ...oasis.ChunkFilter) ([][]oasis.ScoredChunk, error) {
+	start := time.Now()
+	nq := len(embeddings)
+	s.logger.Debug("sqlite: search chunks batch", "queries", nq, "top_k", topK, "filters", len(filters))
+
+	if nq == 0 {
+		return nil, nil
+	}
+
+	// Ensure in-memory vector index is loaded.
+	if err := s.loadVecIndex(ctx); err != nil {
+		return nil, fmt.Errorf("load vec index: %w", err)
+	}
+
+	// Build allowedIDs once — shared across all queries.
+	whereExtra, filterArgs, needsDocJoin := buildChunkFilters(filters)
+	var allowedIDs map[string]bool
+	if whereExtra != "" {
+		var q string
+		if needsDocJoin {
+			q = `SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id
+				WHERE c.embedding IS NOT NULL` + whereExtra
+		} else {
+			q = `SELECT c.id FROM chunks c WHERE c.embedding IS NOT NULL` + whereExtra
+		}
+		rows, err := s.db.QueryContext(ctx, q, filterArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("search chunks batch filter: %w", err)
+		}
+		defer rows.Close()
+		allowedIDs = make(map[string]bool)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return nil, fmt.Errorf("scan batch filter id: %w", err)
+			}
+			allowedIDs[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate batch filter ids: %w", err)
+		}
+	}
+
+	// Single-pass batch scoring.
+	batchScored := s.vecSearchBatch(embeddings, topK, allowedIDs)
+
+	// Collect all unique chunk IDs from all results for a single GetChunksByIDs call.
+	idSet := make(map[string]bool)
+	for _, scored := range batchScored {
+		for _, sc := range scored {
+			idSet[sc.ID] = true
+		}
+	}
+
+	if len(idSet) == 0 {
+		s.logger.Debug("sqlite: search chunks batch ok", "returned", 0, "duration", time.Since(start))
+		return make([][]oasis.ScoredChunk, nq), nil
+	}
+
+	allIDs := make([]string, 0, len(idSet))
+	for id := range idSet {
+		allIDs = append(allIDs, id)
+	}
+	chunkMap, err := s.getChunksByIDsMap(ctx, allIDs)
+	if err != nil {
+		return nil, fmt.Errorf("fetch batch chunks: %w", err)
+	}
+
+	// Build final results per query, enriching with full chunk data.
+	results := make([][]oasis.ScoredChunk, nq)
+	for qi, scored := range batchScored {
+		r := make([]oasis.ScoredChunk, 0, len(scored))
+		for _, sc := range scored {
+			if chunk, ok := chunkMap[sc.ID]; ok {
+				r = append(r, oasis.ScoredChunk{Chunk: chunk, Score: sc.Score})
+			}
+		}
+		results[qi] = r
+	}
+
+	s.logger.Debug("sqlite: search chunks batch ok", "queries", nq, "unique_chunks", len(idSet), "duration", time.Since(start))
+	return results, nil
+}
+
+// getChunksByIDsMap fetches chunks by ID and returns them as a map for O(1) lookup.
+func (s *Store) getChunksByIDsMap(ctx context.Context, ids []string) (map[string]oasis.Chunk, error) {
+	chunks, err := s.GetChunksByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]oasis.Chunk, len(chunks))
+	for _, c := range chunks {
+		m[c.ID] = c
+	}
+	return m, nil
 }
 
 // sanitizeFTS5Query escapes FTS5 metacharacters so the query is treated as

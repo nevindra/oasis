@@ -200,6 +200,37 @@ func (s *Store) ListDocuments(ctx context.Context, limit int) ([]oasis.Document,
 	return docs, rows.Err()
 }
 
+// ListDocumentMeta returns all documents without the Content field, ordered by
+// creation time (newest first). Use this instead of ListDocuments when only
+// ID, Title, Source, and CreatedAt are needed to avoid loading large document
+// bodies into memory.
+func (s *Store) ListDocumentMeta(ctx context.Context, limit int) ([]oasis.Document, error) {
+	start := time.Now()
+	s.logger.Debug("postgres: list document meta", "limit", limit)
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, title, source, created_at
+		 FROM documents
+		 ORDER BY created_at DESC
+		 LIMIT $1`,
+		limit)
+	if err != nil {
+		s.logger.Error("postgres: list document meta failed", "error", err, "duration", time.Since(start))
+		return nil, fmt.Errorf("postgres: list document meta: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []oasis.Document
+	for rows.Next() {
+		var d oasis.Document
+		if err := rows.Scan(&d.ID, &d.Title, &d.Source, &d.CreatedAt); err != nil {
+			return nil, fmt.Errorf("postgres: scan document meta: %w", err)
+		}
+		docs = append(docs, d)
+	}
+	s.logger.Debug("postgres: list document meta ok", "count", len(docs), "duration", time.Since(start))
+	return docs, rows.Err()
+}
+
 // DeleteDocument removes a document and all its chunks in a single transaction.
 func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	start := time.Now()

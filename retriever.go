@@ -383,6 +383,14 @@ type DocumentGetter interface {
 	GetDocumentsByIDs(ctx context.Context, ids []string) ([]Document, error)
 }
 
+// DocumentMetaLister is an optional Store capability that returns documents
+// without loading the Content field. Callers that only need ID, Title, Source,
+// and CreatedAt should prefer this over ListDocuments to avoid loading
+// potentially large document bodies into memory.
+type DocumentMetaLister interface {
+	ListDocumentMeta(ctx context.Context, limit int) ([]Document, error)
+}
+
 // resolveParentChunks replaces child chunks with their parent's richer content.
 // If multiple children map to the same parent, the highest-scored child wins.
 // Uses ParentID already present on RetrievalResult (populated by SearchChunks),

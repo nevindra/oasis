@@ -12,9 +12,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`store/libsql`** — removed libsql store backend. Use `store/sqlite` or `store/postgres` instead
 - **`WithCrossDocumentEdges`** — removed dead ingest option (field was never read). Use `WithBatchCrossDocEdges` instead
 
+### Added
+
+- **`WithMaxVecEntries(n)` SQLite store option** — caps the in-memory vector index at `n` entries. When exceeded, chunks from the oldest documents are evicted FIFO. Evicted chunks remain searchable via a slower disk-based fallback path that queries SQLite directly. Default 0 means unlimited _(RAG review #1.1)_
+- **`DocumentMetaLister` optional interface** — `ListDocumentMeta(ctx, limit)` returns documents with only ID, title, source, and timestamp (no content). Implemented by `store/sqlite` and `store/postgres`. Cross-document extraction auto-discovers this via type assertion to avoid loading full document content _(RAG review #1.4)_
+- **`SearchChunksBatch` on SQLite Store** — searches multiple embeddings in a single pass over the in-memory vector index. Cross-document extraction auto-discovers this via `BatchSearcher` type assertion, reducing N index scans per document to 1 _(RAG review #2.4)_
+- **`CrossDocWithProgressFunc`** — callback option for `ExtractCrossDocumentEdges` that reports `(processed, total)` after each document completes _(RAG review #2.4)_
+
 ### Changed
 
+- **SQLite `StoreDocument` batched INSERTs** — chunk inserts, FTS deletes, and FTS inserts now use multi-value SQL statements in batches of 100 rows instead of individual per-chunk statements. For 1000 chunks: 3001 → ~33 SQL statements _(RAG review #2.3)_
+- **SQLite vector search uses min-heap + pre-computed norms** — `vecSearch` now maintains a min-heap of size K instead of accumulating and sorting all scores. Entry L2 norms are pre-computed during index load, so only the dot product is computed per comparison. Sorting complexity drops from O(N log N) to O(N log K) _(RAG review #2.2)_
+- **SQLite vector index warns at 50K entries** — logs a warning recommending Postgres with pgvector when the brute-force index grows large _(RAG review #2.2)_
+- **Cross-document extraction uses batch search** — when the Store implements `BatchSearcher`, all chunks in a document are searched in one index pass instead of per-chunk `SearchChunks` calls. Falls back to per-chunk when unavailable _(RAG review #2.4)_
 - **SQLite WAL mode + connection pool** — `store/sqlite` now enables WAL journal mode and `busy_timeout=5000` via DSN pragmas, with `MaxOpenConns(4)`. Readers no longer block on writers; concurrent ingestion + search runs without serialization. Previously `MaxOpenConns(1)` with default DELETE journal mode serialized all operations through a single connection _(RAG review #2.1)_
+- **SQLite vector index bounded with FIFO eviction** — when `WithMaxVecEntries` is set, `loadVecIndex` and `vecAdd` enforce the cap by evicting oldest documents first. `SearchChunks` transparently merges in-memory results with disk fallback for evicted chunks, maintaining correct top-K ordering _(RAG review #1.1)_
+- **Cross-document extraction uses `ListDocumentMeta`** — `crossdoc.go` prefers `DocumentMetaLister` over `ListDocuments` to avoid loading full document content into memory when only IDs are needed _(RAG review #1.4)_
 - **`GetChunksByDocument` skips embedding blob when vec index loaded** — uses a query without the `embedding` column when the in-memory vector index is ready, avoiding ~3 MB of wasted blob I/O per 500-chunk document _(RAG review #1.2)_
 - **`buildSemanticBatches` accepts logger** — singleton batches (chunks with no similar neighbor) are now logged as warnings with dropped chunk count instead of being silently discarded _(RAG review #4.4)_
 - **Semantic batch parallelism** — semantic batching (`WithSemanticBatching`) now processes all batches through the configured `WithGraphExtractionWorkers` worker pool instead of sequentially (workers=1). For 200 batches with workers=3, extraction is ~3x faster

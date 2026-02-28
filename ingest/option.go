@@ -204,6 +204,7 @@ type crossDocConfig struct {
 	batchSize           int
 	workers             int
 	resume              bool
+	progressFunc        func(processed, total int)
 }
 
 // CrossDocWithDocumentIDs scopes extraction to specific documents (default: all).
@@ -238,4 +239,11 @@ func CrossDocWithResume(resume bool) CrossDocOption {
 // during cross-document extraction (default 1, sequential).
 func CrossDocWithWorkers(n int) CrossDocOption {
 	return func(c *crossDocConfig) { c.workers = n }
+}
+
+// CrossDocWithProgressFunc sets a callback invoked after each document is
+// processed. The callback receives the number of documents processed so far
+// and the total number of documents to process.
+func CrossDocWithProgressFunc(fn func(processed, total int)) CrossDocOption {
+	return func(c *crossDocConfig) { c.progressFunc = fn }
 }
