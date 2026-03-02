@@ -64,7 +64,7 @@ Converts text to vectors for semantic search. Used by Store (vector search), Mem
 | Package | Provider | EmbeddingProvider | Notes |
 |---------|----------|-------------------|-------|
 | `provider/gemini` | `gemini.New(apiKey, model)` | `gemini.NewEmbedding(apiKey, model, dims)` | Google Gemini. Raw HTTP + SSE. |
-| `provider/openaicompat` | `openaicompat.NewProvider(apiKey, model, baseURL)` | — | Any OpenAI-compatible API (OpenAI, Groq, Together, Fireworks, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure OpenAI) |
+| `provider/openaicompat` | `openaicompat.NewProvider(apiKey, model, baseURL)` | `openaicompat.NewEmbedding(apiKey, model, baseURL, dims)` | Any OpenAI-compatible API (OpenAI, Groq, Together, Fireworks, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure OpenAI) |
 
 Both use raw HTTP with SSE parsing — no SDK dependencies.
 
@@ -247,13 +247,37 @@ embed, err := resolve.EmbeddingProvider(resolve.EmbeddingConfig{
 
 For unlisted OpenAI-compatible providers, use one of the known names with a custom `BaseURL`, or use `openaicompat.NewProvider` directly.
 
+### Multimodal Embedding
+
+For cross-modal retrieval (text queries matching images), use a provider that implements `MultimodalEmbeddingProvider`. The OpenAI-compatible embedding provider supports multimodal models like Qwen3-VL-Embedding served via vLLM:
+
+```go
+emb := openaicompat.NewEmbedding(
+    "",                        // no API key for local vLLM
+    "Qwen3-VL-Embedding-8B",
+    "http://localhost:8000/v1",
+    4096,                      // Qwen3-VL-Embedding-8B dimensions
+)
+
+// Text embedding (EmbeddingProvider interface)
+vecs, err := emb.Embed(ctx, []string{"black shirt"})
+
+// Multimodal embedding (MultimodalEmbeddingProvider interface)
+vecs, err = emb.EmbedMultimodal(ctx, []oasis.MultimodalInput{
+    {Attachments: []oasis.Attachment{{MimeType: "image/jpeg", Data: imageBytes}}},
+})
+```
+
+Both text and image embeddings live in the same vector space — a text query "black shirt" naturally matches a photo of a black shirt via cosine similarity.
+
 ### EmbeddingConfig
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `Provider` | `string` | Currently only `"gemini"` is supported |
+| `Provider` | `string` | `"gemini"`, `"openai"`, `"vllm"`, `"ollama"`, `"together"`, `"mistral"` |
 | `APIKey` | `string` | API key |
 | `Model` | `string` | Embedding model identifier |
+| `BaseURL` | `string` | Override base URL (auto-filled for known providers) |
 | `Dimensions` | `int` | Output vector dimensions |
 
 ## WithRetry Middleware

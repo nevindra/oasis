@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -446,6 +447,103 @@ func TestToolRegistryExecuteError(t *testing.T) {
 	}
 	if err.Error() != "tool broken" {
 		t.Errorf("error = %q, want %q", err.Error(), "tool broken")
+	}
+}
+
+// fakeMultimodalEmb is a test double for MultimodalEmbeddingProvider.
+type fakeMultimodalEmb struct{}
+
+func (fakeMultimodalEmb) EmbedMultimodal(_ context.Context, inputs []MultimodalInput) ([][]float32, error) {
+	vecs := make([][]float32, len(inputs))
+	for i := range inputs {
+		vecs[i] = []float32{0.1, 0.2, 0.3}
+	}
+	return vecs, nil
+}
+
+func TestMultimodalEmbeddingProvider_TypeAssertion(t *testing.T) {
+	var emb any = fakeMultimodalEmb{}
+	mp, ok := emb.(MultimodalEmbeddingProvider)
+	if !ok {
+		t.Fatal("expected fakeMultimodalEmb to implement MultimodalEmbeddingProvider")
+	}
+	vecs, err := mp.EmbedMultimodal(context.Background(), []MultimodalInput{
+		{Text: "black shirt"},
+		{Attachments: []Attachment{{MimeType: "image/jpeg", Data: []byte{0xFF}}}},
+		{Text: "describe", Attachments: []Attachment{{MimeType: "image/png", Data: []byte{0x89}}}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(vecs) != 3 {
+		t.Fatalf("expected 3 vectors, got %d", len(vecs))
+	}
+}
+
+type fakeBlobStore struct {
+	data map[string][]byte
+}
+
+func (f *fakeBlobStore) StoreBlob(_ context.Context, key string, data []byte, _ string) (string, error) {
+	f.data[key] = data
+	return "blob://" + key, nil
+}
+
+func (f *fakeBlobStore) GetBlob(_ context.Context, ref string) ([]byte, string, error) {
+	key := ref[len("blob://"):]
+	return f.data[key], "image/png", nil
+}
+
+func (f *fakeBlobStore) DeleteBlob(_ context.Context, ref string) error {
+	key := ref[len("blob://"):]
+	delete(f.data, key)
+	return nil
+}
+
+func TestChunkMeta_ContentType_JSON(t *testing.T) {
+	meta := ChunkMeta{
+		ContentType: "image",
+		PageNumber:  1,
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded ChunkMeta
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.ContentType != "image" {
+		t.Errorf("expected content_type 'image', got %q", decoded.ContentType)
+	}
+
+	// Zero value preserves backward compatibility (omitempty).
+	metaEmpty := ChunkMeta{PageNumber: 1}
+	data, _ = json.Marshal(metaEmpty)
+	if strings.Contains(string(data), "content_type") {
+		t.Error("expected content_type to be omitted when empty")
+	}
+}
+
+func TestBlobStore_TypeAssertion(t *testing.T) {
+	var s any = &fakeBlobStore{data: make(map[string][]byte)}
+	bs, ok := s.(BlobStore)
+	if !ok {
+		t.Fatal("expected fakeBlobStore to implement BlobStore")
+	}
+	ref, err := bs.StoreBlob(context.Background(), "img-1", []byte{0x89, 0x50}, "image/png")
+	if err != nil {
+		t.Fatalf("StoreBlob: %v", err)
+	}
+	data, mime, err := bs.GetBlob(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("GetBlob: %v", err)
+	}
+	if mime != "image/png" {
+		t.Errorf("expected image/png, got %s", mime)
+	}
+	if len(data) != 2 {
+		t.Errorf("expected 2 bytes, got %d", len(data))
 	}
 }
 

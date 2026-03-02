@@ -140,6 +140,25 @@ func WithIngestorLogger(l *slog.Logger) Option {
 	return func(ing *Ingestor) { ing.logger = l }
 }
 
+// WithImageEmbedding enables image embedding during ingestion.
+// When set, extracted images are stored as separate image chunks with
+// embeddings from the multimodal provider, enabling cross-modal retrieval
+// (e.g. text query "black shirt" finds photos of black shirts).
+// The provider must produce vectors in the same space as the text embedding
+// provider (e.g. Qwen3-VL-Embedding handles both).
+func WithImageEmbedding(p oasis.MultimodalEmbeddingProvider) Option {
+	return func(ing *Ingestor) { ing.imageEmbedding = p }
+}
+
+// WithBlobStore sets an external blob store for image data. When set,
+// image binary data is stored via BlobStore instead of inline base64
+// in ChunkMeta.Images. The chunk's ChunkMeta.BlobRef holds the opaque
+// reference returned by BlobStore.StoreBlob.
+// Without this option, images are stored inline in ChunkMeta.Images.
+func WithBlobStore(bs oasis.BlobStore) Option {
+	return func(ing *Ingestor) { ing.blobStore = bs }
+}
+
 // WithOnSuccess registers a callback invoked after each successful ingestion.
 // The callback receives the full IngestResult.
 func WithOnSuccess(fn func(IngestResult)) Option {

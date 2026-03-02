@@ -47,6 +47,16 @@ func EmbeddingProvider(cfg EmbeddingConfig) (oasis.EmbeddingProvider, error) {
 	switch cfg.Provider {
 	case "gemini":
 		return gemini.NewEmbedding(cfg.APIKey, cfg.Model, cfg.Dimensions), nil
+	case "openai", "vllm", "ollama", "together", "mistral":
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = defaultBaseURL(cfg.Provider)
+		}
+		var opts []openaicompat.EmbeddingOption
+		if cfg.Provider != "openai" {
+			opts = append(opts, openaicompat.WithEmbeddingName(cfg.Provider))
+		}
+		return openaicompat.NewEmbedding(cfg.APIKey, cfg.Model, baseURL, cfg.Dimensions, opts...), nil
 	default:
 		return nil, fmt.Errorf("resolve: embedding provider %q not supported", cfg.Provider)
 	}
@@ -101,6 +111,8 @@ func defaultBaseURL(provider string) string {
 		return "https://api.mistral.ai/v1"
 	case "ollama":
 		return "http://localhost:11434/v1"
+	case "vllm":
+		return "http://localhost:8000/v1"
 	default:
 		return ""
 	}

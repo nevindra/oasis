@@ -15,6 +15,7 @@ func TestDefaultBaseURL(t *testing.T) {
 		{"together", "https://api.together.xyz/v1"},
 		{"mistral", "https://api.mistral.ai/v1"},
 		{"ollama", "http://localhost:11434/v1"},
+		{"vllm", "http://localhost:8000/v1"},
 		{"unknown", ""},
 	}
 	for _, tt := range tests {
@@ -169,14 +170,26 @@ func TestEmbeddingProvider_Gemini(t *testing.T) {
 	}
 }
 
-func TestEmbeddingProvider_Unsupported(t *testing.T) {
-	_, err := EmbeddingProvider(EmbeddingConfig{
-		Provider:   "openai",
-		APIKey:     "test-key",
-		Model:      "text-embedding-3-small",
-		Dimensions: 1536,
-	})
+func TestEmbeddingProvider_OpenAICompat(t *testing.T) {
+	for _, name := range []string{"openai", "vllm", "ollama", "together"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := EmbeddingProvider(EmbeddingConfig{
+				Provider:   name,
+				APIKey:     "test-key",
+				Model:      "test-model",
+				BaseURL:    "http://localhost:8000/v1",
+				Dimensions: 768,
+			})
+			if err != nil {
+				t.Errorf("expected %s to resolve, got: %v", name, err)
+			}
+		})
+	}
+}
+
+func TestEmbeddingProvider_Unknown(t *testing.T) {
+	_, err := EmbeddingProvider(EmbeddingConfig{Provider: "unknown"})
 	if err == nil {
-		t.Fatal("expected error for unsupported embedding provider")
+		t.Fatal("expected error for unknown provider")
 	}
 }

@@ -14,6 +14,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **`MultimodalEmbeddingProvider` interface** — optional capability for embedding multimodal inputs (text + images) into the same vector space. Discovered via type assertion on `EmbeddingProvider`. Enables cross-modal retrieval where text queries find matching images
+- **`MultimodalInput` type** — holds text and/or `Attachment`s for multimodal embedding
+- **`BlobStore` interface** — external binary object storage for large image data. `StoreBlob`/`GetBlob`/`DeleteBlob` with key, data, and MIME type
+- **`ChunkMeta.ContentType` and `ChunkMeta.BlobRef` fields** — discriminate image chunks (`ContentType: "image"`) and reference externally stored blobs
+- **`provider/openaicompat.Embedding`** — OpenAI-compatible embedding provider (`NewEmbedding`). Implements both `EmbeddingProvider` (text) and `MultimodalEmbeddingProvider` (text + images via chat message format). Works with OpenAI, vLLM, Ollama, and other compatible APIs
+- **`provider/resolve.EmbeddingProvider` supports OpenAI-compatible providers** — `"openai"`, `"vllm"`, `"ollama"`, `"together"`, `"mistral"` now resolve to `openaicompat.NewEmbedding`
+- **`ingest.WithImageEmbedding(p)` option** — enables image chunk creation from extracted images during ingestion. Images from `MetadataExtractor`s (DOCX, PDF) are embedded via `MultimodalEmbeddingProvider` and stored as chunks with `ContentType: "image"`
+- **`ingest.WithBlobStore(bs)` option** — stores image bytes externally via `BlobStore`; image chunks hold a `BlobRef` instead of inline data
 - **`CosineSimilarity(a, b []float32) float32`** — exported utility function in root package. Replaces 5 identical package-local implementations (ingest/graph, ingest/chunker_semantic, store/sqlite, memory, tools/search) with one canonical version _(RAG review #4.1)_
 - **`WithLLMTimeout(d time.Duration)` ingest option** — sets the maximum duration for individual LLM calls during graph extraction and contextual enrichment (default 2 minutes). Prevents a hung `provider.Chat` call from blocking workers indefinitely, avoiding deadlocks in the extraction worker pool _(RAG review #3.3)_
 - **`WithRerankerTimeout(d time.Duration)` on `LLMReranker`** — sets the maximum duration for the LLM reranking call (default 2 minutes) _(RAG review #3.3)_

@@ -50,6 +50,48 @@ type EmbeddingProvider interface {
 	Name() string
 }
 
+// MultimodalInput represents an embedding input containing text, images, or both.
+// At least one of Text or Attachments must be populated.
+type MultimodalInput struct {
+	Text        string
+	Attachments []Attachment
+}
+
+// MultimodalEmbeddingProvider embeds inputs containing text, images, or both
+// into a shared vector space. Models like Qwen3-VL-Embedding produce vectors
+// where text and images are comparable via cosine similarity, enabling
+// cross-modal retrieval (e.g. text query "black shirt" matches a photo).
+//
+// Implementations that also support text-only embedding should implement
+// EmbeddingProvider as well. Discover via type assertion:
+//
+//	if mp, ok := embProvider.(MultimodalEmbeddingProvider); ok {
+//	    vecs, err := mp.EmbedMultimodal(ctx, inputs)
+//	}
+type MultimodalEmbeddingProvider interface {
+	EmbedMultimodal(ctx context.Context, inputs []MultimodalInput) ([][]float32, error)
+}
+
+// BlobStore abstracts binary object storage for large assets (images, audio,
+// video) that are too large to store inline in metadata JSON.
+//
+// Implementations may store blobs in PostgreSQL large objects, S3-compatible
+// storage (MinIO, SeaweedFS), or the local filesystem.
+//
+// StoreBlob returns an opaque reference string (e.g. "s3://bucket/key",
+// "pglo://12345") that can be stored in ChunkMeta and resolved later via
+// GetBlob. The framework does not interpret the reference — it is
+// implementation-defined.
+type BlobStore interface {
+	// StoreBlob stores binary data and returns an opaque reference.
+	// mimeType is advisory (e.g. "image/jpeg") and may be stored alongside the blob.
+	StoreBlob(ctx context.Context, key string, data []byte, mimeType string) (ref string, err error)
+	// GetBlob retrieves binary data by reference.
+	GetBlob(ctx context.Context, ref string) (data []byte, mimeType string, err error)
+	// DeleteBlob removes a blob by reference.
+	DeleteBlob(ctx context.Context, ref string) error
+}
+
 // Tool defines an agent capability with one or more tool functions.
 type Tool interface {
 	Definitions() []ToolDefinition
@@ -237,6 +279,12 @@ type ChunkMeta struct {
 	SectionHeading string  `json:"section_heading,omitempty"`
 	SourceURL      string  `json:"source_url,omitempty"`
 	Images         []Image `json:"images,omitempty"`
+	// ContentType discriminates chunk modality: "text" (default/empty) or "image".
+	// Used by filters to scope retrieval to a specific modality.
+	ContentType string `json:"content_type,omitempty"`
+	// BlobRef is an opaque reference to a BlobStore object (e.g. "s3://bucket/key").
+	// Populated when images are stored externally instead of inline in Images.
+	BlobRef string `json:"blob_ref,omitempty"`
 }
 
 // Image represents an extracted image from a document.

@@ -102,6 +102,8 @@ Each chunk can carry a `ChunkMeta` with:
 - **SectionHeading** — nearest heading
 - **SourceURL** — file path or URL
 - **Images** — extracted images (base64-encoded)
+- **ContentType** — chunk content type (`"image"` for image chunks, empty for text)
+- **BlobRef** — external storage reference (set when `BlobStore` is configured)
 
 Metadata is stored as JSON in the `metadata` column and flows through the retrieval pipeline.
 
@@ -450,6 +452,8 @@ for _, cp := range checkpoints {
 | `WithContextWorkers(n)` | 3 | Max concurrent LLM calls for contextual enrichment |
 | `WithContextMaxDocBytes(n)` | 100,000 | Max document bytes sent to LLM for context (0 = unlimited) |
 | `WithLLMTimeout(d)` | 2 min | Max duration per LLM call (graph extraction + contextual enrichment). Prevents deadlocks from hung providers |
+| `WithImageEmbedding(p)` | nil | Enable image chunk creation from extracted images. `p` must implement `MultimodalEmbeddingProvider` |
+| `WithBlobStore(bs)` | nil | Store image bytes externally; chunks hold `BlobRef` instead of inline data |
 | `WithIngestorTracer(t)` | nil | Attach a `Tracer` for span creation (`ingest.document`) |
 | `WithIngestorLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
@@ -470,6 +474,33 @@ CrossDoc options (passed to `ExtractCrossDocumentEdges` and `ResumeCrossDocExtra
 | `CrossDocWithMaxPairsPerChunk(n)` | 3 | Max cross-document candidates per chunk |
 | `CrossDocWithBatchSize(n)` | 5 | Chunks per LLM extraction call |
 | `CrossDocWithResume(b)` | false | Track progress per document; enables `ResumeCrossDocExtraction` |
+
+## Image Embedding
+
+When a `MultimodalEmbeddingProvider` is configured, the ingestor creates dedicated image chunks from images extracted by `MetadataExtractor`s (DOCX, PDF). Each image becomes a separate chunk with `ContentType: "image"` in its metadata. Image chunks are embedded via `EmbedMultimodal`, placing them in the same vector space as text — enabling cross-modal retrieval (text queries finding images).
+
+```go
+import "github.com/nevindra/oasis/provider/openaicompat"
+
+// Multimodal embedding provider (e.g., Qwen3-VL-Embedding via vLLM)
+imageEmb := openaicompat.NewEmbedding(
+    "", "Qwen3-VL-Embedding-8B", "http://localhost:8000/v1", 4096,
+)
+
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithImageEmbedding(imageEmb), // enable image chunks
+)
+
+// With blob storage for large images
+ingestor := ingest.NewIngestor(store, embedding,
+    ingest.WithImageEmbedding(imageEmb),
+    ingest.WithBlobStore(myBlobStore), // images stored externally, chunks hold refs
+)
+```
+
+**How it works:** After text chunks are embedded, the ingestor collects images from page metadata, creates a `MultimodalInput` per image, embeds them in batches via `EmbedMultimodal`, and stores each as a chunk with `ContentType: "image"`. When a `BlobStore` is configured, image bytes are stored externally and chunks hold a `BlobRef` instead of inline data.
+
+**Graceful degradation:** If image embedding fails for a batch, the error is logged and text chunks are still stored — image embedding never blocks text ingestion.
 
 ## Batched Embedding
 

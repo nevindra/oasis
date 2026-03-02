@@ -70,6 +70,10 @@ type Ingestor struct {
 	batchConcurrency   int
 	batchCrossDocEdges bool
 
+	// image embedding config
+	imageEmbedding oasis.MultimodalEmbeddingProvider
+	blobStore      oasis.BlobStore
+
 	// lifecycle hooks
 	onSuccess func(IngestResult)
 	onError   func(source string, err error)
@@ -375,6 +379,19 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		}
 		ing.notifyError(filename, err)
 		return IngestResult{}, err
+	}
+
+	// Create image chunks if multimodal embedding is configured.
+	if ing.imageEmbedding != nil && len(pageMeta) > 0 {
+		imageChunks, err := ing.embedImageChunks(ctx, docID, pageMeta)
+		if err != nil {
+			if ing.logger != nil {
+				ing.logger.Warn("image embedding failed, continuing without image chunks",
+					"doc_id", docID, "source", filename, "err", err)
+			}
+		} else {
+			chunks = append(chunks, imageChunks...)
+		}
 	}
 
 	cp.Status = oasis.CheckpointStoring

@@ -292,6 +292,8 @@ All methods return `IngestResult{DocumentID, Document, ChunkCount}`.
 | `WithContextMaxDocBytes(n)` | 100,000 | Max document bytes sent to LLM (0 = unlimited) |
 | `WithGraphExtraction(p)` | nil | Enable LLM-based graph extraction |
 | `WithSequenceEdges(b)` | false | Auto-create sequence edges between consecutive chunks |
+| `WithImageEmbedding(p)` | nil | Enable image chunk creation from extracted images (`MultimodalEmbeddingProvider`) |
+| `WithBlobStore(bs)` | nil | Store image bytes externally; chunks hold `BlobRef` instead of inline data |
 | `WithIngestorTracer(t)` | nil | Attach a `Tracer` for span creation |
 | `WithIngestorLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 
@@ -1017,6 +1019,47 @@ knowledgeTool := knowledge.New(store, embedding,
 
 ---
 
+### Recipe 7: Cross-Modal Image Search
+
+**Best for:** Product catalogs with photos, medical imaging, design libraries, any corpus where users search by text to find relevant images.
+
+Documents with embedded images (DOCX, PDF) where text queries should match visual content. Requires a multimodal embedding model that places text and images in the same vector space.
+
+```go
+import "github.com/nevindra/oasis/provider/openaicompat"
+
+// Multimodal embedding model (e.g., Qwen3-VL-Embedding via vLLM)
+imageEmb := openaicompat.NewEmbedding(
+    "", "Qwen3-VL-Embedding-8B", "http://localhost:8000/v1", 4096,
+)
+
+// Standard text embedding for text chunks
+textEmb := gemini.NewEmbedding(apiKey, "text-embedding-004", 768)
+
+// Ingestion — image embedding creates dedicated image chunks
+ingestor := ingest.NewIngestor(store, textEmb,
+    ingest.WithStrategy(ingest.StrategyFlat),
+    ingest.WithImageEmbedding(imageEmb), // enable cross-modal image chunks
+    ingest.WithBlobStore(myBlobStore),   // store images externally (optional)
+    ingest.WithIngestorLogger(slog.Default()),
+)
+result, _ := ingestor.IngestFile(ctx, docxBytes, "catalog.docx")
+
+// Retrieval — standard hybrid search finds both text and image chunks
+retriever := oasis.NewHybridRetriever(store, textEmb,
+    oasis.WithKeywordWeight(0.3),
+    oasis.WithReranker(oasis.NewScoreReranker(0.05)),
+)
+knowledgeTool := knowledge.New(store, textEmb,
+    knowledge.WithRetriever(retriever),
+    knowledge.WithTopK(10),
+)
+```
+
+**Why this works:** Image chunks are embedded via `EmbedMultimodal` into the same vector space as text. A query like "black shirt" matches the embedding of a photo of a black shirt via cosine similarity. Image chunks carry `ContentType: "image"` metadata so the application can render them differently. When `BlobStore` is configured, image bytes are stored externally and chunks hold a lightweight reference.
+
+---
+
 ### Recipe Comparison
 
 | Recipe | Ingestion LLM Calls | Retrieval LLM Calls | Latency | Best For |
@@ -1027,6 +1070,7 @@ knowledgeTool := knowledge.New(store, embedding,
 | 4. Multi-Format | 1 per chunk | 0 | Medium | Mixed content types |
 | 5. Research | 1 per chunk + 1 per batch | 0 | Slowest ingestion | Academic/scientific papers |
 | 6. Chatbot | 0 | 0 | Fastest | Real-time file Q&A |
+| 7. Image Search | 0 | 0 | Fast | Cross-modal text→image retrieval |
 
 ## See Also
 

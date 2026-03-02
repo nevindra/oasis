@@ -50,7 +50,47 @@ type EmbeddingProvider interface {
 | Implementation | Constructor |
 |----------------|------------|
 | `provider/gemini` | `gemini.NewEmbedding(apiKey, model string, dimensions int)` |
-| `provider/resolve` | `resolve.EmbeddingProvider(cfg resolve.EmbeddingConfig)` — config-driven (Gemini only) |
+| `provider/openaicompat` | `openaicompat.NewEmbedding(apiKey, model, baseURL string, dims int)` |
+| `provider/resolve` | `resolve.EmbeddingProvider(cfg resolve.EmbeddingConfig)` — config-driven |
+
+---
+
+## MultimodalEmbeddingProvider
+
+**File:** `types.go`
+
+Optional capability for embedding multimodal inputs (text + images) into the same vector space. Discovered via type assertion. Enables cross-modal retrieval — text queries finding images.
+
+```go
+type MultimodalInput struct {
+    Text        string
+    Attachments []Attachment
+}
+
+type MultimodalEmbeddingProvider interface {
+    EmbedMultimodal(ctx context.Context, inputs []MultimodalInput) ([][]float32, error)
+}
+```
+
+| Implementation | Constructor |
+|----------------|------------|
+| `provider/openaicompat` | `openaicompat.NewEmbedding(apiKey, model, baseURL string, dims int)` |
+
+---
+
+## BlobStore
+
+**File:** `types.go`
+
+Interface for external binary object storage. Used by the ingest pipeline to store image bytes externally instead of inline in chunk metadata.
+
+```go
+type BlobStore interface {
+    StoreBlob(ctx context.Context, key string, data []byte, mimeType string) (ref string, err error)
+    GetBlob(ctx context.Context, ref string) (data []byte, mimeType string, err error)
+    DeleteBlob(ctx context.Context, ref string) error
+}
+```
 
 ---
 
