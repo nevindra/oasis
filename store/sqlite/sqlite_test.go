@@ -636,19 +636,19 @@ func TestStoreEdges_Description(t *testing.T) {
 
 func TestCosineSimilarity(t *testing.T) {
 	// Identical vectors = 1.0
-	s := cosineSimilarity([]float32{1, 2, 3}, []float32{1, 2, 3})
+	s := oasis.CosineSimilarity([]float32{1, 2, 3}, []float32{1, 2, 3})
 	if math.Abs(float64(s)-1.0) > 1e-6 {
 		t.Errorf("identical vectors: expected ~1.0, got %f", s)
 	}
 
 	// Orthogonal vectors = 0.0
-	s = cosineSimilarity([]float32{1, 0}, []float32{0, 1})
+	s = oasis.CosineSimilarity([]float32{1, 0}, []float32{0, 1})
 	if math.Abs(float64(s)) > 1e-6 {
 		t.Errorf("orthogonal vectors: expected ~0.0, got %f", s)
 	}
 
 	// Opposite vectors = -1.0
-	s = cosineSimilarity([]float32{1, 0}, []float32{-1, 0})
+	s = oasis.CosineSimilarity([]float32{1, 0}, []float32{-1, 0})
 	if math.Abs(float64(s)+1.0) > 1e-6 {
 		t.Errorf("opposite vectors: expected ~-1.0, got %f", s)
 	}

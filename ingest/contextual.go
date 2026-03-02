@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	oasis "github.com/nevindra/oasis"
 )
@@ -25,7 +26,7 @@ Please give a short succinct context to situate this chunk within the overall do
 // text, and prepends the returned context to chunk.Content. Each chunk is
 // processed independently via a bounded worker pool. Individual LLM failures
 // are logged but do not block — the chunk keeps its original content.
-func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, docText string, workers int, logger *slog.Logger) {
+func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, docText string, workers int, llmTimeout time.Duration, logger *slog.Logger) {
 	if len(chunks) == 0 {
 		return
 	}
@@ -43,6 +44,9 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 			"doc_text_bytes", len(docText))
 	}
 
+	// Collect prefixes in a separate slice so workers never mutate chunks
+	// concurrently. After all workers finish we merge into chunks[i].Content.
+	prefixes := make([]string, len(chunks))
 	var enriched, failed, skipped atomic.Int32
 
 	for w := 0; w < numWorkers; w++ {
@@ -64,7 +68,13 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 						"chunk_bytes", len(chunks[i].Content),
 						"prompt_bytes", len(prompt))
 				}
-				resp, err := provider.Chat(ctx, oasis.ChatRequest{
+				callCtx := ctx
+				if llmTimeout > 0 {
+					var cancel context.CancelFunc
+					callCtx, cancel = context.WithTimeout(ctx, llmTimeout)
+					defer cancel()
+				}
+				resp, err := provider.Chat(callCtx, oasis.ChatRequest{
 					Messages: []oasis.ChatMessage{
 						{Role: "user", Content: prompt},
 					},
@@ -80,7 +90,7 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 
 				prefix := strings.TrimSpace(resp.Content)
 				if prefix != "" {
-					chunks[i].Content = prefix + "\n\n" + chunks[i].Content
+					prefixes[i] = prefix
 					enriched.Add(1)
 					if logger != nil {
 						logger.Debug("contextual enrichment: chunk enriched",
@@ -103,6 +113,13 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 
 	for w := 0; w < numWorkers; w++ {
 		<-done
+	}
+
+	// Merge prefixes into chunk content — single goroutine, no races.
+	for i, p := range prefixes {
+		if p != "" {
+			chunks[i].Content = p + "\n\n" + chunks[i].Content
+		}
 	}
 
 	if logger != nil {

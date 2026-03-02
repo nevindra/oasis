@@ -166,6 +166,7 @@ Passed to `ingest.NewIngestor(store, embedding, ...Option)`.
 | `WithContextualEnrichment(p Provider)` | disabled | Enable LLM-based contextual enrichment per chunk |
 | `WithContextWorkers(n int)` | 3 | Max concurrent LLM calls for contextual enrichment |
 | `WithContextMaxDocBytes(n int)` | 100,000 | Max document bytes sent to LLM for context (0 = unlimited) |
+| `WithLLMTimeout(d time.Duration)` | 2 min | Timeout for individual LLM calls (graph extraction, contextual enrichment). 0 = no timeout |
 | `WithIngestorTracer(t oasis.Tracer)` | nil | Enable `ingest.document` spans |
 | `WithIngestorLogger(l *slog.Logger)` | nil | Enable structured logging for ingestion |
 

@@ -221,7 +221,7 @@ func (s *Store) SearchSkills(ctx context.Context, embedding []float32, topK int)
 		if err != nil {
 			continue
 		}
-		results = append(results, oasis.ScoredSkill{Skill: sk, Score: cosineSimilarity(embedding, stored)})
+		results = append(results, oasis.ScoredSkill{Skill: sk, Score: oasis.CosineSimilarity(embedding, stored)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate skills: %w", err)

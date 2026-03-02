@@ -118,7 +118,7 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 		if err != nil {
 			continue
 		}
-		results = append(results, oasis.ScoredMessage{Message: m, Score: cosineSimilarity(embedding, stored)})
+		results = append(results, oasis.ScoredMessage{Message: m, Score: oasis.CosineSimilarity(embedding, stored)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate messages: %w", err)

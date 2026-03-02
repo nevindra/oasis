@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math"
 	"math/rand/v2"
 	"sort"
 	"strings"
@@ -297,7 +296,7 @@ func (m *agentMemory) trimHistory(ctx context.Context, messages []ChatMessage, h
 			}
 			items := make([]scored, len(olderTexts))
 			for i, emb := range embeddings {
-				items[i] = scored{idx: historyStart + i, score: cosineSimilarity(inputEmbedding, emb)}
+				items[i] = scored{idx: historyStart + i, score: CosineSimilarity(inputEmbedding, emb)}
 			}
 
 			// Sort by score ascending — lowest relevance first (will be dropped first).
@@ -340,23 +339,6 @@ func (m *agentMemory) trimHistory(ctx context.Context, messages []ChatMessage, h
 	return trimmed
 }
 
-// cosineSimilarity computes the cosine similarity between two vectors.
-// Returns 0 if either vector is zero-length or has zero magnitude.
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, magA, magB float32
-	for i := range a {
-		dot += a[i] * b[i]
-		magA += a[i] * a[i]
-		magB += b[i] * b[i]
-	}
-	if magA == 0 || magB == 0 {
-		return 0
-	}
-	return dot / (float32(math.Sqrt(float64(magA))) * float32(math.Sqrt(float64(magB))))
-}
 
 // buildSystemPrompt assembles the system prompt with optional user memory context.
 // inputEmbedding is the pre-computed embedding of the user input (may be nil).

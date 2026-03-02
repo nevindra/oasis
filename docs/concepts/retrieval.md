@@ -125,6 +125,9 @@ Uses an LLM to score query-document relevance on a 0-10 scale, then normalizes a
 
 ```go
 reranker := oasis.NewLLMReranker(llmProvider)
+
+// With custom timeout (default 2 min):
+reranker := oasis.NewLLMReranker(llmProvider, oasis.WithRerankerTimeout(30*time.Second))
 ```
 
 ## GraphRetriever (Graph RAG)

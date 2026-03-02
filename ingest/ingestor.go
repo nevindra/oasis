@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 
 	oasis "github.com/nevindra/oasis"
 )
@@ -61,8 +62,9 @@ type Ingestor struct {
 	tracer oasis.Tracer
 	logger *slog.Logger
 
-	// retry config
-	extractRetries int // max attempts for extractor calls (0 = no retry, i.e. 1 attempt)
+	// timeout config
+	llmTimeout     time.Duration // max duration per LLM call (graph extraction, contextual enrichment)
+	extractRetries int           // max attempts for extractor calls (0 = no retry, i.e. 1 attempt)
 
 	// batch config
 	batchConcurrency   int
@@ -99,6 +101,7 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 		graphWorkers:       3,
 		contextWorkers:     3,
 		contextMaxDocBytes: 100_000, // 100KB ≈ ~25K tokens
+		llmTimeout:         2 * time.Minute,
 	}
 	for _, o := range opts {
 		o(ing)
@@ -196,6 +199,7 @@ func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string)
 		ing.logger.Debug("document stored", "doc_id", docID)
 	}
 
+	cp.DocumentID = docID
 	cp.Status = oasis.CheckpointGraphing
 	ing.saveCheckpoint(ctx, cp)
 
@@ -395,6 +399,7 @@ func (ing *Ingestor) ingestFile(ctx context.Context, content []byte, filename st
 		ing.logger.Debug("document stored", "doc_id", docID)
 	}
 
+	cp.DocumentID = docID
 	cp.Status = oasis.CheckpointGraphing
 	ing.saveCheckpoint(ctx, cp)
 
@@ -490,7 +495,7 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 				ing.logger.Debug("semantic batches built",
 					"batch_count", len(semBatches))
 			}
-			llmEdges, err := extractFromBatches(ctx, ing.graphProvider, semBatches, ing.graphWorkers, docContext, ing.logger)
+			llmEdges, err := extractFromBatches(ctx, ing.graphProvider, semBatches, ing.graphWorkers, docContext, ing.llmTimeout, ing.logger)
 			if err != nil {
 				if ing.logger != nil {
 					ing.logger.Warn("semantic batch extraction failed", "err", err)
@@ -510,7 +515,7 @@ func (ing *Ingestor) extractAndStoreEdges(ctx context.Context, chunks []oasis.Ch
 					"overlap", ing.graphBatchOverlap,
 					"workers", ing.graphWorkers)
 			}
-			llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.graphBatchOverlap, ing.graphWorkers, docContext, ing.logger)
+			llmEdges, err := extractGraphEdges(ctx, ing.graphProvider, chunks, ing.graphBatchSize, ing.graphBatchOverlap, ing.graphWorkers, docContext, ing.llmTimeout, ing.logger)
 			if err != nil {
 				if ing.logger != nil {
 					ing.logger.Warn("LLM graph extraction failed", "err", err)
@@ -678,14 +683,14 @@ func (ing *Ingestor) chunkFlat(ctx context.Context, text, docID string, ct Conte
 				"workers", ing.contextWorkers)
 		}
 		docText := truncateDocText(text, ing.contextMaxDocBytes)
-		enrichChunksWithContext(ctx, ing.contextProvider, chunks, docText, ing.contextWorkers, ing.logger)
+		enrichChunksWithContext(ctx, ing.contextProvider, chunks, docText, ing.contextWorkers, ing.llmTimeout, ing.logger)
 		if ing.logger != nil {
 			ing.logger.Info("contextual enrichment completed",
 				"doc_id", docID, "chunk_count", len(chunks))
 		}
 	}
 
-	if err := ing.batchEmbed(ctx, chunks); err != nil {
+	if err := ing.batchEmbed(ctx, chunks, nil); err != nil {
 		return nil, err
 	}
 
@@ -798,7 +803,7 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 				"workers", ing.contextWorkers)
 		}
 		docText := truncateDocText(text, ing.contextMaxDocBytes)
-		enrichChunksWithContext(ctx, ing.contextProvider, childChunks, docText, ing.contextWorkers, ing.logger)
+		enrichChunksWithContext(ctx, ing.contextProvider, childChunks, docText, ing.contextWorkers, ing.llmTimeout, ing.logger)
 		if ing.logger != nil {
 			ing.logger.Info("contextual enrichment completed",
 				"doc_id", docID, "chunk_count", len(childChunks))
@@ -806,7 +811,7 @@ func (ing *Ingestor) chunkParentChild(ctx context.Context, text, docID string, c
 	}
 
 	// Batch embed only child chunks.
-	if err := ing.batchEmbed(ctx, childChunks); err != nil {
+	if err := ing.batchEmbed(ctx, childChunks, nil); err != nil {
 		return nil, err
 	}
 
@@ -880,7 +885,11 @@ func (ing *Ingestor) selectChunker(ct ContentType) Chunker {
 }
 
 // batchEmbed embeds chunks in batches of ing.batchSize.
-func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk) error {
+// onBatchDone, when non-nil, is called after each successful batch with the
+// cumulative number of completed batches. This allows callers to save
+// checkpoint progress so that a partial failure doesn't discard successful
+// embedding work.
+func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk, onBatchDone func(completedBatches int)) error {
 	if len(chunks) == 0 {
 		return nil
 	}
@@ -929,6 +938,10 @@ func (ing *Ingestor) batchEmbed(ctx context.Context, chunks []oasis.Chunk) error
 			if j < len(embeddings) {
 				chunks[i+j].Embedding = embeddings[j]
 			}
+		}
+
+		if onBatchDone != nil {
+			onBatchDone(batchNum)
 		}
 	}
 

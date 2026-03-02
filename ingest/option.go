@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"log/slog"
+	"time"
 
 	oasis "github.com/nevindra/oasis"
 )
@@ -192,6 +193,14 @@ func WithGraphDocContext(maxBytes int) Option {
 // for sequential windowing).
 func WithSemanticBatching(b bool) Option {
 	return func(ing *Ingestor) { ing.semanticBatching = b }
+}
+
+// WithLLMTimeout sets the maximum duration for individual LLM calls during
+// graph extraction and contextual enrichment (default 2 minutes). This prevents
+// a hung provider.Chat call from blocking workers indefinitely, which can cause
+// deadlocks in the worker pool.
+func WithLLMTimeout(d time.Duration) Option {
+	return func(ing *Ingestor) { ing.llmTimeout = d }
 }
 
 // CrossDocOption configures ExtractCrossDocumentEdges.

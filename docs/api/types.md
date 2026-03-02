@@ -114,6 +114,10 @@ type IngestCheckpoint struct {
     Source          string           `json:"source"`  // filename or source URL
     Status          CheckpointStatus `json:"status"`
 
+    // Document ID assigned after StoreDocument succeeds — used on resume to
+    // avoid creating orphan duplicates.
+    DocumentID      string `json:"document_id,omitempty"`
+
     // Populated after extraction — persisted so the pipeline can skip re-extraction on resume.
     ContentType     string `json:"content_type,omitempty"`
     ExtractedText   string `json:"extracted_text,omitempty"`

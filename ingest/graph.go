@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -60,7 +59,7 @@ The chunks below come from the following document. Use the document's structure 
 // batches (0 = no overlap). workers controls max concurrent LLM calls (<=1 = sequential).
 // docContext, when non-empty, is included in the prompt to give the LLM structural
 // context about the source document.
-func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize, overlap, workers int, docContext string, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
+func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oasis.Chunk, batchSize, overlap, workers int, docContext string, llmTimeout time.Duration, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
 	if len(chunks) < 2 {
 		if logger != nil {
 			logger.Info("graph extraction skipped: fewer than 2 chunks",
@@ -94,13 +93,13 @@ func extractGraphEdges(ctx context.Context, provider oasis.Provider, chunks []oa
 			"chunk_count", len(chunks))
 	}
 
-	return extractFromBatches(ctx, provider, batches, workers, docContext, logger)
+	return extractFromBatches(ctx, provider, batches, workers, docContext, llmTimeout, logger)
 }
 
 // extractFromBatches runs pre-formed chunk batches through an LLM worker pool
 // for relationship extraction. Each batch is sent as one prompt.
 // docContext, when non-empty, is prepended to each prompt for structural awareness.
-func extractFromBatches(ctx context.Context, provider oasis.Provider, batches [][]oasis.Chunk, workers int, docContext string, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
+func extractFromBatches(ctx context.Context, provider oasis.Provider, batches [][]oasis.Chunk, workers int, docContext string, llmTimeout time.Duration, logger *slog.Logger) ([]oasis.ChunkEdge, error) {
 	if len(batches) == 0 {
 		if logger != nil {
 			logger.Debug("graph extraction skipped: no valid batches")
@@ -187,7 +186,13 @@ func extractFromBatches(ctx context.Context, provider oasis.Provider, batches []
 					}
 
 					temp := 0.0
-					resp, err := provider.Chat(ctx, oasis.ChatRequest{
+					callCtx := ctx
+					if llmTimeout > 0 {
+						var cancel context.CancelFunc
+						callCtx, cancel = context.WithTimeout(ctx, llmTimeout)
+						defer cancel()
+					}
+					resp, err := provider.Chat(callCtx, oasis.ChatRequest{
 						Messages: []oasis.ChatMessage{
 							{Role: "user", Content: prompt.String()},
 						},
@@ -365,23 +370,27 @@ func buildSequenceEdges(chunks []oasis.Chunk) []oasis.ChunkEdge {
 		return nil
 	}
 
-	// Sort by ChunkIndex to ensure correct ordering.
-	sorted := make([]oasis.Chunk, len(chunks))
-	copy(sorted, chunks)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].ChunkIndex < sorted[j].ChunkIndex
+	// Sort an index slice by ChunkIndex to avoid copying full Chunk structs
+	// (which include Content strings and Embedding slices).
+	indices := make([]int, len(chunks))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.Slice(indices, func(a, b int) bool {
+		return chunks[indices[a]].ChunkIndex < chunks[indices[b]].ChunkIndex
 	})
 
-	edges := make([]oasis.ChunkEdge, 0, len(sorted)-1)
-	for i := 0; i < len(sorted)-1; i++ {
+	edges := make([]oasis.ChunkEdge, 0, len(indices)-1)
+	for k := 0; k < len(indices)-1; k++ {
+		ci, cj := indices[k], indices[k+1]
 		// Only link chunks that share the same parent (or both are flat/root).
-		if sorted[i].ParentID != sorted[i+1].ParentID {
+		if chunks[ci].ParentID != chunks[cj].ParentID {
 			continue
 		}
 		edges = append(edges, oasis.ChunkEdge{
 			ID:       oasis.NewID(),
-			SourceID: sorted[i].ID,
-			TargetID: sorted[i+1].ID,
+			SourceID: chunks[ci].ID,
+			TargetID: chunks[cj].ID,
 			Relation: oasis.RelSequence,
 			Weight:   1.0,
 		})
@@ -466,7 +475,7 @@ func buildSemanticBatches(chunks []oasis.Chunk, batchSize int, logger *slog.Logg
 			if len(b.chunks) >= batchSize {
 				continue
 			}
-			sim := cosineSimilarity(c.Embedding, b.centroid)
+			sim := float64(oasis.CosineSimilarity(c.Embedding, b.centroid))
 			if sim > bestSim {
 				bestSim = sim
 				bestIdx = i
@@ -511,20 +520,4 @@ func buildSemanticBatches(chunks []oasis.Chunk, batchSize int, logger *slog.Logg
 	return result
 }
 
-// cosineSimilarity computes the cosine similarity between two vectors.
-func cosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
-}
 

@@ -100,7 +100,7 @@ func (s *MemoryStore) UpsertFact(ctx context.Context, fact, category string, emb
 		if parseErr != nil || len(existing) == 0 {
 			continue
 		}
-		sim := cosineSimilarity(embedding, existing)
+		sim := oasis.CosineSimilarity(embedding, existing)
 		if sim > 0.85 && (best == nil || sim > best.similarity) {
 			best = &candidate{id: id, confidence: conf, similarity: sim}
 		}
@@ -161,7 +161,7 @@ func (s *MemoryStore) SearchFacts(ctx context.Context, embedding []float32, topK
 		if parseErr != nil || len(emb) == 0 {
 			continue
 		}
-		all = append(all, oasis.ScoredFact{Fact: f, Score: cosineSimilarity(embedding, emb)})
+		all = append(all, oasis.ScoredFact{Fact: f, Score: oasis.CosineSimilarity(embedding, emb)})
 	}
 
 	sort.Slice(all, func(i, j int) bool {

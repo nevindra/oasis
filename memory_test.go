@@ -1566,7 +1566,7 @@ func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch ch
 
 func TestCosineSimilarityIdentical(t *testing.T) {
 	a := []float32{1, 2, 3, 4}
-	sim := cosineSimilarity(a, a)
+	sim := CosineSimilarity(a, a)
 	if sim < 0.999 {
 		t.Errorf("identical vectors should have similarity ~1.0, got %f", sim)
 	}
@@ -1575,7 +1575,7 @@ func TestCosineSimilarityIdentical(t *testing.T) {
 func TestCosineSimilarityOrthogonal(t *testing.T) {
 	a := []float32{1, 0, 0, 0}
 	b := []float32{0, 1, 0, 0}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if sim > 0.001 {
 		t.Errorf("orthogonal vectors should have similarity ~0.0, got %f", sim)
 	}
@@ -1584,7 +1584,7 @@ func TestCosineSimilarityOrthogonal(t *testing.T) {
 func TestCosineSimilarityOpposite(t *testing.T) {
 	a := []float32{1, 2, 3}
 	b := []float32{-1, -2, -3}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if sim > -0.999 {
 		t.Errorf("opposite vectors should have similarity ~-1.0, got %f", sim)
 	}
@@ -1593,14 +1593,14 @@ func TestCosineSimilarityOpposite(t *testing.T) {
 func TestCosineSimilarityDifferentLength(t *testing.T) {
 	a := []float32{1, 2}
 	b := []float32{1, 2, 3}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if sim != 0 {
 		t.Errorf("different length vectors should return 0, got %f", sim)
 	}
 }
 
 func TestCosineSimilarityEmpty(t *testing.T) {
-	sim := cosineSimilarity([]float32{}, []float32{})
+	sim := CosineSimilarity([]float32{}, []float32{})
 	if sim != 0 {
 		t.Errorf("empty vectors should return 0, got %f", sim)
 	}
@@ -1609,7 +1609,7 @@ func TestCosineSimilarityEmpty(t *testing.T) {
 func TestCosineSimilarityZeroVector(t *testing.T) {
 	a := []float32{0, 0, 0}
 	b := []float32{1, 2, 3}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if sim != 0 {
 		t.Errorf("zero vector should return 0, got %f", sim)
 	}

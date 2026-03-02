@@ -194,6 +194,16 @@ oasis.NewID() string      // time-sortable 20-char xid (base32)
 oasis.NowUnix() int64     // current Unix timestamp (seconds)
 ```
 
+## Vector Math
+
+**File:** `cosine.go`
+
+```go
+oasis.CosineSimilarity(a, b []float32) float32  // cosine similarity in [-1, 1]
+```
+
+Returns 0 for empty, mismatched-length, or zero-magnitude vectors.
+
 ## Chunk Filter Constructors
 
 **File:** `types.go`

@@ -21,24 +21,6 @@ const vecIndexWarnThreshold = 50_000
 
 // --- Vector math ---
 
-// cosineSimilarity computes the cosine similarity between two vectors.
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	denom := math.Sqrt(normA) * math.Sqrt(normB)
-	if denom == 0 {
-		return 0
-	}
-	return float32(dot / denom)
-}
-
 // vecNorm computes the L2 norm of a vector.
 func vecNorm(v []float32) float32 {
 	var sum float64
@@ -481,7 +463,7 @@ func (s *Store) vecDiskFallback(ctx context.Context, query []float32, topK int, 
 		results = append(results, scored{
 			id:    id,
 			docID: docID,
-			score: cosineSimilarity(query, emb),
+			score: oasis.CosineSimilarity(query, emb),
 		})
 	}
 	if err := rows.Err(); err != nil {

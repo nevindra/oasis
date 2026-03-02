@@ -22,7 +22,7 @@ func TestExtractGraphEdges(t *testing.T) {
 		response: `{"edges":[{"source":"c2","target":"c1","relation":"references","weight":0.9,"description":"mentions Go's creation"},{"source":"c3","target":"c2","relation":"elaborates","weight":0.8,"description":"expands on concurrency details"}]}`,
 	}
 
-	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, "", nil)
+	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, "", 0, nil)
 	if err != nil {
 		t.Fatalf("extractGraphEdges: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestExtractGraphEdges_SlidingWindow(t *testing.T) {
 		onChat:   func() { callCount++ },
 	}
 
-	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 2, 1, "", nil)
+	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 2, 1, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestExtractGraphEdges_Parallel(t *testing.T) {
 		},
 	}
 
-	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 3, "", nil)
+	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 3, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestExtractGraphEdges_CancelContext(t *testing.T) {
 		},
 	}
 
-	_, err := extractGraphEdges(ctx, provider, chunks, 5, 0, 1, "", nil)
+	_, err := extractGraphEdges(ctx, provider, chunks, 5, 0, 1, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestExtractGraphEdges_WithDocContext(t *testing.T) {
 
 	docContext := "# Go Programming Guide\n## Chapter 2: Error Handling\nThis chapter covers...\n## Chapter 3: Retry Policies\nBuilds on error handling..."
 
-	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, docContext, nil)
+	edges, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, docContext, 0, nil)
 	if err != nil {
 		t.Fatalf("extractGraphEdges: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestExtractGraphEdges_WithoutDocContext(t *testing.T) {
 	}
 	provider.capturePrompt = &capturedPrompt
 
-	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, "", nil)
+	_, err := extractGraphEdges(context.Background(), provider, chunks, 5, 0, 1, "", 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

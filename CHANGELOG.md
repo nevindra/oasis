@@ -14,6 +14,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **`CosineSimilarity(a, b []float32) float32`** — exported utility function in root package. Replaces 5 identical package-local implementations (ingest/graph, ingest/chunker_semantic, store/sqlite, memory, tools/search) with one canonical version _(RAG review #4.1)_
+- **`WithLLMTimeout(d time.Duration)` ingest option** — sets the maximum duration for individual LLM calls during graph extraction and contextual enrichment (default 2 minutes). Prevents a hung `provider.Chat` call from blocking workers indefinitely, avoiding deadlocks in the extraction worker pool _(RAG review #3.3)_
+- **`WithRerankerTimeout(d time.Duration)` on `LLMReranker`** — sets the maximum duration for the LLM reranking call (default 2 minutes) _(RAG review #3.3)_
+- **`DocumentID` field on `IngestCheckpoint`** — records the document ID after `StoreDocument` succeeds. On resume at "graphing" stage, reuses the stored ID and skips re-store. On earlier stages, deletes the orphan document before re-storing with a fresh ID. Eliminates orphan data accumulation from repeated resume attempts _(RAG review #3.1)_
 - **`WithMaxVecEntries(n)` SQLite store option** — caps the in-memory vector index at `n` entries. When exceeded, chunks from the oldest documents are evicted FIFO. Evicted chunks remain searchable via a slower disk-based fallback path that queries SQLite directly. Default 0 means unlimited _(RAG review #1.1)_
 - **`DocumentMetaLister` optional interface** — `ListDocumentMeta(ctx, limit)` returns documents with only ID, title, source, and timestamp (no content). Implemented by `store/sqlite` and `store/postgres`. Cross-document extraction auto-discovers this via type assertion to avoid loading full document content _(RAG review #1.4)_
 - **`SearchChunksBatch` on SQLite Store** — searches multiple embeddings in a single pass over the in-memory vector index. Cross-document extraction auto-discovers this via `BatchSearcher` type assertion, reducing N index scans per document to 1 _(RAG review #2.4)_
@@ -38,7 +42,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **Graph extraction prompt** — improved directionality guidance for asymmetric relations (`depends_on`, `elaborates`, `caused_by`, `part_of`); removed `sequence` from prompted types (handled deterministically by `WithSequenceEdges`)
 - **`StoreEdges` batched inserts** — SQLite uses multi-value INSERT (150 rows/batch); Postgres uses `unnest`-based bulk insert. Both reduce N round-trips to 1 (or ceil(N/150) for SQLite)
 - **`resolveParentChunks` sort-before-dedup** — results are sorted by score before parent deduplication so the highest-scored child wins when siblings share a parent
-- **`cosineSimilarity` uses `math.Sqrt`** — replaced hand-rolled Newton's method
+- **`CosineSimilarity` consolidated** — 5 package-local implementations replaced with a single exported `oasis.CosineSimilarity` function. `ingest/graph.go` version (float64 return) now uses the shared float32 version with explicit cast _(RAG review #4.1)_
+- **`buildSequenceEdges` index-based sort** — sorts an `[]int` index slice instead of copying the full `[]Chunk` slice, avoiding ~3 MB of embedding data allocation for 500-chunk documents _(RAG review #4.3)_
+- **`enrichChunksWithContext` safe mutation** — workers collect prefixes into a separate `[]string` slice and merge into `chunks[].Content` after all workers finish, eliminating the fragile concurrent write pattern _(RAG review #3.5)_
+- **`batchEmbed` saves checkpoint per batch** — on resume, each successful embedding batch updates `EmbeddedBatches` and `ChunksJSON` in the checkpoint. Previously, a partial failure discarded all completed batches _(RAG review #3.4)_
 - **RRF scores normalized to `[0, 1]`** — `reciprocalRankFusion` now scales scores so rank-0 in both lists = 1.0, fixing `WithMinRetrievalScore` and `ScoreReranker` silently dropping all results
 - **Vector + keyword search run in parallel** — `HybridRetriever` runs both searches concurrently when the store supports `KeywordSearcher`
 - **`LLMReranker` handles markdown-wrapped JSON** — extracts JSON from `` ```json ``` `` code fences instead of silently degrading

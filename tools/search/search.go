@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -258,7 +257,7 @@ func (t *Tool) rankResults(ctx context.Context, query string, results []resultWi
 
 	queryVec := embeddings[0]
 	for i := range tagged {
-		tagged[i].Score = cosineSimilarity(queryVec, embeddings[i+1])
+		tagged[i].Score = oasis.CosineSimilarity(queryVec, embeddings[i+1])
 	}
 
 	sort.Slice(tagged, func(i, j int) bool {
@@ -297,18 +296,3 @@ func formatRankedResults(ranked []rankedChunk, results []resultWithContent) stri
 	return out.String()
 }
 
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return float32(dot / (math.Sqrt(normA) * math.Sqrt(normB)))
-}

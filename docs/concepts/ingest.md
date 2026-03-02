@@ -449,6 +449,7 @@ for _, cp := range checkpoints {
 | `WithContextualEnrichment(p)` | disabled | Enable LLM-based contextual enrichment per chunk |
 | `WithContextWorkers(n)` | 3 | Max concurrent LLM calls for contextual enrichment |
 | `WithContextMaxDocBytes(n)` | 100,000 | Max document bytes sent to LLM for context (0 = unlimited) |
+| `WithLLMTimeout(d)` | 2 min | Max duration per LLM call (graph extraction + contextual enrichment). Prevents deadlocks from hung providers |
 | `WithIngestorTracer(t)` | nil | Attach a `Tracer` for span creation (`ingest.document`) |
 | `WithIngestorLogger(l)` | nil | Attach a `*slog.Logger` for structured logging |
 

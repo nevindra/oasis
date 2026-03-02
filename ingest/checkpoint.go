@@ -77,7 +77,6 @@ func (ing *Ingestor) ResumeIngest(ctx context.Context, checkpointID string) (Ing
 // resumeFromCheckpoint continues the pipeline from the stage recorded in cp.
 func (ing *Ingestor) resumeFromCheckpoint(ctx context.Context, cp oasis.IngestCheckpoint) (IngestResult, error) {
 	now := oasis.NowUnix()
-	docID := oasis.NewID()
 	source := cp.Source
 
 	// --- re-extract if needed ---
@@ -100,6 +99,25 @@ func (ing *Ingestor) resumeFromCheckpoint(ctx context.Context, cp oasis.IngestCh
 	}
 
 	ct := ContentType(cp.ContentType)
+
+	// If checkpoint recorded a DocumentID (store succeeded in a prior attempt),
+	// and we're at the graphing stage, reuse it to avoid orphan duplicates.
+	// Otherwise generate a fresh ID and clean up any prior orphan.
+	docID := cp.DocumentID
+	if docID == "" {
+		docID = oasis.NewID()
+	}
+
+	// If a previous attempt stored a document and we're resuming at an earlier
+	// stage, delete the orphan before re-storing.
+	if cp.DocumentID != "" && cp.Status != oasis.CheckpointGraphing {
+		if err := ing.store.DeleteDocument(ctx, cp.DocumentID); err != nil && ing.logger != nil {
+			ing.logger.Warn("ingest: resume: failed to delete orphan document",
+				"doc_id", cp.DocumentID, "err", err)
+		}
+		docID = oasis.NewID()
+	}
+
 	doc := oasis.Document{
 		ID:        docID,
 		Title:     source,
@@ -143,15 +161,22 @@ func (ing *Ingestor) resumeFromCheckpoint(ctx context.Context, cp oasis.IngestCh
 			// Re-embed only the batches that didn't finish.
 			done := cp.EmbeddedBatches * ing.batchSize
 			if done < len(chunks) {
-				if err := ing.batchEmbed(ctx, chunks[done:]); err != nil {
+				baseBatches := cp.EmbeddedBatches
+				if err := ing.batchEmbed(ctx, chunks[done:], func(completedBatches int) {
+					cp.EmbeddedBatches = baseBatches + completedBatches
+					if cj, err := json.Marshal(chunks); err == nil {
+						cp.ChunksJSON = string(cj)
+					}
+					ing.saveCheckpoint(ctx, cp)
+				}); err != nil {
 					ing.notifyError(source, err)
 					return IngestResult{}, err
 				}
 			}
 		}
 
-	case oasis.CheckpointStoring, oasis.CheckpointGraphing:
-		// Everything up to store/graph is done; just re-store and re-graph.
+	case oasis.CheckpointStoring:
+		// Store stage didn't complete; need to re-store.
 		if cp.ChunksJSON != "" {
 			if err := json.Unmarshal([]byte(cp.ChunksJSON), &chunks); err != nil {
 				return IngestResult{}, fmt.Errorf("ingest: resume: unmarshal chunks: %w", err)
@@ -159,6 +184,15 @@ func (ing *Ingestor) resumeFromCheckpoint(ctx context.Context, cp oasis.IngestCh
 			for i := range chunks {
 				chunks[i].DocumentID = docID
 				chunks[i].ID = oasis.NewID()
+			}
+		}
+
+	case oasis.CheckpointGraphing:
+		// Store succeeded; document and chunks are already in DB.
+		// Load existing chunks for graph extraction.
+		if cp.ChunksJSON != "" {
+			if err := json.Unmarshal([]byte(cp.ChunksJSON), &chunks); err != nil {
+				return IngestResult{}, fmt.Errorf("ingest: resume: unmarshal chunks: %w", err)
 			}
 		}
 	}
@@ -172,6 +206,7 @@ func (ing *Ingestor) resumeFromCheckpoint(ctx context.Context, cp oasis.IngestCh
 			ing.notifyError(source, err)
 			return IngestResult{}, err
 		}
+		cp.DocumentID = docID
 	}
 
 	// --- graph ---

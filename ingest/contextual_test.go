@@ -49,7 +49,7 @@ func TestEnrichChunksWithContext(t *testing.T) {
 	}
 	provider := &mockContextProvider{prefix: "This is about Go."}
 
-	enrichChunksWithContext(context.Background(), provider, chunks, "Full document about Go.", 3, nil)
+	enrichChunksWithContext(context.Background(), provider, chunks, "Full document about Go.", 3, 0, nil)
 
 	for i, c := range chunks {
 		if !strings.HasPrefix(c.Content, "This is about Go.\n\n") {
@@ -68,7 +68,7 @@ func TestEnrichChunksWithContext_GracefulDegradation(t *testing.T) {
 	}
 	provider := &mockErrorProvider{}
 
-	enrichChunksWithContext(context.Background(), provider, chunks, "doc", 1, nil)
+	enrichChunksWithContext(context.Background(), provider, chunks, "doc", 1, 0, nil)
 
 	if chunks[0].Content != original {
 		t.Errorf("chunk content changed on error: got %q, want %q", chunks[0].Content, original)
@@ -86,7 +86,7 @@ func TestEnrichChunksWithContext_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	enrichChunksWithContext(ctx, provider, chunks, "doc", 1, nil)
+	enrichChunksWithContext(ctx, provider, chunks, "doc", 1, 0, nil)
 
 	// All chunks should retain original content (no LLM calls made).
 	for i, c := range chunks {
@@ -98,7 +98,7 @@ func TestEnrichChunksWithContext_CancelledContext(t *testing.T) {
 
 func TestEnrichChunksWithContext_EmptyChunks(t *testing.T) {
 	provider := &mockContextProvider{prefix: "ctx"}
-	enrichChunksWithContext(context.Background(), provider, nil, "doc", 3, nil)
+	enrichChunksWithContext(context.Background(), provider, nil, "doc", 3, 0, nil)
 	if provider.calls.Load() != 0 {
 		t.Errorf("got %d calls for empty chunks, want 0", provider.calls.Load())
 	}

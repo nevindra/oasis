@@ -6,6 +6,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 // SemanticChunker splits text at semantic boundaries detected by embedding
@@ -87,7 +89,7 @@ func (sc *SemanticChunker) ChunkContext(ctx context.Context, text string) ([]str
 
 	similarities := make([]float32, len(sentences)-1)
 	for i := 0; i < len(sentences)-1; i++ {
-		similarities[i] = cosineSim(embeddings[i], embeddings[i+1])
+		similarities[i] = oasis.CosineSimilarity(embeddings[i], embeddings[i+1])
 	}
 
 	threshold := percentileThreshold(similarities, sc.percentile)
@@ -205,23 +207,6 @@ func splitSentences(text string) []string {
 	return sentences
 }
 
-// cosineSim computes cosine similarity between two vectors.
-func cosineSim(a, b []float32) float32 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	denom := math.Sqrt(normA) * math.Sqrt(normB)
-	if denom == 0 {
-		return 0
-	}
-	return float32(dot / denom)
-}
 
 // percentileThreshold computes the Nth percentile of a float32 slice.
 func percentileThreshold(values []float32, percentile int) float32 {

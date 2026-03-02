@@ -12,6 +12,10 @@ type IngestCheckpoint struct {
 	Source string           `json:"source"`  // filename or source URL
 	Status CheckpointStatus `json:"status"`
 
+	// DocumentID is the ID assigned to the document when StoreDocument succeeds.
+	// Used on resume to avoid creating orphan duplicates.
+	DocumentID string `json:"document_id,omitempty"`
+
 	// Populated after extract stage.
 	ContentType   string `json:"content_type,omitempty"`
 	ExtractedText string `json:"extracted_text,omitempty"`

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // RetrievalResult is a scored piece of content from a knowledge base search.
@@ -534,14 +535,20 @@ func extractJSON(s string) string {
 // unmodified (graceful degradation).
 type LLMReranker struct {
 	provider Provider
+	timeout  time.Duration
 }
 
 var _ Reranker = (*LLMReranker)(nil)
 
 // NewLLMReranker creates a Reranker that uses the given LLM provider to
-// score relevance.
+// score relevance. Default timeout is 2 minutes per LLM call.
 func NewLLMReranker(provider Provider) *LLMReranker {
-	return &LLMReranker{provider: provider}
+	return &LLMReranker{provider: provider, timeout: 2 * time.Minute}
+}
+
+// WithRerankerTimeout sets the maximum duration for the LLM reranking call.
+func WithRerankerTimeout(d time.Duration) func(*LLMReranker) {
+	return func(r *LLMReranker) { r.timeout = d }
 }
 
 // Rerank sends results to the LLM for relevance scoring, then re-sorts.
@@ -560,7 +567,13 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Retrie
 		query, docs.String(),
 	)
 
-	resp, err := r.provider.Chat(ctx, ChatRequest{
+	callCtx := ctx
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+	}
+	resp, err := r.provider.Chat(callCtx, ChatRequest{
 		Messages: []ChatMessage{
 			{Role: "user", Content: prompt},
 		},

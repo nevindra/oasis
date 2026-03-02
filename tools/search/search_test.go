@@ -4,11 +4,13 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 func TestCosineSimilarityIdentical(t *testing.T) {
 	a := []float32{1, 2, 3}
-	sim := cosineSimilarity(a, a)
+	sim := oasis.CosineSimilarity(a, a)
 	if math.Abs(float64(sim)-1.0) > 0.001 {
 		t.Errorf("expected ~1.0, got %f", sim)
 	}
@@ -17,14 +19,14 @@ func TestCosineSimilarityIdentical(t *testing.T) {
 func TestCosineSimilarityOrthogonal(t *testing.T) {
 	a := []float32{1, 0, 0}
 	b := []float32{0, 1, 0}
-	sim := cosineSimilarity(a, b)
+	sim := oasis.CosineSimilarity(a, b)
 	if math.Abs(float64(sim)) > 0.001 {
 		t.Errorf("expected ~0, got %f", sim)
 	}
 }
 
 func TestCosineSimilarityEmpty(t *testing.T) {
-	sim := cosineSimilarity(nil, nil)
+	sim := oasis.CosineSimilarity(nil, nil)
 	if sim != 0 {
 		t.Errorf("expected 0, got %f", sim)
 	}
