@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-03-05
+
 ### Removed
 
 - **`similar_to` from graph extraction `validRelations`** — the LLM prompt never lists `similar_to` as a valid relation, so parsing it was dead code. Test mock updated to use `references` _(RAG review #4.2)_
@@ -334,7 +336,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/nevindra/oasis/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/nevindra/oasis/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/nevindra/oasis/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/nevindra/oasis/releases/tag/v0.7.0
