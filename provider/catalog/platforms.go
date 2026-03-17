@@ -1,3 +1,5 @@
+//go:generate go run ../../cmd/modelgen
+
 package catalog
 
 import oasis "github.com/nevindra/oasis"

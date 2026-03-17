@@ -1,0 +1,57 @@
+name: Update Model Registry
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Every 6 hours
+  workflow_dispatch: {} # Manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Generate model registry
+        run: go generate ./provider/catalog/...
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet provider/catalog/models_gen.go; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "### Model registry diff" >> "$GITHUB_STEP_SUMMARY"
+            echo '```diff' >> "$GITHUB_STEP_SUMMARY"
+            git diff provider/catalog/models_gen.go >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build and test
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          go build ./...
+          go test ./provider/catalog/ -count=1
+
+      - name: Create pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: update model registry"
+          title: "chore: update model registry"
+          body: |
+            Automated model registry update from OpenRouter.
+
+            This PR was created by the `update-models` workflow.
+            Review the diff to see which models were added, updated, or removed.
+          branch: chore/update-model-registry
+          delete-branch: true
+          labels: automated,dependencies
