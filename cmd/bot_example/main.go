@@ -61,9 +61,9 @@ func main() {
 	// 3. Observer (opt-in via config)
 	var inst *observer.Instruments
 	if cfg.Observer.Enabled {
-		pricing := make(map[string]observer.ModelPricing, len(cfg.Observer.Pricing))
+		pricing := make(map[string]oasis.ModelPricing, len(cfg.Observer.Pricing))
 		for model, p := range cfg.Observer.Pricing {
-			pricing[model] = observer.ModelPricing{InputPerMillion: p.Input, OutputPerMillion: p.Output}
+			pricing[model] = oasis.ModelPricing{InputPerMillion: p.Input, OutputPerMillion: p.Output}
 		}
 
 		var shutdown func(context.Context) error

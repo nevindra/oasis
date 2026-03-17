@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 
+	oasis "github.com/nevindra/oasis"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -51,7 +52,7 @@ type Instruments struct {
 // Init sets up OTEL trace, metric, and log providers with OTLP HTTP exporters.
 // Configuration comes from standard OTEL env vars (OTEL_EXPORTER_OTLP_ENDPOINT, etc.).
 // Returns a shutdown function that must be called on application exit.
-func Init(ctx context.Context, pricing map[string]ModelPricing) (*Instruments, func(context.Context) error, error) {
+func Init(ctx context.Context, pricing map[string]oasis.ModelPricing) (*Instruments, func(context.Context) error, error) {
 	res, err := resource.New(ctx,
 		resource.WithAttributes(semconv.ServiceName("oasis")),
 		resource.WithFromEnv(),
@@ -115,7 +116,7 @@ func Init(ctx context.Context, pricing map[string]ModelPricing) (*Instruments, f
 	return inst, shutdown, nil
 }
 
-func newInstruments(pricing map[string]ModelPricing) (*Instruments, error) {
+func newInstruments(pricing map[string]oasis.ModelPricing) (*Instruments, error) {
 	tracer := otel.Tracer(scopeName)
 	meter := otel.Meter(scopeName)
 	logger := global.GetLoggerProvider().Logger(scopeName)

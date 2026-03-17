@@ -228,7 +228,7 @@ embed, err := resolve.EmbeddingProvider(resolve.EmbeddingConfig{
 | `Provider` | `string` | Required. Provider name (see table below) |
 | `APIKey` | `string` | API key |
 | `Model` | `string` | Model identifier |
-| `BaseURL` | `string` | Override base URL (auto-filled for known providers) |
+| `BaseURL` | `string` | Override base URL (auto-filled for known providers). Required for unknown providers — treated as OpenAI-compatible. |
 | `Temperature` | `*float64` | Sampling temperature (nil = provider default) |
 | `TopP` | `*float64` | Nucleus sampling (nil = provider default) |
 | `Thinking` | `*bool` | Thinking mode — Gemini only, silently ignored for others |
@@ -245,7 +245,7 @@ embed, err := resolve.EmbeddingProvider(resolve.EmbeddingConfig{
 | `"mistral"` | `https://api.mistral.ai/v1` |
 | `"ollama"` | `http://localhost:11434/v1` |
 
-For unlisted OpenAI-compatible providers, use one of the known names with a custom `BaseURL`, or use `openaicompat.NewProvider` directly.
+For unlisted OpenAI-compatible providers, provide a custom `BaseURL` with any provider name — the resolver treats unknown providers with a BaseURL as OpenAI-compatible. Alternatively, use `openaicompat.NewProvider` directly.
 
 ### Multimodal Embedding
 
@@ -279,6 +279,8 @@ Both text and image embeddings live in the same vector space — a text query "b
 | `Model` | `string` | Embedding model identifier |
 | `BaseURL` | `string` | Override base URL (auto-filled for known providers) |
 | `Dimensions` | `int` | Output vector dimensions |
+
+> **For dynamic model discovery**, see [Model Catalog](#model-catalog) — it wraps provider resolution with model browsing, validation, and metadata enrichment. Use `resolve.Provider` when you know the exact provider and model. Use the catalog when end users need to discover and pick models at runtime.
 
 ## WithRetry Middleware
 
@@ -398,6 +400,144 @@ if bp, ok := provider.(oasis.BatchProvider); ok {
 | Package           | BatchProvider              | BatchEmbeddingProvider                     |
 |-------------------|----------------------------|--------------------------------------------|
 | `provider/gemini` | `gemini.New(apiKey, model)` | `gemini.NewEmbedding(apiKey, model, dims)` |
+
+## Model Catalog
+
+**Package:** `provider/catalog`
+
+The Model Catalog provides dynamic model discovery across LLM providers. It merges a static registry (compiled into the binary, updated via CI every 6 hours) with live provider API calls to give a complete picture: pricing and capabilities from static data, availability from live APIs.
+
+### Why
+
+Without the catalog, users manually specify provider + model as strings — typos only surface when the first API call fails, deprecated models cause silent runtime failures, and there's no way to browse available models programmatically.
+
+### Architecture: Three-Layer Merge
+
+```
+Layer 1: Static Data (models_gen.go)
+    Compiled into the binary. Rich metadata: pricing, capabilities, context windows.
+    Sources: OpenRouter + models.dev, refreshed every 6 hours via CI.
+
+Layer 2: Live API Data (per-provider /v1/models)
+    Called when user has added an API key and requests the model list.
+    Authoritative for what the user's key can actually access.
+
+Layer 3: Merge
+    Static metadata + live availability = complete picture.
+    Model in both     → full metadata + available
+    Model in static only → full metadata + unavailable (deprecated/removed)
+    Model in live only   → minimal metadata + available (brand new)
+```
+
+### Quick Start
+
+```go
+import "github.com/nevindra/oasis/provider/catalog"
+
+cat := catalog.NewModelCatalog()
+
+// End user picks a platform from the built-in list, enters API key
+cat.Add("qwen", apiKey)
+
+// Browse available models with metadata
+models, _ := cat.ListProvider(ctx, "qwen")
+// → []oasis.ModelInfo with ID, context window, capabilities, pricing, status
+
+// Create a provider directly from the catalog
+llm, _ := cat.CreateProvider(ctx, "qwen/qwen-turbo")
+
+// Use it like any other provider
+agent := oasis.NewLLMAgent("chat", "You are helpful.", llm)
+```
+
+### Built-in Platforms
+
+The catalog ships with 10 known platforms. End users see these in the UI without any developer code:
+
+| Platform | Protocol | Default Base URL |
+|----------|----------|-----------------|
+| OpenAI | OpenAI-compat | `https://api.openai.com/v1` |
+| Gemini | Gemini | `https://generativelanguage.googleapis.com/v1beta` |
+| Groq | OpenAI-compat | `https://api.groq.com/openai/v1` |
+| DeepSeek | OpenAI-compat | `https://api.deepseek.com` |
+| Qwen | OpenAI-compat | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| Together | OpenAI-compat | `https://api.together.xyz/v1` |
+| Mistral | OpenAI-compat | `https://api.mistral.ai/v1` |
+| Fireworks | OpenAI-compat | `https://api.fireworks.ai/inference/v1` |
+| Cerebras | OpenAI-compat | `https://api.cerebras.ai/v1` |
+| Ollama | OpenAI-compat | `http://localhost:11434/v1` |
+
+Custom platforms can be registered at runtime via `RegisterPlatform`, and custom providers (self-hosted Ollama, vLLM, etc.) via `AddCustom`.
+
+### Model Identifier Format
+
+Models use the `"provider/model"` format:
+
+```
+openai/gpt-4o
+gemini/gemini-2.5-flash
+qwen/qwen-turbo
+```
+
+Parse with `oasis.ParseModelID`:
+
+```go
+provider, model := oasis.ParseModelID("openai/gpt-4o")
+// provider = "openai", model = "gpt-4o"
+```
+
+### Validation
+
+The catalog validates models before creating providers:
+
+```go
+err := cat.Validate(ctx, "openai/gpt-4o")
+// nil if valid, actionable error if deprecated or not found
+// e.g., "catalog: model \"gemini/gemini-1.0-pro\" is deprecated (use gemini-2.5-flash instead)"
+```
+
+`CreateProvider` calls `Validate` automatically — invalid models are caught before the first Chat call.
+
+### Custom / Self-Hosted Providers
+
+For providers not in the built-in list (Ollama on a remote host, vLLM, internal proxies):
+
+```go
+cat.AddCustom("my-ollama", "http://192.168.1.50:11434/v1", "")
+cat.AddCustom("company-llm", "https://llm.internal.corp/v1", corpKey)
+```
+
+These are assumed OpenAI-compatible. For non-standard protocols, register a platform first:
+
+```go
+cat.RegisterPlatform(oasis.Platform{
+    Name:     "MyGeminiProxy",
+    Protocol: oasis.ProtocolGemini,
+    BaseURL:  "https://gemini-proxy.internal/v1beta",
+})
+cat.Add("mygeminiproxy", apiKey)
+```
+
+### Caching and Refresh
+
+Live API results are cached with a configurable TTL (default: 1 hour). Three refresh strategies:
+
+| Strategy | Behavior |
+|----------|----------|
+| `RefreshOnDemand` (default) | Live call on `List`/`ListProvider`, cached with TTL |
+| `RefreshNone` | Static data only — no network calls. For air-gapped environments |
+
+```go
+cat := catalog.NewModelCatalog(
+    catalog.WithCatalogTTL(30 * time.Minute),
+    catalog.WithRefresh(catalog.RefreshNone), // offline mode
+)
+```
+
+### See Also
+
+- [Custom Provider Guide](../guides/custom-provider.md) — implement your own provider
+- [API Reference: Types](../api/types.md#model-catalog-types) — ModelInfo, ModelCapabilities, ModelPricing
 
 ## Key Behaviors
 

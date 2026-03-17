@@ -266,3 +266,51 @@ observer.WrapTool(tool, inst) Tool
 observer.NewTracer() oasis.Tracer
 observer.NewCostCalculator(overrides) *CostCalculator
 ```
+
+## ModelCatalog
+
+**Package:** `provider/catalog`
+
+```go
+import "github.com/nevindra/oasis/provider/catalog"
+
+cat := catalog.NewModelCatalog(opts ...catalog.CatalogOption)
+```
+
+### Options
+
+```go
+catalog.WithCatalogTTL(d time.Duration)     // cache TTL (default: 1 hour)
+catalog.WithMaxProviders(n int)              // max registered providers (default: 50)
+catalog.WithRefresh(s catalog.RefreshStrategy) // RefreshOnDemand (default) or RefreshNone
+```
+
+### Platform Management
+
+```go
+cat.Platforms() []oasis.Platform                    // list all known platforms
+cat.RegisterPlatform(p oasis.Platform) error        // add custom platform
+```
+
+### Provider Management
+
+```go
+cat.Add(platform, apiKey string) error              // register known platform
+cat.AddCustom(identifier, baseURL, apiKey string) error  // register custom provider
+cat.Remove(identifier string)                       // remove provider
+```
+
+### Model Discovery
+
+```go
+cat.List(ctx context.Context) ([]oasis.ModelInfo, error)              // all providers
+cat.ListProvider(ctx context.Context, id string) ([]oasis.ModelInfo, error)  // single provider
+cat.Validate(ctx context.Context, modelID string) error               // "provider/model" format
+```
+
+### Provider Creation
+
+```go
+cat.CreateProvider(ctx context.Context, modelID string) (oasis.Provider, error)            // "provider/model"
+cat.CreateProviderByID(ctx context.Context, provider, model string) (oasis.Provider, error) // separate strings
+```

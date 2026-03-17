@@ -6,6 +6,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **Model Catalog** (`provider/catalog`) — dynamic model discovery across LLM providers. Merges a static registry (compiled in, CI-refreshed every 6 hours from OpenRouter + models.dev) with live provider API calls for a complete picture: pricing and capabilities from static data, availability from live APIs
+  - `ModelCatalog` with `Add`, `AddCustom`, `ListProvider`, `Validate`, `CreateProvider` — thread-safe, cached with configurable TTL
+  - 10 built-in platforms: OpenAI, Gemini, Groq, DeepSeek, Qwen, Together, Mistral, Fireworks, Cerebras, Ollama
+  - `"provider/model"` canonical identifier format with `ParseModelID` helper
+  - Three-layer merge: static metadata + live availability = full model info with pricing, capabilities, context windows, and deprecation status
+  - OpenAI-compatible protocol listing for ~90% of providers; Gemini-specific listing with pagination
+  - Static registry with 22 models (starter set — `models_gen.go`, updated by `go generate`)
+- **`ModelInfo`, `ModelCapabilities`, `ModelPricing`, `ModelStatus`, `Platform`, `Protocol`** — vocabulary types in root `oasis` package for model metadata
+- **`ParseModelID`** — splits `"provider/model"` strings into provider and model parts
+
+### Changed
+
+- **`ModelPricing` consolidated** — `observer.ModelPricing` replaced by `oasis.ModelPricing` in the root package. Field names unchanged (`InputPerMillion`, `OutputPerMillion`). The observer package now imports from root. This is a breaking change for code that references `observer.ModelPricing` directly — update imports to `oasis.ModelPricing`
+- **`resolve.Provider` accepts unknown providers** — when `BaseURL` is set, unknown provider names are treated as OpenAI-compatible instead of returning an error
+
 ## [0.10.0] - 2026-03-05
 
 ### Removed

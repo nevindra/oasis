@@ -80,6 +80,7 @@ Every box is a Go interface (except Scheduler, which is a concrete struct wrappi
 | Page | Interface | What it does |
 | ---- | --------- | ------------ |
 | [Provider](provider.md) | `Provider`, `EmbeddingProvider`, `BatchProvider` | LLM chat, tool calling, streaming, embedding, batch processing |
+| [Model Catalog](provider.md#model-catalog) | `ModelCatalog` | Dynamic model discovery, validation, pricing metadata, provider creation |
 | [Store](store.md) | `Store`, `KeywordSearcher`, `GraphStore` | Persistence with vector search, full-text search, and graph edges |
 | [Tool](tool.md) | `Tool` | Pluggable agent capabilities |
 
@@ -155,3 +156,4 @@ Both implement `Agent`, so they compose with each other — a Network can contai
 - **Pure-Go SQLite** — `modernc.org/sqlite`, no CGO required
 - **Deep observability** — `Tracer`/`Span` interfaces in root package, zero OTEL imports in your code
 - **Graph RAG** — persistent knowledge graph with typed relations across all store backends
+- **Model Catalog** — static registry (CI-refreshed) + live API calls for model discovery, validation, and pricing

@@ -3,6 +3,8 @@ package observer
 import (
 	"math"
 	"testing"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 func TestCostCalculator(t *testing.T) {
@@ -21,7 +23,7 @@ func TestCostCalculator(t *testing.T) {
 	}
 
 	// Override pricing
-	calc = NewCostCalculator(map[string]ModelPricing{
+	calc = NewCostCalculator(map[string]oasis.ModelPricing{
 		"custom-model": {InputPerMillion: 5.0, OutputPerMillion: 10.0},
 	})
 	cost = calc.Calculate("custom-model", 500_000, 200_000)

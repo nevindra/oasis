@@ -218,7 +218,43 @@ llm, err := resolve.Provider(resolve.Config{
 
 For providers with non-OpenAI API formats, call your custom constructor directly — the resolver only handles built-in providers.
 
+## Using the Model Catalog
+
+For applications where end users select providers and models at runtime (chat apps, playgrounds), use the Model Catalog instead of `resolve.Provider`:
+
+```go
+import "github.com/nevindra/oasis/provider/catalog"
+
+cat := catalog.NewModelCatalog()
+
+// End user picks "Qwen" from a dropdown, enters API key
+cat.Add("qwen", apiKey)
+
+// List available models with metadata
+models, _ := cat.ListProvider(ctx, "qwen")
+
+// Create provider from user's selection
+llm, _ := cat.CreateProvider(ctx, "qwen/qwen-turbo")
+```
+
+Custom providers also work with the catalog:
+
+```go
+// Register your custom platform (if non-OpenAI API format)
+cat.RegisterPlatform(oasis.Platform{
+    Name:     "MyProvider",
+    Protocol: oasis.ProtocolOpenAICompat,
+    BaseURL:  "https://my-api.com/v1",
+})
+
+// Or use AddCustom for self-hosted / one-off providers
+cat.AddCustom("local-llama", "http://localhost:8000/v1", "")
+```
+
+The catalog automatically discovers models from your provider's `/v1/models` endpoint and enriches them with static metadata (pricing, capabilities) when available.
+
 ## See Also
 
 - [Provider Concept](../concepts/provider.md) — full interface reference and resolver documentation
+- [Model Catalog](../concepts/provider.md#model-catalog) — dynamic model discovery and validation
 - [Observability](../concepts/observability.md) — wrapping providers with tracing

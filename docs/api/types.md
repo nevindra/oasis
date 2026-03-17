@@ -560,3 +560,106 @@ type ExtractedFact struct {
     Supersedes *string `json:"supersedes,omitempty"`
 }
 ```
+
+## Model Catalog Types
+
+**File:** `catalog.go`
+
+### Protocol
+
+```go
+type Protocol int
+
+const (
+    ProtocolOpenAICompat Protocol = iota // OpenAI-compatible /v1/models + /v1/chat/completions
+    ProtocolGemini                        // Google Generative Language API
+)
+```
+
+### Platform
+
+```go
+type Platform struct {
+    Name     string   // "OpenAI", "Gemini", "Qwen", etc.
+    Protocol Protocol // how to list models and create providers
+    BaseURL  string   // default API endpoint
+}
+```
+
+### ModelInfo
+
+Normalized metadata for a single model, aggregated from static registry data and live provider APIs.
+
+```go
+type ModelInfo struct {
+    ID          string // "qwen-turbo", "gemini-2.5-flash"
+    Provider    string // identifier used in catalog (e.g., "openai", "qwen")
+    DisplayName string // human-friendly name (empty if unavailable)
+
+    InputContext  int // max input tokens (0 = unknown)
+    OutputContext int // max output tokens (0 = unknown)
+
+    Capabilities ModelCapabilities
+
+    Status         ModelStatus
+    Deprecated     bool
+    DeprecationMsg string
+
+    Pricing *ModelPricing // nil if provider doesn't expose it
+}
+```
+
+| Field | Zero value meaning |
+|-------|-------------------|
+| `InputContext` | 0 = unknown (not "zero tokens") |
+| `OutputContext` | 0 = unknown |
+| `DisplayName` | Empty = provider API didn't return one; use `ID` as fallback |
+| `Pricing` | nil = provider doesn't expose pricing (different from "free") |
+
+### ModelCapabilities
+
+```go
+type ModelCapabilities struct {
+    Chat      bool
+    Vision    bool
+    ToolUse   bool
+    Embedding bool
+}
+```
+
+### ModelPricing
+
+Shared with the `observer` package for cost calculation.
+
+```go
+type ModelPricing struct {
+    InputPerMillion  float64 // USD per 1M input tokens
+    OutputPerMillion float64 // USD per 1M output tokens
+}
+```
+
+### ModelStatus
+
+```go
+type ModelStatus int
+
+const (
+    ModelStatusUnknown     ModelStatus = iota // no live data
+    ModelStatusAvailable                       // confirmed by live API
+    ModelStatusUnavailable                     // in static but not in live API
+)
+```
+
+### ParseModelID
+
+```go
+func ParseModelID(id string) (provider, model string)
+```
+
+Splits a `"provider/model"` string. Returns empty strings if format is invalid.
+
+```go
+oasis.ParseModelID("openai/gpt-4o")       // → "openai", "gpt-4o"
+oasis.ParseModelID("together/meta-llama/Llama-3.1-70B")  // → "together", "meta-llama/Llama-3.1-70B"
+oasis.ParseModelID("invalid")             // → "", ""
+```

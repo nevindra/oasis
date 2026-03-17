@@ -31,6 +31,8 @@ type EmbeddingConfig struct {
 }
 
 // Provider creates an oasis.Provider from a provider-agnostic Config.
+// For known providers, the BaseURL is auto-filled. For unknown providers,
+// BaseURL must be set — the provider is assumed to be OpenAI-compatible.
 func Provider(cfg Config) (oasis.Provider, error) {
 	switch cfg.Provider {
 	case "gemini":
@@ -38,7 +40,10 @@ func Provider(cfg Config) (oasis.Provider, error) {
 	case "openai", "groq", "deepseek", "together", "mistral", "ollama":
 		return openaiCompatProvider(cfg), nil
 	default:
-		return nil, fmt.Errorf("resolve: unknown provider %q", cfg.Provider)
+		if cfg.BaseURL != "" {
+			return openaiCompatProvider(cfg), nil
+		}
+		return nil, fmt.Errorf("resolve: unknown provider %q (provide BaseURL for custom providers)", cfg.Provider)
 	}
 }
 

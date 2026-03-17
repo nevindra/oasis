@@ -1,14 +1,10 @@
 package observer
 
-// ModelPricing holds per-million-token pricing for a model.
-type ModelPricing struct {
-	InputPerMillion  float64
-	OutputPerMillion float64
-}
+import oasis "github.com/nevindra/oasis"
 
 // DefaultPricing contains sensible defaults for common models.
 // Users can override or extend via [observer.pricing] in oasis.toml.
-var DefaultPricing = map[string]ModelPricing{
+var DefaultPricing = map[string]oasis.ModelPricing{
 	// Gemini
 	"gemini-2.0-flash":      {0.10, 0.40},
 	"gemini-2.0-flash-lite": {0.0, 0.0},
@@ -33,12 +29,12 @@ var DefaultPricing = map[string]ModelPricing{
 
 // CostCalculator computes USD cost from token counts.
 type CostCalculator struct {
-	pricing map[string]ModelPricing
+	pricing map[string]oasis.ModelPricing
 }
 
 // NewCostCalculator creates a calculator with default pricing, optionally merged with overrides.
-func NewCostCalculator(overrides map[string]ModelPricing) *CostCalculator {
-	merged := make(map[string]ModelPricing, len(DefaultPricing)+len(overrides))
+func NewCostCalculator(overrides map[string]oasis.ModelPricing) *CostCalculator {
+	merged := make(map[string]oasis.ModelPricing, len(DefaultPricing)+len(overrides))
 	for k, v := range DefaultPricing {
 		merged[k] = v
 	}
