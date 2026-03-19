@@ -10,6 +10,7 @@ var (
 
 	AttrTokensInput  = attribute.Key("llm.tokens.input")
 	AttrTokensOutput = attribute.Key("llm.tokens.output")
+	AttrTokensCached = attribute.Key("llm.tokens.cached")
 	AttrCostUSD      = attribute.Key("llm.cost_usd")
 
 	AttrToolCount = attribute.Key("llm.tool_count")

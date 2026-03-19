@@ -309,6 +309,55 @@ func TestRefreshNone(t *testing.T) {
 	}
 }
 
+func TestPricingMap(t *testing.T) {
+	pm := PricingMap()
+	// PricingMap returns only models with explicit pricing; may be empty if
+	// static registry has no pricing data.
+	for id, p := range pm {
+		if p.InputPerMillion < 0 || p.OutputPerMillion < 0 {
+			t.Errorf("model %q has negative pricing", id)
+		}
+	}
+}
+
+func TestEnrichLiveWithStaticNewFields(t *testing.T) {
+	static := oasis.ModelInfo{
+		ID:               "gpt-4o",
+		Family:           "gpt-4",
+		InputModalities:  []string{"text", "image"},
+		OutputModalities: []string{"text"},
+		KnowledgeCutoff:  "2024-10",
+		ReleaseDate:      "2024-05-13",
+		OpenWeights:      false,
+		Capabilities: oasis.ModelCapabilities{
+			Reasoning:        false,
+			StructuredOutput: true,
+		},
+	}
+	live := oasis.ModelInfo{
+		ID:     "gpt-4o",
+		Status: oasis.ModelStatusAvailable,
+	}
+
+	merged := enrichLiveWithStatic(live, static)
+
+	if merged.Family != "gpt-4" {
+		t.Errorf("Family = %q, want 'gpt-4'", merged.Family)
+	}
+	if len(merged.InputModalities) != 2 {
+		t.Errorf("InputModalities = %v, want [text, image]", merged.InputModalities)
+	}
+	if merged.KnowledgeCutoff != "2024-10" {
+		t.Errorf("KnowledgeCutoff = %q", merged.KnowledgeCutoff)
+	}
+	if merged.ReleaseDate != "2024-05-13" {
+		t.Errorf("ReleaseDate = %q", merged.ReleaseDate)
+	}
+	if !merged.Capabilities.StructuredOutput {
+		t.Error("expected StructuredOutput from static")
+	}
+}
+
 func findModel(models []oasis.ModelInfo, id string) *oasis.ModelInfo {
 	for i := range models {
 		if models[i].ID == id {

@@ -26,13 +26,13 @@ jobs:
       - name: Check for changes
         id: diff
         run: |
-          if git diff --quiet provider/catalog/models_gen.go; then
+          if git diff --quiet provider/catalog/models_gen.go provider/catalog/platforms_gen.go; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "### Model registry diff" >> "$GITHUB_STEP_SUMMARY"
             echo '```diff' >> "$GITHUB_STEP_SUMMARY"
-            git diff provider/catalog/models_gen.go >> "$GITHUB_STEP_SUMMARY"
+            git diff provider/catalog/models_gen.go provider/catalog/platforms_gen.go >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -46,10 +46,10 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
-          commit-message: "chore: update model registry"
-          title: "chore: update model registry"
+          commit-message: "chore: update model registry from models.dev"
+          title: "chore: update model registry from models.dev"
           body: |
-            Automated model registry update from OpenRouter.
+            Automated model registry update from models.dev.
 
             This PR was created by the `update-models` workflow.
             Review the diff to see which models were added, updated, or removed.

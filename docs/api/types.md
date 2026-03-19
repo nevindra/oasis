@@ -583,6 +583,7 @@ type Platform struct {
     Name     string   // "OpenAI", "Gemini", "Qwen", etc.
     Protocol Protocol // how to list models and create providers
     BaseURL  string   // default API endpoint
+    EnvVars  []string // standard env var names for API key (e.g., ["OPENAI_API_KEY"])
 }
 ```
 
@@ -596,10 +597,19 @@ type ModelInfo struct {
     Provider    string // identifier used in catalog (e.g., "openai", "qwen")
     DisplayName string // human-friendly name (empty if unavailable)
 
+    Family string // model series: "gpt-4", "claude-3", "gemini-2.5" (empty if unknown)
+
     InputContext  int // max input tokens (0 = unknown)
     OutputContext int // max output tokens (0 = unknown)
 
+    InputModalities  []string // e.g., ["text", "image", "audio", "pdf", "video"]
+    OutputModalities []string // e.g., ["text", "image", "audio"]
+
     Capabilities ModelCapabilities
+
+    OpenWeights     bool   // true for open-source/open-weights models
+    KnowledgeCutoff string // "2024-10" format (empty if unknown)
+    ReleaseDate     string // "2024-05-13" format (empty if unknown)
 
     Status         ModelStatus
     Deprecated     bool
@@ -614,16 +624,22 @@ type ModelInfo struct {
 | `InputContext` | 0 = unknown (not "zero tokens") |
 | `OutputContext` | 0 = unknown |
 | `DisplayName` | Empty = provider API didn't return one; use `ID` as fallback |
+| `Family` | Empty = series could not be determined |
+| `InputModalities` / `OutputModalities` | nil = unknown (not "text only") |
+| `KnowledgeCutoff` / `ReleaseDate` | Empty = unknown |
 | `Pricing` | nil = provider doesn't expose pricing (different from "free") |
 
 ### ModelCapabilities
 
 ```go
 type ModelCapabilities struct {
-    Chat      bool
-    Vision    bool
-    ToolUse   bool
-    Embedding bool
+    Chat             bool
+    Vision           bool
+    ToolUse          bool
+    Embedding        bool
+    Reasoning        bool // thinking/chain-of-thought (o3, deepseek-r1, claude thinking)
+    StructuredOutput bool // JSON mode / structured output support
+    Attachment       bool // file/media upload support
 }
 ```
 
@@ -633,8 +649,10 @@ Shared with the `observer` package for cost calculation.
 
 ```go
 type ModelPricing struct {
-    InputPerMillion  float64 // USD per 1M input tokens
-    OutputPerMillion float64 // USD per 1M output tokens
+    InputPerMillion      float64 // USD per 1M input tokens
+    OutputPerMillion     float64 // USD per 1M output tokens
+    CacheReadPerMillion  float64 // USD per 1M cached input tokens (0 = no cache pricing)
+    CacheWritePerMillion float64 // USD per 1M cache write tokens (0 = no cache pricing)
 }
 ```
 

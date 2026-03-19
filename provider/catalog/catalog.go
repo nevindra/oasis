@@ -100,6 +100,19 @@ func NewModelCatalog(opts ...CatalogOption) *ModelCatalog {
 		c.platformIdx[strings.ToLower(p.Name)] = i
 	}
 
+	// Merge generated platforms (from models.dev) — skip duplicates.
+	for _, gp := range generatedPlatforms {
+		key := strings.ToLower(gp.Name)
+		if _, exists := c.platformIdx[key]; exists {
+			continue // builtin takes precedence
+		}
+		if proto, ok := protocolOverrides[key]; ok {
+			gp.Protocol = proto
+		}
+		c.platformIdx[key] = len(c.platforms)
+		c.platforms = append(c.platforms, gp)
+	}
+
 	return c
 }
 
@@ -419,6 +432,32 @@ func enrichLiveWithStatic(live, static oasis.ModelInfo) oasis.ModelInfo {
 		m.DisplayName = static.DisplayName
 	}
 
+	// Fill family from static if live doesn't have one.
+	if m.Family == "" {
+		m.Family = static.Family
+	}
+
+	// Fill modalities from static if live doesn't have them.
+	if len(m.InputModalities) == 0 {
+		m.InputModalities = static.InputModalities
+	}
+	if len(m.OutputModalities) == 0 {
+		m.OutputModalities = static.OutputModalities
+	}
+
+	// Fill knowledge cutoff and release date from static if live doesn't have them.
+	if m.KnowledgeCutoff == "" {
+		m.KnowledgeCutoff = static.KnowledgeCutoff
+	}
+	if m.ReleaseDate == "" {
+		m.ReleaseDate = static.ReleaseDate
+	}
+
+	// Use static open weights flag if live doesn't set it.
+	if !m.OpenWeights {
+		m.OpenWeights = static.OpenWeights
+	}
+
 	// Fill context windows from static if live doesn't have them.
 	if m.InputContext == 0 {
 		m.InputContext = static.InputContext
@@ -444,6 +483,19 @@ func enrichLiveWithStatic(live, static oasis.ModelInfo) oasis.ModelInfo {
 	}
 
 	return m
+}
+
+// PricingMap returns a map of model ID → pricing for all models with pricing data
+// in the static registry. Useful for initializing CostCalculator without
+// making any API calls.
+func PricingMap() map[string]oasis.ModelPricing {
+	pm := make(map[string]oasis.ModelPricing)
+	for _, m := range staticModels {
+		if m.Pricing != nil {
+			pm[m.ID] = *m.Pricing
+		}
+	}
+	return pm
 }
 
 // staticByProvider returns static models matching the given provider identifier.

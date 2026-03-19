@@ -115,7 +115,7 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 }
 
 func (o *ObservedProvider) record(ctx context.Context, span trace.Span, method, status string, durationMs float64, usage oasis.Usage) {
-	cost := o.inst.Cost.Calculate(o.model, usage.InputTokens, usage.OutputTokens)
+	cost := o.inst.Cost.Calculate(o.model, usage.InputTokens, usage.OutputTokens, usage.CachedTokens)
 
 	attrs := metric.WithAttributes(
 		AttrLLMModel.String(o.model),
@@ -126,6 +126,7 @@ func (o *ObservedProvider) record(ctx context.Context, span trace.Span, method, 
 	span.SetAttributes(
 		AttrTokensInput.Int(usage.InputTokens),
 		AttrTokensOutput.Int(usage.OutputTokens),
+		AttrTokensCached.Int(usage.CachedTokens),
 		AttrCostUSD.Float64(cost),
 	)
 
@@ -158,6 +159,7 @@ func (o *ObservedProvider) record(ctx context.Context, span trace.Span, method, 
 		oasislog.String("llm.method", method),
 		oasislog.Int("llm.tokens.input", usage.InputTokens),
 		oasislog.Int("llm.tokens.output", usage.OutputTokens),
+		oasislog.Int("llm.tokens.cached", usage.CachedTokens),
 		oasislog.Float64("llm.cost_usd", cost),
 		oasislog.Float64("llm.duration_ms", durationMs),
 		oasislog.String("status", status),
