@@ -6,6 +6,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-03-19
+
+### Added
+
+- **models.dev integration** — model registry generator (`cmd/modelgen`) now fetches from `models.dev/api.json` instead of OpenRouter. 2600+ models with richer metadata: pricing, capabilities, modalities, cache pricing, model family, knowledge cutoff, and release dates
+- **`Reasoning`, `StructuredOutput`, `Attachment` capabilities** — `ModelCapabilities` now tracks whether a model supports chain-of-thought reasoning (o3, DeepSeek-R1, Claude thinking), JSON structured output, and file/media attachments
+- **`InputModalities`, `OutputModalities` on `ModelInfo`** — granular modality tracking (text, image, audio, pdf, video) replaces the coarse `Vision` boolean for model selection
+- **`Family`, `OpenWeights`, `KnowledgeCutoff`, `ReleaseDate` on `ModelInfo`** — model family grouping, open-source flag, and temporal metadata for informed model selection
+- **`CacheReadPerMillion`, `CacheWritePerMillion` on `ModelPricing`** — cache-aware pricing from models.dev. Enables accurate cost tracking for Gemini, Claude, and other providers with prompt caching
+- **`EnvVars` on `Platform`** — standard environment variable names for API keys (e.g., `["OPENAI_API_KEY"]`), sourced from models.dev provider data
+- **`PricingMap()` in `provider/catalog`** — returns `map[string]ModelPricing` from the static registry for initializing `CostCalculator` without API calls
+- **`NewCostCalculatorFromModels`** — creates a `CostCalculator` from `[]ModelInfo` entries, with optional overrides. Bridges the catalog and observer packages
+- **`platforms_gen.go` generated output** — `modelgen` now generates a second file with provider platform data (base URLs, env vars) discovered from models.dev, merged with manually curated builtins at catalog construction
+
+### Changed
+
+- **`CostCalculator.Calculate` is now cache-aware** — signature changed from `(model, input, output)` to `(model, input, output, cached)`. When cached tokens > 0 and the model has cache pricing, cached tokens are billed at the lower `CacheReadPerMillion` rate. **Breaking:** callers must add the 4th argument (pass `0` to preserve old behavior)
+- **Observer emits `llm.tokens.cached` attribute** — span attributes and structured logs now include cached token counts alongside input/output
+- **`enrichLiveWithStatic` handles new fields** — live/static merge now preserves Family, Modalities, KnowledgeCutoff, ReleaseDate, and OpenWeights from static data when live API doesn't provide them
+- **CI workflow references models.dev** — `update-models.yml` now checks both `models_gen.go` and `platforms_gen.go` for changes, and PR descriptions reference models.dev
+
 ## [0.11.0] - 2026-03-19
 
 ### Added
