@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-03-19
+
 ### Added
 
 - **Model Catalog** (`provider/catalog`) — dynamic model discovery across LLM providers. Merges a static registry (compiled in, CI-refreshed every 6 hours from OpenRouter + models.dev) with live provider API calls for a complete picture: pricing and capabilities from static data, availability from live APIs
@@ -23,6 +25,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 - **`ModelPricing` consolidated** — `observer.ModelPricing` replaced by `oasis.ModelPricing` in the root package. Field names unchanged (`InputPerMillion`, `OutputPerMillion`). The observer package now imports from root. This is a breaking change for code that references `observer.ModelPricing` directly — update imports to `oasis.ModelPricing`
 - **`resolve.Provider` accepts unknown providers** — when `BaseURL` is set, unknown provider names are treated as OpenAI-compatible instead of returning an error
+- **Documentation expansion** — comprehensive updates across 16 doc files: built-in tool deep references, provider middleware details (retry backoff, rate limiting, batch workflows), InjectionGuard deep dive, skills guide expansion, stale libsql reference cleanup
 
 ## [0.10.0] - 2026-03-05
 
