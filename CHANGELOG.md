@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-03-19
+
+### Fixed
+
+- **`modelgen` output path** — generated files were written to a nested `provider/catalog/provider/catalog/` path instead of `provider/catalog/`. Default `-out` flag now uses relative paths since `go generate` runs from the package directory
+- **Regenerated static registry** — 3836 models from models.dev (was 646 from OpenRouter) with full pricing, capabilities, modalities, and metadata. 82 auto-discovered platforms with base URLs and env vars
+
 ## [0.12.0] - 2026-03-19
 
 ### Added
