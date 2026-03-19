@@ -57,7 +57,7 @@ func dispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, i
 		// Wrap dispatch to block execute_plan/execute_code calls from within code,
 		// preventing unbounded recursion via execute_code → execute_plan → execute_code.
 		safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
-			if tc.Name == "execute_plan" || tc.Name == "execute_code" {
+			if tc.Name == "execute_plan" || tc.Name == "execute_code" || tc.Name == "spawn_agent" {
 				return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code", IsError: true}
 			}
 			return dispatch(ctx, tc)
@@ -679,6 +679,13 @@ func buildStepTrace(tc ToolCall, res toolExecResult) StepTrace {
 		}
 		if json.Unmarshal(tc.Args, &params) == nil && params.Task != "" {
 			input = params.Task
+		}
+	} else if tc.Name == "spawn_agent" {
+		traceType = "agent"
+		var params spawnAgentArgs
+		if json.Unmarshal(tc.Args, &params) == nil {
+			input = params.Task
+			name = spawnAgentName(params)
 		}
 	}
 

@@ -294,6 +294,69 @@ if errors.As(err, &suspended) {
 
 See [Workflow](workflow.md) for DAG-level suspend/resume and [Processors](processor.md) for processor-triggered gates.
 
+## Sub-Agent Spawning
+
+`WithSubAgentSpawning` injects a built-in `spawn_agent` tool into the LLM's tool set. The LLM can call it to dynamically create and run a focused sub-agent mid-execution. This is distinct from `NewNetwork` — rather than a fixed topology defined at construction time, the parent decides at runtime whether and how to delegate.
+
+```go
+agent := oasis.NewLLMAgent("orchestrator", "Breaks work into sub-tasks", provider,
+    oasis.WithTools(searchTool, writeTool),
+    oasis.WithSubAgentSpawning(oasis.SubAgentConfig{
+        MaxSpawnDepth:  2,
+        DenySpawnTools: []string{"write"},
+    }),
+)
+```
+
+### `spawn_agent` Tool Schema
+
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `task` | string | yes | The task to delegate to the sub-agent |
+| `name` | string | no | Optional name for the sub-agent (defaults to `"sub-agent"`) |
+
+### What Sub-Agents Inherit
+
+Sub-agents are created fresh for each call. They inherit from the parent:
+
+- Provider (same LLM backend)
+- Tools (same tool set, minus any in `DenySpawnTools`)
+- `MaxIter`
+- Generation parameters (`Temperature`, `TopP`, `TopK`, `MaxTokens`)
+- Logger
+
+They do **not** inherit: store, memory, processors, input handler, response schema, tracer, suspend config, or compress settings. Sub-agents have no access to the parent's conversation history.
+
+### Depth Limiting
+
+`MaxSpawnDepth` (default `1`) caps how many levels of spawning are allowed. A depth of 1 means the parent can spawn sub-agents, but those sub-agents cannot spawn further. Attempts to spawn beyond the limit return an error to the LLM.
+
+### Tool Restriction
+
+`DenySpawnTools` lists tool names to strip from sub-agents. Use this to prevent sub-agents from calling side-effectful tools (writes, sends, etc.) while still allowing reads.
+
+```go
+oasis.SubAgentConfig{
+    DenySpawnTools: []string{"send_email", "write_file"},
+}
+```
+
+### Blocked Behaviors
+
+- `ask_user` is always blocked in sub-agents — human-in-the-loop cannot be delegated downward
+- `spawn_agent` is blocked inside `execute_code` — sandboxed code cannot trigger agent spawning
+
+### Parallel Execution
+
+The LLM can call `spawn_agent` multiple times in a single response. Like all tool calls in LLMAgent, they run concurrently via the parallel tool dispatch pool. The parent's execution loop collects all results before continuing.
+
+```
+Parent LLM response:
+  spawn_agent(task="research topic A", name="researcher-a")   ─┐
+  spawn_agent(task="research topic B", name="researcher-b")   ─┤─ run in parallel
+  spawn_agent(task="research topic C", name="researcher-c")   ─┘
+```
+
 ## See Also
 
 - [Network](network.md) — multi-agent coordination

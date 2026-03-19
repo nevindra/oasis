@@ -78,19 +78,35 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 		executeToolStream = n.tools.ExecuteStream
 	}
 
-	return n.baseLoopConfig("network:"+n.name, prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream))
+	return n.baseLoopConfig("network:"+n.name, prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs))
 }
 
 // makeDispatch returns a DispatchFunc that routes tool calls to subagents,
 // the shared built-in tools, or direct tools. When ch is non-nil, agent-start
 // and agent-finish events are emitted for subagent delegation. Tools
 // implementing StreamingTool emit progress events via executeToolStream.
-func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, executeTool toolExecFunc, executeToolStream toolExecStreamFunc) DispatchFunc {
+func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, executeTool toolExecFunc, executeToolStream toolExecStreamFunc, resolvedToolDefs []ToolDefinition) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		// Built-in tools: ask_user, execute_plan, execute_code.
 		if r, ok := dispatchBuiltins(ctx, tc, dispatch, n.inputHandler, n.name, n.planExecution, n.codeRunner); ok {
 			return r
+		}
+
+		// spawn_agent: dynamic sub-agent creation.
+		if tc.Name == "spawn_agent" && n.spawnEnabled {
+			return executeSpawnAgent(ctx, tc.Args, subAgentConfig{
+				provider:       n.provider,
+				toolDefs:       resolvedToolDefs,
+				executeTool:    executeTool,
+				maxIter:        n.maxIter,
+				maxSpawnDepth:  n.maxSpawnDepth,
+				denySpawnTools: n.denySpawnTools,
+				planExecution:  n.planExecution,
+				codeRunner:     n.codeRunner,
+				logger:         n.logger,
+				genParams:      n.generationParams,
+			})
 		}
 
 		// Check if it's an agent call (prefixed with "agent_")

@@ -17,6 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   - Static registry with 22 models (starter set — `models_gen.go`, updated by `go generate`)
 - **`ModelInfo`, `ModelCapabilities`, `ModelPricing`, `ModelStatus`, `Platform`, `Protocol`** — vocabulary types in root `oasis` package for model metadata
 - **`ParseModelID`** — splits `"provider/model"` strings into provider and model parts
+- **`WithSubAgentSpawning`** option — enables the built-in `spawn_agent` tool for LLM-initiated dynamic sub-agent creation. Sub-agents inherit the parent's provider and tools, run in parallel when called multiple times, and support configurable depth limiting (`MaxSpawnDepth`) and tool restriction (`DenySpawnTools`)
 
 ### Changed
 

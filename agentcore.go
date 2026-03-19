@@ -43,6 +43,9 @@ type agentCore struct {
 	compressModel       ModelFunc
 	compressThreshold   int
 	generationParams    *GenerationParams
+	spawnEnabled        bool
+	maxSpawnDepth       int
+	denySpawnTools      []string
 }
 
 // initCore initializes shared fields on an agentCore from the given config.
@@ -98,6 +101,9 @@ func initCore(c *agentCore, name, description string, provider Provider, cfg age
 	c.compressModel = cfg.compressModel
 	c.compressThreshold = cfg.compressThreshold
 	c.generationParams = cfg.generationParams
+	c.spawnEnabled = cfg.spawnEnabled
+	c.maxSpawnDepth = cfg.maxSpawnDepth
+	c.denySpawnTools = cfg.denySpawnTools
 }
 
 func (c *agentCore) Name() string        { return c.name }
@@ -106,6 +112,25 @@ func (c *agentCore) Description() string { return c.description }
 // Drain waits for all in-flight background persist goroutines to finish.
 // Call during shutdown to ensure the last messages are written to the store.
 func (c *agentCore) Drain() { c.mem.drain() }
+
+// --- Spawn depth tracking ---
+
+// spawnDepthKey is the context key for sub-agent nesting depth.
+type spawnDepthKey struct{}
+
+// spawnDepth returns the current sub-agent nesting depth from ctx.
+// Returns 0 at the top level (no spawning has occurred).
+func spawnDepth(ctx context.Context) int {
+	if v, ok := ctx.Value(spawnDepthKey{}).(int); ok {
+		return v
+	}
+	return 0
+}
+
+// withSpawnDepth returns a child context with the given spawn depth.
+func withSpawnDepth(ctx context.Context, depth int) context.Context {
+	return context.WithValue(ctx, spawnDepthKey{}, depth)
+}
 
 // cacheBuiltinToolDefs appends built-in tool definitions (ask_user, execute_plan,
 // execute_code) based on the agent's configuration.
@@ -118,6 +143,9 @@ func (c *agentCore) cacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition
 	}
 	if c.codeRunner != nil {
 		defs = append(defs, executeCodeToolDef)
+	}
+	if c.spawnEnabled {
+		defs = append(defs, spawnAgentToolDef)
 	}
 	return defs
 }

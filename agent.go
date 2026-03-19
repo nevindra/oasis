@@ -177,6 +177,9 @@ type agentConfig struct {
 	semanticTrimming    bool               // enabled by WithSemanticTrimming
 	trimmingEmbedding   EmbeddingProvider  // set by WithSemanticTrimming
 	keepRecent          int                // set by KeepRecent inside WithSemanticTrimming
+	spawnEnabled   bool     // set by WithSubAgentSpawning
+	maxSpawnDepth  int      // set by MaxSpawnDepth (default 1)
+	denySpawnTools []string // set by DenySpawnTools
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -326,6 +329,45 @@ func WithPlanExecution() AgentOption {
 // fan-out, use execute_code for complex logic (conditionals, loops, data flow).
 func WithCodeExecution(runner CodeRunner) AgentOption {
 	return func(c *agentConfig) { c.codeRunner = runner }
+}
+
+// SubAgentOption configures spawn_agent behavior.
+// Scoped type — only accepted by WithSubAgentSpawning.
+type SubAgentOption func(*agentConfig)
+
+// WithSubAgentSpawning enables the built-in spawn_agent tool.
+// When enabled, the LLM can dynamically create ephemeral child agents
+// that inherit the parent's provider and tools. Sub-agents do not
+// inherit conversation memory, user memory, store, or processors.
+//
+// Optional SubAgentOption values configure spawn constraints:
+//
+//	oasis.WithSubAgentSpawning()                                       // defaults
+//	oasis.WithSubAgentSpawning(oasis.MaxSpawnDepth(2))                 // allow recursive spawning
+//	oasis.WithSubAgentSpawning(oasis.DenySpawnTools("shell_exec"))     // restrict tools
+func WithSubAgentSpawning(opts ...SubAgentOption) AgentOption {
+	return func(c *agentConfig) {
+		c.spawnEnabled = true
+		c.maxSpawnDepth = 1
+		for _, o := range opts {
+			o(c)
+		}
+	}
+}
+
+// MaxSpawnDepth sets the maximum sub-agent nesting depth.
+// Default: 1 (parent can spawn, children cannot).
+// A depth of 2 means sub-agents can spawn their own sub-agents once.
+func MaxSpawnDepth(n int) SubAgentOption {
+	return func(c *agentConfig) { c.maxSpawnDepth = n }
+}
+
+// DenySpawnTools prevents specific tools from being inherited by sub-agents.
+// Tool names are matched exactly against ToolDefinition.Name.
+// Multiple calls accumulate (append, not replace).
+// ask_user is always blocked in sub-agents regardless of this setting.
+func DenySpawnTools(names ...string) SubAgentOption {
+	return func(c *agentConfig) { c.denySpawnTools = append(c.denySpawnTools, names...) }
 }
 
 // WithResponseSchema sets the response schema for structured JSON output.

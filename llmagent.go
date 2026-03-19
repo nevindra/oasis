@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"strings"
 )
 
 // LLMAgent is an Agent that uses an LLM with tools to complete tasks.
@@ -63,19 +65,33 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 		executeToolStream = a.tools.ExecuteStream
 	}
 
-	return a.baseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool, executeToolStream, ch))
+	return a.baseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool, executeToolStream, ch, toolDefs))
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
-// executor function and handles the ask_user, execute_plan, and execute_code
-// special cases via the shared dispatchBuiltins helper.
+// executor function and handles the ask_user, execute_plan, execute_code,
+// and spawn_agent special cases via the shared dispatchBuiltins helper.
 // When executeToolStream and ch are non-nil, tools implementing StreamingTool
 // emit progress events during execution.
-func (a *LLMAgent) makeDispatch(executeTool toolExecFunc, executeToolStream toolExecStreamFunc, ch chan<- StreamEvent) DispatchFunc {
+func (a *LLMAgent) makeDispatch(executeTool toolExecFunc, executeToolStream toolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		if r, ok := dispatchBuiltins(ctx, tc, dispatch, a.inputHandler, a.name, a.planExecution, a.codeRunner); ok {
 			return r
+		}
+		if tc.Name == "spawn_agent" && a.spawnEnabled {
+			return executeSpawnAgent(ctx, tc.Args, subAgentConfig{
+				provider:       a.provider,
+				toolDefs:       resolvedToolDefs,
+				executeTool:    executeTool,
+				maxIter:        a.maxIter,
+				maxSpawnDepth:  a.maxSpawnDepth,
+				denySpawnTools: a.denySpawnTools,
+				planExecution:  a.planExecution,
+				codeRunner:     a.codeRunner,
+				logger:         a.logger,
+				genParams:      a.generationParams,
+			})
 		}
 		return dispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
 	}
@@ -337,4 +353,170 @@ func executeAskUser(ctx context.Context, handler InputHandler, agentName string,
 		return "", err
 	}
 	return resp.Value, nil
+}
+
+// --- spawn_agent tool ---
+
+// spawnAgentToolDef is the tool definition for the built-in spawn_agent tool.
+var spawnAgentToolDef = ToolDefinition{
+	Name:        "spawn_agent",
+	Description: "Spawn a sub-agent to handle a specific task autonomously. The sub-agent has access to the same tools as you. Use when a task is independent and can be delegated. Call spawn_agent multiple times in one response to run sub-agents in parallel.",
+	Parameters: json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"task": {
+				"type": "string",
+				"description": "Clear instruction for what the sub-agent should accomplish"
+			},
+			"name": {
+				"type": "string",
+				"description": "Short label for this sub-agent (for logging). Auto-generated if omitted."
+			}
+		},
+		"required": ["task"]
+	}`),
+}
+
+// funcTool wraps resolved tool definitions and an executor into the Tool interface.
+// Used by spawn_agent to pass the parent's (possibly filtered) tools to the
+// ephemeral sub-agent without reconstructing a ToolRegistry.
+type funcTool struct {
+	defs []ToolDefinition
+	exec toolExecFunc
+}
+
+func (f *funcTool) Definitions() []ToolDefinition { return f.defs }
+func (f *funcTool) Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
+	return f.exec(ctx, name, args)
+}
+
+// spawnAgentArgs is the parsed arguments for the spawn_agent tool call.
+type spawnAgentArgs struct {
+	Task string `json:"task"`
+	Name string `json:"name,omitempty"`
+}
+
+// spawnAgentName returns a short name for a sub-agent, derived from the
+// args.Name if provided or from the first 20 runes of the task (slugified).
+func spawnAgentName(args spawnAgentArgs) string {
+	if args.Name != "" {
+		return args.Name
+	}
+	name := truncateStr(args.Task, 20) // rune-safe truncation (reuses loop.go helper)
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '_'
+	}, name)
+}
+
+// subAgentPrompt is the minimal system prompt given to spawned sub-agents.
+const subAgentPrompt = "You are a sub-agent. Complete the given task thoroughly and return the result. Be concise."
+
+// subAgentConfig carries the parent's state needed to construct a sub-agent.
+// Passed through makeDispatch closures — no context keys needed.
+type subAgentConfig struct {
+	provider       Provider
+	toolDefs       []ToolDefinition
+	executeTool    toolExecFunc
+	maxIter        int
+	maxSpawnDepth  int
+	denySpawnTools []string
+	planExecution  bool       // inherit parent's execute_plan capability
+	codeRunner     CodeRunner // inherit parent's execute_code capability (nil = disabled)
+	logger         *slog.Logger
+	genParams      *GenerationParams
+}
+
+// executeSpawnAgent handles the spawn_agent tool call. Constructs an ephemeral
+// LLMAgent with inherited tools (minus denied ones), executes it, returns result.
+func executeSpawnAgent(ctx context.Context, args json.RawMessage, cfg subAgentConfig) DispatchResult {
+	var params spawnAgentArgs
+	if err := json.Unmarshal(args, &params); err != nil {
+		return DispatchResult{Content: "error: invalid spawn_agent args: " + err.Error(), IsError: true}
+	}
+	if params.Task == "" {
+		return DispatchResult{Content: "error: spawn_agent requires non-empty task", IsError: true}
+	}
+
+	// Check depth limit.
+	depth := spawnDepth(ctx)
+	if depth >= cfg.maxSpawnDepth {
+		return DispatchResult{Content: fmt.Sprintf("error: max spawn depth (%d) exceeded", cfg.maxSpawnDepth), IsError: true}
+	}
+
+	name := spawnAgentName(params)
+
+	// Filter tool definitions: remove denied tools + ask_user.
+	// When child will be at max depth, also strip spawn_agent.
+	childAtMaxDepth := depth+1 >= cfg.maxSpawnDepth
+	var filteredDefs []ToolDefinition
+	deny := make(map[string]bool, len(cfg.denySpawnTools)+1)
+	deny["ask_user"] = true
+	for _, n := range cfg.denySpawnTools {
+		deny[n] = true
+	}
+	if childAtMaxDepth {
+		deny["spawn_agent"] = true
+	}
+	for _, d := range cfg.toolDefs {
+		if !deny[d.Name] {
+			filteredDefs = append(filteredDefs, d)
+		}
+	}
+
+	// Build filtered executor that respects deny list.
+	filteredExec := func(ctx context.Context, toolName string, toolArgs json.RawMessage) (ToolResult, error) {
+		if deny[toolName] {
+			return ToolResult{Error: "tool " + toolName + " is not available to sub-agents"}, nil
+		}
+		return cfg.executeTool(ctx, toolName, toolArgs)
+	}
+
+	// Build ephemeral options.
+	opts := []AgentOption{
+		WithPrompt(subAgentPrompt),
+		WithTools(&funcTool{defs: filteredDefs, exec: filteredExec}),
+		WithMaxIter(cfg.maxIter),
+		WithLogger(cfg.logger),
+	}
+	if cfg.genParams != nil {
+		if cfg.genParams.Temperature != nil {
+			opts = append(opts, WithTemperature(*cfg.genParams.Temperature))
+		}
+		if cfg.genParams.TopP != nil {
+			opts = append(opts, WithTopP(*cfg.genParams.TopP))
+		}
+		if cfg.genParams.TopK != nil {
+			opts = append(opts, WithTopK(*cfg.genParams.TopK))
+		}
+		if cfg.genParams.MaxTokens != nil {
+			opts = append(opts, WithMaxTokens(*cfg.genParams.MaxTokens))
+		}
+	}
+	// Enable spawning on child if it won't be at max depth.
+	if !childAtMaxDepth {
+		opts = append(opts, WithSubAgentSpawning(
+			MaxSpawnDepth(cfg.maxSpawnDepth),
+			DenySpawnTools(cfg.denySpawnTools...),
+		))
+	}
+	// Inherit plan execution and code execution from parent.
+	if cfg.planExecution {
+		opts = append(opts, WithPlanExecution())
+	}
+	if cfg.codeRunner != nil {
+		opts = append(opts, WithCodeExecution(cfg.codeRunner))
+	}
+
+	child := NewLLMAgent("sub:"+name, "sub-agent: "+params.Task, cfg.provider, opts...)
+
+	// Execute with incremented depth.
+	childCtx := withSpawnDepth(ctx, depth+1)
+	result, err := child.Execute(childCtx, AgentTask{Input: params.Task})
+	if err != nil {
+		return DispatchResult{Content: "error: sub-agent failed: " + err.Error(), IsError: true}
+	}
+	return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
 }
