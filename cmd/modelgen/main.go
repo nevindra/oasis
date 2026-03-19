@@ -81,8 +81,8 @@ type platformEntry struct {
 }
 
 func main() {
-	outPath := flag.String("out", "provider/catalog/models_gen.go", "output file path")
-	platformsPath := flag.String("platforms-out", "provider/catalog/platforms_gen.go", "platforms output path")
+	outPath := flag.String("out", "models_gen.go", "output file path")
+	platformsPath := flag.String("platforms-out", "platforms_gen.go", "platforms output path")
 	dryRun := flag.Bool("dry-run", false, "print to stdout instead of writing file")
 	timeout := flag.Duration("timeout", 60*time.Second, "HTTP request timeout")
 	flag.Parse()

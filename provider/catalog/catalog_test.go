@@ -35,8 +35,8 @@ func TestRegisterPlatform(t *testing.T) {
 	initial := len(cat.Platforms())
 
 	err := cat.RegisterPlatform(oasis.Platform{
-		Name:    "Zai",
-		BaseURL: "https://api.zai.ai/v1",
+		Name:    "TestCustomProvider",
+		BaseURL: "https://api.example.com/v1",
 	})
 	if err != nil {
 		t.Fatal(err)
