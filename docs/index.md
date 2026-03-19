@@ -55,7 +55,6 @@ graph TB
         direction LR
         SQL["SQLite<br/><small>pure-Go, no CGO</small>"]
         PG["PostgreSQL<br/><small>pgvector HNSW</small>"]
-        LIB["libSQL<br/><small>Turso</small>"]
     end
 
     subgraph TOOLS["Built-in Tools"]

@@ -14,8 +14,9 @@ type ErrLLM struct {
 // ErrHTTP is returned for HTTP request failures.
 // Used by WithRetry to identify transient errors (429, 503).
 type ErrHTTP struct {
-    Status int
-    Body   string
+    Status     int
+    Body       string
+    RetryAfter time.Duration // parsed from Retry-After header; zero = not set
 }
 ```
 

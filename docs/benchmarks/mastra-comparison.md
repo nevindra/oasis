@@ -170,8 +170,8 @@ Mastra has a convenience edge with string-based model selection. Oasis covers eq
 
 | Feature | Mastra | Oasis | Winner |
 |---|---|---|---|
-| **Relational** | LibSQL, PostgreSQL, MongoDB | SQLite (pure-Go), PostgreSQL, libSQL/Turso | Tie |
-| **Vector** | 14+ stores (pgvector, Pinecone, Qdrant, etc.) | Integrated in Store (SQLite brute-force, pgvector HNSW, libSQL DiskANN) | Mastra |
+| **Relational** | LibSQL, PostgreSQL, MongoDB | SQLite (pure-Go), PostgreSQL | Tie |
+| **Vector** | 14+ stores (pgvector, Pinecone, Qdrant, etc.) | Integrated in Store (SQLite brute-force, pgvector HNSW) | Mastra |
 | **Architecture** | Separate storage + vector packages | Unified Store interface (relational + vector in one) | Oasis |
 
 **Score: Mastra 1 — Oasis 1 — Tie 1**

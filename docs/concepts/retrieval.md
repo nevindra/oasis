@@ -95,7 +95,7 @@ type KeywordSearcher interface {
 }
 ```
 
-Both `store/sqlite` and `store/libsql` implement this interface using SQLite FTS5. The FTS index is populated automatically when documents are stored via `StoreDocument()`.
+`store/sqlite` implements this interface using SQLite FTS5. The FTS index is populated automatically when documents are stored via `StoreDocument()`.
 
 `SearchChunksKeyword` accepts optional `ChunkFilter` arguments with the same semantics as `Store.SearchChunks` — see [Store: Chunk Filtering](store.md#chunk-filtering).
 

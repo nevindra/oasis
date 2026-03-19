@@ -318,7 +318,7 @@ for _, r := range results {
 
 ### Hybrid Search (Vector + Keyword)
 
-When the Store implements `KeywordSearcher` (both `store/sqlite` and `store/libsql` do), `HybridRetriever` automatically uses both vector and keyword search, merging results with Reciprocal Rank Fusion (RRF).
+When the Store implements `KeywordSearcher` (`store/sqlite` and `store/postgres` both do), `HybridRetriever` automatically uses both vector and keyword search, merging results with Reciprocal Rank Fusion (RRF).
 
 Vector search excels at semantic similarity ("What does the auth module do?"). Keyword search excels at exact matches ("JWT", "OAuth2", specific error codes). Combined, they provide better recall than either alone.
 

@@ -143,7 +143,7 @@ Close() error    // clean up connections
 | `store/sqlite` | `sqlite.New(path, opts...)` | Local pure-Go SQLite (`modernc.org/sqlite`) |
 | `store/postgres` | `postgres.New(pool, opts...)` | PostgreSQL + pgvector (HNSW indexes) |
 
-All three packages also ship a `MemoryStore` implementation in the same package — see [Memory](memory.md).
+Both packages also ship a `MemoryStore` implementation in the same package — see [Memory](memory.md).
 
 **SQLite:**
 
@@ -219,7 +219,6 @@ Five convenience constructors cover common patterns:
 ### Backend Implementation Notes
 
 - **SQLite / PostgreSQL** — filters are translated to SQL WHERE clauses with conditional JOINs to the `documents` table when filtering on source or time. Metadata filters use `json_extract` (SQLite) or `->>'key'` (Postgres).
-- **LibSQL** — `vector_top_k()` doesn't support WHERE clauses, so the store overfetches `topK * 3` candidates and applies filters in-memory after retrieval.
 
 When no filters are passed, all backends behave exactly as before (search all chunks).
 
@@ -235,7 +234,7 @@ type KeywordSearcher interface {
 
 `SearchChunksKeyword` also accepts `...ChunkFilter` with the same semantics as `SearchChunks`.
 
-SQLite/libSQL use an FTS5 virtual table (`chunks_fts`) synchronized in `StoreDocument()`. PostgreSQL uses a GIN expression index on `to_tsvector('english', content)` — no manual sync needed. The [HybridRetriever](retrieval.md) discovers this capability via type assertion and uses it for hybrid vector + keyword search.
+SQLite uses an FTS5 virtual table (`chunks_fts`) synchronized in `StoreDocument()`. PostgreSQL uses a GIN expression index on `to_tsvector('english', content)` — no manual sync needed. The [HybridRetriever](retrieval.md) discovers this capability via type assertion and uses it for hybrid vector + keyword search.
 
 ## Database Schema
 

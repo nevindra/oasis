@@ -18,8 +18,6 @@ Complete reference for all Oasis configuration options.
 |----------|-------------|----------|
 | `OASIS_INTENT_API_KEY` | Intent classification LLM | `OASIS_LLM_API_KEY` |
 | `OASIS_ACTION_API_KEY` | Action/tool-use LLM | `OASIS_LLM_API_KEY` |
-| `OASIS_TURSO_URL` | Remote libSQL database URL | Local SQLite |
-| `OASIS_TURSO_TOKEN` | Turso auth token | — |
 | `OASIS_BRAVE_API_KEY` | Brave Search API key | `web_search` not registered |
 | `OASIS_OBSERVER_ENABLED` | Enable OTEL (`true` or `1`) | Disabled |
 | `OASIS_CONFIG` | Path to config file | `oasis.toml` |

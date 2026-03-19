@@ -171,8 +171,8 @@ CrewAI has a convenience edge with LiteLLM's string-based model selection. Oasis
 
 | Feature | CrewAI | Oasis | Winner |
 |---|---|---|---|
-| **Relational** | SQLite3 for long-term memory/training data | SQLite (pure-Go), PostgreSQL, libSQL/Turso | Oasis |
-| **Vector** | LanceDB (default), ChromaDB (knowledge), configurable: Qdrant, Pinecone, Weaviate, FAISS, pgvector | Integrated in Store (SQLite brute-force, pgvector HNSW, libSQL DiskANN) | CrewAI |
+| **Relational** | SQLite3 for long-term memory/training data | SQLite (pure-Go), PostgreSQL | Oasis |
+| **Vector** | LanceDB (default), ChromaDB (knowledge), configurable: Qdrant, Pinecone, Weaviate, FAISS, pgvector | Integrated in Store (SQLite brute-force, pgvector HNSW) | CrewAI |
 | **Architecture** | Separate storage paths for memory vs knowledge; tightly coupled to subsystems | Unified Store interface (relational + vector + graph in one) | Oasis |
 
 **Score: CrewAI 1 — Oasis 1 — Tie 1**

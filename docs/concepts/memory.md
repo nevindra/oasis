@@ -136,7 +136,7 @@ type MemoryStore interface {
 }
 ```
 
-**Shipped implementations:** `store/sqlite` (`sqlite.NewMemoryStore(store.DB())`), `store/libsql` (`libsql.NewMemoryStore(store.DB())`), `store/postgres` (`postgres.NewMemoryStore(pool)`)
+**Shipped implementations:** `store/sqlite` (`sqlite.NewMemoryStore(store.DB())`), `store/postgres` (`postgres.NewMemoryStore(pool)`)
 
 ## Confidence System
 
@@ -255,7 +255,7 @@ for _, m := range messages {
 }
 ```
 
-Metadata is stored as JSON TEXT (SQLite/libSQL) or JSONB (PostgreSQL). The `Metadata` field is `map[string]any`, so you can also store custom per-message metadata by setting it before calling `Store.StoreMessage` directly.
+Metadata is stored as JSON TEXT (SQLite) or JSONB (PostgreSQL). The `Metadata` field is `map[string]any`, so you can also store custom per-message metadata by setting it before calling `Store.StoreMessage` directly.
 
 ## See Also
 

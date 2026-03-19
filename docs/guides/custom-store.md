@@ -109,7 +109,7 @@ type KeywordSearcher interface {
 }
 ```
 
-This is discovered via type assertion — if your store implements it, `HybridRetriever` uses it automatically. The shipped SQLite and libSQL stores use FTS5 for this. For Postgres, use `tsvector`.
+This is discovered via type assertion — if your store implements it, `HybridRetriever` uses it automatically. The shipped SQLite store uses FTS5 for this. For Postgres, use `tsvector`.
 
 ```go
 // compile-time check (optional capability)

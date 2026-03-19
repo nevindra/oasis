@@ -142,9 +142,6 @@ memoryStore.Init(ctx)
 //   store := postgres.New(pool)
 //   memoryStore := postgres.NewMemoryStore(pool)
 
-// libSQL/Turso alternative:
-//   store := libsql.New(dbURL, authToken)
-//   memoryStore := libsql.NewMemoryStore(store.DB())
 
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithConversationMemory(store),  // required for write path

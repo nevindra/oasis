@@ -284,42 +284,130 @@ Both text and image embeddings live in the same vector space — a text query "b
 
 ## WithRetry Middleware
 
-Wraps any Provider with automatic retry on transient HTTP errors (429, 503):
+**File:** `retry.go`
+
+Wraps any Provider (or EmbeddingProvider) with automatic retry on transient HTTP errors. Only errors with HTTP status 429 (Too Many Requests) or 503 (Service Unavailable) trigger a retry — all other errors pass through immediately.
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `RetryMaxAttempts(n)` | 3 | Maximum number of total attempts (initial + retries) |
+| `RetryBaseDelay(d)` | 1s | Initial backoff delay before the second attempt |
+| `RetryTimeout(d)` | 0 (disabled) | Overall timeout across all attempts. When exceeded, the retry loop returns the last error |
+| `RetryLogger(l)` | no-op | Structured `*slog.Logger` for retry events. Retries log at WARN, final exhaustion at ERROR |
+
+### Exponential Backoff
+
+Delays grow exponentially with random jitter to avoid thundering herd:
+
+```
+delay = baseDelay * 2^attempt + rand(0, baseDelay * 2^attempt / 2)
+```
+
+For the default `baseDelay` of 1s, the schedule looks like:
+
+| Attempt | Base | Delay range (with jitter) |
+|---------|------|--------------------------|
+| 1st retry | 1s | 1.0s -- 1.5s |
+| 2nd retry | 2s | 2.0s -- 3.0s |
+| 3rd retry | 4s | 4.0s -- 6.0s |
+
+### Retry-After Header
+
+When the server returns a `Retry-After` header, the provider's `ErrHTTP` carries the parsed duration. The retry delay becomes `max(backoff, retryAfter)` — the server's requested wait time is always respected, but the exponential backoff is used as a floor so delays never decrease between attempts.
+
+### Streaming Behavior
+
+`ChatStream` only retries if no tokens have been forwarded to the caller yet. Once a `StreamEvent` has been sent on `ch`, errors pass through immediately to avoid sending duplicate content. The retry middleware always closes `ch` before returning.
+
+### Usage
 
 ```go
+// Defaults: 3 attempts, 1s base delay
 llm := oasis.WithRetry(gemini.New(apiKey, model))
 
-// Custom limits
+// Custom retry configuration
 llm := oasis.WithRetry(gemini.New(apiKey, model),
     oasis.RetryMaxAttempts(5),
     oasis.RetryBaseDelay(500*time.Millisecond),
+    oasis.RetryTimeout(30*time.Second),
+    oasis.RetryLogger(slog.Default()),
+)
+
+// Retry for embedding providers
+emb := oasis.WithEmbeddingRetry(
+    gemini.NewEmbedding(apiKey, "gemini-embedding-001", 768),
+    oasis.RetryMaxAttempts(5),
 )
 ```
 
-Uses exponential backoff with jitter. `ChatStream` only retries if no tokens have been forwarded yet.
-
-## WithRateLimit Middleware
-
-Wraps any Provider with proactive rate limiting. Requests block until the sliding-window budget allows them to proceed:
+Compose with rate limiting — rate limit on the outside, retry on the inside:
 
 ```go
-// RPM only
-llm := oasis.WithRateLimit(gemini.New(apiKey, model), oasis.RPM(60))
-
-// RPM + TPM
-llm := oasis.WithRateLimit(gemini.New(apiKey, model),
-    oasis.RPM(60),
-    oasis.TPM(100000),
-)
-
-// Compose with retry — rate limit first, retry inside
 llm := oasis.WithRateLimit(
     oasis.WithRetry(gemini.New(apiKey, model)),
     oasis.RPM(60),
 )
 ```
 
-`RPM(n)` uses a sliding window of request timestamps — when the window is full, the next request blocks until the oldest entry expires. `TPM(n)` is a soft limit — the request that exceeds the budget completes, but subsequent requests block until the token window slides. Both respect context cancellation.
+This way, a 429 from the LLM triggers a retry, and the rate limiter prevents hitting 429s in the first place.
+
+## WithRateLimit Middleware
+
+**File:** `ratelimit.go`
+
+Wraps any Provider with proactive rate limiting. Requests block until the sliding-window budget allows them to proceed — this prevents 429s rather than reacting to them.
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `RPM(n)` | Maximum requests per minute. Uses a sliding window of request timestamps — when the window contains `n` entries, the next call blocks until the oldest entry is more than 1 minute old |
+| `TPM(n)` | Maximum tokens per minute (input + output combined). Soft limit — the request that exceeds the budget completes normally, but subsequent requests block until the token window slides below the limit |
+
+Both limits use a 1-minute sliding window. Setting either to 0 (or omitting it) disables that dimension. Both respect context cancellation — a cancelled context unblocks immediately with `ctx.Err()`.
+
+### How the Sliding Window Works
+
+RPM and TPM each maintain a time-ordered list of events from the last 60 seconds:
+
+1. **Before each request**, expired entries (older than 1 minute) are pruned.
+2. **RPM check**: if the number of remaining request timestamps is less than the RPM limit, the request proceeds. Otherwise, the caller sleeps until the oldest entry expires.
+3. **TPM check**: if the sum of token counts in the window is below the TPM limit, the request proceeds. Otherwise, the caller sleeps until enough entries expire to free budget.
+4. **After each request**, the response's `Usage.InputTokens + Usage.OutputTokens` is recorded in the TPM window.
+
+Because TPM is recorded after the response, it is a soft limit: one request can temporarily exceed the budget, but the next request will wait.
+
+### Usage
+
+```go
+// RPM only — 60 requests per minute
+llm := oasis.WithRateLimit(gemini.New(apiKey, model), oasis.RPM(60))
+
+// RPM + TPM — 60 requests per minute, 100k tokens per minute
+llm := oasis.WithRateLimit(gemini.New(apiKey, model),
+    oasis.RPM(60),
+    oasis.TPM(100_000),
+)
+```
+
+### Composing with Retry
+
+Rate limit on the outside, retry on the inside:
+
+```go
+llm := oasis.WithRateLimit(
+    oasis.WithRetry(gemini.New(apiKey, model),
+        oasis.RetryMaxAttempts(5),
+        oasis.RetryLogger(slog.Default()),
+    ),
+    oasis.RPM(60),
+    oasis.TPM(100_000),
+)
+```
+
+The rate limiter gates outgoing requests to stay within budget. If a request still gets a 429 (e.g., from a shared quota), the retry middleware handles the backoff. This layering gives you both prevention and recovery.
 
 ## LLM Protocol Types
 
@@ -366,7 +454,9 @@ oasis.ToolResultMessage(callID, "result content")
 
 **File:** `batch.go`
 
-Optional capabilities for asynchronous batch processing at reduced cost. Discovered via type assertion.
+Optional capabilities for asynchronous batch processing at reduced cost (typically 50% for supported providers). Batch interfaces are not part of the core `Provider` or `EmbeddingProvider` contracts — they are discovered via type assertion at runtime.
+
+### Interfaces
 
 ```go
 type BatchProvider interface {
@@ -383,19 +473,151 @@ type BatchEmbeddingProvider interface {
 }
 ```
 
-Batch jobs are processed offline — create with `BatchChat`/`BatchEmbed`, poll with `BatchStatus`, retrieve results when `BatchSucceeded`. Trade-off: higher latency (minutes to hours) for lower cost (50% for Gemini).
+### BatchJob and BatchState
+
+Every batch operation returns a `BatchJob` that tracks the lifecycle of the work:
 
 ```go
-// Check if provider supports batching
-if bp, ok := provider.(oasis.BatchProvider); ok {
-    job, _ := bp.BatchChat(ctx, requests)
-    // Poll status...
-    status, _ := bp.BatchStatus(ctx, job.ID)
-    if status.State == oasis.BatchSucceeded {
-        results, _ := bp.BatchChatResults(ctx, job.ID)
+type BatchJob struct {
+    ID          string     // provider-assigned job identifier
+    State       BatchState // current lifecycle state
+    DisplayName string     // optional human-readable name
+    Stats       BatchStats // aggregate counts
+    CreateTime  time.Time
+    UpdateTime  time.Time
+}
+
+type BatchStats struct {
+    TotalCount     int // total requests in the batch
+    SucceededCount int // requests that completed successfully
+    FailedCount    int // requests that failed
+}
+```
+
+A batch job moves through these states:
+
+| State | Constant | Description |
+|-------|----------|-------------|
+| Pending | `BatchPending` | Submitted, waiting for processing to begin |
+| Running | `BatchRunning` | Provider is actively processing the requests |
+| Succeeded | `BatchSucceeded` | All requests completed — results are available |
+| Failed | `BatchFailed` | The job failed (partial results may be available via `BatchStats`) |
+| Cancelled | `BatchCancelled` | Cancelled via `BatchCancel` |
+| Expired | `BatchExpired` | Provider discarded the job after its retention period |
+
+### Workflow: Submit, Poll, Collect
+
+Batch jobs are processed offline — higher latency (minutes to hours) in exchange for lower cost. The workflow is always the same: submit requests, poll for completion, retrieve results.
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant BatchProvider
+    participant LLM API
+
+    App->>BatchProvider: BatchChat(requests)
+    BatchProvider->>LLM API: Create batch job
+    LLM API-->>BatchProvider: job ID
+    BatchProvider-->>App: BatchJob{ID, State: Pending}
+
+    loop Poll until terminal state
+        App->>BatchProvider: BatchStatus(jobID)
+        BatchProvider->>LLM API: Check status
+        LLM API-->>BatchProvider: state + stats
+        BatchProvider-->>App: BatchJob{State: Running/Succeeded/...}
+    end
+
+    App->>BatchProvider: BatchChatResults(jobID)
+    BatchProvider->>LLM API: Fetch results
+    LLM API-->>BatchProvider: responses
+    BatchProvider-->>App: []ChatResponse
+```
+
+### Batch Chat Example
+
+```go
+// Discover batch capability via type assertion
+bp, ok := provider.(oasis.BatchProvider)
+if !ok {
+    log.Fatal("provider does not support batch processing")
+}
+
+// 1. Submit a batch of chat requests
+requests := []oasis.ChatRequest{
+    {Messages: []oasis.ChatMessage{oasis.UserMessage("Summarize quantum computing")}},
+    {Messages: []oasis.ChatMessage{oasis.UserMessage("Summarize machine learning")}},
+    {Messages: []oasis.ChatMessage{oasis.UserMessage("Summarize distributed systems")}},
+}
+
+job, err := bp.BatchChat(ctx, requests)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("submitted batch:", job.ID)
+
+// 2. Poll until the job reaches a terminal state
+ticker := time.NewTicker(30 * time.Second)
+defer ticker.Stop()
+for range ticker.C {
+    job, err = bp.BatchStatus(ctx, job.ID)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("state=%s succeeded=%d/%d\n",
+        job.State, job.Stats.SucceededCount, job.Stats.TotalCount)
+    if job.State == oasis.BatchSucceeded || job.State == oasis.BatchFailed {
+        break
+    }
+}
+
+// 3. Collect results
+if job.State == oasis.BatchSucceeded {
+    results, err := bp.BatchChatResults(ctx, job.ID)
+    if err != nil {
+        log.Fatal(err)
+    }
+    for i, r := range results {
+        fmt.Printf("--- Response %d ---\n%s\n", i, r.Content)
     }
 }
 ```
+
+### Batch Embedding Example
+
+```go
+bep, ok := embeddingProvider.(oasis.BatchEmbeddingProvider)
+if !ok {
+    log.Fatal("embedding provider does not support batch processing")
+}
+
+// Each element is a group of texts to embed
+texts := [][]string{
+    {"quantum computing basics", "quantum entanglement explained"},
+    {"neural network architectures", "transformer models"},
+}
+
+job, err := bep.BatchEmbed(ctx, texts)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Poll for completion (same pattern as batch chat)
+for {
+    job, _ = bep.BatchEmbedStatus(ctx, job.ID)
+    if job.State == oasis.BatchSucceeded {
+        break
+    }
+    time.Sleep(30 * time.Second)
+}
+
+// Retrieve vectors — one per input text group
+vectors, err := bep.BatchEmbedResults(ctx, job.ID)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Supported Providers
 
 | Package           | BatchProvider              | BatchEmbeddingProvider                     |
 |-------------------|----------------------------|--------------------------------------------|

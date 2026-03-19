@@ -189,7 +189,6 @@ type Store interface {
 | Implementation | Constructor |
 |----------------|------------|
 | `store/sqlite` | `sqlite.New(path string)` |
-| `store/libsql` | `libsql.New(url, token string)` |
 
 ---
 
@@ -371,7 +370,7 @@ type KeywordSearcher interface {
 }
 ```
 
-Implemented by `store/sqlite`, `store/libsql` (FTS5), and `store/postgres` (GIN/tsvector).
+Implemented by `store/sqlite` (FTS5) and `store/postgres` (GIN/tsvector).
 
 ---
 
