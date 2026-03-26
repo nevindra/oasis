@@ -343,6 +343,39 @@ type CodeResult struct {
 
 `CodeRequest.Code` is the source code written by the LLM. `CodeResult.Output` contains the JSON-serialized data passed to `set_result()` in Python. `Logs` captures `print()` output (redirected to stderr by the prelude).
 
+## Sandbox Types
+
+**Package:** `github.com/nevindra/oasis/sandbox`
+
+```go
+// EditFileRequest is the input for EditFile.
+type EditFileRequest struct {
+    Path string // file to edit
+    Old  string // exact string to find (must be unique in file)
+    New  string // replacement string
+}
+
+// GlobRequest is the input for GlobFiles.
+type GlobRequest struct {
+    Pattern string // glob pattern (e.g., "**/*.py")
+    Path    string // base directory; empty uses working directory
+}
+
+// GrepRequest is the input for GrepFiles.
+type GrepRequest struct {
+    Pattern string // regex pattern
+    Path    string // base directory or file path
+    Glob    string // optional file filter (e.g., "*.py")
+}
+
+// GrepMatch is a single search result from GrepFiles.
+type GrepMatch struct {
+    Path    string // file path
+    Line    int    // line number (1-indexed)
+    Content string // matching line content
+}
+```
+
 ## Dynamic Config Function Types
 
 **File:** `agent.go`

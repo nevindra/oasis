@@ -22,7 +22,7 @@
 | **Dynamic Instructions** | YAML variable interpolation, `system_template`/`prompt_template` | `WithDynamicPrompt(PromptFunc)` — per-request prompt/model/tools resolution | Oasis |
 | **Runtime Context/DI** | Flow `self.state` (dict or Pydantic), task `context` referencing other outputs | `TaskFromContext(ctx)` — Go `context.Context` propagates through entire call chain, tools read natively | Oasis |
 | **Structured Output** | Pydantic `output_pydantic`, `output_json`, `response_format` — runtime validation | `ResponseSchema` / `SchemaObject` — compile-time typed builder, zero runtime cost | Oasis |
-| **Code Execution** | `allow_code_execution` — Docker sandbox or restricted fallback; separate `CodeInterpreterTool` | `WithCodeExecution` — sandboxed Python subprocess with tool bridge (`call_tool`, `call_tools_parallel`, `set_result`), no external deps | Oasis |
+| **Code Execution** | `allow_code_execution` — Docker sandbox or restricted fallback; separate `CodeInterpreterTool` | `WithSandbox` — Docker-based sandbox with 7 tools (shell, code, file I/O, browser, MCP), no external orchestration service | Oasis |
 | **Background Agents** | `async_execution=True` on tasks, `akickoff()` async | `Spawn()` / `AgentHandle` — goroutine-based with lifecycle states (Pending/Running/Completed/Failed/Cancelled) | Oasis |
 
 **Score: CrewAI 0 — Oasis 6 — Tie 2**
@@ -294,7 +294,7 @@ CrewAI has a convenience edge with LiteLLM's string-based model selection. Oasis
 - **`PostToolProcessor`** — hook after each tool execution
 - **Background agents** (`Spawn`/`AgentHandle`) with full lifecycle management
 - **Provider decorators** (composable `WithRetry` + `WithRateLimit`)
-- **Code execution** (`WithCodeExecution`) — sandboxed Python subprocess with tool bridge (`call_tool`, `call_tools_parallel`, `set_result`)
+- **Code execution** (`WithSandbox`) — Docker-based sandbox with 7 tools (shell, code execution, file I/O, browser, MCP)
 - **Persistent GraphRAG** — LLM-based ingestion-time edge extraction with 8 typed relations, `GraphStore` in all backends, multi-hop BFS retrieval
 - **Deep observability** — `Tracer`/`Span` interfaces in root package (zero OTEL imports), `StepTrace` on every `AgentResult`, hierarchical spans, nil-check zero overhead
 - **Cost tracking** — built-in `CostCalculator` with pricing tables for major providers

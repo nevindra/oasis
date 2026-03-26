@@ -106,15 +106,21 @@ tool := data.New()
 
 Creates a data transform tool with four functions: `data_parse`, `data_filter`, `data_aggregate`, `data_transform`. No dependencies — pure Go stdlib.
 
-## SubprocessRunner
+## Sandbox Manager
 
-**Package:** `github.com/nevindra/oasis/code`
+**Package:** `github.com/nevindra/oasis/sandbox/ix`
 
 ```go
-runner := code.NewSubprocessRunner(pythonBin string, opts ...code.Option)
+mgr, err := ix.NewManager(ctx context.Context, cfg ix.ManagerConfig)
 ```
 
-Creates a `CodeRunner` that executes Python code in a subprocess with a JSON-over-pipes protocol. The `pythonBin` argument is the Python binary (e.g., `"python3"`).
+Creates a `Manager` that provisions and manages Docker containers as sandboxes. Each sandbox provides shell, code execution, file I/O, browser, and MCP capabilities.
+
+```go
+sb, err := mgr.Create(ctx context.Context, opts sandbox.CreateOpts)
+```
+
+Creates a `Sandbox` from the manager. Use `sandbox.Tools(sb)` to get the 7 auto-registered tools for `WithSandbox`.
 
 ## Scheduler
 

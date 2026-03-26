@@ -24,7 +24,7 @@ graph TB
 
     subgraph INTELLIGENCE["Intelligence Layer"]
         direction LR
-        CODE["Code Execution<br/><small>sandboxed Python</small>"]
+        CODE["Sandbox<br/><small>shell, code, files, browser, MCP</small>"]
         PLAN["Plan Execution<br/><small>parallel tool batch</small>"]
         DYN["Dynamic Config<br/><small>per-request model/prompt/tools</small>"]
     end
@@ -199,7 +199,7 @@ Beyond basic tool calling, agents can leverage advanced execution patterns:
 
 | Capability | Option | What it does |
 | ---------- | ------ | ------------ |
-| [**Code Execution**](concepts/code-execution.md) | `WithCodeExecution(runner)` | LLM writes Python, executed in sandbox with `call_tool()` bridge |
+| [**Code Execution**](concepts/code-execution.md) | `WithSandbox(sb, tools...)` | Docker-based sandbox with shell, code execution, file I/O, browser, and MCP tools |
 | [**Plan Execution**](guides/execution-plans.md) | `WithPlanExecution()` | LLM batches tool calls → all run in parallel → results returned in one turn |
 | **Dynamic Config** | `WithDynamicPrompt` / `WithDynamicModel` / `WithDynamicTools` | Per-request prompt, model, and tool resolution |
 | **Structured Output** | `WithResponseSchema(schema)` | Enforce JSON output schema on every LLM call |
@@ -366,13 +366,13 @@ Optional: `BatchProvider` and `BatchEmbeddingProvider` for async batch processin
 ## At a Glance
 
 ```go
-// Single agent with memory, code execution, and streaming
+// Single agent with memory, sandbox, and streaming
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithTools(searchTool, knowledgeTool),
     oasis.WithPrompt("You are a helpful assistant."),
     oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding)),
     oasis.WithUserMemory(memoryStore, embedding),
-    oasis.WithCodeExecution(runner),
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),
     oasis.WithPlanExecution(),
     oasis.WithTracer(observer.NewTracer()),
 )
@@ -420,7 +420,7 @@ pipeline, _ := oasis.NewWorkflow("pipeline", "Research then write",
 | [Processors & Guardrails](guides/processors-and-guardrails.md) | Input/output middleware |
 | [Human-in-the-Loop](guides/human-in-the-loop.md) | InputHandler and suspend/resume |
 | [Background Agents](guides/background-agents.md) | Spawn, cancel, select |
-| [Code Execution](guides/code-execution.md) | Sandboxed Python with tool bridge |
+| [Code Execution](guides/code-execution.md) | Docker-based sandbox with shell, code, files, browser, MCP |
 | [Execution Plans](guides/execution-plans.md) | Parallel tool batching |
 | [Skills](guides/skills.md) | Agent-created instruction packages |
 

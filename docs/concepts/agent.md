@@ -135,7 +135,7 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithProcessors(processors ...any)` | Add processor middleware |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
 | `WithPlanExecution()` | Enable batched tool calls via `execute_plan` tool |
-| `WithCodeExecution(r CodeRunner)` | Enable sandboxed code execution via `execute_code` tool |
+| `WithSandbox(sb any, tools ...Tool)` | Enable sandbox tools (shell, execute_code, file_read, file_write, browser, screenshot, mcp_call) |
 | `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output. Use `NewResponseSchema(name, schema)` with `SchemaObject` for type-safe schema building |
 | `WithDynamicPrompt(fn PromptFunc)` | Per-request system prompt resolution |
 | `WithDynamicModel(fn ModelFunc)` | Per-request provider/model selection |
@@ -362,7 +362,7 @@ Parent LLM response:
 - [Network](network.md) — multi-agent coordination
 - [Workflow](workflow.md) — deterministic DAG orchestration
 - [Tool](tool.md) — what agents can do
-- [Code Execution](code-execution.md) — sandboxed Python with tool bridge
+- [Code Execution](code-execution.md) — sandbox with shell, code execution, file I/O, browser, and MCP
 - [Memory](memory.md) — conversation and user memory
 - [Observability](observability.md) — tracing and structured logging
 - [Custom Agent Guide](../guides/custom-agent.md)

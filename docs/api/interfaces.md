@@ -457,19 +457,57 @@ type DocumentChunkLister interface {
 
 ---
 
-## CodeRunner
+## Sandbox
 
-**File:** `code.go`
+**Package:** `github.com/nevindra/oasis/sandbox`
 
 ```go
-type CodeRunner interface {
-    Run(ctx context.Context, req CodeRequest, dispatch DispatchFunc) (CodeResult, error)
+type Sandbox interface {
+    Shell(ctx context.Context, req ShellRequest) (ShellResult, error)
+    ExecCode(ctx context.Context, req CodeRequest) (CodeResult, error)
+    ReadFile(ctx context.Context, path string) (FileContent, error)
+    WriteFile(ctx context.Context, req WriteFileRequest) error
+    UploadFile(ctx context.Context, path string, r io.Reader) error
+    DownloadFile(ctx context.Context, path string) (io.ReadCloser, error)
+    BrowserNavigate(ctx context.Context, url string) error
+    BrowserScreenshot(ctx context.Context) ([]byte, error)
+    BrowserAction(ctx context.Context, action BrowserAction) (BrowserResult, error)
+    MCPCall(ctx context.Context, req MCPRequest) (MCPResult, error)
+    EditFile(ctx context.Context, req EditFileRequest) error
+    GlobFiles(ctx context.Context, req GlobRequest) ([]string, error)
+    GrepFiles(ctx context.Context, req GrepRequest) ([]GrepMatch, error)
+    Close() error
+}
+```
+
+| Method | Description |
+|--------|-------------|
+| `EditFile` | Performs a surgical string replacement in a file. `old` must exist exactly once in the file. Returns an error if `old` is not found or appears more than once |
+| `GlobFiles` | Finds files matching a glob pattern relative to a base directory |
+| `GrepFiles` | Searches file contents for a regex pattern and returns matches with file path, line number, and matching line content |
+
+| Implementation | Constructor |
+|----------------|------------|
+| `sandbox/ix` | `ix.NewManager(ctx, ix.ManagerConfig{...})` then `mgr.Create(ctx, sandbox.CreateOpts{...})` |
+
+---
+
+## Manager
+
+**Package:** `github.com/nevindra/oasis/sandbox`
+
+```go
+type Manager interface {
+    Create(ctx context.Context, opts CreateOpts) (Sandbox, error)
+    Get(ctx context.Context, sessionID string) (Sandbox, error)
+    Shutdown(ctx context.Context) error
+    Close() error
 }
 ```
 
 | Implementation | Constructor |
 |----------------|------------|
-| `code/SubprocessRunner` | `code.NewSubprocessRunner(pythonBin string, opts ...Option)` |
+| `sandbox/ix` | `ix.NewManager(ctx, ix.ManagerConfig{...})` |
 
 ---
 

@@ -1,45 +1,54 @@
 # Code Execution
 
-This guide shows how to enable LLM code execution and covers common patterns. The LLM writes Python or Node.js code, the framework sends it to a sandbox service for execution, and the code can call any agent tool via `call_tool()` / `callTool()`.
+This guide shows how to enable sandbox capabilities for your agents. The sandbox provides a full Docker container with shell access, code execution, file I/O, browser automation, and MCP integration — all auto-registered as agent tools.
 
 ## When to Use This
 
-Use code execution when:
+Use sandbox when:
 
+- **Code execution** — the LLM needs to write and run Python, Node.js, or Bash code
+- **Shell commands** — running system commands, installing packages, managing processes
+- **File operations** — reading, writing, uploading, or downloading files in an isolated environment
+- **Browser automation** — navigating web pages, taking screenshots, interacting with web UIs
+- **MCP integration** — calling MCP server tools from within the sandbox
 - **Data flow between tools** — the result of one tool call determines the input to the next
-- **Conditional logic** — the LLM needs if/else branching based on tool results
-- **Loops and iteration** — processing a list of items with tool calls per item
-- **Data transformation** — parsing, filtering, aggregating results before returning
+- **Conditional logic** — if/else branching based on tool results
 - **Visualization** — generating charts, images, or files using Python/Node.js libraries
 
-If the LLM just needs to call multiple independent tools at once, use `WithPlanExecution()` instead — it's simpler and has no subprocess overhead.
+If the LLM just needs to call multiple independent tools at once, use `WithPlanExecution()` instead — it's simpler and has no container overhead.
 
 ## Quick Start
 
-### 1. Start the sandbox container
+### 1. Prerequisites
 
-```bash
-docker build -f cmd/sandbox/Dockerfile -t oasis-sandbox .
-docker run -d --name sandbox -p 9000:9000 oasis-sandbox
-```
+- Docker Engine 20.10+
 
-### 2. Create an HTTPRunner and agent
+### 2. Create a sandbox manager and agent
 
 ```go
 import (
     "github.com/nevindra/oasis"
-    "github.com/nevindra/oasis/code"
+    "github.com/nevindra/oasis/sandbox"
+    "github.com/nevindra/oasis/sandbox/ix"
 )
 
-runner := code.NewHTTPRunner("http://localhost:9000")
-defer runner.Close()
+// Create sandbox manager (manages Docker containers)
+mgr, err := ix.NewManager(ctx, ix.ManagerConfig{
+    Image: "oasis-ix:latest",
+})
 
-agent := oasis.NewLLMAgent("analyst", "Data analyst with code execution", provider,
+// Create a sandbox for a session
+sb, err := mgr.Create(ctx, sandbox.CreateOpts{
+    SessionID: "conversation-123",
+    TTL:       time.Hour,
+})
+defer sb.Close()
+
+agent := oasis.NewLLMAgent("analyst", "Data analyst with sandbox", provider,
     oasis.WithTools(searchTool, fileTool, httpTool),
-    oasis.WithCodeExecution(runner),
-    oasis.WithPrompt("You can execute Python or Node.js code to accomplish complex tasks. "+
-        "Use call_tool()/callTool() to access your tools from within code. "+
-        "Always return structured results via set_result()/setResult()."),
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),
+    oasis.WithPrompt("You have access to a sandbox environment with shell, code execution, "+
+        "file I/O, and browser capabilities. Use the appropriate tool for each task."),
 )
 
 result, err := agent.Execute(ctx, oasis.AgentTask{
@@ -47,207 +56,21 @@ result, err := agent.Execute(ctx, oasis.AgentTask{
 })
 ```
 
-The agent now has access to an `execute_code` tool alongside its regular tools. The LLM decides when code execution is more appropriate than direct tool calls.
+The agent now has access to 10 sandbox tools alongside its regular tools. The LLM decides which tool to use based on the task.
 
 ### Docker Compose
 
-For production setups, run the sandbox as a sidecar:
+For production setups:
 
 ```yaml
 services:
   app:
     build: .
-    depends_on: [sandbox]
-
-  sandbox:
-    build:
-      context: .
-      dockerfile: cmd/sandbox/Dockerfile
-    environment:
-      SANDBOX_MAX_CONCURRENT: "8"
-      SANDBOX_SESSION_TTL: "2h"
-```
-
-Then point HTTPRunner at the service name:
-
-```go
-runner := code.NewHTTPRunner("http://sandbox:9000")
-```
-
-## Using OpenSandbox (Production)
-
-[OpenSandbox](https://github.com/alibaba/OpenSandbox) provides production-grade sandboxing with multi-tier isolation (Docker, gVisor, Kata, Firecracker), network egress control, and Kubernetes-native lifecycle management. The `OpenSandboxRunner` manages the full container lifecycle — you don't need to run or manage sandbox containers yourself.
-
-### Prerequisites
-
-- Docker Engine 20.10+
-- Python 3.10+ with [uv](https://github.com/astral-sh/uv) (for the OpenSandbox server)
-
-### 1. Start the OpenSandbox server
-
-```bash
-# Install
-uv pip install opensandbox-server
-
-# Generate config for Docker runtime
-opensandbox-server init-config ~/.sandbox.toml --example docker
-
-# Start (listens on 127.0.0.1:8080)
-opensandbox-server
-```
-
-Verify it's running:
-
-```bash
-curl http://127.0.0.1:8080/health
-# {"status": "healthy"}
-```
-
-API docs are available at `http://127.0.0.1:8080/docs` (Swagger).
-
-### 2. Create an OpenSandboxRunner and agent
-
-```go
-import (
-    "github.com/nevindra/oasis"
-    "github.com/nevindra/oasis/code"
-)
-
-runner := code.NewOpenSandboxRunner("http://127.0.0.1:8080", "",
-    code.WithImage("opensandbox/code-interpreter:v1.0.2"),
-    code.WithResources("1", "1Gi"),
-    code.WithExecTimeout(60 * time.Second),
-    code.WithSandboxTTL(600),
-)
-defer runner.Close()
-
-agent := oasis.NewLLMAgent("analyst", "Data analyst with code execution", provider,
-    oasis.WithTools(searchTool, fileTool),
-    oasis.WithCodeExecution(runner),
-)
-```
-
-The API key is an empty string `""` when auth is disabled (default for local dev). Set it in production via the server's `server.api_key` config.
-
-### 3. Docker Compose (server in container)
-
-For setups where you want the OpenSandbox server itself in a container:
-
-```yaml
-services:
-  app:
-    build: .
-    depends_on: [opensandbox]
-    environment:
-      OPENSANDBOX_URL: "http://opensandbox:8090"
-
-  opensandbox:
-    image: opensandbox/server:latest
-    ports:
-      - "8090:8090"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    configs:
-      - source: sandbox-config
-        target: /etc/opensandbox/config.toml
-    environment:
-      SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
-
-configs:
-  sandbox-config:
-    content: |
-      [server]
-      host = "0.0.0.0"
-      port = 8090
-
-      [runtime]
-      type = "docker"
-      execd_image = "opensandbox/execd:v1.0.9"
-
-      [docker]
-      network_mode = "bridge"
-      host_ip = "host.docker.internal"
-
-      [ingress]
-      mode = "direct"
 ```
 
-```go
-runner := code.NewOpenSandboxRunner("http://opensandbox:8090", "")
-```
-
-### Callback Networking
-
-The sandbox code calls `call_tool()` which POSTs back to the callback server running in your app process. The callback URL must be reachable **from inside the sandbox container**.
-
-**Local dev (sandbox on same host):**
-
-```go
-// Default 127.0.0.1:0 works if sandbox containers can reach host
-runner := code.NewOpenSandboxRunner("http://127.0.0.1:8080", "")
-```
-
-**Docker bridge networking (sandbox in isolated network):**
-
-```go
-// Sandbox containers can't reach 127.0.0.1 on the host.
-// Use host.docker.internal or your host's IP.
-runner := code.NewOpenSandboxRunner("http://127.0.0.1:8080", "",
-    code.WithCallbackListenAddr("0.0.0.0:9999"),
-    code.WithExternalCallbackAddr("http://host.docker.internal:9999"),
-)
-```
-
-**Kubernetes:**
-
-```go
-// Use a Service or Ingress reachable from sandbox pods.
-runner := code.NewOpenSandboxRunner("http://opensandbox-server:8080", apiKey,
-    code.WithExternalCallbackAddr("http://my-app.default.svc:8080"),
-)
-// Mount callback handler on your existing server:
-mux.Handle("/_oasis/dispatch", runner.Handler())
-```
-
-### Session Management
-
-Sessions work differently from HTTPRunner:
-
-- **HTTPRunner** — sessions map to workspace directories on disk. Same process, same filesystem.
-- **OpenSandboxRunner** — sessions map to entire sandbox containers. Same `SessionID` reuses the same container across `Run()` calls. No `SessionID` creates an ephemeral container that's deleted after execution.
-
-```go
-// Ephemeral: new container per execution, deleted after
-runner.Run(ctx, oasis.CodeRequest{Code: "x = 1"}, dispatch)
-
-// Persistent: container stays alive across calls
-runner.Run(ctx, oasis.CodeRequest{Code: "x = 1", SessionID: "user-123"}, dispatch)
-runner.Run(ctx, oasis.CodeRequest{Code: "print(x)", SessionID: "user-123"}, dispatch)
-
-// Clean up all session containers
-runner.Close()
-```
-
-### Container Images
-
-The `WithImage` option controls which Docker image is used for sandboxes:
-
-| Image | Use case |
-|-------|----------|
-| `opensandbox/code-interpreter:v1.0.2` | Python + Node.js with execd (recommended) |
-| `python:3.11-slim` | Python only (needs execd in the server config) |
-| Custom image | Any runtime — must have execd or use server-side injection |
-
-### When to Use OpenSandbox vs HTTPRunner
-
-| Scenario | Use |
-|----------|-----|
-| Local dev, quick prototyping | HTTPRunner + `cmd/sandbox/` |
-| Single-tenant production | Either works |
-| Multi-tenant, untrusted code | OpenSandbox (isolation tiers) |
-| Need network egress control | OpenSandbox (FQDN policies) |
-| Kubernetes deployment | OpenSandbox (native CRDs) |
-| Minimal infrastructure | HTTPRunner (just one Docker container) |
+The `ix.Manager` manages Docker containers directly — no separate sandbox service needed. Your app just needs access to the Docker socket.
 
 ## Python Patterns
 
@@ -427,6 +250,42 @@ set_result("chart generated", files=['chart.png'])
 
 Output files are returned in `CodeResult.Files` with MIME types auto-detected. The agent maps them to `Attachment` structs.
 
+### Surgical File Edits
+
+Use `file_edit` for targeted string replacements instead of reading and rewriting entire files:
+
+```python
+# LLM calls file_edit tool directly — no code execution needed
+# tool: file_edit
+# args: {"path": "/app/main.py", "old_string": "DEBUG = True", "new_string": "DEBUG = False"}
+```
+
+The old string must appear exactly once in the file. This saves significant tokens compared to reading the file, modifying it in code, and writing it back.
+
+### Finding Files with Glob
+
+Use `file_glob` to find files by pattern:
+
+```python
+# tool: file_glob
+# args: {"pattern": "**/*.py", "path": "/app"}
+# returns: /app/main.py\n/app/lib/utils.py\n/app/tests/test_main.py
+```
+
+Supports `**` for recursive matching. Backed by `fd` for fast results.
+
+### Searching Code with Grep
+
+Use `file_grep` to search file contents by regex:
+
+```python
+# tool: file_grep
+# args: {"pattern": "def main", "path": "/app", "glob": "*.py"}
+# returns: /app/main.py:42: def main():
+```
+
+Returns file paths, line numbers, and matching line content. Backed by `rg` (ripgrep) for fast search across large codebases.
+
 ## Session Persistence
 
 Use `SessionID` to persist workspace files across executions:
@@ -443,89 +302,69 @@ A subsequent execution with `SessionID: "user-123"` will find `state.json` in th
 
 ## Combining with Plan Execution
 
-You can enable both `WithPlanExecution()` and `WithCodeExecution()` on the same agent:
+You can enable both `WithPlanExecution()` and `WithSandbox()` on the same agent:
 
 ```go
 agent := oasis.NewLLMAgent("analyst", "Data analyst", provider,
     oasis.WithTools(searchTool, fileTool),
-    oasis.WithPlanExecution(),      // simple parallel fan-out
-    oasis.WithCodeExecution(runner), // complex logic
-    oasis.WithPrompt(`You have two execution modes:
+    oasis.WithPlanExecution(),                    // simple parallel fan-out
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),  // sandbox tools
+    oasis.WithPrompt(`You have multiple execution modes:
 - execute_plan: Use for simple parallel tool calls with no dependencies
 - execute_code: Use for complex logic with conditionals, loops, or data flow between steps
+- shell: Use for system commands
+- file_read/file_write: Use for file operations
 Choose the simplest mode that handles the task.`),
 )
 ```
 
 ## Configuration
 
-### HTTPRunner Options
+### Manager Options
 
 ```go
-runner := code.NewHTTPRunner("http://sandbox:9000",
-    code.WithTimeout(2 * time.Minute),     // execution timeout
-    code.WithMaxFileSize(20 << 20),        // 20MB max per file
-    code.WithMaxRetries(3),                // retry on transient errors
-    code.WithCallbackAddr("0.0.0.0:0"),    // callback listen address
-)
+mgr, err := ix.NewManager(ctx, ix.ManagerConfig{
+    Image: "oasis-ix:latest",
+})
 ```
 
-### External Callback Mount
-
-If your app already runs an HTTP server, avoid the extra listener:
+### Sandbox Options
 
 ```go
-runner := code.NewHTTPRunner("http://sandbox:9000",
-    code.WithCallbackExternal("http://myapp:8080"),
-)
-// Mount on your server's mux:
-mux.Handle("/_oasis/dispatch", runner.Handler())
-```
-
-### OpenSandboxRunner Options
-
-```go
-runner := code.NewOpenSandboxRunner("http://opensandbox:8080", "api-key",
-    code.WithImage("opensandbox/code-interpreter:v1.0.2"),
-    code.WithResources("2", "2Gi"),          // CPU, memory
-    code.WithExecTimeout(2 * time.Minute),   // per-execution timeout
-    code.WithSandboxTTL(1800),               // 30 min container TTL
-    code.WithMaxFileDownload(20 << 20),      // 20MB max per file
-    code.WithRetryCount(3),                  // retry transient API errors
-    code.WithExecdToken("execd-secret"),     // execd auth token
-    code.WithSandboxEnv(map[string]string{   // extra env vars
-        "PYTHONUNBUFFERED": "1",
-    }),
-)
+sb, err := mgr.Create(ctx, sandbox.CreateOpts{
+    SessionID: "user-123",
+    TTL:       time.Hour,
+})
 ```
 
 ### Network
 
-The Network agent supports code execution the same way:
+The Network agent supports sandbox the same way:
 
 ```go
 network := oasis.NewNetwork("coordinator", "Multi-agent coordinator", router,
     oasis.WithAgents(researcher, writer),
-    oasis.WithCodeExecution(runner),
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),
 )
 ```
 
-The code can call both regular tools and `agent_*` tools for delegating to subagents.
-
 ## Tips
 
-- **Prompt the LLM clearly.** Tell it when to use `execute_code` vs regular tool calls. Without guidance, some LLMs default to one-at-a-time tool calls.
+- **Prompt the LLM clearly.** Tell it when to use `execute_code` vs `shell` vs regular tool calls. Without guidance, some LLMs default to one-at-a-time tool calls.
 - **Use `set_result()` / `setResult()`.** If code doesn't set a result, the agent gets a message saying no result was set. Always return structured data.
 - **Use `print()` / `console.log()` for debugging.** Output goes to `CodeResult.Logs`, not the structured result.
 - **Handle errors in code.** Wrap tool calls in try/except or try/catch when partial failures are acceptable.
 - **Keep code simple.** The LLM writes better code when the task is clear.
 - **Declare output files explicitly.** Files are only returned if listed in `set_result(files=[...])` / `setResult(data, ['file.png'])`.
 - **Choose the right runtime.** Python for data analysis, visualization, scientific computing. Node.js for web scraping, JSON processing, or when the LLM prefers JavaScript.
+- **Use `shell` for simple commands.** One-off system commands are better as `shell` calls than `execute_code`.
+- **Use `file_read`/`file_write` for direct file access.** Simpler than writing code to read/write files.
+- **Use `file_edit` for surgical changes.** Replacing a single string is far cheaper than reading the whole file and rewriting it.
+- **Use `file_glob`/`file_grep` for discovery.** Faster and more structured than running `find` or `grep` via shell.
 
 ## See Also
 
-- [Code Execution Concept](../concepts/code-execution.md) — architecture, safety model, runtime API reference
-- [OpenSandbox](https://github.com/alibaba/OpenSandbox) — the sandbox platform behind `OpenSandboxRunner`
+- [Code Execution Concept](../concepts/code-execution.md) — architecture, safety model, sandbox interface reference
 - [Tool Concept](../concepts/tool.md) — plan execution, parallel execution
 - [Execution Plans](execution-plans.md) — Workflow-based plan-approve-execute pattern
 - [Custom Tool Guide](custom-tool.md) — build tools that code can call

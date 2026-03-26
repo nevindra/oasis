@@ -721,51 +721,60 @@ sequenceDiagram
 
 Works with both `LLMAgent` and `Network`. Provider-agnostic — any LLM can use it.
 
-## Code Execution
+## Sandbox
 
-When the LLM needs more than parallel fan-out — conditionals, loops, data flow between tool calls — use code execution. The LLM writes Python code that runs in a sandboxed subprocess with full access to agent tools via `call_tool()`.
+When the LLM needs more than parallel fan-out — conditionals, loops, data flow between tool calls, shell access, file I/O, or browser automation — use a sandbox. The sandbox provides a Docker container with 7 auto-registered tools.
 
-Enable with `WithCodeExecution()`:
+Enable with `WithSandbox()`:
 
 ```go
-import "github.com/nevindra/oasis/code"
+import (
+    "github.com/nevindra/oasis/sandbox"
+    "github.com/nevindra/oasis/sandbox/ix"
+)
 
-runner := code.NewSubprocessRunner("python3")
+mgr, _ := ix.NewManager(ctx, ix.ManagerConfig{
+    Image: "oasis-ix:latest",
+})
+sb, _ := mgr.Create(ctx, sandbox.CreateOpts{SessionID: "s1", TTL: time.Hour})
+defer sb.Close()
 
 agent := oasis.NewLLMAgent("analyst", "Data analyst", provider,
     oasis.WithTools(searchTool, fileTool),
-    oasis.WithCodeExecution(runner), // injects execute_code tool
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...), // injects 10 sandbox tools
 )
 ```
 
-The framework auto-injects an `execute_code` tool. The LLM writes Python code that can call tools:
+The framework auto-registers these tools:
 
-```json
-{
-    "name": "execute_code",
-    "input": {
-        "code": "results = call_tool('web_search', {'query': 'Go frameworks'})\nfiltered = [r for r in results if r.get('score', 0) > 0.8]\nset_result({'top_results': filtered})"
-    }
-}
-```
+| Tool | Description |
+|---|---|
+| `shell` | Execute shell commands |
+| `execute_code` | Execute code (Python, JS, Bash) |
+| `file_read` | Read file content |
+| `file_write` | Write content to file |
+| `browser` | Browser interactions (navigate, click, type) |
+| `screenshot` | Capture browser/desktop screenshot |
+| `mcp_call` | Invoke MCP server tools |
 
-### Plan vs Code Execution
+### Plan vs Sandbox
 
-| | `execute_plan` | `execute_code` |
+| | `execute_plan` | Sandbox tools |
 |---|---|---|
 | **Control flow** | Parallel only | Conditionals, loops, data flow |
 | **Data dependencies** | None | Full |
-| **Overhead** | None (Go-native) | Python subprocess |
-| **Best for** | Independent fan-out | Complex logic |
+| **Overhead** | None (Go-native) | Docker container |
+| **Capabilities** | Tool fan-out only | Shell, code, files, browser, MCP |
+| **Best for** | Independent fan-out | Complex logic, system access |
 
 Both can be enabled on the same agent — the LLM picks the right tool for each task.
 
-See [Code Execution](code-execution.md) for the full architecture, safety model, and Python API reference.
+See [Code Execution](code-execution.md) for the full architecture, safety model, and runtime API reference.
 
 ## See Also
 
 - [Custom Tool Guide](../guides/custom-tool.md) — build your own tool step by step
-- [Code Execution](code-execution.md) — sandboxed Python execution with tool bridge
+- [Code Execution](code-execution.md) — sandbox with shell, code execution, file I/O, browser, and MCP
 - [Code Execution Guide](../guides/code-execution.md) — patterns and recipes
 - [Agent](agent.md) — how agents use tools
 - [API Reference: Interfaces](../api/interfaces.md)

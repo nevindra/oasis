@@ -22,6 +22,12 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	a := &LLMAgent{}
 	initCore(&a.agentCore, name, description, provider, cfg)
 
+	if cfg.sandbox != nil {
+		for _, t := range cfg.sandboxTools {
+			a.tools.Add(t)
+		}
+	}
+
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Avoids rebuilding the slice on every Execute call.
 	if a.dynamicTools == nil {
@@ -69,14 +75,14 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
-// executor function and handles the ask_user, execute_plan, execute_code,
+// executor function and handles the ask_user, execute_plan,
 // and spawn_agent special cases via the shared dispatchBuiltins helper.
 // When executeToolStream and ch are non-nil, tools implementing StreamingTool
 // emit progress events during execution.
 func (a *LLMAgent) makeDispatch(executeTool toolExecFunc, executeToolStream toolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
-		if r, ok := dispatchBuiltins(ctx, tc, dispatch, a.inputHandler, a.name, a.planExecution, a.codeRunner); ok {
+		if r, ok := dispatchBuiltins(ctx, tc, dispatch, a.inputHandler, a.name, a.planExecution); ok {
 			return r
 		}
 		if tc.Name == "spawn_agent" && a.spawnEnabled {
@@ -88,7 +94,6 @@ func (a *LLMAgent) makeDispatch(executeTool toolExecFunc, executeToolStream tool
 				maxSpawnDepth:  a.maxSpawnDepth,
 				denySpawnTools: a.denySpawnTools,
 				planExecution:  a.planExecution,
-				codeRunner:     a.codeRunner,
 				logger:         a.logger,
 				genParams:      a.generationParams,
 			})
@@ -220,90 +225,6 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 	return DispatchResult{Content: string(out), Usage: totalUsage, Attachments: allAttachments}
 }
 
-// --- execute_code tool ---
-
-// executeCodeToolDef is the tool definition for the built-in execute_code tool.
-var executeCodeToolDef = ToolDefinition{
-	Name:        "execute_code",
-	Description: "Execute code in a sandboxed environment. Supports multiple runtimes. Use Python for data analysis, visualization, and complex logic. Use Node.js for web-related tasks. You can install packages on-the-fly with install_package(). Use call_tool() to access agent tools from within code. Return results via set_result(). Explicitly list files in set_result to return them to the user.",
-	Parameters: json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"runtime": {
-				"type": "string",
-				"enum": ["python", "node"],
-				"description": "The runtime to execute the code in. Default: python."
-			},
-			"code": {
-				"type": "string",
-				"description": "The code to execute. Use call_tool(name, args) to call tools. Use call_tools_parallel([(name, args), ...]) for parallel tool calls. Use set_result(data, files=['file.png']) to return structured results with files. Use install_package(name) to install packages on-the-fly. Use print() for debug output."
-			}
-		},
-		"required": ["runtime", "code"]
-	}`),
-}
-
-// executeCode handles the execute_code tool call by delegating to the CodeRunner.
-func executeCode(ctx context.Context, args json.RawMessage, runner CodeRunner, dispatch DispatchFunc) DispatchResult {
-	var params struct {
-		Code    string `json:"code"`
-		Runtime string `json:"runtime"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return DispatchResult{Content: "error: invalid execute_code args: " + err.Error(), IsError: true}
-	}
-	if params.Code == "" {
-		return DispatchResult{Content: "error: execute_code requires non-empty code", IsError: true}
-	}
-
-	req := CodeRequest{
-		Code:    params.Code,
-		Runtime: params.Runtime,
-	}
-	if req.Runtime == "" {
-		req.Runtime = "python"
-	}
-
-	result, err := runner.Run(ctx, req, dispatch)
-	if err != nil {
-		return DispatchResult{Content: "error: code execution failed: " + err.Error(), IsError: true}
-	}
-
-	// Build response: prioritize structured output, include logs
-	var response string
-	if result.Error != "" {
-		response = "error: " + result.Error
-		if result.Logs != "" {
-			response += "\n\nlogs:\n" + result.Logs
-		}
-		return DispatchResult{Content: response, IsError: true}
-	}
-
-	if result.Output != "" {
-		response = result.Output
-	} else {
-		response = "(no result set — use set_result(data) to return structured output)"
-	}
-	if result.Logs != "" {
-		response += "\n\nlogs:\n" + result.Logs
-	}
-
-	// Map output files to attachments for the agent result.
-	var attachments []Attachment
-	for _, f := range result.Files {
-		if len(f.Data) == 0 && f.URL == "" {
-			continue
-		}
-		attachments = append(attachments, Attachment{
-			MimeType: f.MIME,
-			Data:     f.Data,
-			URL:      f.URL,
-		})
-	}
-
-	return DispatchResult{Content: response, Attachments: attachments}
-}
-
 // --- ask_user tool ---
 
 // askUserToolDef is the tool definition for the built-in ask_user tool.
@@ -424,7 +345,6 @@ type subAgentConfig struct {
 	maxSpawnDepth  int
 	denySpawnTools []string
 	planExecution  bool       // inherit parent's execute_plan capability
-	codeRunner     CodeRunner // inherit parent's execute_code capability (nil = disabled)
 	logger         *slog.Logger
 	genParams      *GenerationParams
 }
@@ -502,12 +422,9 @@ func executeSpawnAgent(ctx context.Context, args json.RawMessage, cfg subAgentCo
 			DenySpawnTools(cfg.denySpawnTools...),
 		))
 	}
-	// Inherit plan execution and code execution from parent.
+	// Inherit plan execution from parent.
 	if cfg.planExecution {
 		opts = append(opts, WithPlanExecution())
-	}
-	if cfg.codeRunner != nil {
-		opts = append(opts, WithCodeExecution(cfg.codeRunner))
 	}
 
 	child := NewLLMAgent("sub:"+name, "sub-agent: "+params.Task, cfg.provider, opts...)

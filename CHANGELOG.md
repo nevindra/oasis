@@ -6,17 +6,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
-### Changed
-- **BREAKING:** Skills are now file-based (folders with `SKILL.md`) instead of database-stored. Skill CRUD methods removed from `Store` interface. Use `SkillProvider` and `FileSkillProvider` instead.
-- Skill tool now exposes `skill_discover` and `skill_activate` instead of `skill_search`. Progressive disclosure: discover returns names only, activate loads full instructions.
-
 ### Added
+- **ix — sandbox execution daemon** (`internal/ixd/`, `cmd/ix/`). Go stdlib HTTP daemon that runs inside sandbox containers, replacing gem-server/execd. Provides shell execution (SSE streaming), stateless code execution (Python, JS, Bash), and comprehensive file operations via REST API. Zero external dependencies.
+- **Enhanced file operations** — `EditFile`, `GlobFiles`, `GrepFiles` methods on `Sandbox` interface. `file_edit` (surgical string replacement), `file_glob` (pattern search via `fd`), `file_grep` (content search via `rg`) tools. 10-50x token savings vs read+rewrite for file edits.
+- **File delivery** — `FileDelivery` interface + `deliver_file` tool. Agents can deliver sandbox files to users as downloadable chat attachments. Framework-level capability: apps implement `FileDelivery` to choose storage backend (S3, disk, etc.). Tool conditionally registered via `WithFileDelivery()` option.
+- `ToolsOption` functional options for `sandbox.Tools()` — extensible tool registration without breaking the function signature.
+- `EventFileAttachment` stream event type for file delivery notifications.
 - `SkillProvider` interface for discovering and activating skills.
 - `SkillWriter` interface for creating, updating, and deleting skills.
 - `FileSkillProvider` — reads skills from directories, hot-reloads without restart.
 - `SkillSummary` type for lightweight discovery results.
 
+### Changed
+- **BREAKING:** `sandbox/aio` package renamed to `sandbox/ix`. `AIOSandbox` → `IXSandbox`, `AIOManager` → `IXManager`. Import path: `github.com/nevindra/oasis/sandbox/ix`.
+- **BREAKING:** `IXSandbox` now communicates via SSE for shell/code execution (previously synchronous JSON). Client-side change only — `Sandbox` interface unchanged.
+- **BREAKING:** Skills are now file-based (folders with `SKILL.md`) instead of database-stored. Skill CRUD methods removed from `Store` interface. Use `SkillProvider` and `FileSkillProvider` instead.
+- Skill tool now exposes `skill_discover` and `skill_activate` instead of `skill_search`. Progressive disclosure: discover returns names only, activate loads full instructions.
+- Default sandbox image changed from `ghcr.io/agent-infra/sandbox:latest` to `oasis-ix:latest`.
+- Health check endpoint changed from `GET /v1/shell/sessions` to `GET /health`.
+
 ### Removed
+- `sandbox/aio` package — replaced by `sandbox/ix`.
 - `Store.CreateSkill`, `Store.GetSkill`, `Store.ListSkills`, `Store.UpdateSkill`, `Store.DeleteSkill`, `Store.SearchSkills` — replaced by `SkillProvider`.
 - `ScoredSkill` type — no longer needed (no embedding-based search).
 - `Skill.ID`, `Skill.Embedding`, `Skill.CreatedBy`, `Skill.CreatedAt`, `Skill.UpdatedAt` fields — replaced by filesystem metadata.

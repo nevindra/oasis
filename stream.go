@@ -57,6 +57,10 @@ const (
 	// to invoke. Name carries the network name; Content carries a JSON summary
 	// (e.g. {"agents":["researcher"],"tools":["search"]}).
 	EventRoutingDecision StreamEventType = "routing-decision"
+	// EventFileAttachment signals that a file has been delivered from a sandbox
+	// and is available for download. Content carries JSON metadata:
+	// {"name":"report.pdf","mime_type":"application/pdf","size":12345,"url":"/api/files/…/download"}.
+	EventFileAttachment StreamEventType = "file_attachment"
 )
 
 // StreamEvent is a typed event emitted during agent streaming.

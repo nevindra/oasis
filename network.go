@@ -88,8 +88,8 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, executeTool toolExecFunc, executeToolStream toolExecStreamFunc, resolvedToolDefs []ToolDefinition) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
-		// Built-in tools: ask_user, execute_plan, execute_code.
-		if r, ok := dispatchBuiltins(ctx, tc, dispatch, n.inputHandler, n.name, n.planExecution, n.codeRunner); ok {
+		// Built-in tools: ask_user, execute_plan.
+		if r, ok := dispatchBuiltins(ctx, tc, dispatch, n.inputHandler, n.name, n.planExecution); ok {
 			return r
 		}
 
@@ -103,7 +103,6 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 				maxSpawnDepth:  n.maxSpawnDepth,
 				denySpawnTools: n.denySpawnTools,
 				planExecution:  n.planExecution,
-				codeRunner:     n.codeRunner,
 				logger:         n.logger,
 				genParams:      n.generationParams,
 			})

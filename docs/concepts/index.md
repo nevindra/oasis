@@ -123,7 +123,7 @@ Both implement `Agent`, so they compose with each other — a Network can contai
 
 | Page | Feature | What it does |
 | ---- | ------- | ------------ |
-| [Code Execution](code-execution.md) | `CodeRunner`, `WithCodeExecution` | LLM writes Python, framework executes in sandbox with tool bridge |
+| [Code Execution](code-execution.md) | `Sandbox`, `Manager`, `WithSandbox` | Docker-based sandbox with shell, code execution, file I/O, browser, and MCP tools |
 
 ### Memory & Processing
 

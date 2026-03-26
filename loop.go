@@ -39,10 +39,10 @@ type toolExecFunc = func(ctx context.Context, name string, args json.RawMessage)
 // Abstracts ToolRegistry.ExecuteStream.
 type toolExecStreamFunc = func(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error)
 
-// dispatchBuiltins handles the built-in special-case tools (ask_user, execute_plan,
-// execute_code). Returns (result, true) if the call was handled, or (zero, false)
+// dispatchBuiltins handles the built-in special-case tools (ask_user, execute_plan).
+// Returns (result, true) if the call was handled, or (zero, false)
 // if the caller should proceed with its own routing (agent delegation, direct tools).
-func dispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, ih InputHandler, agentName string, planExec bool, codeRunner CodeRunner) (DispatchResult, bool) {
+func dispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, ih InputHandler, agentName string, planExec bool) (DispatchResult, bool) {
 	if tc.Name == "ask_user" && ih != nil {
 		content, err := executeAskUser(ctx, ih, agentName, tc)
 		if err != nil {
@@ -52,17 +52,6 @@ func dispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, i
 	}
 	if tc.Name == "execute_plan" && planExec {
 		return executePlan(ctx, tc.Args, dispatch), true
-	}
-	if tc.Name == "execute_code" && codeRunner != nil {
-		// Wrap dispatch to block execute_plan/execute_code calls from within code,
-		// preventing unbounded recursion via execute_code → execute_plan → execute_code.
-		safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
-			if tc.Name == "execute_plan" || tc.Name == "execute_code" || tc.Name == "spawn_agent" {
-				return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code", IsError: true}
-			}
-			return dispatch(ctx, tc)
-		}
-		return executeCode(ctx, tc.Args, codeRunner, safeDispatch), true
 	}
 	return DispatchResult{}, false
 }

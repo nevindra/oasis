@@ -14,7 +14,7 @@ Most agent frameworks are wrappers around LLM SDKs with hardcoded abstractions. 
 - **Agents compose recursively.** An `LLMAgent` is an `Agent`. A `Network` of agents is an `Agent`. A `Workflow` containing both is an `Agent`. Nest them arbitrarily.
 - **No LLM SDKs.** Every provider uses raw `net/http`. You control the bytes. Zero vendor lock-in, minimal dependencies.
 - **Go-native concurrency.** Parallel tool dispatch, background agents via `Spawn()`, DAG workflows with automatic wave execution — all using goroutines and channels.
-- **Production primitives, not demos.** Rate limiting, retry with backoff, batch processing, persistent Graph RAG, semantic memory with decay, suspend/resume, code execution with tool bridge.
+- **Production primitives, not demos.** Rate limiting, retry with backoff, batch processing, persistent Graph RAG, semantic memory with decay, suspend/resume, Docker-based sandbox with code execution, shell, file I/O, browser, and MCP.
 
 ## Quick Start
 
@@ -60,7 +60,7 @@ func main() {
 
 ### Intelligence
 
-- **Code execution** — LLM writes and runs Python code in a sandboxed subprocess with full tool bridge access (`call_tool`, `call_tools_parallel`, `set_result`). Complex logic, loops, conditionals, error handling via try/except.
+- **Code execution** — Docker-based sandbox with 7 auto-registered tools: shell, code execution (Python/JS/Bash), file read/write, browser automation, screenshot capture, and MCP server integration. No external orchestration service needed.
 - **Plan execution** — LLM batches multiple tool calls in a single turn via `execute_plan`. All steps run in parallel without re-sampling. Reduces latency and tokens for fan-out patterns.
 - **Dynamic configuration** — per-request resolution of prompt, model, and tool set via `WithDynamicPrompt`, `WithDynamicModel`, `WithDynamicTools`. Multi-tenant personalization, tier-based model selection, role-based tool gating.
 - **Structured output** — `WithResponseSchema` enforces JSON output at the agent level. `SchemaObject` typed builder for compile-time safety.
@@ -105,7 +105,7 @@ researcher := oasis.NewLLMAgent("researcher", "Searches the web", llm,
     oasis.WithTools(searchTool, knowledgeTool),
     oasis.WithPrompt("You are a research specialist."),
     oasis.WithMaxIter(5),
-    oasis.WithCodeExecution(runner),     // let the LLM write and run code
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),  // sandbox: shell, code, files, browser, MCP
     oasis.WithPlanExecution(),           // let the LLM batch tool calls
     oasis.WithTracer(observer.NewTracer()),
 )
@@ -193,7 +193,7 @@ h.Cancel()
 | `InputHandler` | Human-in-the-loop — pause and request human input |
 | `Tracer` / `Span` | Tracing abstraction (zero OTEL imports in your code) |
 | `Retriever` | Composable retrieval with re-ranking |
-| `CodeRunner` | Sandboxed code execution with tool bridge |
+| `Sandbox` / `Manager` | Docker-based sandbox with shell, code, file I/O, browser, MCP |
 
 ## Included Implementations
 
@@ -202,7 +202,7 @@ h.Cancel()
 | **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Groq, Together, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure, and any OpenAI-compatible API) |
 | **Storage** | `store/sqlite` (local, pure-Go), `store/libsql` (Turso/remote), `store/postgres` (PostgreSQL + pgvector). All three support `Store`, `MemoryStore`, `GraphStore`, and `KeywordSearcher` |
 | **Tools** | `tools/knowledge` (RAG), `tools/remember`, `tools/search` (web), `tools/schedule`, `tools/shell`, `tools/file`, `tools/http`, `tools/data` (CSV/JSON transform), `tools/skill` (agent skill management) |
-| **Code** | `code` (sandboxed Python subprocess with tool bridge) |
+| **Sandbox** | `sandbox` (Docker-based sandbox), `sandbox/ix` (manager + ix daemon client) |
 | **Retrieval** | `HybridRetriever` (vector + FTS + RRF), `GraphRetriever` (multi-hop BFS), `ScoreReranker`, `LLMReranker` |
 | **Ingestion** | `ingest` (HTML, Markdown, CSV, JSON, DOCX, PDF extractors; recursive, markdown, semantic chunkers; parent-child strategy) |
 | **Observability** | `observer` (OpenTelemetry-backed `Tracer` implementation) |
@@ -233,7 +233,7 @@ oasis/
 |-- store/sqlite/                       # Local SQLite (pure-Go, no CGO)
 |-- store/libsql/                       # Remote Turso store
 |-- store/postgres/                     # PostgreSQL + pgvector
-|-- code/                              # Sandboxed code execution
+|-- sandbox/                           # Docker-based sandbox (shell, code, files, browser, MCP)
 |-- observer/                           # OTEL observability
 |-- ingest/                             # Document chunking pipeline
 |-- tools/                              # Built-in tools

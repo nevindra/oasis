@@ -13,7 +13,7 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithProcessors(processors ...any)` | Add processor middleware |
 | `WithInputHandler(h InputHandler)` | Enable human-in-the-loop |
 | `WithPlanExecution()` | Enable batched tool calls via built-in `execute_plan` tool |
-| `WithCodeExecution(runner CodeRunner)` | Enable Python code execution via built-in `execute_code` tool |
+| `WithSandbox(sb any, tools ...Tool)` | Enable sandbox tools (shell, execute_code, file_read, file_write, browser, screenshot, mcp_call) |
 | `WithResponseSchema(s *ResponseSchema)` | Enforce structured JSON output matching the schema |
 | `WithDynamicPrompt(fn PromptFunc)` | Per-request system prompt resolution. Overrides `WithPrompt` |
 | `WithDynamicModel(fn ModelFunc)` | Per-request provider/model selection. Overrides constructor provider |
@@ -246,16 +246,23 @@ Passed inside `WithOptions(...)` or accumulated per-request.
 | `WithToolChoice(choice any)` | — | Tool selection: `"none"`, `"auto"`, `"required"`, or a specific tool object |
 | `WithCacheControl(messageIndices ...int)` | — | Mark messages as cache breakpoints with `cache_control: {"type": "ephemeral"}`. Supported by Anthropic, Qwen, and other providers with the cache_control extension |
 
-## CodeRunner Options
+## Sandbox Options
 
-**Package:** `github.com/nevindra/oasis/code`
+**Package:** `github.com/nevindra/oasis/sandbox/ix`
 
-Configures `code.NewSubprocessRunner`.
+### ManagerConfig
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `WithTimeout(d time.Duration)` | 30s | Maximum execution duration. Subprocess is killed on timeout |
-| `WithMaxOutput(bytes int)` | 64KB | Maximum output size. Output beyond this is truncated |
-| `WithWorkspace(path string)` | `os.TempDir()` | Working directory. File operations restricted to this path |
-| `WithEnv(key, value string)` | — | Set environment variable. Multiple calls accumulate |
-| `WithEnvPassthrough()` | minimal env | Pass all host environment variables to subprocess |
+Passed to `ix.NewManager`.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `Image` | — | Docker image for sandbox containers (required) |
+
+### CreateOpts
+
+Passed to `mgr.Create`.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `SessionID` | — | Session identifier for container reuse |
+| `TTL` | — | Time-to-live for the sandbox container |

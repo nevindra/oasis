@@ -106,16 +106,15 @@ func TestCacheBuiltinToolDefs(t *testing.T) {
 	// With all builtins.
 	c.inputHandler = &mockInputHandler{response: InputResponse{Value: "ok"}}
 	c.planExecution = true
-	c.codeRunner = &mockCodeRunner{}
 	defs = c.cacheBuiltinToolDefs([]ToolDefinition{{Name: "existing"}})
-	if len(defs) != 4 { // existing + ask_user + execute_plan + execute_code
-		t.Errorf("got %d defs, want 4", len(defs))
+	if len(defs) != 3 { // existing + ask_user + execute_plan
+		t.Errorf("got %d defs, want 3", len(defs))
 	}
 	names := make(map[string]bool)
 	for _, d := range defs {
 		names[d.Name] = true
 	}
-	for _, want := range []string{"existing", "ask_user", "execute_plan", "execute_code"} {
+	for _, want := range []string{"existing", "ask_user", "execute_plan"} {
 		if !names[want] {
 			t.Errorf("missing tool def %q", want)
 		}

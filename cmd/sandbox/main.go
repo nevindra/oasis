@@ -6,7 +6,7 @@
 // The reference sandbox is a minimal, single-tenant execution service suitable
 // for development and small-scale deployments. For production workloads requiring
 // multi-tenancy, auto-scaling, or stronger isolation guarantees, consider a managed
-// code execution service or build a custom CodeRunner implementation.
+// code execution service or build a custom sandbox.Sandbox implementation.
 package main
 
 import (

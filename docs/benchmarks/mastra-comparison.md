@@ -22,7 +22,7 @@
 | **Dynamic Instructions** | Async functions for runtime personalization | `WithDynamicPrompt(PromptFunc)` — per-request prompt/model/tools resolution | Tie |
 | **Runtime Context/DI** | `runtimeContext` — typed dependency injection | `TaskFromContext(ctx)` — task context propagated to tools via `context.Context` | Tie |
 | **Structured Output** | Zod schema validation with error strategies (strict/warn/fallback) | `ResponseSchema` / `SchemaObject` — compile-time typed builder, zero runtime cost | Tie |
-| **Code Execution** | E2B Workspaces — shell commands in cloud sandbox (external service) | `WithCodeExecution` — sandboxed Python subprocess with tool bridge (`call_tool`, `call_tools_parallel`, `set_result`), no external deps | Oasis |
+| **Code Execution** | E2B Workspaces — shell commands in cloud sandbox (external service) | `WithSandbox` — Docker-based sandbox with 7 tools (shell, code, file I/O, browser, MCP), no external orchestration service | Oasis |
 | **Background Agents** | N/A | `Spawn()` / `AgentHandle` — goroutine-based with lifecycle states | Oasis |
 
 **Score: Mastra 0 — Oasis 3 — Tie 5**
@@ -292,7 +292,7 @@ Mastra has a convenience edge with string-based model selection. Oasis covers eq
 - **`PostToolProcessor`** — hook after each tool execution
 - **Background agents** (`Spawn`/`AgentHandle`) with lifecycle management
 - **Provider decorators** (composable `WithRetry` + `WithRateLimit`)
-- **Code execution** (`WithCodeExecution`) — sandboxed Python subprocess with tool bridge (`call_tool`, `call_tools_parallel`, `set_result`)
+- **Code execution** (`WithSandbox`) — Docker-based sandbox with 7 tools (shell, code execution, file I/O, browser, MCP)
 - **Persistent GraphRAG** — LLM-based ingestion-time edge extraction with 8 typed relations, `GraphStore` in all backends, multi-hop BFS retrieval
 - **Deep observability** — `Tracer`/`Span` interfaces in root package (zero OTEL imports), `StepTrace` on every `AgentResult`, hierarchical spans, nil-check zero overhead
 

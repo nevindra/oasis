@@ -25,7 +25,7 @@ type agentCore struct {
 	maxIter          int
 	inputHandler     InputHandler
 	planExecution    bool
-	codeRunner       CodeRunner
+	sandbox          any // holds a sandbox.Sandbox when set
 	responseSchema   *ResponseSchema
 	dynamicPrompt    PromptFunc
 	dynamicModel     ModelFunc
@@ -88,7 +88,7 @@ func initCore(c *agentCore, name, description string, provider Provider, cfg age
 
 	c.inputHandler = cfg.inputHandler
 	c.planExecution = cfg.planExecution
-	c.codeRunner = cfg.codeRunner
+	c.sandbox = cfg.sandbox
 	c.responseSchema = cfg.responseSchema
 	c.dynamicPrompt = cfg.dynamicPrompt
 	c.dynamicModel = cfg.dynamicModel
@@ -132,17 +132,14 @@ func withSpawnDepth(ctx context.Context, depth int) context.Context {
 	return context.WithValue(ctx, spawnDepthKey{}, depth)
 }
 
-// cacheBuiltinToolDefs appends built-in tool definitions (ask_user, execute_plan,
-// execute_code) based on the agent's configuration.
+// cacheBuiltinToolDefs appends built-in tool definitions (ask_user, execute_plan)
+// based on the agent's configuration.
 func (c *agentCore) cacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition {
 	if c.inputHandler != nil {
 		defs = append(defs, askUserToolDef)
 	}
 	if c.planExecution {
 		defs = append(defs, executePlanToolDef)
-	}
-	if c.codeRunner != nil {
-		defs = append(defs, executeCodeToolDef)
 	}
 	if c.spawnEnabled {
 		defs = append(defs, spawnAgentToolDef)
