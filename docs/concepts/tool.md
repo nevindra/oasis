@@ -103,7 +103,7 @@ result, err := registry.Execute(ctx, "web_search", argsJSON)
 | `tools/file` | `file_read`, `file_write`, `file_list`, `file_delete`, `file_stat` | workspace path |
 | `tools/http` | `http_fetch` | (none) |
 | `tools/data` | `data_parse`, `data_filter`, `data_aggregate`, `data_transform` | (none) |
-| `tools/skill` | `skill_search`, `skill_create`, `skill_update` | Store, EmbeddingProvider |
+| `tools/skill` | `skill_discover`, `skill_activate`, `skill_create`, `skill_update` | SkillProvider |
 
 ## Built-in Tool Reference
 
@@ -570,53 +570,57 @@ tool := data.New()
 ### skill — Skill Management
 
 **Package:** `tools/skill`
-**Constructor:** `skill.New(store, embedding)`
+**Constructor:** `skill.New(provider)`
 
-Manages skills — stored instruction packages that specialize agent behavior. Agents can search, create, and update skills at runtime, enabling self-improvement loops where learned patterns are encoded as reusable instructions.
+Manages skills — file-based instruction packages that specialize agent behavior. Agents discover available skills, activate them to load full instructions, and can create or update skills at runtime.
 
-**Tool schema — `skill_search`:**
+**Tool schema — `skill_discover`:**
+
+No parameters. Lists all available skills with their names, descriptions, and tags. Instructions are not loaded — use `skill_activate` to load full content.
+
+**Tool schema — `skill_activate`:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | yes | Natural language query to find relevant skills |
+| `name` | string | yes | Name of the skill to activate |
 
-Embeds the query and searches via `Store.SearchSkills` (top 5 results). Returns skill name, score, ID, description, tags, creator, and full instructions.
+Loads the full skill content including instructions, tools, model, and references.
 
 **Tool schema — `skill_create`:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `name` | string | yes | Short identifier (e.g., `code-reviewer`, `data-analyst`) |
-| `description` | string | yes | What this skill does — used for semantic search matching |
-| `instructions` | string | yes | Detailed instructions injected into the agent system prompt |
+| `name` | string | yes | Short identifier (becomes folder name, e.g., `code-reviewer`) |
+| `description` | string | yes | When to use this skill — shown during discovery |
+| `instructions` | string | yes | Full markdown instructions loaded when the skill is activated |
 | `tags` | array of strings | no | Categorization labels |
 | `tools` | array of strings | no | Tool names this skill should use (empty = all) |
 | `model` | string | no | Model override |
-| `references` | array of strings | no | Skill IDs this skill builds on |
+| `references` | array of strings | no | Names of skills this builds on |
 
-The description is embedded at creation time for semantic search. The `createdBy` field is automatically set from the task context's user ID.
+Creates a new skill folder with a SKILL.md file. The skill is immediately discoverable. Only available when the provider implements `SkillWriter`.
 
 **Tool schema — `skill_update`:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `id` | string | yes | ID of the skill to update |
-| `name` | string | no | New name |
-| `description` | string | no | New description (triggers re-embedding) |
+| `name` | string | yes | Name of the skill to update |
+| `description` | string | no | New description |
 | `instructions` | string | no | New instructions |
 | `tags` | array of strings | no | New tags (replaces existing) |
 | `tools` | array of strings | no | New tool list (replaces existing) |
 | `model` | string | no | New model override |
 | `references` | array of strings | no | New skill references (replaces existing) |
 
-Only provided fields are changed. When `description` is updated, the embedding is automatically recomputed.
+Only provided fields are changed. Only available when the provider implements `SkillWriter`.
 
 **Example:**
 
 ```go
 import "github.com/nevindra/oasis/tools/skill"
 
-tool := skill.New(store, embedding)
+provider := oasis.NewFileSkillProvider("./skills")
+tool := skill.New(provider)
 ```
 
 ## Parallel Execution

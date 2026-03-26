@@ -234,22 +234,6 @@ func (s *Store) Init(ctx context.Context) error {
 			created_at BIGINT NOT NULL DEFAULT 0
 		)`,
 
-		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS skills (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			description TEXT NOT NULL,
-			instructions TEXT NOT NULL,
-			tools TEXT NOT NULL DEFAULT '',
-			model TEXT NOT NULL DEFAULT '',
-			tags TEXT NOT NULL DEFAULT '',
-			created_by TEXT NOT NULL DEFAULT '',
-			refs TEXT NOT NULL DEFAULT '',
-			embedding %s,
-			created_at BIGINT NOT NULL,
-			updated_at BIGINT NOT NULL
-		)`, vtype),
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS skills_embedding_idx ON skills USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
-
 		`CREATE TABLE IF NOT EXISTS chunk_edges (
 			id TEXT PRIMARY KEY,
 			source_id TEXT NOT NULL,

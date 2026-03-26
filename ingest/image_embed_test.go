@@ -86,14 +86,6 @@ func (f *fakeImageStore) DeleteAllScheduledActions(context.Context) (int, error)
 func (f *fakeImageStore) FindScheduledActionsByDescription(context.Context, string) ([]oasis.ScheduledAction, error) {
 	return nil, nil
 }
-func (f *fakeImageStore) CreateSkill(context.Context, oasis.Skill) error                      { return nil }
-func (f *fakeImageStore) GetSkill(context.Context, string) (oasis.Skill, error)               { return oasis.Skill{}, nil }
-func (f *fakeImageStore) ListSkills(context.Context) ([]oasis.Skill, error)                   { return nil, nil }
-func (f *fakeImageStore) UpdateSkill(context.Context, oasis.Skill) error                      { return nil }
-func (f *fakeImageStore) DeleteSkill(context.Context, string) error                           { return nil }
-func (f *fakeImageStore) SearchSkills(context.Context, []float32, int) ([]oasis.ScoredSkill, error) {
-	return nil, nil
-}
 func (f *fakeImageStore) Init(context.Context) error { return nil }
 func (f *fakeImageStore) Close() error               { return nil }
 

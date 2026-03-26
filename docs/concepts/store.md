@@ -118,17 +118,6 @@ DeleteAllScheduledActions(ctx) (int, error)
 FindScheduledActionsByDescription(ctx, pattern) ([]ScheduledAction, error)
 ```
 
-### Skills
-
-```go
-CreateSkill(ctx, skill) error
-GetSkill(ctx, id) (Skill, error)
-ListSkills(ctx) ([]Skill, error)
-UpdateSkill(ctx, skill) error
-DeleteSkill(ctx, id) error
-SearchSkills(ctx, embedding, topK) ([]ScoredSkill, error)
-```
-
 ### Lifecycle
 
 ```go

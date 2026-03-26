@@ -83,14 +83,6 @@ func (nopStore) DeleteAllScheduledActions(_ context.Context) (int, error) {
 func (nopStore) FindScheduledActionsByDescription(_ context.Context, _ string) ([]oasis.ScheduledAction, error) {
 	return nil, nil
 }
-func (nopStore) CreateSkill(_ context.Context, _ oasis.Skill) error            { return nil }
-func (nopStore) GetSkill(_ context.Context, _ string) (oasis.Skill, error)     { return oasis.Skill{}, nil }
-func (nopStore) ListSkills(_ context.Context) ([]oasis.Skill, error)           { return nil, nil }
-func (nopStore) UpdateSkill(_ context.Context, _ oasis.Skill) error            { return nil }
-func (nopStore) DeleteSkill(_ context.Context, _ string) error                 { return nil }
-func (nopStore) SearchSkills(_ context.Context, _ []float32, _ int) ([]oasis.ScoredSkill, error) {
-	return nil, nil
-}
 func (nopStore) Init(_ context.Context) error { return nil }
 func (nopStore) Close() error                 { return nil }
 

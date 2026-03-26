@@ -6,6 +6,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING:** Skills are now file-based (folders with `SKILL.md`) instead of database-stored. Skill CRUD methods removed from `Store` interface. Use `SkillProvider` and `FileSkillProvider` instead.
+- Skill tool now exposes `skill_discover` and `skill_activate` instead of `skill_search`. Progressive disclosure: discover returns names only, activate loads full instructions.
+
+### Added
+- `SkillProvider` interface for discovering and activating skills.
+- `SkillWriter` interface for creating, updating, and deleting skills.
+- `FileSkillProvider` — reads skills from directories, hot-reloads without restart.
+- `SkillSummary` type for lightweight discovery results.
+
+### Removed
+- `Store.CreateSkill`, `Store.GetSkill`, `Store.ListSkills`, `Store.UpdateSkill`, `Store.DeleteSkill`, `Store.SearchSkills` — replaced by `SkillProvider`.
+- `ScoredSkill` type — no longer needed (no embedding-based search).
+- `Skill.ID`, `Skill.Embedding`, `Skill.CreatedBy`, `Skill.CreatedAt`, `Skill.UpdatedAt` fields — replaced by filesystem metadata.
+- `store/sqlite/skills.go`, `store/postgres/skills.go` — DB skill implementations.
+
 ## [0.12.1] - 2026-03-19
 
 ### Fixed

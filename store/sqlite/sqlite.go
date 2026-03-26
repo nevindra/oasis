@@ -167,25 +167,6 @@ func (s *Store) Init(ctx context.Context) error {
 		return fmt.Errorf("create table: %w", err)
 	}
 
-	// Skills
-	_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS skills (
-		id TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		description TEXT NOT NULL,
-		instructions TEXT NOT NULL,
-		tools TEXT,
-		model TEXT,
-		tags TEXT,
-		created_by TEXT,
-		refs TEXT,
-		embedding TEXT,
-		created_at INTEGER NOT NULL,
-		updated_at INTEGER NOT NULL
-	)`)
-	if err != nil {
-		return fmt.Errorf("create table: %w", err)
-	}
-
 	// Migrations (best-effort, silent fail if already applied)
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")

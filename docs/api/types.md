@@ -66,15 +66,20 @@ type ScheduledAction struct {
 }
 
 type Skill struct {
-    ID           string    `json:"id"`
-    Name         string    `json:"name"`
-    Description  string    `json:"description"`
-    Instructions string    `json:"instructions"`
-    Tools        []string  `json:"tools,omitempty"`
-    Model        string    `json:"model,omitempty"`
-    Embedding    []float32 `json:"-"`
-    CreatedAt    int64     `json:"created_at"`
-    UpdatedAt    int64     `json:"updated_at"`
+    Name         string   `json:"name"`
+    Description  string   `json:"description"`
+    Instructions string   `json:"instructions"`
+    Tools        []string `json:"tools,omitempty"`
+    Model        string   `json:"model,omitempty"`
+    Tags         []string `json:"tags,omitempty"`
+    References   []string `json:"references,omitempty"`
+    Dir          string   `json:"-"`
+}
+
+type SkillSummary struct {
+    Name        string   `json:"name"`
+    Description string   `json:"description"`
+    Tags        []string `json:"tags,omitempty"`
 }
 ```
 
@@ -218,7 +223,6 @@ Score is in [0, 1]; higher means more relevant. Exact range depends on scoring m
 ```go
 type ScoredMessage struct { Message; Score float32 }
 type ScoredChunk struct { Chunk; Score float32 }
-type ScoredSkill struct { Skill; Score float32 }
 type ScoredFact struct { Fact; Score float32 }
 ```
 

@@ -81,15 +81,6 @@ func (s *mockStore) DeleteAllScheduledActions(context.Context) (int, error)     
 func (s *mockStore) FindScheduledActionsByDescription(context.Context, string) ([]oasis.ScheduledAction, error) {
 	return nil, nil
 }
-func (s *mockStore) CreateSkill(context.Context, oasis.Skill) error           { return nil }
-func (s *mockStore) GetSkill(context.Context, string) (oasis.Skill, error)    { return oasis.Skill{}, nil }
-func (s *mockStore) ListSkills(context.Context) ([]oasis.Skill, error)        { return nil, nil }
-func (s *mockStore) UpdateSkill(context.Context, oasis.Skill) error           { return nil }
-func (s *mockStore) DeleteSkill(context.Context, string) error                { return nil }
-func (s *mockStore) SearchSkills(context.Context, []float32, int) ([]oasis.ScoredSkill, error) {
-	return nil, nil
-}
-
 // --- tests ---
 
 func TestIngestorIngestText(t *testing.T) {

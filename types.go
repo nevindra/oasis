@@ -212,19 +212,38 @@ type Store interface {
 	DeleteAllScheduledActions(ctx context.Context) (int, error)
 	FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
 
-	// --- Skills ---
-	CreateSkill(ctx context.Context, skill Skill) error
-	GetSkill(ctx context.Context, id string) (Skill, error)
-	ListSkills(ctx context.Context) ([]Skill, error)
-	UpdateSkill(ctx context.Context, skill Skill) error
-	DeleteSkill(ctx context.Context, id string) error
-	// SearchSkills performs semantic similarity search over stored skills.
-	// Results are sorted by Score descending.
-	SearchSkills(ctx context.Context, embedding []float32, topK int) ([]ScoredSkill, error)
-
 	// --- Lifecycle ---
 	Init(ctx context.Context) error
 	Close() error
+}
+
+// SkillProvider discovers and loads skills from any backing store.
+// Implementations must be safe for concurrent use.
+type SkillProvider interface {
+	// Discover returns lightweight summaries of all available skills.
+	// Only name, description, and tags are loaded — full instructions remain unread.
+	// Results are rescanned on every call (no caching), so newly created skills
+	// are immediately visible without restart.
+	Discover(ctx context.Context) ([]SkillSummary, error)
+
+	// Activate loads the full skill by name, including instructions and metadata.
+	// Returns an error if the skill does not exist.
+	Activate(ctx context.Context, name string) (Skill, error)
+}
+
+// SkillWriter creates and modifies skills. File-based providers implement this
+// to let agents author skills at runtime. Check via type assertion:
+//
+//	if w, ok := provider.(SkillWriter); ok { ... }
+type SkillWriter interface {
+	// CreateSkill writes a new skill. The Name field determines the folder name.
+	CreateSkill(ctx context.Context, skill Skill) error
+
+	// UpdateSkill modifies an existing skill identified by name.
+	UpdateSkill(ctx context.Context, name string, skill Skill) error
+
+	// DeleteSkill removes a skill and its entire folder.
+	DeleteSkill(ctx context.Context, name string) error
 }
 
 // --- Domain types (database records) ---
@@ -239,12 +258,6 @@ type ScoredMessage struct {
 // ScoredChunk is a Chunk paired with its cosine similarity score.
 type ScoredChunk struct {
 	Chunk
-	Score float32
-}
-
-// ScoredSkill is a Skill paired with its cosine similarity score.
-type ScoredSkill struct {
-	Skill
 	Score float32
 }
 
@@ -426,20 +439,26 @@ type ScheduledToolCall struct {
 	Params json.RawMessage `json:"params"`
 }
 
-// Skill is a stored instruction package for specializing the action agent.
+// SkillSummary is a lightweight view of a skill for discovery.
+// Contains only the metadata needed for an agent to decide whether to activate.
+type SkillSummary struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags,omitempty"`
+}
+
+// Skill is a stored instruction package that specializes agent behavior.
+// Skills are folders on disk with a SKILL.md file containing YAML frontmatter
+// (metadata) and markdown body (instructions).
 type Skill struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Description  string    `json:"description"`
-	Instructions string    `json:"instructions"`
-	Tools        []string  `json:"tools,omitempty"`
-	Model        string    `json:"model,omitempty"`
-	Tags         []string  `json:"tags,omitempty"`       // categorization labels
-	CreatedBy    string    `json:"created_by,omitempty"`  // origin: user ID or agent ID
-	References   []string  `json:"references,omitempty"` // skill IDs this builds on
-	Embedding    []float32 `json:"-"`
-	CreatedAt    int64     `json:"created_at"`
-	UpdatedAt    int64     `json:"updated_at"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Instructions string   `json:"instructions"`
+	Tools        []string `json:"tools,omitempty"`
+	Model        string   `json:"model,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	References   []string `json:"references,omitempty"`
+	Dir          string   `json:"-"` // filesystem path to skill directory
 }
 
 // --- LLM protocol types ---

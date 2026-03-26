@@ -172,14 +172,6 @@ type Store interface {
     DeleteAllScheduledActions(ctx context.Context) (int, error)
     FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
 
-    // Skills
-    CreateSkill(ctx context.Context, skill Skill) error
-    GetSkill(ctx context.Context, id string) (Skill, error)
-    ListSkills(ctx context.Context) ([]Skill, error)
-    UpdateSkill(ctx context.Context, skill Skill) error
-    DeleteSkill(ctx context.Context, id string) error
-    SearchSkills(ctx context.Context, embedding []float32, topK int) ([]ScoredSkill, error)
-
     // Lifecycle
     Init(ctx context.Context) error
     Close() error
@@ -189,6 +181,58 @@ type Store interface {
 | Implementation | Constructor |
 |----------------|------------|
 | `store/sqlite` | `sqlite.New(path string)` |
+
+---
+
+## SkillProvider
+
+**File:** `skills.go`
+
+Read-only access to the skill library. Used for discovery and activation.
+
+```go
+type SkillProvider interface {
+    // Discover returns lightweight summaries of all available skills.
+    // Returns names and descriptions only — no instruction text loaded.
+    Discover(ctx context.Context) ([]SkillSummary, error)
+
+    // Activate loads the full Skill by name, including instructions.
+    Activate(ctx context.Context, name string) (Skill, error)
+}
+```
+
+| Implementation | Constructor |
+|----------------|------------|
+| `skills.FileSkillProvider` | `skills.NewFileSkillProvider(dir string)` |
+
+---
+
+## SkillWriter
+
+**File:** `skills.go`
+
+Write access to the skill library. Used for agent self-improvement — creating and updating skills at runtime.
+
+```go
+type SkillWriter interface {
+    // Create writes a new skill to the backing store.
+    // Returns an error if a skill with the same name already exists.
+    Create(ctx context.Context, skill Skill) error
+
+    // Update replaces an existing skill's fields.
+    // The skill must already exist (identified by Name).
+    Update(ctx context.Context, skill Skill) error
+
+    // Delete removes a skill by name.
+    Delete(ctx context.Context, name string) error
+}
+```
+
+`FileSkillProvider` implements both `SkillProvider` and `SkillWriter`. The skill tool accepts them separately so you can compose a read-only provider with a restricted writer, or use the same instance for both.
+
+| Implementation | Constructor |
+|----------------|------------|
+| `skills.FileSkillProvider` | `skills.NewFileSkillProvider(dir string)` |
 
 ---
 

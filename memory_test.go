@@ -40,13 +40,6 @@ func (s *stubStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ 
 func (s *stubStore) DeleteScheduledAction(_ context.Context, _ string) error { return nil }
 func (s *stubStore) DeleteAllScheduledActions(_ context.Context) (int, error) { return 0, nil }
 func (s *stubStore) FindScheduledActionsByDescription(_ context.Context, _ string) ([]ScheduledAction, error) { return nil, nil }
-func (s *stubStore) CreateSkill(_ context.Context, _ Skill) error { return nil }
-func (s *stubStore) GetSkill(_ context.Context, _ string) (Skill, error) { return Skill{}, nil }
-func (s *stubStore) ListSkills(_ context.Context) ([]Skill, error) { return nil, nil }
-func (s *stubStore) UpdateSkill(_ context.Context, _ Skill) error { return nil }
-func (s *stubStore) DeleteSkill(_ context.Context, _ string) error { return nil }
-func (s *stubStore) SearchSkills(_ context.Context, _ []float32, _ int) ([]ScoredSkill, error) { return nil, nil }
-
 // recordingStore tracks calls to StoreMessage, CreateThread, UpdateThread
 // and returns canned history.
 type recordingStore struct {

@@ -35,13 +35,7 @@ func (nopStore) DeleteAllScheduledActions(_ context.Context) (int, error)       
 func (nopStore) FindScheduledActionsByDescription(_ context.Context, _ string) ([]ScheduledAction, error) {
 	return nil, nil
 }
-func (nopStore) CreateSkill(_ context.Context, _ Skill) error                        { return nil }
-func (nopStore) GetSkill(_ context.Context, _ string) (Skill, error)                 { return Skill{}, nil }
-func (nopStore) ListSkills(_ context.Context) ([]Skill, error)                       { return nil, nil }
-func (nopStore) UpdateSkill(_ context.Context, _ Skill) error                        { return nil }
-func (nopStore) DeleteSkill(_ context.Context, _ string) error                       { return nil }
-func (nopStore) SearchSkills(_ context.Context, _ []float32, _ int) ([]ScoredSkill, error) { return nil, nil }
-func (nopStore) Init(_ context.Context) error                                         { return nil }
+func (nopStore) Init(_ context.Context) error { return nil }
 func (nopStore) Close() error                                                         { return nil }
 
 // --- Tool mocks (shared across agent_test.go, workflow_test.go) ---
