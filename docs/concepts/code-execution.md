@@ -125,6 +125,66 @@ runner := code.NewHTTPRunner("http://sandbox:9000",
 mux.Handle("/_oasis/dispatch", runner.Handler())
 ```
 
+## OpenSandboxRunner
+
+**Package:** `github.com/nevindra/oasis/code`
+
+A `CodeRunner` implementation that manages remote sandbox containers via the [OpenSandbox](https://opensandbox.dev) API. Unlike HTTPRunner (which requires you to run and manage the sandbox sidecar), OpenSandboxRunner provisions containers on-demand through the OpenSandbox platform, handles the full lifecycle (create, execute, cleanup), and streams execution output via SSE.
+
+```go
+import "github.com/nevindra/oasis/code"
+
+runner := code.NewOpenSandboxRunner("https://api.opensandbox.dev", "your-api-key",
+    code.WithImage("python:3.11-slim"),
+    code.WithResources("1", "1Gi"),
+    code.WithExecTimeout(60 * time.Second),
+)
+defer runner.Close()
+
+agent := oasis.NewLLMAgent("analyst", "Data analysis agent", provider,
+    oasis.WithTools(searchTool, fileTool),
+    oasis.WithCodeExecution(runner),
+)
+```
+
+### How It Works
+
+1. **Sandbox lifecycle** — on first `Run()` for a session, the runner creates a sandbox container via the OpenSandbox API (`POST /v1/sandboxes`), retrieves the execd endpoint, and polls `/ping` until the sandbox is ready. Subsequent calls with the same `SessionID` reuse the existing container.
+2. **Script upload** — the runner assembles a full script by concatenating a runtime-specific prelude (Python or Node.js), the user's code, and a postlude. This script is uploaded to the sandbox via the execd file upload API.
+3. **Command execution** — the runner issues a `POST /command` to the sandbox's execd sidecar, passing the script path, working directory, timeout, and environment variables (including the callback URL and execution ID).
+4. **SSE streaming** — the execd response is an SSE stream of JSON events (`stdout`, `stderr`, `error`, `execution_complete`). The runner parses these in real time, collecting output and detecting errors.
+5. **Tool callbacks** — when sandbox code calls `call_tool()` / `callTool()`, the prelude POSTs to the callback URL (`/_oasis/dispatch`) with the execution ID for correlation. The runner's callback server dispatches through the agent's `DispatchFunc` and returns the result.
+6. **Cleanup** — ephemeral sandboxes (no `SessionID`) are deleted after execution. Session-scoped sandboxes persist until `runner.Close()` is called, which deletes all managed sandboxes.
+
+### HTTPRunner vs OpenSandboxRunner
+
+| | HTTPRunner | OpenSandboxRunner |
+|---|---|---|
+| **Infrastructure** | Self-hosted sandbox sidecar | Managed OpenSandbox platform |
+| **Container lifecycle** | External (you manage Docker) | Automatic (create/delete via API) |
+| **Communication** | Single POST to `/execute`, JSON response | File upload + SSE streaming via execd |
+| **Session support** | Via `session_id` in request | Via sandbox reuse (same container) |
+| **Tool callbacks** | Same (`/_oasis/dispatch`) | Same (`/_oasis/dispatch`) |
+| **File transfer** | Base64 in JSON | Multipart upload / binary download |
+| **Best for** | Self-hosted, low-latency setups | Managed, on-demand, no infra to run |
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithImage(image string)` | `"python:3.11-slim"` | Container image for new sandboxes |
+| `WithResources(cpu, mem string)` | `"500m"`, `"512Mi"` | CPU and memory resource limits (Kubernetes notation) |
+| `WithExecdToken(token string)` | — | Access token for the execd sidecar (`X-EXECD-ACCESS-TOKEN` header) |
+| `WithEntrypoint(args ...string)` | `["sleep", "infinity"]` | Container entrypoint command |
+| `WithSandboxTTL(seconds int)` | `600` (10 min) | Sandbox auto-termination timeout. 0 disables |
+| `WithSandboxEnv(env map[string]string)` | — | Additional environment variables for the sandbox container |
+| `WithExecTimeout(d time.Duration)` | `30s` | Maximum duration for a single code execution |
+| `WithMaxFileDownload(bytes int64)` | `10MB` | Max bytes per downloaded file. Oversized files degrade to metadata only |
+| `WithCallbackListenAddr(addr string)` | `"127.0.0.1:0"` | Listen address for the auto-started callback server |
+| `WithExternalCallbackAddr(addr string)` | — | External callback URL (disables auto-start). Use `runner.Handler()` to mount |
+| `WithRetryCount(n int)` | `2` | Total API attempts. Values below 1 clamped to 1 |
+| `WithRetryBackoff(d time.Duration)` | `500ms` | Initial backoff delay between retries (doubles each retry) |
+
 ## Sandbox Service
 
 **Package:** `cmd/sandbox/`

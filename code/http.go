@@ -110,7 +110,7 @@ func (r *HTTPRunner) Run(ctx context.Context, req oasis.CodeRequest, dispatch oa
 	dispatchCh := r.server.register(executionID)
 	defer close(stopCh)
 	defer r.server.deregister(executionID)
-	go r.drainDispatch(ctx, dispatchCh, dispatch, stopCh)
+	go drainDispatch(ctx, dispatchCh, dispatch, stopCh)
 
 	// POST to sandbox /execute with retry.
 	resp, err := r.doExecute(ctx, execReq)
@@ -165,60 +165,6 @@ func (r *HTTPRunner) callbackURL() string {
 		return strings.TrimRight(r.cfg.callbackExtAddr, "/") + callbackPath
 	}
 	return "http://" + r.server.Addr() + callbackPath
-}
-
-// drainDispatch processes tool call envelopes from the dispatch channel.
-// Each envelope is dispatched concurrently; the result is sent back via replyCh.
-// On exit, drains any remaining envelopes with error replies to prevent
-// handleDispatch goroutines from blocking on replyCh indefinitely.
-func (r *HTTPRunner) drainDispatch(ctx context.Context, dispatchCh chan dispatchEnvelope, dispatch oasis.DispatchFunc, stopCh chan struct{}) {
-	var wg sync.WaitGroup
-	defer wg.Wait()
-
-	for {
-		select {
-		case env, ok := <-dispatchCh:
-			if !ok {
-				return
-			}
-			wg.Add(1)
-			go func(env dispatchEnvelope) {
-				defer wg.Done()
-				dr := dispatch(ctx, env.call)
-				env.replyCh <- dispatchReply{
-					content: dr.Content,
-					isError: dr.IsError,
-				}
-			}(env)
-		case <-stopCh:
-			// Drain any remaining envelopes and reply with errors
-			// so handleDispatch goroutines don't block on replyCh.
-			for {
-				select {
-				case env := <-dispatchCh:
-					env.replyCh <- dispatchReply{
-						content: "execution completed",
-						isError: true,
-					}
-				default:
-					return
-				}
-			}
-		case <-ctx.Done():
-			// Same drain on context cancellation.
-			for {
-				select {
-				case env := <-dispatchCh:
-					env.replyCh <- dispatchReply{
-						content: "execution cancelled",
-						isError: true,
-					}
-				default:
-					return
-				}
-			}
-		}
-	}
 }
 
 // --- sandbox wire types ---

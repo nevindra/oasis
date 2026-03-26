@@ -74,6 +74,181 @@ Then point HTTPRunner at the service name:
 runner := code.NewHTTPRunner("http://sandbox:9000")
 ```
 
+## Using OpenSandbox (Production)
+
+[OpenSandbox](https://github.com/alibaba/OpenSandbox) provides production-grade sandboxing with multi-tier isolation (Docker, gVisor, Kata, Firecracker), network egress control, and Kubernetes-native lifecycle management. The `OpenSandboxRunner` manages the full container lifecycle — you don't need to run or manage sandbox containers yourself.
+
+### Prerequisites
+
+- Docker Engine 20.10+
+- Python 3.10+ with [uv](https://github.com/astral-sh/uv) (for the OpenSandbox server)
+
+### 1. Start the OpenSandbox server
+
+```bash
+# Install
+uv pip install opensandbox-server
+
+# Generate config for Docker runtime
+opensandbox-server init-config ~/.sandbox.toml --example docker
+
+# Start (listens on 127.0.0.1:8080)
+opensandbox-server
+```
+
+Verify it's running:
+
+```bash
+curl http://127.0.0.1:8080/health
+# {"status": "healthy"}
+```
+
+API docs are available at `http://127.0.0.1:8080/docs` (Swagger).
+
+### 2. Create an OpenSandboxRunner and agent
+
+```go
+import (
+    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/code"
+)
+
+runner := code.NewOpenSandboxRunner("http://127.0.0.1:8080", "",
+    code.WithImage("opensandbox/code-interpreter:v1.0.2"),
+    code.WithResources("1", "1Gi"),
+    code.WithExecTimeout(60 * time.Second),
+    code.WithSandboxTTL(600),
+)
+defer runner.Close()
+
+agent := oasis.NewLLMAgent("analyst", "Data analyst with code execution", provider,
+    oasis.WithTools(searchTool, fileTool),
+    oasis.WithCodeExecution(runner),
+)
+```
+
+The API key is an empty string `""` when auth is disabled (default for local dev). Set it in production via the server's `server.api_key` config.
+
+### 3. Docker Compose (server in container)
+
+For setups where you want the OpenSandbox server itself in a container:
+
+```yaml
+services:
+  app:
+    build: .
+    depends_on: [opensandbox]
+    environment:
+      OPENSANDBOX_URL: "http://opensandbox:8090"
+
+  opensandbox:
+    image: opensandbox/server:latest
+    ports:
+      - "8090:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    configs:
+      - source: sandbox-config
+        target: /etc/opensandbox/config.toml
+    environment:
+      SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
+
+configs:
+  sandbox-config:
+    content: |
+      [server]
+      host = "0.0.0.0"
+      port = 8090
+
+      [runtime]
+      type = "docker"
+      execd_image = "opensandbox/execd:v1.0.9"
+
+      [docker]
+      network_mode = "bridge"
+      host_ip = "host.docker.internal"
+
+      [ingress]
+      mode = "direct"
+```
+
+```go
+runner := code.NewOpenSandboxRunner("http://opensandbox:8090", "")
+```
+
+### Callback Networking
+
+The sandbox code calls `call_tool()` which POSTs back to the callback server running in your app process. The callback URL must be reachable **from inside the sandbox container**.
+
+**Local dev (sandbox on same host):**
+
+```go
+// Default 127.0.0.1:0 works if sandbox containers can reach host
+runner := code.NewOpenSandboxRunner("http://127.0.0.1:8080", "")
+```
+
+**Docker bridge networking (sandbox in isolated network):**
+
+```go
+// Sandbox containers can't reach 127.0.0.1 on the host.
+// Use host.docker.internal or your host's IP.
+runner := code.NewOpenSandboxRunner("http://127.0.0.1:8080", "",
+    code.WithCallbackListenAddr("0.0.0.0:9999"),
+    code.WithExternalCallbackAddr("http://host.docker.internal:9999"),
+)
+```
+
+**Kubernetes:**
+
+```go
+// Use a Service or Ingress reachable from sandbox pods.
+runner := code.NewOpenSandboxRunner("http://opensandbox-server:8080", apiKey,
+    code.WithExternalCallbackAddr("http://my-app.default.svc:8080"),
+)
+// Mount callback handler on your existing server:
+mux.Handle("/_oasis/dispatch", runner.Handler())
+```
+
+### Session Management
+
+Sessions work differently from HTTPRunner:
+
+- **HTTPRunner** — sessions map to workspace directories on disk. Same process, same filesystem.
+- **OpenSandboxRunner** — sessions map to entire sandbox containers. Same `SessionID` reuses the same container across `Run()` calls. No `SessionID` creates an ephemeral container that's deleted after execution.
+
+```go
+// Ephemeral: new container per execution, deleted after
+runner.Run(ctx, oasis.CodeRequest{Code: "x = 1"}, dispatch)
+
+// Persistent: container stays alive across calls
+runner.Run(ctx, oasis.CodeRequest{Code: "x = 1", SessionID: "user-123"}, dispatch)
+runner.Run(ctx, oasis.CodeRequest{Code: "print(x)", SessionID: "user-123"}, dispatch)
+
+// Clean up all session containers
+runner.Close()
+```
+
+### Container Images
+
+The `WithImage` option controls which Docker image is used for sandboxes:
+
+| Image | Use case |
+|-------|----------|
+| `opensandbox/code-interpreter:v1.0.2` | Python + Node.js with execd (recommended) |
+| `python:3.11-slim` | Python only (needs execd in the server config) |
+| Custom image | Any runtime — must have execd or use server-side injection |
+
+### When to Use OpenSandbox vs HTTPRunner
+
+| Scenario | Use |
+|----------|-----|
+| Local dev, quick prototyping | HTTPRunner + `cmd/sandbox/` |
+| Single-tenant production | Either works |
+| Multi-tenant, untrusted code | OpenSandbox (isolation tiers) |
+| Need network egress control | OpenSandbox (FQDN policies) |
+| Kubernetes deployment | OpenSandbox (native CRDs) |
+| Minimal infrastructure | HTTPRunner (just one Docker container) |
+
 ## Python Patterns
 
 ### Pattern 1: Sequential Tool Chains
@@ -307,6 +482,23 @@ runner := code.NewHTTPRunner("http://sandbox:9000",
 mux.Handle("/_oasis/dispatch", runner.Handler())
 ```
 
+### OpenSandboxRunner Options
+
+```go
+runner := code.NewOpenSandboxRunner("http://opensandbox:8080", "api-key",
+    code.WithImage("opensandbox/code-interpreter:v1.0.2"),
+    code.WithResources("2", "2Gi"),          // CPU, memory
+    code.WithExecTimeout(2 * time.Minute),   // per-execution timeout
+    code.WithSandboxTTL(1800),               // 30 min container TTL
+    code.WithMaxFileDownload(20 << 20),      // 20MB max per file
+    code.WithRetryCount(3),                  // retry transient API errors
+    code.WithExecdToken("execd-secret"),     // execd auth token
+    code.WithSandboxEnv(map[string]string{   // extra env vars
+        "PYTHONUNBUFFERED": "1",
+    }),
+)
+```
+
 ### Network
 
 The Network agent supports code execution the same way:
@@ -333,6 +525,7 @@ The code can call both regular tools and `agent_*` tools for delegating to subag
 ## See Also
 
 - [Code Execution Concept](../concepts/code-execution.md) — architecture, safety model, runtime API reference
+- [OpenSandbox](https://github.com/alibaba/OpenSandbox) — the sandbox platform behind `OpenSandboxRunner`
 - [Tool Concept](../concepts/tool.md) — plan execution, parallel execution
 - [Execution Plans](execution-plans.md) — Workflow-based plan-approve-execute pattern
 - [Custom Tool Guide](custom-tool.md) — build tools that code can call
