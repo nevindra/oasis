@@ -8,7 +8,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 - **ix — sandbox execution daemon** (`internal/ixd/`, `cmd/ix/`). Go stdlib HTTP daemon that runs inside sandbox containers, replacing gem-server/execd. Provides shell execution (SSE streaming), stateless code execution (Python, JS, Bash), and comprehensive file operations via REST API. Zero external dependencies.
-- **Enhanced file operations** — `EditFile`, `GlobFiles`, `GrepFiles` methods on `Sandbox` interface. `file_edit` (surgical string replacement), `file_glob` (pattern search via `fd`), `file_grep` (content search via `rg`) tools. 10-50x token savings vs read+rewrite for file edits.
+- **Enhanced file operations** — `EditFile`, `GlobFiles`, `GrepFiles` methods on `Sandbox` interface. `file_edit` (surgical string replacement), `file_glob` (pattern search via `fd` with `**` support), `file_grep` (content search via `rg` with regex and context lines) tools. `ReadFile` now uses buffered line-by-line reading with line numbers (`cat -n` format) instead of loading entire files. `GlobFiles` and `GrepFiles` support `Exclude`, `Limit`, and `Context` parameters. 10-50x token savings vs read+rewrite for file edits.
+- **Workspace tools for ix sandbox** — 3 new endpoints and 3 fixes to make the sandbox a fast, complete workspace for AI agents:
+  - `POST /v1/file/tree` — recursive directory listing with depth control and exclude patterns. Uses `tree` command with native Go fallback.
+  - `POST /v1/http/fetch` — URL fetching with readability text extraction (via `go-readability`). Clean text by default, `raw: true` for HTML.
+  - `GET /v1/workspace/info` — environment discovery: OS, arch, working directory, installed tools (`rg`, `fd`, `git`, `python3`, `node`, etc.), and browser availability.
+  - `file_tree`, `http_fetch`, `workspace_info` sandbox tools registered by default via `sandbox.Tools()`.
+- `TreeRequest`, `TreeResult`, `HTTPFetchRequest`, `HTTPFetchResult`, `WorkspaceInfoResult` types on `sandbox` package.
+- `Tree`, `HTTPFetch`, `WorkspaceInfo` methods on `Sandbox` interface.
 - **File delivery** — `FileDelivery` interface + `deliver_file` tool. Agents can deliver sandbox files to users as downloadable chat attachments. Framework-level capability: apps implement `FileDelivery` to choose storage backend (S3, disk, etc.). Tool conditionally registered via `WithFileDelivery()` option.
 - `ToolsOption` functional options for `sandbox.Tools()` — extensible tool registration without breaking the function signature.
 - `EventFileAttachment` stream event type for file delivery notifications.
@@ -20,10 +27,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ### Changed
 - **BREAKING:** `sandbox/aio` package renamed to `sandbox/ix`. `AIOSandbox` → `IXSandbox`, `AIOManager` → `IXManager`. Import path: `github.com/nevindra/oasis/sandbox/ix`.
 - **BREAKING:** `IXSandbox` now communicates via SSE for shell/code execution (previously synchronous JSON). Client-side change only — `Sandbox` interface unchanged.
+- **BREAKING:** `Sandbox.ReadFile` now accepts `ReadFileRequest` instead of a plain path string. `FileContent` gains `TotalLines` field.
+- **BREAKING:** `Sandbox.GlobFiles` now returns `GlobResult` (with `Files` and `Truncated`) instead of `[]string`. `GlobRequest` gains `Exclude` and `Limit` fields.
+- **BREAKING:** `Sandbox.GrepFiles` now returns `GrepResult` (with `Matches` and `Truncated`) instead of `[]GrepMatch`. `GrepRequest` gains `Context` and `Limit` fields. `GrepMatch` gains `ContextBefore` and `ContextAfter`.
 - **BREAKING:** Skills are now file-based (folders with `SKILL.md`) instead of database-stored. Skill CRUD methods removed from `Store` interface. Use `SkillProvider` and `FileSkillProvider` instead.
 - Skill tool now exposes `skill_discover` and `skill_activate` instead of `skill_search`. Progressive disclosure: discover returns names only, activate loads full instructions.
+- All sandbox tool descriptions updated to guide agents toward dedicated tools and away from shell workarounds (e.g., "Use file_read instead of cat via shell").
 - Default sandbox image changed from `ghcr.io/agent-infra/sandbox:latest` to `oasis-ix:latest`.
 - Health check endpoint changed from `GET /v1/shell/sessions` to `GET /health`.
+- Added GitHub CI workflow (`build-ix.yml`) to build and push ix sandbox Docker image on sandbox-related changes.
 
 ### Removed
 - `sandbox/aio` package — replaced by `sandbox/ix`.

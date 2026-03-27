@@ -6,6 +6,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -46,9 +49,18 @@ func NewServer(ctx context.Context, addr string) *Server {
 	mux.HandleFunc("GET /v1/file/stat", s.handleFileStat)
 	mux.HandleFunc("POST /v1/file/ls", s.handleFileLs)
 
+	// File tree
+	mux.HandleFunc("POST /v1/file/tree", s.handleFileTree)
+
 	// File transfer
 	mux.HandleFunc("POST /v1/file/upload", s.handleFileUpload)
 	mux.HandleFunc("GET /v1/file/download", s.handleFileDownload)
+
+	// HTTP fetch
+	mux.HandleFunc("POST /v1/http/fetch", s.handleHTTPFetch)
+
+	// Workspace info
+	mux.HandleFunc("GET /v1/workspace/info", s.handleWorkspaceInfo)
 
 	// Browser (proxied to Pinchtab)
 	bp := newBrowserProxy(s.pt)
@@ -101,6 +113,30 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // Shutdown gracefully stops the server and the Pinchtab subprocess.
 func (s *Server) Shutdown() {
 	s.pt.shutdown()
+}
+
+// handleWorkspaceInfo returns environment info for agent calibration.
+func (s *Server) handleWorkspaceInfo(w http.ResponseWriter, r *http.Request) {
+	cwd, _ := os.Getwd()
+
+	tools := make(map[string]bool)
+	for _, name := range []string{"rg", "fd", "fdfind", "git", "python3", "node", "tree", "curl", "wget"} {
+		_, err := exec.LookPath(name)
+		tools[name] = err == nil
+	}
+	// Normalize fd/fdfind into a single "fd" key.
+	if tools["fdfind"] {
+		tools["fd"] = true
+	}
+	delete(tools, "fdfind")
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"os":          runtime.GOOS,
+		"arch":        runtime.GOARCH,
+		"working_dir": cwd,
+		"tools":       tools,
+		"browser":     s.pt.isAvailable(),
+	})
 }
 
 // writeJSON serializes data as JSON and writes it with the given status code.

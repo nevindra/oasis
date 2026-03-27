@@ -16,11 +16,11 @@ import (
 type mockSandbox struct {
 	shellFn        func(ctx context.Context, req ShellRequest) (ShellResult, error)
 	execCodeFn     func(ctx context.Context, req CodeRequest) (CodeResult, error)
-	readFileFn     func(ctx context.Context, path string) (FileContent, error)
+	readFileFn     func(ctx context.Context, req ReadFileRequest) (FileContent, error)
 	writeFileFn    func(ctx context.Context, req WriteFileRequest) error
 	editFileFn     func(ctx context.Context, req EditFileRequest) error
-	globFilesFn    func(ctx context.Context, req GlobRequest) ([]string, error)
-	grepFilesFn    func(ctx context.Context, req GrepRequest) ([]GrepMatch, error)
+	globFilesFn    func(ctx context.Context, req GlobRequest) (GlobResult, error)
+	grepFilesFn    func(ctx context.Context, req GrepRequest) (GrepResult, error)
 	browserNavFn   func(ctx context.Context, url string) error
 	browserActFn   func(ctx context.Context, action BrowserAction) (BrowserResult, error)
 	screenshotFn   func(ctx context.Context) ([]byte, error)
@@ -45,9 +45,9 @@ func (m *mockSandbox) ExecCode(ctx context.Context, req CodeRequest) (CodeResult
 	return CodeResult{}, nil
 }
 
-func (m *mockSandbox) ReadFile(ctx context.Context, path string) (FileContent, error) {
+func (m *mockSandbox) ReadFile(ctx context.Context, req ReadFileRequest) (FileContent, error) {
 	if m.readFileFn != nil {
-		return m.readFileFn(ctx, path)
+		return m.readFileFn(ctx, req)
 	}
 	return FileContent{}, nil
 }
@@ -66,18 +66,18 @@ func (m *mockSandbox) EditFile(ctx context.Context, req EditFileRequest) error {
 	return nil
 }
 
-func (m *mockSandbox) GlobFiles(ctx context.Context, req GlobRequest) ([]string, error) {
+func (m *mockSandbox) GlobFiles(ctx context.Context, req GlobRequest) (GlobResult, error) {
 	if m.globFilesFn != nil {
 		return m.globFilesFn(ctx, req)
 	}
-	return nil, nil
+	return GlobResult{}, nil
 }
 
-func (m *mockSandbox) GrepFiles(ctx context.Context, req GrepRequest) ([]GrepMatch, error) {
+func (m *mockSandbox) GrepFiles(ctx context.Context, req GrepRequest) (GrepResult, error) {
 	if m.grepFilesFn != nil {
 		return m.grepFilesFn(ctx, req)
 	}
-	return nil, nil
+	return GrepResult{}, nil
 }
 
 func (m *mockSandbox) UploadFile(ctx context.Context, path string, data io.Reader) error {
@@ -138,6 +138,18 @@ func (m *mockSandbox) BrowserPDF(ctx context.Context) ([]byte, error) {
 		return m.browserPDFFn(ctx)
 	}
 	return nil, nil
+}
+
+func (m *mockSandbox) Tree(ctx context.Context, req TreeRequest) (TreeResult, error) {
+	return TreeResult{}, nil
+}
+
+func (m *mockSandbox) HTTPFetch(ctx context.Context, req HTTPFetchRequest) (HTTPFetchResult, error) {
+	return HTTPFetchResult{}, nil
+}
+
+func (m *mockSandbox) WorkspaceInfo(ctx context.Context) (WorkspaceInfoResult, error) {
+	return WorkspaceInfoResult{}, nil
 }
 
 func (m *mockSandbox) Close() error { return nil }
@@ -300,19 +312,22 @@ func TestToolDefinitionsComplete(t *testing.T) {
 	tools := Tools(sb)
 
 	expected := map[string]bool{
-		"shell":        false,
-		"execute_code": false,
-		"file_read":    false,
-		"file_write":   false,
-		"file_edit":    false,
-		"file_glob":    false,
-		"file_grep":    false,
-		"browser":      false,
-		"screenshot":   false,
-		"mcp_call":     false,
-		"snapshot":     false,
-		"page_text":    false,
-		"export_pdf":   false,
+		"shell":          false,
+		"execute_code":   false,
+		"file_read":      false,
+		"file_write":     false,
+		"file_edit":      false,
+		"file_glob":      false,
+		"file_grep":      false,
+		"file_tree":      false,
+		"http_fetch":     false,
+		"workspace_info": false,
+		"browser":        false,
+		"screenshot":     false,
+		"mcp_call":       false,
+		"snapshot":       false,
+		"page_text":      false,
+		"export_pdf":     false,
 	}
 
 	for _, tool := range tools {
@@ -345,8 +360,8 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		}
 	}
 
-	if len(tools) != 13 {
-		t.Errorf("got %d tools, want 13", len(tools))
+	if len(tools) != 16 {
+		t.Errorf("got %d tools, want 16", len(tools))
 	}
 }
 
@@ -420,9 +435,9 @@ func TestFileEditToolError(t *testing.T) {
 func TestFileGlobToolDispatch(t *testing.T) {
 	var captured GlobRequest
 	sb := &mockSandbox{
-		globFilesFn: func(_ context.Context, req GlobRequest) ([]string, error) {
+		globFilesFn: func(_ context.Context, req GlobRequest) (GlobResult, error) {
 			captured = req
-			return []string{"/app/main.py", "/app/lib/utils.py"}, nil
+			return GlobResult{Files: []string{"/app/main.py", "/app/lib/utils.py"}}, nil
 		},
 	}
 
@@ -460,8 +475,8 @@ func TestFileGlobToolDispatch(t *testing.T) {
 
 func TestFileGlobToolNoMatches(t *testing.T) {
 	sb := &mockSandbox{
-		globFilesFn: func(_ context.Context, req GlobRequest) ([]string, error) {
-			return nil, nil
+		globFilesFn: func(_ context.Context, req GlobRequest) (GlobResult, error) {
+			return GlobResult{}, nil
 		},
 	}
 
@@ -485,12 +500,12 @@ func TestFileGlobToolNoMatches(t *testing.T) {
 func TestFileGrepToolDispatch(t *testing.T) {
 	var captured GrepRequest
 	sb := &mockSandbox{
-		grepFilesFn: func(_ context.Context, req GrepRequest) ([]GrepMatch, error) {
+		grepFilesFn: func(_ context.Context, req GrepRequest) (GrepResult, error) {
 			captured = req
-			return []GrepMatch{
+			return GrepResult{Matches: []GrepMatch{
 				{Path: "/app/main.py", Line: 42, Content: "def main():"},
 				{Path: "/app/lib/utils.py", Line: 10, Content: "def main_helper():"},
-			}, nil
+			}}, nil
 		},
 	}
 
@@ -531,8 +546,8 @@ func TestFileGrepToolDispatch(t *testing.T) {
 
 func TestFileGrepToolNoMatches(t *testing.T) {
 	sb := &mockSandbox{
-		grepFilesFn: func(_ context.Context, req GrepRequest) ([]GrepMatch, error) {
-			return nil, nil
+		grepFilesFn: func(_ context.Context, req GrepRequest) (GrepResult, error) {
+			return GrepResult{}, nil
 		},
 	}
 

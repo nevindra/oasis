@@ -64,6 +64,9 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 		fileEditTool(sb),
 		fileGlobTool(sb),
 		fileGrepTool(sb),
+		fileTreeTool(sb),
+		httpFetchTool(sb),
+		workspaceInfoTool(sb),
 		browserTool(sb),
 		screenshotTool(sb),
 		mcpCallTool(sb),
@@ -80,7 +83,7 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 }
 
 func shellTool(sb Sandbox) toolImpl {
-	return newTool("shell", "Execute shell command in the sandbox", `{
+	return newTool("shell", "Execute a shell command in the sandbox. Use for system tasks, running builds, git operations, installing packages, and commands that don't have a dedicated tool. Do NOT use shell for: reading files (use file_read), searching file contents (use file_grep), finding files (use file_glob), writing files (use file_write), editing files (use file_edit), listing directory trees (use file_tree), or fetching URLs (use http_fetch).", `{
 		"type": "object",
 		"properties": {
 			"command": {"type": "string", "description": "Shell command to execute"},
@@ -146,20 +149,24 @@ func executeCodeTool(sb Sandbox) toolImpl {
 }
 
 func fileReadTool(sb Sandbox) toolImpl {
-	return newTool("file_read", "Read file content from the sandbox", `{
+	return newTool("file_read", "Read file content with line numbers. Supports offset and limit for reading specific line ranges. Use this instead of running cat, head, tail, or sed via shell. Returns content in cat -n format with line numbers for precise editing.", `{
 		"type": "object",
 		"properties": {
-			"path": {"type": "string", "description": "File path to read"}
+			"path":   {"type": "string", "description": "File path to read"},
+			"offset": {"type": "integer", "description": "Line offset to start reading from (0-based, default 0)"},
+			"limit":  {"type": "integer", "description": "Maximum number of lines to read (default 2000)"}
 		},
 		"required": ["path"]
 	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 		var p struct {
-			Path string `json:"path"`
+			Path   string `json:"path"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
 		}
 		if err := json.Unmarshal(args, &p); err != nil {
 			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 		}
-		fc, err := sb.ReadFile(ctx, p.Path)
+		fc, err := sb.ReadFile(ctx, ReadFileRequest{Path: p.Path, Offset: p.Offset, Limit: p.Limit})
 		if err != nil {
 			return oasis.ToolResult{Error: err.Error()}, nil
 		}
@@ -168,7 +175,7 @@ func fileReadTool(sb Sandbox) toolImpl {
 }
 
 func fileWriteTool(sb Sandbox) toolImpl {
-	return newTool("file_write", "Write content to a file in the sandbox", `{
+	return newTool("file_write", "Write content to a file in the sandbox. Creates parent directories if needed. Use this instead of echo/cat redirection via shell.", `{
 		"type": "object",
 		"properties": {
 			"path":    {"type": "string", "description": "File path to write"},
@@ -191,7 +198,7 @@ func fileWriteTool(sb Sandbox) toolImpl {
 }
 
 func fileEditTool(sb Sandbox) toolImpl {
-	return newTool("file_edit", "Edit a file by replacing an exact string match with new content. The old string must appear exactly once in the file. This is more efficient than reading and rewriting the entire file.", `{
+	return newTool("file_edit", "Edit a file by replacing an exact string match with new content. The old string must appear exactly once in the file. More efficient than reading and rewriting the entire file. Use this instead of sed or awk via shell.", `{
 		"type": "object",
 		"properties": {
 			"path":       {"type": "string", "description": "Absolute path to the file to edit"},
@@ -216,46 +223,55 @@ func fileEditTool(sb Sandbox) toolImpl {
 }
 
 func fileGlobTool(sb Sandbox) toolImpl {
-	return newTool("file_glob", "Find files matching a glob pattern. Supports ** for recursive matching.", `{
+	return newTool("file_glob", "Find files matching a glob pattern. Supports ** for recursive matching. Use this instead of running find or ls via shell — results are structured and fast.", `{
 		"type": "object",
 		"properties": {
 			"pattern": {"type": "string", "description": "Glob pattern to match (e.g., '**/*.py', 'src/**/*.ts')"},
-			"path":    {"type": "string", "description": "Base directory to search in (default: working directory)"}
+			"path":    {"type": "string", "description": "Base directory to search in (default: working directory)"},
+			"exclude": {"type": "array", "items": {"type": "string"}, "description": "Directories to skip (default: [\".git\"])"},
+			"limit":   {"type": "integer", "description": "Maximum results to return (default: 1000)"}
 		},
 		"required": ["pattern"]
 	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 		var p struct {
-			Pattern string `json:"pattern"`
-			Path    string `json:"path"`
+			Pattern string   `json:"pattern"`
+			Path    string   `json:"path"`
+			Exclude []string `json:"exclude"`
+			Limit   int      `json:"limit"`
 		}
 		if err := json.Unmarshal(args, &p); err != nil {
 			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 		}
-		files, err := sb.GlobFiles(ctx, GlobRequest{Pattern: p.Pattern, Path: p.Path})
+		res, err := sb.GlobFiles(ctx, GlobRequest{Pattern: p.Pattern, Path: p.Path, Exclude: p.Exclude, Limit: p.Limit})
 		if err != nil {
 			return oasis.ToolResult{Error: err.Error()}, nil
 		}
-		if len(files) == 0 {
+		if len(res.Files) == 0 {
 			return oasis.ToolResult{Content: "no files matched"}, nil
 		}
 		var result string
-		for i, f := range files {
+		for i, f := range res.Files {
 			if i > 0 {
 				result += "\n"
 			}
 			result += f
+		}
+		if res.Truncated {
+			result += "\n... (truncated)"
 		}
 		return oasis.ToolResult{Content: result}, nil
 	})
 }
 
 func fileGrepTool(sb Sandbox) toolImpl {
-	return newTool("file_grep", "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers.", `{
+	return newTool("file_grep", "Search file contents for a regex pattern. Returns matching lines with file paths, line numbers, and optional context lines. Use this instead of running grep or rg via shell — results are structured and token-efficient.", `{
 		"type": "object",
 		"properties": {
 			"pattern": {"type": "string", "description": "Regex pattern to search for"},
 			"path":    {"type": "string", "description": "Directory or file to search in (default: working directory)"},
-			"glob":    {"type": "string", "description": "File pattern filter (e.g., '*.py' to only search Python files)"}
+			"glob":    {"type": "string", "description": "File pattern filter (e.g., '*.py' to only search Python files)"},
+			"context": {"type": "integer", "description": "Number of context lines before and after each match (default: 0)"},
+			"limit":   {"type": "integer", "description": "Maximum matches to return (default: 100)"}
 		},
 		"required": ["pattern"]
 	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
@@ -263,25 +279,105 @@ func fileGrepTool(sb Sandbox) toolImpl {
 			Pattern string `json:"pattern"`
 			Path    string `json:"path"`
 			Glob    string `json:"glob"`
+			Context int    `json:"context"`
+			Limit   int    `json:"limit"`
 		}
 		if err := json.Unmarshal(args, &p); err != nil {
 			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 		}
-		matches, err := sb.GrepFiles(ctx, GrepRequest{Pattern: p.Pattern, Path: p.Path, Glob: p.Glob})
+		res, err := sb.GrepFiles(ctx, GrepRequest{Pattern: p.Pattern, Path: p.Path, Glob: p.Glob, Context: p.Context, Limit: p.Limit})
 		if err != nil {
 			return oasis.ToolResult{Error: err.Error()}, nil
 		}
-		if len(matches) == 0 {
+		if len(res.Matches) == 0 {
 			return oasis.ToolResult{Content: "no matches found"}, nil
 		}
-		var result string
-		for i, m := range matches {
+		var b strings.Builder
+		for i, m := range res.Matches {
 			if i > 0 {
-				result += "\n"
+				b.WriteString("\n")
 			}
-			result += fmt.Sprintf("%s:%d: %s", m.Path, m.Line, m.Content)
+			for _, cl := range m.ContextBefore {
+				fmt.Fprintf(&b, "%s:%d- %s\n", m.Path, m.Line-len(m.ContextBefore)+i, cl)
+			}
+			fmt.Fprintf(&b, "%s:%d: %s", m.Path, m.Line, m.Content)
+			for j, cl := range m.ContextAfter {
+				fmt.Fprintf(&b, "\n%s:%d- %s", m.Path, m.Line+j+1, cl)
+			}
 		}
-		return oasis.ToolResult{Content: result}, nil
+		if res.Truncated {
+			b.WriteString("\n... (truncated)")
+		}
+		return oasis.ToolResult{Content: b.String()}, nil
+	})
+}
+
+func fileTreeTool(sb Sandbox) toolImpl {
+	return newTool("file_tree", "Get a recursive directory listing as an indented tree. Use this to understand project structure instead of running tree, find, or ls -R via shell.", `{
+		"type": "object",
+		"properties": {
+			"path":    {"type": "string", "description": "Root directory (default: working directory)"},
+			"depth":   {"type": "integer", "description": "Maximum depth to traverse (default: 3)"},
+			"exclude": {"type": "array", "items": {"type": "string"}, "description": "Directories to skip (default: [\".git\", \"node_modules\", \"__pycache__\", \".venv\", \"vendor\"])"}
+		}
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		var p struct {
+			Path    string   `json:"path"`
+			Depth   int      `json:"depth"`
+			Exclude []string `json:"exclude"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+		res, err := sb.Tree(ctx, TreeRequest{Path: p.Path, Depth: p.Depth, Exclude: p.Exclude})
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		return oasis.ToolResult{Content: fmt.Sprintf("%s\n\n%d files, %d directories", res.Tree, res.Files, res.Dirs)}, nil
+	})
+}
+
+func httpFetchTool(sb Sandbox) toolImpl {
+	return newTool("http_fetch", "Fetch a URL and extract readable text content. Returns clean text by default with HTML noise removed. Use raw=true to get unprocessed HTML. Use this instead of running curl via shell or writing Python to fetch URLs.", `{
+		"type": "object",
+		"properties": {
+			"url":       {"type": "string", "description": "URL to fetch"},
+			"raw":       {"type": "boolean", "description": "true = raw HTML, false = readability extraction (default)"},
+			"max_chars": {"type": "integer", "description": "Truncation limit in characters (default: 8000)"}
+		},
+		"required": ["url"]
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		var p struct {
+			URL      string `json:"url"`
+			Raw      bool   `json:"raw"`
+			MaxChars int    `json:"max_chars"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+		res, err := sb.HTTPFetch(ctx, HTTPFetchRequest{URL: p.URL, Raw: p.Raw, MaxChars: p.MaxChars})
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		content := res.Content
+		if res.Title != "" {
+			content = "Title: " + res.Title + "\n\n" + content
+		}
+		return oasis.ToolResult{Content: content}, nil
+	})
+}
+
+func workspaceInfoTool(sb Sandbox) toolImpl {
+	return newTool("workspace_info", "Get information about the sandbox environment: OS, architecture, working directory, installed tools (rg, fd, git, python3, node, etc), and browser availability. Call this once at the start of a session to understand your environment.", `{
+		"type": "object",
+		"properties": {}
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		res, err := sb.WorkspaceInfo(ctx)
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		data, _ := json.Marshal(res)
+		return oasis.ToolResult{Content: string(data)}, nil
 	})
 }
 

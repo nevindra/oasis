@@ -163,13 +163,19 @@ func (s *IXSandbox) ExecCode(ctx context.Context, req sandbox.CodeRequest) (sand
 	}, nil
 }
 
-// ReadFile reads the content of a file inside the sandbox.
-func (s *IXSandbox) ReadFile(ctx context.Context, path string) (sandbox.FileContent, error) {
+// ReadFile reads the content of a file inside the sandbox with line numbers.
+func (s *IXSandbox) ReadFile(ctx context.Context, req sandbox.ReadFileRequest) (sandbox.FileContent, error) {
 	if err := s.checkClosed(); err != nil {
 		return sandbox.FileContent{}, err
 	}
 	body := map[string]any{
-		"path": path,
+		"path": req.Path,
+	}
+	if req.Offset > 0 {
+		body["offset"] = req.Offset
+	}
+	if req.Limit > 0 {
+		body["limit"] = req.Limit
 	}
 	var resp struct {
 		Content    string `json:"content"`
@@ -180,8 +186,9 @@ func (s *IXSandbox) ReadFile(ctx context.Context, path string) (sandbox.FileCont
 		return sandbox.FileContent{}, fmt.Errorf("read file: %w", err)
 	}
 	return sandbox.FileContent{
-		Content: resp.Content,
-		Path:    resp.Path,
+		Content:    resp.Content,
+		Path:       resp.Path,
+		TotalLines: resp.TotalLines,
 	}, nil
 }
 
@@ -334,52 +341,139 @@ func (s *IXSandbox) EditFile(ctx context.Context, req sandbox.EditFileRequest) e
 }
 
 // GlobFiles finds files matching a glob pattern.
-func (s *IXSandbox) GlobFiles(ctx context.Context, req sandbox.GlobRequest) ([]string, error) {
+func (s *IXSandbox) GlobFiles(ctx context.Context, req sandbox.GlobRequest) (sandbox.GlobResult, error) {
 	if err := s.checkClosed(); err != nil {
-		return nil, err
+		return sandbox.GlobResult{}, err
 	}
-	body := map[string]string{
+	body := map[string]any{
 		"pattern": req.Pattern,
-		"path":    req.Path,
+	}
+	if req.Path != "" {
+		body["path"] = req.Path
+	}
+	if len(req.Exclude) > 0 {
+		body["exclude"] = req.Exclude
+	}
+	if req.Limit > 0 {
+		body["limit"] = req.Limit
 	}
 	var resp struct {
-		Files []string `json:"files"`
+		Files     []string `json:"files"`
+		Truncated bool     `json:"truncated"`
 	}
 	if err := s.client.post(ctx, "/v1/file/glob", body, &resp); err != nil {
-		return nil, fmt.Errorf("glob files: %w", err)
+		return sandbox.GlobResult{}, fmt.Errorf("glob files: %w", err)
 	}
-	return resp.Files, nil
+	return sandbox.GlobResult{Files: resp.Files, Truncated: resp.Truncated}, nil
 }
 
 // GrepFiles searches file contents for a regex pattern.
-func (s *IXSandbox) GrepFiles(ctx context.Context, req sandbox.GrepRequest) ([]sandbox.GrepMatch, error) {
+func (s *IXSandbox) GrepFiles(ctx context.Context, req sandbox.GrepRequest) (sandbox.GrepResult, error) {
 	if err := s.checkClosed(); err != nil {
-		return nil, err
+		return sandbox.GrepResult{}, err
 	}
-	body := map[string]string{
+	body := map[string]any{
 		"pattern": req.Pattern,
-		"path":    req.Path,
-		"glob":    req.Glob,
+	}
+	if req.Path != "" {
+		body["path"] = req.Path
+	}
+	if req.Glob != "" {
+		body["glob"] = req.Glob
+	}
+	if req.Context > 0 {
+		body["context"] = req.Context
+	}
+	if req.Limit > 0 {
+		body["limit"] = req.Limit
 	}
 	var resp struct {
 		Matches []struct {
-			Path    string `json:"path"`
-			Line    int    `json:"line"`
-			Content string `json:"content"`
+			Path          string   `json:"path"`
+			Line          int      `json:"line"`
+			Content       string   `json:"content"`
+			ContextBefore []string `json:"context_before"`
+			ContextAfter  []string `json:"context_after"`
 		} `json:"matches"`
+		Truncated bool `json:"truncated"`
 	}
 	if err := s.client.post(ctx, "/v1/file/grep", body, &resp); err != nil {
-		return nil, fmt.Errorf("grep files: %w", err)
+		return sandbox.GrepResult{}, fmt.Errorf("grep files: %w", err)
 	}
 	matches := make([]sandbox.GrepMatch, len(resp.Matches))
 	for i, m := range resp.Matches {
 		matches[i] = sandbox.GrepMatch{
-			Path:    m.Path,
-			Line:    m.Line,
-			Content: m.Content,
+			Path:          m.Path,
+			Line:          m.Line,
+			Content:       m.Content,
+			ContextBefore: m.ContextBefore,
+			ContextAfter:  m.ContextAfter,
 		}
 	}
-	return matches, nil
+	return sandbox.GrepResult{Matches: matches, Truncated: resp.Truncated}, nil
+}
+
+// Tree returns a recursive directory listing.
+func (s *IXSandbox) Tree(ctx context.Context, req sandbox.TreeRequest) (sandbox.TreeResult, error) {
+	if err := s.checkClosed(); err != nil {
+		return sandbox.TreeResult{}, err
+	}
+	body := map[string]any{}
+	if req.Path != "" {
+		body["path"] = req.Path
+	}
+	if req.Depth > 0 {
+		body["depth"] = req.Depth
+	}
+	if len(req.Exclude) > 0 {
+		body["exclude"] = req.Exclude
+	}
+	var resp struct {
+		Tree  string `json:"tree"`
+		Files int    `json:"files"`
+		Dirs  int    `json:"dirs"`
+	}
+	if err := s.client.post(ctx, "/v1/file/tree", body, &resp); err != nil {
+		return sandbox.TreeResult{}, fmt.Errorf("tree: %w", err)
+	}
+	return sandbox.TreeResult{Tree: resp.Tree, Files: resp.Files, Dirs: resp.Dirs}, nil
+}
+
+// HTTPFetch fetches a URL and extracts readable text content.
+func (s *IXSandbox) HTTPFetch(ctx context.Context, req sandbox.HTTPFetchRequest) (sandbox.HTTPFetchResult, error) {
+	if err := s.checkClosed(); err != nil {
+		return sandbox.HTTPFetchResult{}, err
+	}
+	body := map[string]any{
+		"url": req.URL,
+	}
+	if req.Raw {
+		body["raw"] = true
+	}
+	if req.MaxChars > 0 {
+		body["max_chars"] = req.MaxChars
+	}
+	var resp struct {
+		URL     string `json:"url"`
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	}
+	if err := s.client.post(ctx, "/v1/http/fetch", body, &resp); err != nil {
+		return sandbox.HTTPFetchResult{}, fmt.Errorf("http fetch: %w", err)
+	}
+	return sandbox.HTTPFetchResult{URL: resp.URL, Title: resp.Title, Content: resp.Content}, nil
+}
+
+// WorkspaceInfo returns environment information about the sandbox.
+func (s *IXSandbox) WorkspaceInfo(ctx context.Context) (sandbox.WorkspaceInfoResult, error) {
+	if err := s.checkClosed(); err != nil {
+		return sandbox.WorkspaceInfoResult{}, err
+	}
+	var resp sandbox.WorkspaceInfoResult
+	if err := s.client.getJSON(ctx, "/v1/workspace/info", &resp); err != nil {
+		return sandbox.WorkspaceInfoResult{}, fmt.Errorf("workspace info: %w", err)
+	}
+	return resp, nil
 }
 
 // BrowserSnapshot returns the accessibility tree of the current page.

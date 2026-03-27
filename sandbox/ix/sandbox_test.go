@@ -291,7 +291,7 @@ func TestIXSandboxExecCode(t *testing.T) {
 func TestIXSandboxReadFile(t *testing.T) {
 	s, _ := newTestSandbox(t)
 
-	fc, err := s.ReadFile(context.Background(), "/workspace/test.txt")
+	fc, err := s.ReadFile(context.Background(), sandbox.ReadFileRequest{Path: "/workspace/test.txt"})
 	if err != nil {
 		t.Fatalf("ReadFile() returned error: %v", err)
 	}
@@ -466,25 +466,25 @@ func TestIXSandboxEditFile(t *testing.T) {
 func TestIXSandboxGlobFiles(t *testing.T) {
 	s, _ := newTestSandbox(t)
 
-	files, err := s.GlobFiles(context.Background(), sandbox.GlobRequest{
+	result, err := s.GlobFiles(context.Background(), sandbox.GlobRequest{
 		Pattern: "**/*.py",
 		Path:    "/app",
 	})
 	if err != nil {
 		t.Fatalf("GlobFiles() returned error: %v", err)
 	}
-	if len(files) != 2 {
-		t.Fatalf("expected 2 files, got %d", len(files))
+	if len(result.Files) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(result.Files))
 	}
-	if files[0] != "/app/main.py" {
-		t.Errorf("expected first file '/app/main.py', got %q", files[0])
+	if result.Files[0] != "/app/main.py" {
+		t.Errorf("expected first file '/app/main.py', got %q", result.Files[0])
 	}
 }
 
 func TestIXSandboxGrepFiles(t *testing.T) {
 	s, _ := newTestSandbox(t)
 
-	matches, err := s.GrepFiles(context.Background(), sandbox.GrepRequest{
+	result, err := s.GrepFiles(context.Background(), sandbox.GrepRequest{
 		Pattern: "def main",
 		Path:    "/app",
 		Glob:    "*.py",
@@ -492,14 +492,14 @@ func TestIXSandboxGrepFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GrepFiles() returned error: %v", err)
 	}
-	if len(matches) != 1 {
-		t.Fatalf("expected 1 match, got %d", len(matches))
+	if len(result.Matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(result.Matches))
 	}
-	if matches[0].Path != "/app/main.py" {
-		t.Errorf("expected path '/app/main.py', got %q", matches[0].Path)
+	if result.Matches[0].Path != "/app/main.py" {
+		t.Errorf("expected path '/app/main.py', got %q", result.Matches[0].Path)
 	}
-	if matches[0].Line != 42 {
-		t.Errorf("expected line 42, got %d", matches[0].Line)
+	if result.Matches[0].Line != 42 {
+		t.Errorf("expected line 42, got %d", result.Matches[0].Line)
 	}
 }
 

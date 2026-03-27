@@ -17,7 +17,8 @@ type Sandbox interface {
 	ExecCode(ctx context.Context, req CodeRequest) (CodeResult, error)
 
 	// ReadFile reads the content of a file inside the sandbox.
-	ReadFile(ctx context.Context, path string) (FileContent, error)
+	// Returns line-numbered content with offset/limit support.
+	ReadFile(ctx context.Context, req ReadFileRequest) (FileContent, error)
 
 	// WriteFile writes text content to a file inside the sandbox.
 	WriteFile(ctx context.Context, req WriteFileRequest) error
@@ -61,11 +62,20 @@ type Sandbox interface {
 	EditFile(ctx context.Context, req EditFileRequest) error
 
 	// GlobFiles finds files matching a glob pattern relative to a base directory.
-	GlobFiles(ctx context.Context, req GlobRequest) ([]string, error)
+	GlobFiles(ctx context.Context, req GlobRequest) (GlobResult, error)
 
 	// GrepFiles searches file contents for a regex pattern and returns matches
 	// with file path, line number, and matching line content.
-	GrepFiles(ctx context.Context, req GrepRequest) ([]GrepMatch, error)
+	GrepFiles(ctx context.Context, req GrepRequest) (GrepResult, error)
+
+	// Tree returns a recursive directory listing.
+	Tree(ctx context.Context, req TreeRequest) (TreeResult, error)
+
+	// HTTPFetch fetches a URL and extracts readable text content.
+	HTTPFetch(ctx context.Context, req HTTPFetchRequest) (HTTPFetchResult, error)
+
+	// WorkspaceInfo returns environment information about the sandbox.
+	WorkspaceInfo(ctx context.Context) (WorkspaceInfoResult, error)
 
 	// Close releases resources held by this sandbox instance. Container
 	// lifecycle (stop, remove) is managed by Manager, not by Close.
@@ -99,10 +109,18 @@ type CodeResult struct {
 	Stderr string
 }
 
+// ReadFileRequest is the input for ReadFile.
+type ReadFileRequest struct {
+	Path   string // required
+	Offset int    // line offset (0-based)
+	Limit  int    // max lines to return; 0 uses default (2000)
+}
+
 // FileContent is the output of ReadFile.
 type FileContent struct {
-	Content string
-	Path    string
+	Content    string
+	Path       string
+	TotalLines int
 }
 
 // WriteFileRequest is the input for WriteFile.
@@ -184,8 +202,16 @@ type EditFileRequest struct {
 
 // GlobRequest is the input for GlobFiles.
 type GlobRequest struct {
-	Pattern string // glob pattern (e.g., "**/*.py")
-	Path    string // base directory; empty uses working directory
+	Pattern string   // glob pattern (e.g., "**/*.py")
+	Path    string   // base directory; empty uses working directory
+	Exclude []string // directories to skip (default: [".git"])
+	Limit   int      // max results; 0 uses default (1000)
+}
+
+// GlobResult is the output of GlobFiles.
+type GlobResult struct {
+	Files     []string
+	Truncated bool
 }
 
 // GrepRequest is the input for GrepFiles.
@@ -193,13 +219,60 @@ type GrepRequest struct {
 	Pattern string // regex pattern
 	Path    string // base directory or file path
 	Glob    string // optional file filter (e.g., "*.py")
+	Context int    // context lines before/after each match
+	Limit   int    // max results; 0 uses default (100)
 }
 
 // GrepMatch is a single search result from GrepFiles.
 type GrepMatch struct {
-	Path    string // file path
-	Line    int    // line number (1-indexed)
-	Content string // matching line content
+	Path          string   // file path
+	Line          int      // line number (1-indexed)
+	Content       string   // matching line content
+	ContextBefore []string // lines before the match
+	ContextAfter  []string // lines after the match
+}
+
+// GrepResult is the output of GrepFiles.
+type GrepResult struct {
+	Matches   []GrepMatch
+	Truncated bool
+}
+
+// TreeRequest is the input for Tree.
+type TreeRequest struct {
+	Path    string   // root directory
+	Depth   int      // max depth; 0 uses default (3)
+	Exclude []string // directories to skip
+}
+
+// TreeResult is the output of Tree.
+type TreeResult struct {
+	Tree  string // formatted tree string
+	Files int
+	Dirs  int
+}
+
+// HTTPFetchRequest is the input for HTTPFetch.
+type HTTPFetchRequest struct {
+	URL      string // required
+	Raw      bool   // true = raw HTML, false = readability extraction
+	MaxChars int    // 0 uses default (8000)
+}
+
+// HTTPFetchResult is the output of HTTPFetch.
+type HTTPFetchResult struct {
+	URL     string
+	Title   string
+	Content string
+}
+
+// WorkspaceInfoResult is the output of WorkspaceInfo.
+type WorkspaceInfoResult struct {
+	OS         string          `json:"os"`
+	Arch       string          `json:"arch"`
+	WorkingDir string          `json:"working_dir"`
+	Tools      map[string]bool `json:"tools"`
+	Browser    bool            `json:"browser"`
 }
 
 // FileDelivery persists a file from the sandbox and returns a download URL.
