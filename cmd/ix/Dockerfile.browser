@@ -1,4 +1,5 @@
-FROM oasis-ix:latest
+ARG BASE_IMAGE=oasis-ix:latest
+FROM ${BASE_IMAGE}
 
 # Install Google Chrome (Ubuntu 24.04 snap chromium doesn't work in Docker).
 RUN apt-get update \
