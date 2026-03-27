@@ -151,3 +151,24 @@ These rules apply always — pre-v1 and post-v1.
 - Do not use unbounded channels, caches, or buffers
 - Do not store `context.Context` in structs
 - Do not ship v1.0.0 with any exported symbol that hasn't passed the API audit
+
+---
+
+## Design Decision Documentation
+
+Every design decision that isn't obvious from reading the code must have a comment explaining **why** — not just what. This applies especially to:
+
+- **Resource lifecycle choices** — why a resource is created/closed at a particular scope (e.g., per-call vs per-session). If `Close()` is deferred somewhere, explain why it's safe to close at that point and what callers must know.
+- **Concurrency boundaries** — why a channel is buffered to a specific size, why a lock covers a particular scope, why a goroutine is spawned here rather than elsewhere.
+- **Interface design trade-offs** — why a method lives on one interface and not another, why a parameter is passed vs stored.
+- **Non-obvious control flow** — loops that re-enter functions, fallback chains, retry logic. If a caller can invoke a function multiple times with shared state, document the contract.
+
+The comment format: `// Why: <reason>`. Place it above the relevant line or block.
+
+```go
+// Why: sandbox lifecycle is managed by the TTL reaper, not the caller.
+// Closing here would break re-execution flows that reuse the same session ID.
+sb, err := a.sandboxMgr.Get(req.RunID)
+```
+
+The cost of a missing "why" comment is a future contributor (human or agent) repeating the same mistake — or worse, "fixing" correct code because the reasoning wasn't visible.
