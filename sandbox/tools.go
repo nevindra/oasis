@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"path/filepath"
+	"strings"
 
 	oasis "github.com/nevindra/oasis"
 )
@@ -66,6 +67,9 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 		browserTool(sb),
 		screenshotTool(sb),
 		mcpCallTool(sb),
+		snapshotTool(sb),
+		pageTextTool(sb),
+		exportPDFTool(sb),
 	}
 
 	if cfg.delivery != nil {
@@ -282,20 +286,22 @@ func fileGrepTool(sb Sandbox) toolImpl {
 }
 
 func browserTool(sb Sandbox) toolImpl {
-	return newTool("browser", "Interact with the sandbox browser", `{
+	return newTool("browser", "Interact with the sandbox browser. Use element refs from the snapshot tool for precise interactions.", `{
 		"type": "object",
 		"properties": {
-			"action": {"type": "string", "description": "Browser action: navigate, click, type, scroll, key"},
+			"action": {"type": "string", "description": "Browser action: navigate, click, type, scroll, key, hover, fill, press, select"},
+			"ref":    {"type": "string", "description": "Element reference from snapshot (e.g., 'e5'). Preferred over coordinates."},
 			"url":    {"type": "string", "description": "URL for navigate action"},
-			"x":      {"type": "integer", "description": "X coordinate"},
-			"y":      {"type": "integer", "description": "Y coordinate"},
-			"text":   {"type": "string", "description": "Text to type"},
+			"x":      {"type": "integer", "description": "X coordinate (fallback when ref not available)"},
+			"y":      {"type": "integer", "description": "Y coordinate (fallback when ref not available)"},
+			"text":   {"type": "string", "description": "Text to type or fill"},
 			"key":    {"type": "string", "description": "Key to press"}
 		},
 		"required": ["action"]
 	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 		var p struct {
 			Action string `json:"action"`
+			Ref    string `json:"ref"`
 			URL    string `json:"url"`
 			X      int    `json:"x"`
 			Y      int    `json:"y"`
@@ -313,6 +319,7 @@ func browserTool(sb Sandbox) toolImpl {
 		}
 		res, err := sb.BrowserAction(ctx, BrowserAction{
 			Type: p.Action,
+			Ref:  p.Ref,
 			X:    p.X,
 			Y:    p.Y,
 			Text: p.Text,
@@ -335,6 +342,76 @@ func screenshotTool(sb Sandbox) toolImpl {
 			return oasis.ToolResult{Error: err.Error()}, nil
 		}
 		return oasis.ToolResult{Content: fmt.Sprintf("screenshot captured (%d bytes)", len(data))}, nil
+	})
+}
+
+func snapshotTool(sb Sandbox) toolImpl {
+	return newTool("snapshot", "Get the accessibility tree of the current browser page. Returns element references (e0, e1, ...) that can be used with the browser tool for precise interactions.", `{
+		"type": "object",
+		"properties": {
+			"filter":   {"type": "string", "description": "Set to 'interactive' to show only actionable elements"},
+			"selector": {"type": "string", "description": "CSS selector to scope snapshot to a subtree"},
+			"depth":    {"type": "integer", "description": "Tree traversal depth limit (0 = unlimited)"}
+		}
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		var p struct {
+			Filter   string `json:"filter"`
+			Selector string `json:"selector"`
+			Depth    int    `json:"depth"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+		snap, err := sb.BrowserSnapshot(ctx, SnapshotOpts{
+			Filter:   p.Filter,
+			Selector: p.Selector,
+			Depth:    p.Depth,
+		})
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		var out strings.Builder
+		fmt.Fprintf(&out, "url: %s\ntitle: %s\n", snap.URL, snap.Title)
+		for _, n := range snap.Nodes {
+			fmt.Fprintf(&out, "[%s] %s %q\n", n.Ref, n.Role, n.Name)
+		}
+		return oasis.ToolResult{Content: out.String()}, nil
+	})
+}
+
+func pageTextTool(sb Sandbox) toolImpl {
+	return newTool("page_text", "Extract readable text content from the current browser page. Ideal for RAG and information gathering — much cheaper than screenshots.", `{
+		"type": "object",
+		"properties": {
+			"raw":       {"type": "boolean", "description": "true = raw innerText, false = readability extraction (default)"},
+			"max_chars": {"type": "integer", "description": "Truncation limit in characters (0 = unlimited)"}
+		}
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		var p struct {
+			Raw      bool `json:"raw"`
+			MaxChars int  `json:"max_chars"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+		result, err := sb.BrowserText(ctx, TextOpts{Raw: p.Raw, MaxChars: p.MaxChars})
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		return oasis.ToolResult{Content: result.Text}, nil
+	})
+}
+
+func exportPDFTool(sb Sandbox) toolImpl {
+	return newTool("export_pdf", "Export the current browser page as a PDF document.", `{
+		"type": "object",
+		"properties": {}
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		data, err := sb.BrowserPDF(ctx)
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		return oasis.ToolResult{Content: fmt.Sprintf("pdf exported (%d bytes)", len(data))}, nil
 	})
 }
 

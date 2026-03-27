@@ -17,7 +17,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	srv := ixd.NewServer(*addr)
+	srv := ixd.NewServer(ctx, *addr)
+	defer srv.Shutdown()
 	if err := srv.ListenAndServe(ctx); err != nil {
 		log.Fatal(err)
 	}

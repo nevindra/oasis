@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -125,6 +126,12 @@ func (m *IXManager) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbo
 
 	resolved := m.resolveOpts(opts)
 
+	// Detect browser image and adjust container security for Chrome.
+	isBrowserImage := strings.Contains(resolved.Image, "browser")
+	if isBrowserImage && resolved.Resources.Memory < 3<<30 {
+		resolved.Resources.Memory = 3 << 30 // 3 GB minimum for Chrome
+	}
+
 	// Acquire concurrency slot.
 	if err := acquireSlot(ctx, m.semaphore, func() bool { return m.evictIdle(ctx) }, 30*time.Second); err != nil {
 		return nil, err
@@ -169,6 +176,12 @@ func (m *IXManager) Create(ctx context.Context, opts sandbox.CreateOpts) (sandbo
 		SecurityOpt: []string{"no-new-privileges:true"},
 		CapDrop:     []string{"ALL"},
 		CapAdd:      []string{"CHOWN", "SETUID", "SETGID", "KILL", "NET_BIND_SERVICE"},
+	}
+
+	// Chrome requires larger shared memory and relaxed seccomp for its sandbox.
+	if isBrowserImage {
+		hostCfg.ShmSize = 2 << 30 // 2 GB shared memory
+		hostCfg.SecurityOpt = []string{"no-new-privileges:true", "seccomp=unconfined"}
 	}
 
 	// Build env vars.

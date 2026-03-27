@@ -231,15 +231,13 @@ func (s *IXSandbox) BrowserNavigate(ctx context.Context, targetURL string) error
 	if err := s.checkClosed(); err != nil {
 		return err
 	}
-	body := map[string]any{
-		"actions": []map[string]any{
-			{"type": "navigate", "url": targetURL},
-		},
-	}
+	body := map[string]string{"url": targetURL}
 	var resp struct {
-		Success bool `json:"success"`
+		TabID string `json:"tabId"`
+		URL   string `json:"url"`
+		Title string `json:"title"`
 	}
-	if err := s.client.post(ctx, "/v1/browser/actions", body, &resp); err != nil {
+	if err := s.client.post(ctx, "/v1/browser/navigate", body, &resp); err != nil {
 		return fmt.Errorf("browser navigate: %w", err)
 	}
 	return nil
@@ -268,26 +266,32 @@ func (s *IXSandbox) BrowserAction(ctx context.Context, action sandbox.BrowserAct
 		return sandbox.BrowserResult{}, err
 	}
 	body := map[string]any{
-		"actions": []map[string]any{
-			{
-				"type": action.Type,
-				"x":    action.X,
-				"y":    action.Y,
-				"text": action.Text,
-				"key":  action.Key,
-			},
-		},
+		"kind": action.Type,
+	}
+	if action.Ref != "" {
+		body["ref"] = action.Ref
+	}
+	if action.X != 0 || action.Y != 0 {
+		body["x"] = action.X
+		body["y"] = action.Y
+	}
+	if action.Text != "" {
+		body["text"] = action.Text
+	}
+	if action.Key != "" {
+		body["key"] = action.Key
 	}
 	var resp struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
+		Success bool `json:"success"`
+		Result  struct {
+			Success bool `json:"success"`
+		} `json:"result"`
 	}
-	if err := s.client.post(ctx, "/v1/browser/actions", body, &resp); err != nil {
+	if err := s.client.post(ctx, "/v1/browser/action", body, &resp); err != nil {
 		return sandbox.BrowserResult{}, fmt.Errorf("browser action: %w", err)
 	}
 	return sandbox.BrowserResult{
 		Success: resp.Success,
-		Message: resp.Message,
 	}, nil
 }
 
@@ -376,6 +380,109 @@ func (s *IXSandbox) GrepFiles(ctx context.Context, req sandbox.GrepRequest) ([]s
 		}
 	}
 	return matches, nil
+}
+
+// BrowserSnapshot returns the accessibility tree of the current page.
+func (s *IXSandbox) BrowserSnapshot(ctx context.Context, opts sandbox.SnapshotOpts) (sandbox.BrowserSnapshot, error) {
+	if err := s.checkClosed(); err != nil {
+		return sandbox.BrowserSnapshot{}, err
+	}
+
+	q := make(url.Values)
+	if opts.Filter != "" {
+		q.Set("filter", opts.Filter)
+	}
+	if opts.Selector != "" {
+		q.Set("selector", opts.Selector)
+	}
+	if opts.Depth > 0 {
+		q.Set("depth", fmt.Sprintf("%d", opts.Depth))
+	}
+
+	path := "/v1/browser/snapshot"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+
+	var resp struct {
+		URL   string `json:"url"`
+		Title string `json:"title"`
+		Nodes []struct {
+			Ref  string `json:"ref"`
+			Role string `json:"role"`
+			Name string `json:"name"`
+		} `json:"nodes"`
+	}
+	if err := s.client.getJSON(ctx, path, &resp); err != nil {
+		return sandbox.BrowserSnapshot{}, fmt.Errorf("browser snapshot: %w", err)
+	}
+
+	nodes := make([]sandbox.SnapshotNode, len(resp.Nodes))
+	for i, n := range resp.Nodes {
+		nodes[i] = sandbox.SnapshotNode{
+			Ref:  n.Ref,
+			Role: n.Role,
+			Name: n.Name,
+		}
+	}
+	return sandbox.BrowserSnapshot{
+		URL:   resp.URL,
+		Title: resp.Title,
+		Nodes: nodes,
+	}, nil
+}
+
+// BrowserText extracts readable text content from the current page.
+func (s *IXSandbox) BrowserText(ctx context.Context, opts sandbox.TextOpts) (sandbox.BrowserTextResult, error) {
+	if err := s.checkClosed(); err != nil {
+		return sandbox.BrowserTextResult{}, err
+	}
+
+	q := make(url.Values)
+	if opts.Raw {
+		q.Set("raw", "true")
+	}
+	if opts.MaxChars > 0 {
+		q.Set("maxChars", fmt.Sprintf("%d", opts.MaxChars))
+	}
+
+	path := "/v1/browser/text"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+
+	var resp struct {
+		URL       string `json:"url"`
+		Title     string `json:"title"`
+		Text      string `json:"text"`
+		Truncated bool   `json:"truncated"`
+	}
+	if err := s.client.getJSON(ctx, path, &resp); err != nil {
+		return sandbox.BrowserTextResult{}, fmt.Errorf("browser text: %w", err)
+	}
+	return sandbox.BrowserTextResult{
+		URL:       resp.URL,
+		Title:     resp.Title,
+		Text:      resp.Text,
+		Truncated: resp.Truncated,
+	}, nil
+}
+
+// BrowserPDF exports the current page as a PDF document.
+func (s *IXSandbox) BrowserPDF(ctx context.Context) ([]byte, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+	rc, err := s.client.getRaw(ctx, "/v1/browser/pdf")
+	if err != nil {
+		return nil, fmt.Errorf("browser pdf: %w", err)
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("read pdf: %w", err)
+	}
+	return data, nil
 }
 
 // Close releases resources held by this sandbox instance.

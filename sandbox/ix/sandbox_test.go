@@ -153,20 +153,29 @@ func ixMux(t *testing.T) *http.ServeMux {
 		})
 	})
 
-	// Browser actions
-	mux.HandleFunc("POST /v1/browser/actions", func(w http.ResponseWriter, r *http.Request) {
+	// Browser navigate
+	mux.HandleFunc("POST /v1/browser/navigate", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Actions []map[string]any `json:"actions"`
+			URL string `json:"url"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Errorf("browser actions: decode body: %v", err)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
+			"tabId": "tab-123",
+			"url":   req.URL,
+			"title": "Example Page",
+		})
+	})
+
+	// Browser action
+	mux.HandleFunc("POST /v1/browser/action", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
 			"success": true,
-			"message": "action performed",
+			"result":  map[string]any{"success": true},
 		})
 	})
 
@@ -174,6 +183,37 @@ func ixMux(t *testing.T) *http.ServeMux {
 	mux.HandleFunc("GET /v1/browser/screenshot", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
 		w.Write([]byte("fake-png-data"))
+	})
+
+	// Browser snapshot
+	mux.HandleFunc("GET /v1/browser/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"url":   "https://example.com",
+			"title": "Example",
+			"nodes": []map[string]any{
+				{"ref": "e0", "role": "link", "name": "Home"},
+				{"ref": "e1", "role": "button", "name": "Submit"},
+			},
+			"count": 2,
+		})
+	})
+
+	// Browser text
+	mux.HandleFunc("GET /v1/browser/text", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"url":       "https://example.com",
+			"title":     "Example",
+			"text":      "Welcome to Example Domain.",
+			"truncated": false,
+		})
+	})
+
+	// Browser PDF
+	mux.HandleFunc("GET /v1/browser/pdf", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Write([]byte("%PDF-fake-data"))
 	})
 
 	// MCP call (wildcard pattern for /v1/mcp/{server}/tools/{tool})
@@ -311,6 +351,86 @@ func TestIXSandboxBrowserScreenshot(t *testing.T) {
 	}
 	if string(data) != "fake-png-data" {
 		t.Errorf("expected %q, got %q", "fake-png-data", string(data))
+	}
+}
+
+func TestIXSandboxBrowserNavigate(t *testing.T) {
+	s, _ := newTestSandbox(t)
+
+	err := s.BrowserNavigate(context.Background(), "https://example.com")
+	if err != nil {
+		t.Fatalf("BrowserNavigate() returned error: %v", err)
+	}
+}
+
+func TestIXSandboxBrowserAction(t *testing.T) {
+	s, _ := newTestSandbox(t)
+
+	res, err := s.BrowserAction(context.Background(), sandbox.BrowserAction{
+		Type: "click",
+		Ref:  "e5",
+	})
+	if err != nil {
+		t.Fatalf("BrowserAction() returned error: %v", err)
+	}
+	if !res.Success {
+		t.Error("expected success=true")
+	}
+}
+
+func TestIXSandboxBrowserSnapshot(t *testing.T) {
+	s, _ := newTestSandbox(t)
+
+	snap, err := s.BrowserSnapshot(context.Background(), sandbox.SnapshotOpts{
+		Filter: "interactive",
+	})
+	if err != nil {
+		t.Fatalf("BrowserSnapshot() returned error: %v", err)
+	}
+	if snap.URL != "https://example.com" {
+		t.Errorf("URL = %q, want %q", snap.URL, "https://example.com")
+	}
+	if snap.Title != "Example" {
+		t.Errorf("Title = %q, want %q", snap.Title, "Example")
+	}
+	if len(snap.Nodes) != 2 {
+		t.Fatalf("got %d nodes, want 2", len(snap.Nodes))
+	}
+	if snap.Nodes[0].Ref != "e0" {
+		t.Errorf("Nodes[0].Ref = %q, want %q", snap.Nodes[0].Ref, "e0")
+	}
+	if snap.Nodes[1].Role != "button" {
+		t.Errorf("Nodes[1].Role = %q, want %q", snap.Nodes[1].Role, "button")
+	}
+}
+
+func TestIXSandboxBrowserText(t *testing.T) {
+	s, _ := newTestSandbox(t)
+
+	result, err := s.BrowserText(context.Background(), sandbox.TextOpts{Raw: false})
+	if err != nil {
+		t.Fatalf("BrowserText() returned error: %v", err)
+	}
+	if result.URL != "https://example.com" {
+		t.Errorf("URL = %q, want %q", result.URL, "https://example.com")
+	}
+	if result.Text != "Welcome to Example Domain." {
+		t.Errorf("Text = %q, want %q", result.Text, "Welcome to Example Domain.")
+	}
+	if result.Truncated {
+		t.Error("expected truncated=false")
+	}
+}
+
+func TestIXSandboxBrowserPDF(t *testing.T) {
+	s, _ := newTestSandbox(t)
+
+	data, err := s.BrowserPDF(context.Background())
+	if err != nil {
+		t.Fatalf("BrowserPDF() returned error: %v", err)
+	}
+	if string(data) != "%PDF-fake-data" {
+		t.Errorf("got %q, want %q", string(data), "%PDF-fake-data")
 	}
 }
 

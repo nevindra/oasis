@@ -26,6 +26,9 @@ type mockSandbox struct {
 	screenshotFn   func(ctx context.Context) ([]byte, error)
 	mcpCallFn      func(ctx context.Context, req MCPRequest) (MCPResult, error)
 	downloadFileFn func(ctx context.Context, path string) (io.ReadCloser, error)
+	snapshotFn     func(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error)
+	browserTextFn  func(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
+	browserPDFFn   func(ctx context.Context) ([]byte, error)
 }
 
 func (m *mockSandbox) Shell(ctx context.Context, req ShellRequest) (ShellResult, error) {
@@ -114,6 +117,27 @@ func (m *mockSandbox) MCPCall(ctx context.Context, req MCPRequest) (MCPResult, e
 		return m.mcpCallFn(ctx, req)
 	}
 	return MCPResult{}, nil
+}
+
+func (m *mockSandbox) BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error) {
+	if m.snapshotFn != nil {
+		return m.snapshotFn(ctx, opts)
+	}
+	return BrowserSnapshot{}, nil
+}
+
+func (m *mockSandbox) BrowserText(ctx context.Context, opts TextOpts) (BrowserTextResult, error) {
+	if m.browserTextFn != nil {
+		return m.browserTextFn(ctx, opts)
+	}
+	return BrowserTextResult{}, nil
+}
+
+func (m *mockSandbox) BrowserPDF(ctx context.Context) ([]byte, error) {
+	if m.browserPDFFn != nil {
+		return m.browserPDFFn(ctx)
+	}
+	return nil, nil
 }
 
 func (m *mockSandbox) Close() error { return nil }
@@ -286,6 +310,9 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		"browser":      false,
 		"screenshot":   false,
 		"mcp_call":     false,
+		"snapshot":     false,
+		"page_text":    false,
+		"export_pdf":   false,
 	}
 
 	for _, tool := range tools {
@@ -318,8 +345,8 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		}
 	}
 
-	if len(tools) != 10 {
-		t.Errorf("got %d tools, want 10", len(tools))
+	if len(tools) != 13 {
+		t.Errorf("got %d tools, want 13", len(tools))
 	}
 }
 
@@ -520,6 +547,155 @@ func TestFileGrepToolNoMatches(t *testing.T) {
 				}
 				if result.Content != "no matches found" {
 					t.Errorf("content = %q, want %q", result.Content, "no matches found")
+				}
+			}
+		}
+	}
+}
+
+func TestSnapshotToolDispatch(t *testing.T) {
+	var captured SnapshotOpts
+	sb := &mockSandbox{
+		snapshotFn: func(_ context.Context, opts SnapshotOpts) (BrowserSnapshot, error) {
+			captured = opts
+			return BrowserSnapshot{
+				URL:   "https://example.com",
+				Title: "Example",
+				Nodes: []SnapshotNode{
+					{Ref: "e0", Role: "link", Name: "Home"},
+					{Ref: "e1", Role: "button", Name: "Submit"},
+				},
+			}, nil
+		},
+	}
+
+	tools := Tools(sb)
+	var found bool
+	for _, tool := range tools {
+		for _, def := range tool.Definitions() {
+			if def.Name == "snapshot" {
+				found = true
+				args := json.RawMessage(`{"filter":"interactive"}`)
+				result, err := tool.Execute(context.Background(), "snapshot", args)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if captured.Filter != "interactive" {
+					t.Errorf("filter = %q, want %q", captured.Filter, "interactive")
+				}
+				if !strings.Contains(result.Content, "[e0] link \"Home\"") {
+					t.Errorf("content missing e0 node: %q", result.Content)
+				}
+				if !strings.Contains(result.Content, "[e1] button \"Submit\"") {
+					t.Errorf("content missing e1 node: %q", result.Content)
+				}
+				if result.Error != "" {
+					t.Errorf("unexpected error: %q", result.Error)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("snapshot tool not found")
+	}
+}
+
+func TestPageTextToolDispatch(t *testing.T) {
+	var captured TextOpts
+	sb := &mockSandbox{
+		browserTextFn: func(_ context.Context, opts TextOpts) (BrowserTextResult, error) {
+			captured = opts
+			return BrowserTextResult{
+				URL:   "https://example.com",
+				Title: "Example",
+				Text:  "Welcome to Example.",
+			}, nil
+		},
+	}
+
+	tools := Tools(sb)
+	var found bool
+	for _, tool := range tools {
+		for _, def := range tool.Definitions() {
+			if def.Name == "page_text" {
+				found = true
+				args := json.RawMessage(`{"raw":true,"max_chars":500}`)
+				result, err := tool.Execute(context.Background(), "page_text", args)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !captured.Raw {
+					t.Error("expected raw=true")
+				}
+				if captured.MaxChars != 500 {
+					t.Errorf("max_chars = %d, want 500", captured.MaxChars)
+				}
+				if result.Content != "Welcome to Example." {
+					t.Errorf("content = %q, want %q", result.Content, "Welcome to Example.")
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("page_text tool not found")
+	}
+}
+
+func TestExportPDFToolDispatch(t *testing.T) {
+	sb := &mockSandbox{
+		browserPDFFn: func(_ context.Context) ([]byte, error) {
+			return []byte("%PDF-1.4-fake"), nil
+		},
+	}
+
+	tools := Tools(sb)
+	var found bool
+	for _, tool := range tools {
+		for _, def := range tool.Definitions() {
+			if def.Name == "export_pdf" {
+				found = true
+				args := json.RawMessage(`{}`)
+				result, err := tool.Execute(context.Background(), "export_pdf", args)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !strings.Contains(result.Content, "13 bytes") {
+					t.Errorf("content = %q, want size info", result.Content)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("export_pdf tool not found")
+	}
+}
+
+func TestBrowserToolWithRef(t *testing.T) {
+	var captured BrowserAction
+	sb := &mockSandbox{
+		browserActFn: func(_ context.Context, action BrowserAction) (BrowserResult, error) {
+			captured = action
+			return BrowserResult{Success: true, Message: "clicked"}, nil
+		},
+	}
+
+	tools := Tools(sb)
+	for _, tool := range tools {
+		for _, def := range tool.Definitions() {
+			if def.Name == "browser" {
+				args := json.RawMessage(`{"action":"click","ref":"e5"}`)
+				result, err := tool.Execute(context.Background(), "browser", args)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if captured.Ref != "e5" {
+					t.Errorf("ref = %q, want %q", captured.Ref, "e5")
+				}
+				if captured.Type != "click" {
+					t.Errorf("type = %q, want %q", captured.Type, "click")
+				}
+				if result.Content != "clicked" {
+					t.Errorf("content = %q, want %q", result.Content, "clicked")
 				}
 			}
 		}

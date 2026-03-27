@@ -39,6 +39,19 @@ type Sandbox interface {
 	// BrowserAction sends an interaction to the sandbox browser.
 	BrowserAction(ctx context.Context, action BrowserAction) (BrowserResult, error)
 
+	// BrowserSnapshot returns the accessibility tree of the current page.
+	// Each interactive element has a Ref that can be passed to BrowserAction
+	// for precise interaction without pixel coordinates.
+	BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error)
+
+	// BrowserText extracts readable text content from the current page.
+	// Uses readability-style extraction by default; set Raw to true for innerText.
+	BrowserText(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
+
+	// BrowserPDF exports the current page as a PDF document.
+	// Returns raw PDF bytes.
+	BrowserPDF(ctx context.Context) ([]byte, error)
+
 	// MCPCall invokes a tool on an MCP server running inside the sandbox.
 	MCPCall(ctx context.Context, req MCPRequest) (MCPResult, error)
 
@@ -100,17 +113,53 @@ type WriteFileRequest struct {
 
 // BrowserAction describes a browser interaction.
 type BrowserAction struct {
-	Type string // "click", "type", "scroll", "navigate", "key"
-	X    int    // coordinates for click/scroll
+	Type string // "click", "type", "scroll", "navigate", "key", "hover", "fill", "press", "select"
+	Ref  string // element ref from snapshot (preferred over coordinates)
+	X    int    // pixel coordinates (fallback for canvas/maps)
 	Y    int
-	Text string // text for type, URL for navigate
-	Key  string // key name for key press
+	Text string // text for type/fill, URL for navigate
+	Key  string // key name for key/press
 }
 
 // BrowserResult is the output of BrowserAction.
 type BrowserResult struct {
 	Success bool
 	Message string
+}
+
+// SnapshotOpts configures a browser snapshot request.
+type SnapshotOpts struct {
+	Filter   string // "interactive" filters to actionable elements only
+	Selector string // CSS selector to scope snapshot to a subtree
+	Depth    int    // traversal depth; 0 = unlimited
+}
+
+// BrowserSnapshot is the accessibility tree of the current page.
+type BrowserSnapshot struct {
+	URL   string         // current page URL
+	Title string         // page title
+	Nodes []SnapshotNode // accessibility tree nodes
+}
+
+// SnapshotNode is a single element in the accessibility tree.
+type SnapshotNode struct {
+	Ref  string // element reference (e.g., "e0") — use in BrowserAction.Ref
+	Role string // semantic role (link, button, textbox, heading, etc.)
+	Name string // accessible name / visible text
+}
+
+// TextOpts configures a browser text extraction request.
+type TextOpts struct {
+	Raw      bool // true = innerText, false = readability extraction
+	MaxChars int  // 0 = unlimited
+}
+
+// BrowserTextResult is the output of BrowserText.
+type BrowserTextResult struct {
+	URL       string
+	Title     string
+	Text      string
+	Truncated bool
 }
 
 // MCPRequest is the input for MCPCall.

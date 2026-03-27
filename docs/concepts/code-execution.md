@@ -25,7 +25,7 @@ type Sandbox interface {
 }
 ```
 
-The `Sandbox` interface exposes all capabilities of a running container. When passed to `WithSandbox`, the framework auto-registers 10 tools that the LLM can call.
+The `Sandbox` interface exposes all capabilities of a running container. When passed to `WithSandbox`, the framework auto-registers 13 tools that the LLM can call.
 
 ## Manager Interface
 
@@ -81,7 +81,7 @@ sequenceDiagram
       ▼
 ┌─────────────┐
 │  Agent      │
-│  10 auto-   │
+│  13 auto-   │
 │  registered │
 │  tools      │
 └─────────────┘
@@ -89,7 +89,7 @@ sequenceDiagram
 
 - **ix.Manager** (`sandbox/ix/` package) — creates and manages Docker containers directly. No external orchestration service needed.
 - **Docker Container** — runs an ix daemon (Go, stdlib-only) that exposes shell, code execution, file I/O, browser, and MCP capabilities via REST + SSE. Shell and code execution use SSE for streaming output; file operations use plain JSON.
-- **Auto-registered tools** — `sandbox.Tools(sb)` returns 10 tools that the agent can use.
+- **Auto-registered tools** — `sandbox.Tools(sb)` returns 13 tools that the agent can use.
 
 ## Sandbox Tools
 
@@ -104,8 +104,11 @@ When you call `oasis.WithSandbox(sb, sandbox.Tools(sb)...)`, the framework auto-
 | `file_edit` | Edit a file by replacing an exact string match. More efficient than read+rewrite. |
 | `file_glob` | Find files matching a glob pattern with recursive support. |
 | `file_grep` | Search file contents for a regex pattern with line numbers. |
-| `browser` | Browser interactions (navigate, click, type) |
+| `browser` | Browser interactions (navigate, click, type, fill) with element ref support |
 | `screenshot` | Capture browser/desktop screenshot |
+| `snapshot` | Get accessibility tree with element refs for precise interaction |
+| `page_text` | Extract readable text from the page (token-efficient alternative to screenshots) |
+| `export_pdf` | Export current page as PDF |
 | `mcp_call` | Invoke MCP server tools |
 
 The LLM decides which tool to use based on the task. Code execution via `execute_code` remains available for complex logic with conditionals, loops, and data flow — but the LLM also has direct access to shell, file I/O (including surgical edits, glob, and grep), browser automation, and MCP without writing code.

@@ -15,13 +15,15 @@ type Server struct {
 	addr    string
 	startAt time.Time
 	srv     *http.Server
+	pt      *pinchtab
 }
 
 // NewServer creates a new ix server that will listen on addr.
-func NewServer(addr string) *Server {
+func NewServer(ctx context.Context, addr string) *Server {
 	s := &Server{
 		addr:    addr,
 		startAt: time.Now(),
+		pt:      newPinchtab(ctx),
 	}
 
 	mux := http.NewServeMux()
@@ -47,6 +49,15 @@ func NewServer(addr string) *Server {
 	// File transfer
 	mux.HandleFunc("POST /v1/file/upload", s.handleFileUpload)
 	mux.HandleFunc("GET /v1/file/download", s.handleFileDownload)
+
+	// Browser (proxied to Pinchtab)
+	bp := newBrowserProxy(s.pt)
+	mux.HandleFunc("POST /v1/browser/navigate", bp.handleNavigate)
+	mux.HandleFunc("POST /v1/browser/action", bp.handleAction)
+	mux.HandleFunc("GET /v1/browser/screenshot", bp.handleScreenshot)
+	mux.HandleFunc("GET /v1/browser/snapshot", bp.handleSnapshot)
+	mux.HandleFunc("GET /v1/browser/text", bp.handleText)
+	mux.HandleFunc("GET /v1/browser/pdf", bp.handlePDF)
 
 	s.srv = &http.Server{
 		Addr:    addr,
@@ -83,7 +94,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
 		"uptime_sec": int(time.Since(s.startAt).Seconds()),
+		"browser":    s.pt.isAvailable(),
 	})
+}
+
+// Shutdown gracefully stops the server and the Pinchtab subprocess.
+func (s *Server) Shutdown() {
+	s.pt.shutdown()
 }
 
 // writeJSON serializes data as JSON and writes it with the given status code.
