@@ -1,8 +1,10 @@
 package ixd
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,7 +25,21 @@ type httpFetchResponse struct {
 	Content string `json:"content"`
 }
 
-var fetchClient = &http.Client{Timeout: 15 * time.Second}
+// fetchClient forces HTTP/1.1 to avoid HTTP/2 stream errors that many sites trigger.
+var fetchClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		TLSNextProto:      make(map[string]func(string, *tls.Conn) http.RoundTripper), // disable HTTP/2
+		MaxIdleConns:       10,
+		IdleConnTimeout:    30 * time.Second,
+		DisableCompression: false,
+		DialContext: (&net.Dialer{
+			Timeout: 10 * time.Second,
+		}).DialContext,
+	},
+}
+
+const browserUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 func (s *Server) handleHTTPFetch(w http.ResponseWriter, r *http.Request) {
 	var req httpFetchRequest
@@ -44,7 +60,9 @@ func (s *Server) handleHTTPFetch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid URL: "+err.Error())
 		return
 	}
-	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; OasisBot/1.0)")
+	httpReq.Header.Set("User-Agent", browserUA)
+	httpReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	resp, err := fetchClient.Do(httpReq)
 	if err != nil {

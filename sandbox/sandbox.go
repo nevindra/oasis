@@ -53,6 +53,13 @@ type Sandbox interface {
 	// Returns raw PDF bytes.
 	BrowserPDF(ctx context.Context) ([]byte, error)
 
+	// BrowserEval executes JavaScript in the current browser tab and returns the result.
+	BrowserEval(ctx context.Context, expression string) (string, error)
+
+	// BrowserFind uses natural-language matching to find the best element ref
+	// for a given query (e.g., "submit button", "email input").
+	BrowserFind(ctx context.Context, query string) (BrowserFindResult, error)
+
 	// MCPCall invokes a tool on an MCP server running inside the sandbox.
 	MCPCall(ctx context.Context, req MCPRequest) (MCPResult, error)
 
@@ -73,6 +80,9 @@ type Sandbox interface {
 
 	// HTTPFetch fetches a URL and extracts readable text content.
 	HTTPFetch(ctx context.Context, req HTTPFetchRequest) (HTTPFetchResult, error)
+
+	// WebSearch performs a web search and returns structured results.
+	WebSearch(ctx context.Context, req WebSearchRequest) (WebSearchResult, error)
 
 	// WorkspaceInfo returns environment information about the sandbox.
 	WorkspaceInfo(ctx context.Context) (WorkspaceInfoResult, error)
@@ -131,12 +141,14 @@ type WriteFileRequest struct {
 
 // BrowserAction describes a browser interaction.
 type BrowserAction struct {
-	Type string // "click", "type", "scroll", "navigate", "key", "hover", "fill", "press", "select"
-	Ref  string // element ref from snapshot (preferred over coordinates)
-	X    int    // pixel coordinates (fallback for canvas/maps)
-	Y    int
-	Text string // text for type/fill, URL for navigate
-	Key  string // key name for key/press
+	Type      string // "click", "type", "scroll", "navigate", "key", "hover", "fill", "press", "select", "focus"
+	Ref       string // element ref from snapshot (preferred over coordinates)
+	X         int    // pixel coordinates (fallback for canvas/maps)
+	Y         int
+	Text      string // text for type/fill, URL for navigate
+	Key       string // key name for key/press
+	Direction string // scroll direction: "up", "down", "left", "right"
+	Value     string // option value for select action
 }
 
 // BrowserResult is the output of BrowserAction.
@@ -164,6 +176,13 @@ type SnapshotNode struct {
 	Ref  string // element reference (e.g., "e0") — use in BrowserAction.Ref
 	Role string // semantic role (link, button, textbox, heading, etc.)
 	Name string // accessible name / visible text
+}
+
+// BrowserFindResult is the output of BrowserFind.
+type BrowserFindResult struct {
+	Ref        string  `json:"best_ref"`
+	Confidence string  `json:"confidence"` // "high", "medium", "low"
+	Score      float64 `json:"score"`
 }
 
 // TextOpts configures a browser text extraction request.
@@ -264,6 +283,25 @@ type HTTPFetchResult struct {
 	URL     string
 	Title   string
 	Content string
+}
+
+// WebSearchRequest is the input for WebSearch.
+type WebSearchRequest struct {
+	Query      string // required
+	MaxResults int    // 0 uses default (10)
+}
+
+// WebSearchResult is the output of WebSearch.
+type WebSearchResult struct {
+	Query   string              `json:"query"`
+	Results []WebSearchResultItem `json:"results"`
+}
+
+// WebSearchResultItem is a single search result.
+type WebSearchResultItem struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Snippet string `json:"snippet"`
 }
 
 // WorkspaceInfoResult is the output of WorkspaceInfo.

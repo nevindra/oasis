@@ -73,6 +73,9 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 		snapshotTool(sb),
 		pageTextTool(sb),
 		exportPDFTool(sb),
+		browserEvalTool(sb),
+		browserFindTool(sb),
+		webSearchTool(sb),
 	}
 
 	if cfg.delivery != nil {
@@ -338,7 +341,7 @@ func fileTreeTool(sb Sandbox) toolImpl {
 }
 
 func httpFetchTool(sb Sandbox) toolImpl {
-	return newTool("http_fetch", "Fetch a URL and extract readable text content. Returns clean text by default with HTML noise removed. Use raw=true to get unprocessed HTML. Use this instead of running curl via shell or writing Python to fetch URLs.", `{
+	return newTool("http_fetch", "Fetch a URL and extract readable text content. Returns clean text by default with HTML noise removed. Use raw=true to get unprocessed HTML. NOTE: This is a simple HTTP GET — sites with bot protection (Cloudflare, WAF) will block it. If this tool returns 403/502 errors, use the browser tool to navigate to the URL instead, then use page_text to extract content.", `{
 		"type": "object",
 		"properties": {
 			"url":       {"type": "string", "description": "URL to fetch"},
@@ -357,7 +360,12 @@ func httpFetchTool(sb Sandbox) toolImpl {
 		}
 		res, err := sb.HTTPFetch(ctx, HTTPFetchRequest{URL: p.URL, Raw: p.Raw, MaxChars: p.MaxChars})
 		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "502") || strings.Contains(errMsg, "503") ||
+				strings.Contains(errMsg, "stream error") || strings.Contains(errMsg, "connection reset") {
+				errMsg += ". This site likely has bot protection. Use browser(action='navigate', url='...') + page_text() instead."
+			}
+			return oasis.ToolResult{Error: errMsg}, nil
 		}
 		content := res.Content
 		if res.Title != "" {
@@ -382,27 +390,31 @@ func workspaceInfoTool(sb Sandbox) toolImpl {
 }
 
 func browserTool(sb Sandbox) toolImpl {
-	return newTool("browser", "Interact with the sandbox browser. Use element refs from the snapshot tool for precise interactions.", `{
+	return newTool("browser", "Interact with the sandbox browser. Use element refs from the snapshot tool for precise interactions. IMPORTANT: click, type, fill, hover, focus, and select actions REQUIRE a ref (element reference) or coordinates — there is no implicit focus.", `{
 		"type": "object",
 		"properties": {
-			"action": {"type": "string", "description": "Browser action: navigate, click, type, scroll, key, hover, fill, press, select"},
-			"ref":    {"type": "string", "description": "Element reference from snapshot (e.g., 'e5'). Preferred over coordinates."},
-			"url":    {"type": "string", "description": "URL for navigate action"},
-			"x":      {"type": "integer", "description": "X coordinate (fallback when ref not available)"},
-			"y":      {"type": "integer", "description": "Y coordinate (fallback when ref not available)"},
-			"text":   {"type": "string", "description": "Text to type or fill"},
-			"key":    {"type": "string", "description": "Key to press"}
+			"action":    {"type": "string", "description": "Browser action: navigate, click, type, fill, scroll, key, hover, press, select, focus"},
+			"ref":       {"type": "string", "description": "Element reference from snapshot (e.g., 'e5'). REQUIRED for click, type, fill, hover, focus, select actions."},
+			"url":       {"type": "string", "description": "URL for navigate action"},
+			"x":         {"type": "integer", "description": "X coordinate (fallback when ref not available)"},
+			"y":         {"type": "integer", "description": "Y coordinate (fallback when ref not available)"},
+			"text":      {"type": "string", "description": "Text to type or fill into the element specified by ref"},
+			"key":       {"type": "string", "description": "Key to press (e.g., 'Enter', 'Tab', 'Escape')"},
+			"direction": {"type": "string", "description": "Scroll direction: up, down, left, right"},
+			"value":     {"type": "string", "description": "Option value for select action"}
 		},
 		"required": ["action"]
 	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 		var p struct {
-			Action string `json:"action"`
-			Ref    string `json:"ref"`
-			URL    string `json:"url"`
-			X      int    `json:"x"`
-			Y      int    `json:"y"`
-			Text   string `json:"text"`
-			Key    string `json:"key"`
+			Action    string `json:"action"`
+			Ref       string `json:"ref"`
+			URL       string `json:"url"`
+			X         int    `json:"x"`
+			Y         int    `json:"y"`
+			Text      string `json:"text"`
+			Key       string `json:"key"`
+			Direction string `json:"direction"`
+			Value     string `json:"value"`
 		}
 		if err := json.Unmarshal(args, &p); err != nil {
 			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
@@ -413,13 +425,35 @@ func browserTool(sb Sandbox) toolImpl {
 			}
 			return oasis.ToolResult{Content: "navigated to " + p.URL}, nil
 		}
+		// Validate that target-element actions have a ref or coordinates.
+		switch p.Action {
+		case "click", "type", "fill", "hover", "select", "focus":
+			if p.Ref == "" && p.X == 0 && p.Y == 0 {
+				return oasis.ToolResult{Error: fmt.Sprintf(
+					"%s action requires a 'ref' (element reference from snapshot) or x/y coordinates. "+
+						"Use the snapshot tool first to find the element ref, then pass it as ref (e.g., ref: 'e5').", p.Action,
+				)}, nil
+			}
+		case "scroll":
+			if p.Direction == "" {
+				return oasis.ToolResult{Error: "scroll action requires 'direction' parameter (up, down, left, right)"}, nil
+			}
+		}
+		if (p.Action == "type" || p.Action == "fill") && p.Text == "" {
+			return oasis.ToolResult{Error: p.Action + " action requires 'text' parameter"}, nil
+		}
+		if p.Action == "select" && p.Value == "" {
+			return oasis.ToolResult{Error: "select action requires 'value' parameter"}, nil
+		}
 		res, err := sb.BrowserAction(ctx, BrowserAction{
-			Type: p.Action,
-			Ref:  p.Ref,
-			X:    p.X,
-			Y:    p.Y,
-			Text: p.Text,
-			Key:  p.Key,
+			Type:      p.Action,
+			Ref:       p.Ref,
+			X:         p.X,
+			Y:         p.Y,
+			Text:      p.Text,
+			Key:       p.Key,
+			Direction: p.Direction,
+			Value:     p.Value,
 		})
 		if err != nil {
 			return oasis.ToolResult{Error: err.Error()}, nil
@@ -508,6 +542,86 @@ func exportPDFTool(sb Sandbox) toolImpl {
 			return oasis.ToolResult{Error: err.Error()}, nil
 		}
 		return oasis.ToolResult{Content: fmt.Sprintf("pdf exported (%d bytes)", len(data))}, nil
+	})
+}
+
+func webSearchTool(sb Sandbox) toolImpl {
+	return newTool("web_search", "Search the web and return structured results (titles, URLs, snippets). Use this to find relevant pages before fetching or browsing them. Returns up to 10 results by default.", `{
+		"type": "object",
+		"properties": {
+			"query":       {"type": "string", "description": "Search query"},
+			"max_results": {"type": "integer", "description": "Maximum number of results (default: 10)"}
+		},
+		"required": ["query"]
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		var p struct {
+			Query      string `json:"query"`
+			MaxResults int    `json:"max_results"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+		res, err := sb.WebSearch(ctx, WebSearchRequest{Query: p.Query, MaxResults: p.MaxResults})
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		if len(res.Results) == 0 {
+			return oasis.ToolResult{Content: "No results found for: " + p.Query}, nil
+		}
+		var out strings.Builder
+		fmt.Fprintf(&out, "Found %d results for: %s\n\n", len(res.Results), res.Query)
+		for i, r := range res.Results {
+			fmt.Fprintf(&out, "%d. %s\n   %s\n", i+1, r.Title, r.URL)
+			if r.Snippet != "" {
+				fmt.Fprintf(&out, "   %s\n", r.Snippet)
+			}
+			out.WriteString("\n")
+		}
+		return oasis.ToolResult{Content: out.String()}, nil
+	})
+}
+
+func browserEvalTool(sb Sandbox) toolImpl {
+	return newTool("browser_eval", "Execute JavaScript in the current browser tab. Useful for reading form values, checking element states, extracting data, or interacting with page APIs that aren't accessible through the accessibility tree.", `{
+		"type": "object",
+		"properties": {
+			"expression": {"type": "string", "description": "JavaScript expression to evaluate (e.g., 'document.title', 'document.querySelector(\"input\").value')"}
+		},
+		"required": ["expression"]
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		var p struct {
+			Expression string `json:"expression"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+		result, err := sb.BrowserEval(ctx, p.Expression)
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		return oasis.ToolResult{Content: result}, nil
+	})
+}
+
+func browserFindTool(sb Sandbox) toolImpl {
+	return newTool("browser_find", "Find an element ref using a natural-language description instead of manually searching the snapshot. Returns the best matching element ref, confidence level, and score.", `{
+		"type": "object",
+		"properties": {
+			"query": {"type": "string", "description": "Natural-language description of the element (e.g., 'submit button', 'email input', 'search box')"}
+		},
+		"required": ["query"]
+	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		var p struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+		result, err := sb.BrowserFind(ctx, p.Query)
+		if err != nil {
+			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		return oasis.ToolResult{Content: fmt.Sprintf("ref: %s (confidence: %s, score: %.2f)", result.Ref, result.Confidence, result.Score)}, nil
 	})
 }
 

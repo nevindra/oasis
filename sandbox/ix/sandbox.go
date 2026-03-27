@@ -288,6 +288,12 @@ func (s *IXSandbox) BrowserAction(ctx context.Context, action sandbox.BrowserAct
 	if action.Key != "" {
 		body["key"] = action.Key
 	}
+	if action.Direction != "" {
+		body["direction"] = action.Direction
+	}
+	if action.Value != "" {
+		body["value"] = action.Value
+	}
 	var resp struct {
 		Success bool `json:"success"`
 		Result  struct {
@@ -464,6 +470,35 @@ func (s *IXSandbox) HTTPFetch(ctx context.Context, req sandbox.HTTPFetchRequest)
 	return sandbox.HTTPFetchResult{URL: resp.URL, Title: resp.Title, Content: resp.Content}, nil
 }
 
+// WebSearch performs a web search via the ix daemon's search endpoint.
+func (s *IXSandbox) WebSearch(ctx context.Context, req sandbox.WebSearchRequest) (sandbox.WebSearchResult, error) {
+	if err := s.checkClosed(); err != nil {
+		return sandbox.WebSearchResult{}, err
+	}
+	body := map[string]any{
+		"query": req.Query,
+	}
+	if req.MaxResults > 0 {
+		body["max_results"] = req.MaxResults
+	}
+	var resp struct {
+		Query   string `json:"query"`
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Snippet string `json:"snippet"`
+		} `json:"results"`
+	}
+	if err := s.client.post(ctx, "/v1/web/search", body, &resp); err != nil {
+		return sandbox.WebSearchResult{}, fmt.Errorf("web search: %w", err)
+	}
+	items := make([]sandbox.WebSearchResultItem, len(resp.Results))
+	for i, r := range resp.Results {
+		items[i] = sandbox.WebSearchResultItem{Title: r.Title, URL: r.URL, Snippet: r.Snippet}
+	}
+	return sandbox.WebSearchResult{Query: resp.Query, Results: items}, nil
+}
+
 // WorkspaceInfo returns environment information about the sandbox.
 func (s *IXSandbox) WorkspaceInfo(ctx context.Context) (sandbox.WorkspaceInfoResult, error) {
 	if err := s.checkClosed(); err != nil {
@@ -524,6 +559,34 @@ func (s *IXSandbox) BrowserSnapshot(ctx context.Context, opts sandbox.SnapshotOp
 		Title: resp.Title,
 		Nodes: nodes,
 	}, nil
+}
+
+// BrowserEval executes JavaScript in the current browser tab.
+func (s *IXSandbox) BrowserEval(ctx context.Context, expression string) (string, error) {
+	if err := s.checkClosed(); err != nil {
+		return "", err
+	}
+	body := map[string]string{"expression": expression}
+	var resp struct {
+		Result string `json:"result"`
+	}
+	if err := s.client.post(ctx, "/v1/browser/evaluate", body, &resp); err != nil {
+		return "", fmt.Errorf("browser eval: %w", err)
+	}
+	return resp.Result, nil
+}
+
+// BrowserFind uses natural-language matching to find the best element ref.
+func (s *IXSandbox) BrowserFind(ctx context.Context, query string) (sandbox.BrowserFindResult, error) {
+	if err := s.checkClosed(); err != nil {
+		return sandbox.BrowserFindResult{}, err
+	}
+	body := map[string]string{"query": query}
+	var resp sandbox.BrowserFindResult
+	if err := s.client.post(ctx, "/v1/browser/find", body, &resp); err != nil {
+		return sandbox.BrowserFindResult{}, fmt.Errorf("browser find: %w", err)
+	}
+	return resp, nil
 }
 
 // BrowserText extracts readable text content from the current page.

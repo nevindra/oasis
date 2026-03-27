@@ -59,12 +59,14 @@ func (b *browserProxy) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Kind string `json:"kind"`
-		Ref  string `json:"ref"`
-		X    int    `json:"x"`
-		Y    int    `json:"y"`
-		Text string `json:"text"`
-		Key  string `json:"key"`
+		Kind      string `json:"kind"`
+		Ref       string `json:"ref"`
+		X         int    `json:"x"`
+		Y         int    `json:"y"`
+		Text      string `json:"text"`
+		Key       string `json:"key"`
+		Direction string `json:"direction"`
+		Value     string `json:"value"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -85,9 +87,61 @@ func (b *browserProxy) handleAction(w http.ResponseWriter, r *http.Request) {
 	if req.Key != "" {
 		payload["key"] = req.Key
 	}
+	if req.Direction != "" {
+		payload["direction"] = req.Direction
+	}
+	if req.Value != "" {
+		payload["value"] = req.Value
+	}
 
 	body, _ := json.Marshal(payload)
 	resp, err := b.forward(r.Context(), http.MethodPost, "/action", body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	copyResponse(w, resp)
+}
+
+// handleEvaluate proxies POST /v1/browser/evaluate to Pinchtab POST /evaluate.
+func (b *browserProxy) handleEvaluate(w http.ResponseWriter, r *http.Request) {
+	if !b.checkAvailable(w) {
+		return
+	}
+	var req struct {
+		Expression string `json:"expression"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	body, _ := json.Marshal(map[string]string{"expression": req.Expression})
+	resp, err := b.forward(r.Context(), http.MethodPost, "/evaluate", body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	copyResponse(w, resp)
+}
+
+// handleFind proxies POST /v1/browser/find to Pinchtab POST /find.
+func (b *browserProxy) handleFind(w http.ResponseWriter, r *http.Request) {
+	if !b.checkAvailable(w) {
+		return
+	}
+	var req struct {
+		Query string `json:"query"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	body, _ := json.Marshal(map[string]string{"query": req.Query})
+	resp, err := b.forward(r.Context(), http.MethodPost, "/find", body)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

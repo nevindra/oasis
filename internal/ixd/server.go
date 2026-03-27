@@ -59,6 +59,9 @@ func NewServer(ctx context.Context, addr string) *Server {
 	// HTTP fetch
 	mux.HandleFunc("POST /v1/http/fetch", s.handleHTTPFetch)
 
+	// Web search
+	mux.HandleFunc("POST /v1/web/search", s.handleWebSearch)
+
 	// Workspace info
 	mux.HandleFunc("GET /v1/workspace/info", s.handleWorkspaceInfo)
 
@@ -66,6 +69,8 @@ func NewServer(ctx context.Context, addr string) *Server {
 	bp := newBrowserProxy(s.pt)
 	mux.HandleFunc("POST /v1/browser/navigate", bp.handleNavigate)
 	mux.HandleFunc("POST /v1/browser/action", bp.handleAction)
+	mux.HandleFunc("POST /v1/browser/evaluate", bp.handleEvaluate)
+	mux.HandleFunc("POST /v1/browser/find", bp.handleFind)
 	mux.HandleFunc("GET /v1/browser/screenshot", bp.handleScreenshot)
 	mux.HandleFunc("GET /v1/browser/snapshot", bp.handleSnapshot)
 	mux.HandleFunc("GET /v1/browser/text", bp.handleText)

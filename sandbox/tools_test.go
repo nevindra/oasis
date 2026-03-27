@@ -152,6 +152,18 @@ func (m *mockSandbox) WorkspaceInfo(ctx context.Context) (WorkspaceInfoResult, e
 	return WorkspaceInfoResult{}, nil
 }
 
+func (m *mockSandbox) BrowserEval(ctx context.Context, expression string) (string, error) {
+	return "", nil
+}
+
+func (m *mockSandbox) BrowserFind(ctx context.Context, query string) (BrowserFindResult, error) {
+	return BrowserFindResult{}, nil
+}
+
+func (m *mockSandbox) WebSearch(ctx context.Context, req WebSearchRequest) (WebSearchResult, error) {
+	return WebSearchResult{}, nil
+}
+
 func (m *mockSandbox) Close() error { return nil }
 
 func TestShellToolDispatch(t *testing.T) {
@@ -328,6 +340,9 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		"snapshot":       false,
 		"page_text":      false,
 		"export_pdf":     false,
+		"browser_eval":   false,
+		"browser_find":   false,
+		"web_search":     false,
 	}
 
 	for _, tool := range tools {
@@ -360,8 +375,8 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		}
 	}
 
-	if len(tools) != 16 {
-		t.Errorf("got %d tools, want 16", len(tools))
+	if len(tools) != 19 {
+		t.Errorf("got %d tools, want 19", len(tools))
 	}
 }
 
