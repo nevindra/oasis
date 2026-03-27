@@ -24,7 +24,7 @@ func newBrowserProxy(pt *pinchtab) *browserProxy {
 func (b *browserProxy) checkAvailable(w http.ResponseWriter) bool {
 	if !b.pt.isAvailable() {
 		writeError(w, http.StatusNotImplemented,
-			"browser not available: use oasis-ix-browser image")
+			"browser not available: pinchtab binary not found in image")
 		return false
 	}
 	return true

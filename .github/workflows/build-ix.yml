@@ -7,6 +7,9 @@ on:
       - 'internal/ixd/**'
       - 'cmd/ix/**'
       - 'sandbox/**'
+      - 'renderers/**'
+      - 'bin/oasis-render'
+      - 'requirements.txt'
       - 'go.mod'
       - 'go.sum'
   pull_request:
@@ -15,6 +18,9 @@ on:
       - 'internal/ixd/**'
       - 'cmd/ix/**'
       - 'sandbox/**'
+      - 'renderers/**'
+      - 'bin/oasis-render'
+      - 'requirements.txt'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch: {}
@@ -52,8 +58,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (base)
-        id: meta-base
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -61,35 +67,13 @@ jobs:
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push (base)
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: cmd/ix/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta-base.outputs.tags }}
-          labels: ${{ steps.meta-base.outputs.labels }}
-          cache-from: type=gha,scope=ix-base
-          cache-to: type=gha,mode=max,scope=ix-base
-
-      - name: Extract metadata (browser)
-        id: meta-browser
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-browser
-          tags: |
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push (browser)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: cmd/ix/Dockerfile.browser
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta-browser.outputs.tags }}
-          labels: ${{ steps.meta-browser.outputs.labels }}
-          build-args: |
-            BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha,scope=ix-browser
-          cache-to: type=gha,mode=max,scope=ix-browser
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=ix
+          cache-to: type=gha,mode=max,scope=ix

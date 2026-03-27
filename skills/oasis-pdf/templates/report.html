@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @page {
+            size: A4;
+            margin: 1in;
+        }
+        @media print {
+            .page-break { page-break-before: always; }
+            .no-break { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body class="font-sans text-gray-800 text-sm leading-relaxed">
+
+    <!-- Cover Page -->
+    <div class="flex flex-col justify-center items-center min-h-screen text-center">
+        <div class="w-16 h-1 bg-[#1B2A4A] mb-8"></div>
+        <h1 class="text-4xl font-bold text-[#1B2A4A]">Report Title</h1>
+        <p class="mt-4 text-lg text-[#2D5F8A]">Subtitle or description</p>
+        <p class="mt-12 text-sm text-gray-400">Prepared by Your Name</p>
+        <p class="text-sm text-gray-400">March 2026</p>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- Table of Contents -->
+    <h2 class="text-xl font-semibold text-[#1B2A4A] border-b-2 border-[#E8734A] pb-2 mb-6">Table of Contents</h2>
+    <ul class="space-y-2 text-[#2D5F8A]">
+        <li><a href="#section1" class="hover:underline">1. Executive Summary</a></li>
+        <li><a href="#section2" class="hover:underline">2. Key Findings</a></li>
+        <li><a href="#section3" class="hover:underline">3. Data Analysis</a></li>
+        <li><a href="#section4" class="hover:underline">4. Recommendations</a></li>
+    </ul>
+
+    <div class="page-break"></div>
+
+    <!-- Section 1 -->
+    <h2 id="section1" class="text-xl font-semibold text-[#1B2A4A] border-b-2 border-[#E8734A] pb-2 mb-4">
+        1. Executive Summary
+    </h2>
+    <p class="mb-4">
+        Replace this paragraph with a concise overview of the report's purpose, scope, and key conclusions.
+    </p>
+
+    <!-- Section 2 -->
+    <h2 id="section2" class="text-xl font-semibold text-[#1B2A4A] border-b-2 border-[#E8734A] pb-2 mb-4 mt-8">
+        2. Key Findings
+    </h2>
+    <div class="grid grid-cols-3 gap-4 mb-6 no-break">
+        <div class="bg-[#F5F5F5] rounded-lg p-4 text-center">
+            <p class="text-2xl font-bold text-[#1B2A4A]">$2.1M</p>
+            <p class="text-xs text-gray-500 mt-1">Total Revenue</p>
+        </div>
+        <div class="bg-[#F5F5F5] rounded-lg p-4 text-center">
+            <p class="text-2xl font-bold text-[#2D5F8A]">+25%</p>
+            <p class="text-xs text-gray-500 mt-1">YoY Growth</p>
+        </div>
+        <div class="bg-[#F5F5F5] rounded-lg p-4 text-center">
+            <p class="text-2xl font-bold text-[#E8734A]">178</p>
+            <p class="text-xs text-gray-500 mt-1">Active Customers</p>
+        </div>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- Section 3 -->
+    <h2 id="section3" class="text-xl font-semibold text-[#1B2A4A] border-b-2 border-[#E8734A] pb-2 mb-4">
+        3. Data Analysis
+    </h2>
+    <div class="no-break" style="max-width: 500px; margin: 0 auto 2rem;">
+        <canvas id="revenueChart"></canvas>
+    </div>
+    <script>
+    new Chart(document.getElementById('revenueChart'), {
+        type: 'bar',
+        data: {
+            labels: ['Q1', 'Q2', 'Q3', 'Q4'],
+            datasets: [{
+                label: 'Revenue ($M)',
+                data: [1.2, 1.5, 1.8, 2.1],
+                backgroundColor: '#2D5F8A'
+            }]
+        },
+        options: { responsive: true, animation: false }
+    });
+    </script>
+
+    <!-- Data Table -->
+    <table class="w-full border-collapse text-sm no-break mt-6">
+        <thead>
+            <tr class="bg-[#1B2A4A] text-white">
+                <th class="p-2 text-left">Quarter</th>
+                <th class="p-2 text-right">Revenue</th>
+                <th class="p-2 text-right">Expenses</th>
+                <th class="p-2 text-right">Profit</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr class="border-b border-gray-200">
+                <td class="p-2">Q1</td>
+                <td class="p-2 text-right">$1,200,000</td>
+                <td class="p-2 text-right">$850,000</td>
+                <td class="p-2 text-right">$350,000</td>
+            </tr>
+            <tr class="border-b border-gray-200 bg-[#F5F5F5]">
+                <td class="p-2">Q2</td>
+                <td class="p-2 text-right">$1,500,000</td>
+                <td class="p-2 text-right">$920,000</td>
+                <td class="p-2 text-right">$580,000</td>
+            </tr>
+            <tr class="border-b border-gray-200">
+                <td class="p-2">Q3</td>
+                <td class="p-2 text-right">$1,800,000</td>
+                <td class="p-2 text-right">$980,000</td>
+                <td class="p-2 text-right">$820,000</td>
+            </tr>
+            <tr class="border-b border-gray-200 bg-[#F5F5F5]">
+                <td class="p-2">Q4</td>
+                <td class="p-2 text-right">$2,100,000</td>
+                <td class="p-2 text-right">$1,050,000</td>
+                <td class="p-2 text-right">$1,050,000</td>
+            </tr>
+            <tr class="font-bold bg-gray-100">
+                <td class="p-2">Total</td>
+                <td class="p-2 text-right">$6,600,000</td>
+                <td class="p-2 text-right">$3,800,000</td>
+                <td class="p-2 text-right">$2,800,000</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="page-break"></div>
+
+    <!-- Section 4 -->
+    <h2 id="section4" class="text-xl font-semibold text-[#1B2A4A] border-b-2 border-[#E8734A] pb-2 mb-4">
+        4. Recommendations
+    </h2>
+    <ol class="list-decimal list-inside space-y-2 mb-4">
+        <li>First recommendation — explain the action and expected impact.</li>
+        <li>Second recommendation — include timeline if relevant.</li>
+        <li>Third recommendation — note any dependencies or risks.</li>
+    </ol>
+
+</body>
+</html>

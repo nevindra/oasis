@@ -1,0 +1,93 @@
+# Slide Types Reference
+
+When to use each slide layout and what makes a good version of each.
+
+## cover
+
+The first slide. Sets the tone.
+
+**Good:**
+- Clear, concise title (5-8 words max)
+- Subtitle adds context (audience, purpose)
+- Date grounds the content
+- Clean, uncluttered
+
+**Bad:**
+- Title longer than one line
+- Multiple subtitles or descriptions
+- Logos and decorative elements (keep it minimal)
+
+## toc
+
+Agenda / table of contents. Helps the audience know what's coming.
+
+**Good:**
+- 3-5 items (matches actual sections)
+- Short, noun-phrase items ("Financial Overview" not "We will review our financial performance")
+- Items match section slide titles exactly
+
+**Bad:**
+- More than 7 items (too many sections)
+- Long sentences as items
+- Items that don't correspond to actual slides
+
+## section
+
+Section divider between major topics.
+
+**Good:**
+- Title matches the TOC item
+- Optional subtitle gives a one-line preview
+- Different background (use `light` theme color) to visually break the flow
+
+**Bad:**
+- Too many section dividers (1 per 3-5 content slides)
+- Subtitle that repeats the title
+
+## content
+
+The workhorse slide. Contains data, charts, text, images.
+
+**Good:**
+- One main idea
+- Chart + insight pattern (data on left, takeaway text on right)
+- White space — don't fill every pixel
+- Elements use percentage positioning
+
+**Bad:**
+- Multiple charts competing for attention
+- Wall of text (move to speaker notes)
+- Raw data tables without a takeaway
+
+### Common Content Patterns
+
+**Chart + Insight:**
+```
+[    Chart (55%)     ] [ Takeaway (30%) ]
+                       [ KPI card       ]
+```
+
+**KPI Dashboard:**
+```
+[ KPI 1 ] [ KPI 2 ] [ KPI 3 ]
+[        Chart or Table       ]
+```
+
+**Comparison:**
+```
+[  Before (45%)  ] | [  After (45%)   ]
+```
+
+## summary
+
+Last content slide. Reinforces key messages.
+
+**Good:**
+- 3-5 bullets (memorable)
+- Action-oriented language ("Revenue exceeded targets" not "Revenue was good")
+- Each bullet is a standalone takeaway
+
+**Bad:**
+- More than 5 bullets (not a summary anymore)
+- Repeating slide titles as bullets
+- Questions or ambiguous statements

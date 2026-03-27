@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+CMD="${1:?Usage: oasis-render <pdf|pdf-fill|docx|docx-fill|xlsx|pptx> <input> <output> [options]}"
+shift
+
+RENDERERS="/opt/oasis/renderers"
+
+case "$CMD" in
+    pdf)       node "$RENDERERS/pdf/render.js" "$@" ;;
+    pdf-fill)  python3 "$RENDERERS/pdf/fill.py" "$@" ;;
+    docx)      python3 "$RENDERERS/docx/generate.py" "$@" ;;
+    docx-fill) python3 "$RENDERERS/docx/fill.py" "$@" ;;
+    xlsx)      python3 "$RENDERERS/xlsx/generate.py" "$@" ;;
+    pptx)      node "$RENDERERS/pptx/compile.js" "$@" ;;
+    *)         echo "Unknown command: $CMD" >&2; exit 1 ;;
+esac

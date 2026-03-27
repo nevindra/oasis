@@ -14,6 +14,50 @@ import (
 // Compile-time interface checks.
 var _ SkillProvider = (*FileSkillProvider)(nil)
 var _ SkillWriter = (*FileSkillProvider)(nil)
+var _ SkillProvider = (*ChainedSkillProvider)(nil)
+
+// ChainedSkillProvider merges multiple SkillProviders. Discover returns the
+// union (first provider wins on name collisions). Activate searches in order.
+type ChainedSkillProvider struct {
+	providers []SkillProvider
+}
+
+// ChainSkillProviders creates a provider that searches multiple providers in
+// order. Typically: ChainSkillProviders(fileProvider, builtinProvider) so
+// user skills override built-in ones.
+func ChainSkillProviders(providers ...SkillProvider) *ChainedSkillProvider {
+	return &ChainedSkillProvider{providers: providers}
+}
+
+func (c *ChainedSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error) {
+	seen := make(map[string]bool)
+	var all []SkillSummary
+	for _, p := range c.providers {
+		summaries, err := p.Discover(ctx)
+		if err != nil {
+			continue
+		}
+		for _, s := range summaries {
+			if seen[s.Name] {
+				continue
+			}
+			seen[s.Name] = true
+			all = append(all, s)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+	return all, nil
+}
+
+func (c *ChainedSkillProvider) Activate(ctx context.Context, name string) (Skill, error) {
+	for _, p := range c.providers {
+		skill, err := p.Activate(ctx, name)
+		if err == nil {
+			return skill, nil
+		}
+	}
+	return Skill{}, fmt.Errorf("skill %q not found", name)
+}
 
 // parseFrontmatter reads an io.Reader whose first line must be "---".
 // It returns the parsed frontmatter key-value map, the body (everything after

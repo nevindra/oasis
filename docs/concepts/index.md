@@ -124,6 +124,7 @@ Both implement `Agent`, so they compose with each other — a Network can contai
 | Page | Feature | What it does |
 | ---- | ------- | ------------ |
 | [Code Execution](code-execution.md) | `Sandbox`, `Manager`, `WithSandbox` | Docker-based sandbox with shell, code execution, file I/O, browser, and MCP tools |
+| [Document Generation](document-generation.md) | Skills + `oasis-render` | PDF, DOCX, XLSX, PPTX generation via sandbox renderers |
 
 ### Memory & Processing
 

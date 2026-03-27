@@ -23,8 +23,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `SkillWriter` interface for creating, updating, and deleting skills.
 - `FileSkillProvider` — reads skills from directories, hot-reloads without restart.
 - `SkillSummary` type for lightweight discovery results.
+- **Document generation skills** — `oasis-design-system`, `oasis-pdf`, `oasis-docx`, `oasis-xlsx`, `oasis-pptx` skills in `skills/`. Agents generate PDF (HTML+Tailwind+Playwright), Word (JSON+python-docx), Excel (JSON+openpyxl), and PowerPoint (JSON+PptxGenJS) documents via the `oasis-render` CLI inside the sandbox.
+- **`oasis-render` CLI** — unified entry point for document rendering (`bin/oasis-render`). Routes to format-specific renderers: `pdf`, `pdf-fill`, `docx`, `docx-fill`, `xlsx`, `pptx`.
+- **Renderer scripts** — `renderers/pdf/render.js` (Playwright HTML->PDF), `renderers/pdf/fill.py` (pypdf form fill), `renderers/docx/generate.py` (python-docx), `renderers/docx/fill.py` (template fill), `renderers/xlsx/generate.py` (openpyxl), `renderers/pptx/compile.js` (PptxGenJS).
+- **Sandbox Dockerfile** — single unified `cmd/ix/Dockerfile` with Chrome, Pinchtab, uv, document generation deps (python-docx, openpyxl, pypdf, PptxGenJS, Playwright), and oasis-render CLI.
+- **`BuiltinSkillProvider`** — embedded skill provider that serves framework skills (`oasis-pdf`, `oasis-docx`, `oasis-xlsx`, `oasis-pptx`, `oasis-design-system`) from the compiled binary via `//go:embed`. Consumers get document generation skills without filesystem setup.
+- **`ChainSkillProviders`** — merges multiple `SkillProvider` implementations. User file-based skills take priority over built-in ones. Typical usage: `ChainSkillProviders(fileProvider, builtinProvider)`.
 
 ### Changed
+- **Sandbox Dockerfile** — Node.js 22 (nodesource) replaced with Node.js 25 (fnm), npm replaced with pnpm (via corepack), uv pinned to 0.11.2 with `--break-system-packages` for PEP 668 compliance on Ubuntu 24.04.
 - **BREAKING:** `sandbox/aio` package renamed to `sandbox/ix`. `AIOSandbox` → `IXSandbox`, `AIOManager` → `IXManager`. Import path: `github.com/nevindra/oasis/sandbox/ix`.
 - **BREAKING:** `IXSandbox` now communicates via SSE for shell/code execution (previously synchronous JSON). Client-side change only — `Sandbox` interface unchanged.
 - **BREAKING:** `Sandbox.ReadFile` now accepts `ReadFileRequest` instead of a plain path string. `FileContent` gains `TotalLines` field.
@@ -43,6 +50,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `ScoredSkill` type — no longer needed (no embedding-based search).
 - `Skill.ID`, `Skill.Embedding`, `Skill.CreatedBy`, `Skill.CreatedAt`, `Skill.UpdatedAt` fields — replaced by filesystem metadata.
 - `store/sqlite/skills.go`, `store/postgres/skills.go` — DB skill implementations.
+- `cmd/sandbox/` — legacy sandbox service, superseded by `cmd/ix/`.
+- `cmd/ix/Dockerfile.browser` — merged into `cmd/ix/Dockerfile` (single image with Chrome + document generation).
 
 ## [0.12.1] - 2026-03-19
 
