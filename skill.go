@@ -59,6 +59,37 @@ func (c *ChainedSkillProvider) Activate(ctx context.Context, name string) (Skill
 	return Skill{}, fmt.Errorf("skill %q not found", name)
 }
 
+// ActivateWithReferences activates a skill and prepends instructions from
+// all referenced skills. References are resolved one level deep — a
+// referenced skill's own references are not followed. Missing references
+// are silently skipped.
+func ActivateWithReferences(ctx context.Context, p SkillProvider, name string) (Skill, error) {
+	skill, err := p.Activate(ctx, name)
+	if err != nil {
+		return Skill{}, err
+	}
+
+	if len(skill.References) == 0 {
+		return skill, nil
+	}
+
+	var parts []string
+	for _, ref := range skill.References {
+		refSkill, refErr := p.Activate(ctx, ref)
+		if refErr != nil {
+			continue // graceful — reference is optional
+		}
+		parts = append(parts, "## "+refSkill.Name+"\n\n"+refSkill.Instructions)
+	}
+
+	if len(parts) > 0 {
+		parts = append(parts, skill.Instructions)
+		skill.Instructions = strings.Join(parts, "\n\n---\n\n")
+	}
+
+	return skill, nil
+}
+
 // parseFrontmatter reads an io.Reader whose first line must be "---".
 // It returns the parsed frontmatter key-value map, the body (everything after
 // the closing "---"), and any error encountered.
@@ -84,6 +115,7 @@ func parseFrontmatter(r io.Reader) (map[string]string, string, error) {
 	fm := make(map[string]string)
 	inFrontmatter := true
 	var bodyLines []string
+	var parentKey string // tracks current map key for indented sub-entries (e.g. metadata:)
 
 	for scanner.Scan() {
 		line := strings.TrimRight(scanner.Text(), "\r")
@@ -91,6 +123,7 @@ func parseFrontmatter(r io.Reader) (map[string]string, string, error) {
 		if inFrontmatter {
 			if line == "---" {
 				inFrontmatter = false
+				parentKey = ""
 				continue
 			}
 			// Skip blank lines and comment lines.
@@ -98,6 +131,20 @@ func parseFrontmatter(r io.Reader) (map[string]string, string, error) {
 			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 				continue
 			}
+
+			// Indented line — belongs to parent key as sub-entry.
+			if parentKey != "" && (strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "\t")) {
+				idx := strings.IndexByte(trimmed, ':')
+				if idx > 0 {
+					subKey := strings.TrimSpace(trimmed[:idx])
+					subVal := strings.TrimSpace(trimmed[idx+1:])
+					subVal = parseFrontmatterValue(subVal)
+					fm[parentKey+"."+subKey] = subVal
+				}
+				continue
+			}
+			parentKey = ""
+
 			// Parse key: value.
 			idx := strings.Index(line, ":")
 			if idx < 0 {
@@ -105,6 +152,13 @@ func parseFrontmatter(r io.Reader) (map[string]string, string, error) {
 			}
 			key := strings.TrimSpace(line[:idx])
 			val := strings.TrimSpace(line[idx+1:])
+
+			// Key with no value — start of a map block (e.g., metadata:).
+			if val == "" {
+				parentKey = key
+				continue
+			}
+
 			val = parseFrontmatterValue(val)
 			fm[key] = val
 		} else {
@@ -220,6 +274,7 @@ func (p *FileSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error
 			if tags := fm["tags"]; tags != "" {
 				summary.Tags = splitCSV(tags)
 			}
+			summary.Compatibility = fm["compatibility"]
 			summaries = append(summaries, summary)
 		}
 	}
@@ -267,6 +322,21 @@ func (p *FileSkillProvider) Activate(ctx context.Context, name string) (Skill, e
 		}
 		if refs := fm["references"]; refs != "" {
 			skill.References = splitCSV(refs)
+		}
+		skill.Compatibility = fm["compatibility"]
+		skill.License = fm["license"]
+		// Collect metadata.* entries
+		meta := make(map[string]string)
+		for k, v := range fm {
+			if strings.HasPrefix(k, "metadata.") {
+				meta[strings.TrimPrefix(k, "metadata.")] = v
+			}
+		}
+		if len(meta) > 0 {
+			skill.Metadata = meta
+		}
+		if skill.Dir != "" {
+			skill.Instructions = strings.ReplaceAll(skill.Instructions, "{dir}", skill.Dir)
 		}
 		return skill, nil
 	}
@@ -379,6 +449,27 @@ func renderSkillMD(skill Skill) string {
 		sb.WriteString("references: [")
 		sb.WriteString(strings.Join(skill.References, ", "))
 		sb.WriteString("]\n")
+	}
+	if skill.Compatibility != "" {
+		sb.WriteString("compatibility: ")
+		sb.WriteString(skill.Compatibility)
+		sb.WriteString("\n")
+	}
+	if skill.License != "" {
+		sb.WriteString("license: ")
+		sb.WriteString(skill.License)
+		sb.WriteString("\n")
+	}
+	if len(skill.Metadata) > 0 {
+		sb.WriteString("metadata:\n")
+		keys := make([]string, 0, len(skill.Metadata))
+		for k := range skill.Metadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			sb.WriteString("  " + k + ": " + skill.Metadata[k] + "\n")
+		}
 	}
 
 	sb.WriteString("---\n")

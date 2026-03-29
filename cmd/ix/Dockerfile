@@ -51,9 +51,7 @@ COPY --from=pinchtab/pinchtab:latest /usr/local/bin/pinchtab /usr/local/bin/pinc
 COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /usr/local/bin/uv
 
 # Python dependencies (scientific + document generation).
-COPY requirements.txt /tmp/requirements.txt
-RUN uv --no-cache pip install --system --break-system-packages -r /tmp/requirements.txt && \
-    rm /tmp/requirements.txt
+RUN uv pip install --system --break-system-packages python-docx openpyxl pypdf pandas numpy matplotlib seaborn Pillow jinja2
 
 # Node.js global dependencies (document generation + diagrams).
 RUN pnpm add -g \
@@ -63,11 +61,6 @@ RUN pnpm add -g \
     @mermaid-js/mermaid-cli \
     sharp \
     papaparse
-
-# oasis-render CLI + renderer scripts.
-COPY renderers/ /opt/oasis/renderers/
-COPY bin/oasis-render /usr/local/bin/oasis-render
-RUN chmod +x /usr/local/bin/oasis-render
 
 # ix binary.
 COPY --from=build /ix /usr/local/bin/ix

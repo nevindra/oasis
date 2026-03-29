@@ -4,44 +4,54 @@ This guide shows how to wire document generation skills into your Oasis agents. 
 
 ## Prerequisites
 
-- Sandbox image with `oasis-render` pre-installed (see Docker setup below)
-- Skills directory with `oasis-design-system`, `oasis-pdf`, `oasis-docx`, `oasis-xlsx`, `oasis-pptx`
+- Sandbox image with document generation libraries pre-installed (Playwright, python-docx, openpyxl, PptxGenJS)
+- Skills available via `BuiltinSkillProvider` (compiled in) or on disk
 
 ## Setup
 
 ### 1. Wire Skills into Your Agent
+
+The simplest approach uses `WithSkills` to auto-register skill discovery and activation tools:
 
 ```go
 package main
 
 import (
     "github.com/nevindra/oasis"
-    skilltool "github.com/nevindra/oasis/tools/skill"
+    "github.com/nevindra/oasis/skills"
 )
 
 func main() {
-    // Create a FileSkillProvider pointing at your skills directory.
-    skillProvider := oasis.NewFileSkillProvider("./skills")
+    // Built-in skills are compiled into the binary — no filesystem needed.
+    builtin := oasis.NewBuiltinSkillProvider()
 
-    // Create the skill tool.
-    skills := skilltool.New(skillProvider)
+    // Optionally chain with file-based skills (user skills take priority).
+    fileProvider := skills.NewFileSkillProvider("./skills")
+    provider := oasis.ChainSkillProviders(fileProvider, builtin)
 
-    // Wire into your agent.
-    agent := oasis.NewLLMAgent(oasis.AgentConfig{
-        // ... provider, store, etc.
-        Tools: []oasis.Tool{
-            skills,
-            // ... other tools (shell, file_write, etc.)
-        },
-    })
+    // WithSkills auto-registers skill_discover and skill_activate tools.
+    agent := oasis.NewLLMAgent("assistant", "Document generation agent", llmProvider,
+        oasis.WithSkills(provider),
+        oasis.WithSandbox(sb, sandbox.Tools(sb)...),
+    )
 }
 ```
 
-The agent now has access to `skill_discover`, `skill_activate`, `skill_create`, and `skill_update`. When the user asks to generate a document, the agent discovers the right skill, activates it, and follows the instructions.
+Alternatively, pre-activate a specific skill so its instructions are always in the system prompt:
+
+```go
+// Pre-activate oasis-pdf — agent always has PDF instructions available.
+pdfSkill, _ := oasis.ActivateWithReferences(ctx, provider, "oasis-pdf")
+
+agent := oasis.NewLLMAgent("pdf-agent", "PDF generation agent", llmProvider,
+    oasis.WithActiveSkills(pdfSkill),
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),
+)
+```
 
 ### 2. Docker Image
 
-Extend the sandbox Dockerfile with document generation dependencies:
+The sandbox image needs document generation libraries installed:
 
 ```dockerfile
 FROM oasis-ix:latest
@@ -49,45 +59,34 @@ FROM oasis-ix:latest
 # uv for fast Python package installs.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Python deps.
-COPY requirements.txt /tmp/requirements.txt
-RUN uv pip install --system --no-cache -r /tmp/requirements.txt
+# Python libs for DOCX and XLSX generation.
+RUN uv pip install --system --no-cache python-docx openpyxl pypdf
 
-# Node.js deps.
-RUN npm install -g pptxgenjs playwright-core chartjs-node-canvas sharp
-
-# Renderer scripts + CLI.
-COPY renderers/ /opt/oasis/renderers/
-COPY bin/oasis-render /usr/local/bin/oasis-render
-RUN chmod +x /usr/local/bin/oasis-render
+# Node.js libs for PPTX generation.
+RUN npm install -g pptxgenjs
 ```
 
-### 3. Skills Directory
+Playwright and Chromium are already included in the base `oasis-ix` image for browser automation.
 
-Place the bundled skills in your project:
+### 3. Skills Directory (Optional)
+
+If using file-based skills alongside built-in ones:
 
 ```
 skills/
 ├── oasis-design-system/
 │   └── SKILL.md
 ├── oasis-pdf/
-│   ├── SKILL.md
-│   ├── templates/
-│   │   ├── report.html
-│   │   └── invoice.html
-│   └── references/
-│       ├── print-css.md
-│       └── chart-patterns.md
+│   └── SKILL.md
 ├── oasis-docx/
-│   ├── SKILL.md
-│   └── references/
+│   └── SKILL.md
 ├── oasis-xlsx/
-│   ├── SKILL.md
-│   └── references/
+│   └── SKILL.md
 └── oasis-pptx/
-    ├── SKILL.md
-    └── references/
+    └── SKILL.md
 ```
+
+The `{dir}` placeholder in skill instructions is resolved to the absolute path of the skill directory at activation time, so skills can reference their own files (e.g., `{dir}/templates/report.html`).
 
 ## Usage Examples
 
@@ -98,8 +97,8 @@ User says: "Create a Q4 financial report as a PDF."
 The agent will:
 1. Call `skill_discover` to list available skills
 2. Call `skill_activate("oasis-pdf")` to load PDF generation instructions
-3. Write an HTML file with Tailwind CSS and Chart.js charts
-4. Call `shell("oasis-render pdf report.html report.pdf --size A4")`
+3. Write Python code using Playwright to render HTML + CSS to PDF
+4. Run the code via `execute_code` inside the sandbox
 
 ### Generate an Excel Spreadsheet
 
@@ -107,8 +106,8 @@ User says: "Create a budget spreadsheet with monthly data."
 
 The agent will:
 1. Activate `oasis-xlsx`
-2. Write a JSON spec with sheets, columns, rows, formulas, and charts
-3. Call `shell("oasis-render xlsx spec.json budget.xlsx")`
+2. Write Python code using openpyxl to create sheets, rows, formulas, and charts
+3. Run the code via `execute_code` inside the sandbox
 
 ### Generate a PowerPoint Deck
 
@@ -116,21 +115,12 @@ User says: "Make a pitch deck for our Series A."
 
 The agent will:
 1. Activate `oasis-pptx`
-2. Write a JSON spec with theme, cover, content slides with charts, and summary
-3. Call `shell("oasis-render pptx spec.json pitch-deck.pptx")`
-
-### Fill an Existing PDF Form
-
-User says: "Fill this tax form with my details."
-
-The agent will:
-1. Activate `oasis-pdf` (FILL route)
-2. Write a JSON file with field name/value pairs
-3. Call `shell("oasis-render pdf-fill form.pdf filled.pdf --fields fields.json")`
+2. Write JavaScript code using PptxGenJS to create themed slides with charts
+3. Run the code via `execute_code` inside the sandbox
 
 ## Adding Custom Skills
 
-You can create additional document skills. For example, a company-specific report template:
+Create additional document skills that reference the built-in ones. For example, a company-specific report template:
 
 ```
 skills/
@@ -138,7 +128,7 @@ skills/
     └── SKILL.md
 ```
 
-The SKILL.md can reference `oasis-design-system` and `oasis-pdf`, layering company-specific formatting and content structure on top.
+The SKILL.md can reference `oasis-design-system` and `oasis-pdf` via the `references` frontmatter field. When activated with `ActivateWithReferences`, the referenced skill instructions are prepended automatically.
 
 ## Troubleshooting
 
@@ -148,8 +138,5 @@ Chart.js needs `animation: false` so the chart is fully drawn before Playwright 
 ### Fonts look different
 The sandbox image includes system fonts. For custom fonts, add a Google Fonts `<link>` in the HTML head. Playwright will load them before rendering.
 
-### PPTX positions look wrong
-Use percentage-based positioning (`"x": "5%"`) not inches or pixels. Percentages scale correctly across screen sizes.
-
 ### Large Excel files are slow
-For very large datasets (100k+ rows), use `xlsxwriter` via `execute_code` instead of the JSON spec approach. The JSON spec is optimized for structured reports, not bulk data export.
+For very large datasets (100k+ rows), consider using `xlsxwriter` instead of openpyxl. The agent can install it at runtime via `install_package('xlsxwriter')`.

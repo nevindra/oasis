@@ -28,6 +28,11 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 		}
 	}
 
+	// Register skill tools if a provider is configured.
+	if cfg.skillProvider != nil {
+		a.tools.Add(newSkillTool(cfg.skillProvider))
+	}
+
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Avoids rebuilding the slice on every Execute call.
 	if a.dynamicTools == nil {
@@ -56,6 +61,9 @@ func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- 
 // Resolves dynamic prompt, model, and tools when configured.
 func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- StreamEvent) loopConfig {
 	prompt, provider := a.resolvePromptAndProvider(ctx, task)
+	if a.activeSkillInstructions != "" {
+		prompt = prompt + "\n\n# Active Skills\n\n" + a.activeSkillInstructions
+	}
 
 	// Resolve tools: dynamic replaces static.
 	var toolDefs []ToolDefinition

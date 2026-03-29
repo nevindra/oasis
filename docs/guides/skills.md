@@ -46,6 +46,8 @@ Each skill is a folder containing a `SKILL.md` file with YAML frontmatter and a 
 ---
 name: code-reviewer
 description: Review code changes and suggest improvements
+compatibility: oasis >= 0.13
+license: MIT
 tools:
   - shell_exec
   - file_read
@@ -56,6 +58,9 @@ tags:
 references:
   - frontend-review
   - backend-review
+metadata:
+  author: team-name
+  version: "1.0"
 ---
 
 You are a code reviewer. Analyze code for style, correctness, and performance.
@@ -69,16 +74,23 @@ When reviewing:
 
 **Frontmatter fields:**
 
-| Field          | Purpose                                                                                       |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| `name`         | Unique identifier for the skill (matches the folder name by convention)                       |
-| `description`  | Short summary used during discovery — agents read this to decide whether to activate          |
-| `tools`        | Restrict available tools when this skill is active (empty = all tools available)              |
-| `model`        | Override the agent's default LLM (e.g. use a stronger model for complex skills)               |
-| `tags`         | Labels for categorization (e.g. `["dev", "review"]`)                                         |
-| `references`   | Names of other skills this skill builds on, enabling composability                            |
+| Field           | Purpose                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| `name`          | Unique identifier for the skill (matches the folder name by convention)                       |
+| `description`   | Short summary used during discovery — agents read this to decide whether to activate          |
+| `compatibility` | Host/runtime requirements (e.g., `"oasis >= 0.13"`, `"claude-code >= 1.0"`) — shown during discovery |
+| `license`       | SPDX license identifier (e.g., `"MIT"`, `"Apache-2.0"`) — shown during activation            |
+| `tools`         | Restrict available tools when this skill is active (empty = all tools available)              |
+| `model`         | Override the agent's default LLM (e.g. use a stronger model for complex skills)               |
+| `tags`          | Labels for categorization (e.g. `["dev", "review"]`)                                         |
+| `references`    | Names of other skills this skill builds on, enabling composability                            |
+| `metadata`      | Arbitrary key-value pairs (e.g., `author`, `version`) — passed through on activation          |
+
+The `Compatibility`, `License`, and `Metadata` fields align with the [AgentSkills open specification](https://agentskills.io).
 
 **Markdown body:** The full instructions injected into the agent's system prompt when the skill is activated. No length limit — write as much as needed.
+
+**`{dir}` placeholder:** Any occurrence of `{dir}` in the instruction body is replaced with the absolute path to the skill's directory at activation time. This lets skills reference their own files (e.g., `{dir}/templates/report.html`, `{dir}/scripts/setup.sh`).
 
 ## Skill Directory Structure
 
@@ -155,10 +167,10 @@ The `tools/skill` package exposes skill management to agents through the standar
 
 | Action           | Parameters                                                                               | Description                                              |
 | ---------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `skill_discover` | _(none)_                                                                                 | List all skills as lightweight summaries (name + description + tags) |
-| `skill_activate` | `name` (string, required)                                                                | Load full instructions for a named skill                 |
-| `skill_create`   | `name`, `description`, `instructions` (required); `tags`, `tools`, `model`, `references` (optional) | Write a new SKILL.md to disk                 |
-| `skill_update`   | `name` (required); all other fields optional                                             | Partial update — only provided fields change             |
+| `skill_discover` | _(none)_                                                                                 | List all skills as lightweight summaries (name + description + tags + compatibility) |
+| `skill_activate` | `name` (string, required)                                                                | Load full instructions for a named skill (includes compatibility, license, metadata) |
+| `skill_create`   | `name`, `description`, `instructions` (required); `tags`, `tools`, `model`, `references`, `compatibility`, `license`, `metadata` (optional) | Write a new SKILL.md to disk |
+| `skill_update`   | `name` (required); all other fields optional (including `compatibility`, `license`, `metadata`) | Partial update — only provided fields change |
 
 ### How Each Action Works
 
@@ -176,7 +188,7 @@ sequenceDiagram
     SkillTool-->>Agent: names, descriptions, tags<br>(no instructions)
 ```
 
-Returns all skills as summaries — name, description, and tags only. No instruction text is loaded. The agent reads the list and decides which skill to activate.
+Returns all skills as summaries — name, description, tags, and compatibility. No instruction text is loaded. The agent reads the list and decides which skill to activate.
 
 #### `skill_activate`
 
@@ -189,7 +201,7 @@ sequenceDiagram
     Agent->>SkillTool: skill_activate("code-reviewer")
     SkillTool->>Provider: Activate(ctx, "code-reviewer")
     Provider-->>SkillTool: Skill (full instructions)
-    SkillTool-->>Agent: name, description, instructions,<br>tools, model, tags, references
+    SkillTool-->>Agent: name, description, instructions,<br>tools, model, tags, references,<br>compatibility, license, metadata
 ```
 
 Loads a single skill by name. Returns the full `Skill` struct including the complete instruction text. The agent uses the instructions in its system prompt or reasoning.
@@ -266,31 +278,93 @@ This is not a framework feature you toggle on — it's an emergent behavior that
 
 ## Integration Pattern
 
-Wire `FileSkillProvider` and the skill tool into an agent:
+### WithSkills — Runtime Discovery
+
+`WithSkills` registers a `SkillProvider` and automatically adds `skill_discover` and `skill_activate` tools. If the provider also implements `SkillWriter`, `skill_create` and `skill_update` are added too.
 
 ```go
 import (
     "github.com/nevindra/oasis"
     "github.com/nevindra/oasis/skills"
-    skilltool "github.com/nevindra/oasis/tools/skill"
 )
 
 // Create a provider pointing at your skills directory.
 skillProvider := skills.NewFileSkillProvider("./skills")
 
-// Create the skill tool — provider acts as both SkillProvider and SkillWriter.
-tool := skilltool.New(skillProvider, skillProvider)
-
-// Wire into an agent.
+// WithSkills auto-registers discovery and activation tools.
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
-    oasis.WithTools(tool),
+    oasis.WithSkills(skillProvider),
 )
 ```
 
-**Agent-driven skill creation flow** — a complete example of discover → activate → create:
+The agent can now discover, activate, create, and update skills at runtime via tool calls.
+
+### WithActiveSkills — Pre-Activated Skills
+
+`WithActiveSkills` injects skill instructions into the system prompt on every LLM call. Use for capabilities that should always be available:
 
 ```go
-// The agent's system prompt should describe the self-improvement pattern:
+// Pre-activate with reference resolution.
+pdfSkill, _ := oasis.ActivateWithReferences(ctx, skillProvider, "oasis-pdf")
+
+agent := oasis.NewLLMAgent("doc-agent", "Document generation agent", provider,
+    oasis.WithActiveSkills(pdfSkill),
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),
+)
+```
+
+References are NOT auto-resolved by `WithActiveSkills` — call `ActivateWithReferences` before passing skills if you need reference resolution.
+
+### Combining Both
+
+Use `WithSkills` for runtime discovery alongside `WithActiveSkills` for always-on capabilities:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", provider,
+    oasis.WithActiveSkills(pdfSkill),     // always available
+    oasis.WithSkills(skillProvider),       // discoverable at runtime
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),
+)
+```
+
+### DefaultSkillDirs
+
+`DefaultSkillDirs()` returns AgentSkills-compatible scan paths:
+- `<cwd>/.agents/skills/` (project-level)
+- `~/.agents/skills/` (user-level)
+
+```go
+// Scan standard AgentSkills directories.
+for _, dir := range oasis.DefaultSkillDirs() {
+    providers = append(providers, skills.NewFileSkillProvider(dir))
+}
+```
+
+### ActivateWithReferences
+
+`ActivateWithReferences` loads a skill and prepends instructions from all referenced skills. References are resolved one level deep — a referenced skill's own references are not followed. Missing references are silently skipped.
+
+```go
+// Loads oasis-pdf + its reference oasis-design-system in one call.
+skill, err := oasis.ActivateWithReferences(ctx, provider, "oasis-pdf")
+// skill.Instructions now contains design-system instructions + pdf instructions
+```
+
+### ChainSkillProviders
+
+Merge multiple providers. Earlier providers take priority:
+
+```go
+builtin := oasis.NewBuiltinSkillProvider()
+fileProvider := skills.NewFileSkillProvider("./skills")
+
+// User file-based skills override built-in ones.
+combined := oasis.ChainSkillProviders(fileProvider, builtin)
+```
+
+### Agent-Driven Skill Creation
+
+```go
 const systemPrompt = `You are a helpful assistant.
 
 At the start of complex tasks:
@@ -303,31 +377,23 @@ After solving a hard problem:
 2. Use a descriptive name and clear instructions.`
 
 agent := oasis.NewLLMAgent("assistant", systemPrompt, provider,
-    oasis.WithTools(tool),
+    oasis.WithSkills(skillProvider),
 )
-
-// The agent will autonomously:
-// 1. skill_discover → reads summary list
-// 2. skill_activate("code-reviewer") → loads full instructions
-// 3. Uses instructions to do the task
-// 4. skill_create("new-pattern", ...) → writes SKILL.md for next time
-result, _ := agent.Execute(ctx, oasis.AgentTask{
-    Input: "Review this Go code for race conditions",
-})
 ```
 
 **Seeding skills from code:** Drop skill folders in your `skills/` directory before starting. They are picked up automatically — no initialization call needed:
 
 ```go
-// Write a skill programmatically (e.g., for seeding).
 skillProvider := skills.NewFileSkillProvider("./skills")
 
 skill := oasis.Skill{
-    Name:         "go-debugger",
-    Description:  "Debug Go applications including race conditions and goroutine leaks",
-    Instructions: "Use delve or print-based debugging. Check for goroutine leaks with runtime.NumGoroutine(). Look for data races with -race flag.",
-    Tools:        []string{"shell_exec", "file_read"},
-    Tags:         []string{"dev", "go", "debug"},
+    Name:          "go-debugger",
+    Description:   "Debug Go applications including race conditions and goroutine leaks",
+    Instructions:  "Use delve or print-based debugging. Check for goroutine leaks with runtime.NumGoroutine(). Look for data races with -race flag.",
+    Tools:         []string{"shell_exec", "file_read"},
+    Tags:          []string{"dev", "go", "debug"},
+    Compatibility: "oasis >= 0.14",
+    License:       "MIT",
 }
 
 if err := skillProvider.Create(ctx, skill); err != nil {
@@ -340,7 +406,7 @@ if err := skillProvider.Create(ctx, skill); err != nil {
 
 ## Skill Composability
 
-The `References` field links skills into dependency chains. A composite skill references foundational skills by name, and the application can resolve those references at runtime to assemble a combined instruction set:
+The `References` field links skills into dependency chains. A composite skill references foundational skills by name:
 
 ```go
 // skills/full-stack-reviewer/SKILL.md references two other skills.
@@ -353,28 +419,15 @@ fullStack := oasis.Skill{
 }
 ```
 
-To resolve references and merge instructions at runtime:
+Use `ActivateWithReferences` to resolve references at activation time. It loads the skill and prepends instructions from all referenced skills (one level deep, missing refs silently skipped):
 
 ```go
-func resolveSkill(ctx context.Context, provider oasis.SkillProvider, skill oasis.Skill) (string, error) {
-    var parts []string
-
-    // Load referenced skills first (depth-1 — no recursive resolution).
-    for _, refName := range skill.References {
-        ref, err := provider.Activate(ctx, refName)
-        if err != nil {
-            continue // skip broken references gracefully
-        }
-        parts = append(parts, fmt.Sprintf("## %s\n%s", ref.Name, ref.Instructions))
-    }
-
-    // Append the composite skill's own instructions last.
-    parts = append(parts, skill.Instructions)
-    return strings.Join(parts, "\n\n"), nil
-}
+// Loads full-stack-reviewer + frontend-review + backend-review instructions.
+skill, err := oasis.ActivateWithReferences(ctx, provider, "full-stack-reviewer")
+// skill.Instructions = "## frontend-review\n\n...\n\n---\n\n## backend-review\n\n...\n\n---\n\n<own instructions>"
 ```
 
-The framework stores references as data — how you resolve them (depth-1, recursive, selective) is an application-level decision.
+For custom resolution strategies (recursive, selective, etc.), you can still call `provider.Activate` directly and merge instructions yourself.
 
 ---
 
@@ -411,5 +464,7 @@ func applySkillTools(skill oasis.Skill, allTools []oasis.Tool) []oasis.Tool {
 
 ## See Also
 
+- [AgentSkills specification](https://agentskills.io) — open specification for skill compatibility, licensing, and metadata
+- [Document Generation](../concepts/document-generation.md) — built-in document generation skills
 - [Store Concept](../concepts/store.md) — persistence layer
 - [Tool Concept](../concepts/tool.md) — tool interface and built-in tools

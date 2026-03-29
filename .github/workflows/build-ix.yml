@@ -7,9 +7,7 @@ on:
       - 'internal/ixd/**'
       - 'cmd/ix/**'
       - 'sandbox/**'
-      - 'renderers/**'
-      - 'bin/oasis-render'
-      - 'requirements.txt'
+      - 'skills/**'
       - 'go.mod'
       - 'go.sum'
     tags:
@@ -20,9 +18,7 @@ on:
       - 'internal/ixd/**'
       - 'cmd/ix/**'
       - 'sandbox/**'
-      - 'renderers/**'
-      - 'bin/oasis-render'
-      - 'requirements.txt'
+      - 'skills/**'
       - 'go.mod'
       - 'go.sum'
   workflow_dispatch: {}

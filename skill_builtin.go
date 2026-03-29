@@ -50,6 +50,7 @@ func (p *BuiltinSkillProvider) Discover(ctx context.Context) ([]SkillSummary, er
 		if tags := fm["tags"]; tags != "" {
 			summary.Tags = splitCSV(tags)
 		}
+		summary.Compatibility = fm["compatibility"]
 		summaries = append(summaries, summary)
 	}
 
@@ -88,6 +89,18 @@ func (p *BuiltinSkillProvider) Activate(ctx context.Context, name string) (Skill
 	}
 	if refs := fm["references"]; refs != "" {
 		skill.References = splitCSV(refs)
+	}
+	skill.Compatibility = fm["compatibility"]
+	skill.License = fm["license"]
+	// Collect metadata.* entries
+	meta := make(map[string]string)
+	for k, v := range fm {
+		if strings.HasPrefix(k, "metadata.") {
+			meta[strings.TrimPrefix(k, "metadata.")] = v
+		}
+	}
+	if len(meta) > 0 {
+		skill.Metadata = meta
 	}
 	return skill, nil
 }

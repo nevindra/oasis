@@ -66,20 +66,24 @@ type ScheduledAction struct {
 }
 
 type Skill struct {
-    Name         string   `json:"name"`
-    Description  string   `json:"description"`
-    Instructions string   `json:"instructions"`
-    Tools        []string `json:"tools,omitempty"`
-    Model        string   `json:"model,omitempty"`
-    Tags         []string `json:"tags,omitempty"`
-    References   []string `json:"references,omitempty"`
-    Dir          string   `json:"-"`
+    Name          string            `json:"name"`
+    Description   string            `json:"description"`
+    Instructions  string            `json:"instructions"`
+    Tools         []string          `json:"tools,omitempty"`
+    Model         string            `json:"model,omitempty"`
+    Tags          []string          `json:"tags,omitempty"`
+    References    []string          `json:"references,omitempty"`
+    Dir           string            `json:"-"`
+    Compatibility string            `json:"compatibility,omitempty"`
+    License       string            `json:"license,omitempty"`
+    Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
 type SkillSummary struct {
-    Name        string   `json:"name"`
-    Description string   `json:"description"`
-    Tags        []string `json:"tags,omitempty"`
+    Name          string   `json:"name"`
+    Description   string   `json:"description"`
+    Tags          []string `json:"tags,omitempty"`
+    Compatibility string   `json:"compatibility,omitempty"`
 }
 ```
 
