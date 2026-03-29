@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-03-29
+
 ### Added
 - **ix — sandbox execution daemon** (`internal/ixd/`, `cmd/ix/`). Go stdlib HTTP daemon that runs inside sandbox containers, replacing gem-server/execd. Provides shell execution (SSE streaming), stateless code execution (Python, JS, Bash), and comprehensive file operations via REST API. Zero external dependencies.
 - **Enhanced file operations** — `EditFile`, `GlobFiles`, `GrepFiles` methods on `Sandbox` interface. `file_edit` (surgical string replacement), `file_glob` (pattern search via `fd` with `**` support), `file_grep` (content search via `rg` with regex and context lines) tools. `ReadFile` now uses buffered line-by-line reading with line numbers (`cat -n` format) instead of loading entire files. `GlobFiles` and `GrepFiles` support `Exclude`, `Limit`, and `Context` parameters. 10-50x token savings vs read+rewrite for file edits.
