@@ -1,0 +1,107 @@
+# Philosophy
+
+Oasis is a high-performance Go framework for AI agent systems — fast, reliable, and built to scale with the next leap in AI capabilities.
+
+This document defines how we think. For concrete implementation rules, see [ENGINEERING.md](ENGINEERING.md).
+
+> **Current phase: pre-v1.0.0** — breaking changes are expected and encouraged when they improve the final API surface. Each breaking change requires a migration note in the PR description. After v1.0.0, semver applies strictly.
+
+---
+
+## API Strategy
+
+Every exported symbol is a permanent contract. The API surface must earn its place.
+
+1. **Consolidate aggressively.** If two interfaces overlap or can become one without losing expressiveness, merge them. Fewer, more powerful primitives beat many narrow ones.
+2. **Every export is a commitment.** New exported symbols require a design doc in `docs/plans/`. The bar: does this *need* to be public, or can it stay internal?
+3. **Pre-v1: break what needs breaking.** Rename for clarity, change signatures for consistency, restructure packages for coherence. The cost of a breaking change now is a migration note. The cost of a wrong API in v1 is forever.
+4. **Post-v1: extend, never break.** New capability = new interface + type assertion. New struct field = zero value preserves old behavior. Semver strictly enforced.
+
+---
+
+## Design Principles
+
+Every design decision asks: **will this still work — and work fast — when agents are 10x more capable?**
+
+### 1. Design for Autonomous AI Systems
+
+Production readiness is the minimum bar, not a principle. The framework exists to power autonomous AI agent systems — today and as capabilities grow.
+
+**Performance is a first-class constraint, not an afterthought.** Every component is designed with speed and resource efficiency in mind. A fast framework means faster agents, lower costs, and higher throughput.
+
+**Design for the next leap:**
+
+- Agents today follow explicit tool-calling loops. Tomorrow they may dynamically discover tools, spawn sub-agents, or negotiate task delegation. Interfaces should not assume a fixed execution pattern.
+- Keep protocol types open for extension. Prefer structs with optional fields over rigid signatures. Adding a field is non-breaking; adding a parameter is breaking.
+- Think in recursion. An Agent that contains Agents. A Tool that wraps an Agent. A Network that routes to Networks. Recursive composition is how simple primitives produce emergent behavior.
+
+**Forward-compatible API design:**
+
+- Extend via composition, not modification. Need a Provider that also does embeddings? That's a separate `EmbeddingProvider` interface — don't add methods to `Provider`.
+- Zero values must preserve existing behavior. A new struct field whose zero value changes behavior is a silent breaking change.
+- Optional capabilities via interface assertion — check at runtime, don't force at compile time.
+
+```go
+// Optional capability via separate interface
+type StreamingAgent interface {
+    Agent
+    ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
+}
+
+// Check at runtime — existing code never breaks
+if sa, ok := agent.(StreamingAgent); ok {
+    return sa.ExecuteStream(ctx, task, ch)
+}
+```
+
+### 2. Opinionated Core, Composable Edges
+
+The framework owns the execution model. Developers configure it, not replace it.
+
+**The core is opinionated.** The agent execution loop, memory pipeline, suspend/resume, and message assembly are framework-owned. These are optimized as a unit — crossing internal boundaries for flexibility would compromise performance and reliability. Developers use LLMAgent, Network, and Workflow as provided.
+
+**The edges are composable.** Integration points are open interfaces:
+
+- **Provider** — bring any LLM backend
+- **Tool** — add capabilities without framework coupling
+- **Processor** — plug in guardrails, validation, logging
+- **Store** — swap persistence backends
+- **SkillProvider** — load instructions from any source
+
+**Why this split:** The core changes together and is optimized together. The edges vary per deployment and must be swappable. Forcing composability on the core adds indirection that costs performance. Forcing opinions on the edges limits adoption.
+
+**The rules:**
+
+- Interfaces at integration boundaries — between the framework and external services, not between internal components that always change together.
+- Depend on behavior, not implementation. Consumers shouldn't care whether storage is SQLite or Postgres.
+- Explicit dependencies. Constructor injection, not service locator. Dependencies visible in function signatures. No hidden side effects.
+- Earn every abstraction. Write concrete code first. Extract only when a pattern repeats 3x. No `utils`, `helpers`, or `common` packages.
+
+### 3. Code for Dual Readers — Human and Agent
+
+Code is read by humans and will be read, extended, and generated by AI agents.
+
+- Names explain *intent*, not *implementation*. `BuildContext` over `GetTop15FactsAndFormat`.
+- Comments explain **why**, not **what**. If a comment restates the code, delete it.
+- **Capture design context in code.** Every non-obvious design decision must explain why it exists — not just what it does. Without this, future contributors (human or agent) will "fix" correct code or repeat mistakes because the reasoning wasn't visible.
+- Consistent patterns. When every Tool follows the same Execute pattern, agents generate correct code on the first try.
+
+### 4. Fail Gracefully, Recover Fast
+
+An autonomous agent can't page a human every time something goes wrong.
+
+- Never crash on recoverable errors. Memory extraction fails? Chat continues.
+- **Recovery must be fast.** A graceful failure that takes 30 seconds to recover is a performance bug. Design recovery paths with the same rigor as happy paths.
+- Error messages must be actionable. `"invalid args: expected string for 'query' field"`, not `"invalid args"`.
+- **Errors must be observable.** Developers who weren't there when it happened must be able to reconstruct what went wrong from logs alone. Structured logging, clear context, no swallowed errors.
+- `ToolResult` is not an error. `Tool.Execute` always returns nil Go error. Business failures go in `ToolResult.Error`. Go errors = infrastructure failure only.
+
+### 5. Optimize for the First 15 Minutes
+
+A framework that's powerful but painful to use is a framework nobody uses. Developer experience is a design constraint, not a feature.
+
+- Simple things must be simple. An agent with one tool and one provider should take <20 lines of code.
+- Progressive disclosure. Beginners see the simple path. Power users discover depth without it getting in the way.
+- Defaults must be sensible. Zero-config should produce a working, reasonable agent. Every option should have a justifiable default.
+- **Design for LLM-assisted development.** Developers build with AI coding assistants. APIs, types, and patterns must be easy for LLMs to reason about, suggest correctly, and explain clearly. If an LLM consistently misuses an API, that's a DX bug.
+- Own your dependencies. Can stdlib or <200 lines hand-rolled solve it? Don't add the dep. For external APIs: no SDKs — raw HTTP + JSON gives full control and fewer surprises.

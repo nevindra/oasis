@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Documentation
 
-**Always read [docs/ENGINEERING.md](docs/ENGINEERING.md) before making changes or in brainstorming session** — engineering principles, production engineering, extensibility, and things to never do.
+**Always read [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md) before brainstorming or making architectural decisions** — framework identity, design principles, composability stance, and API strategy.
+
+**Always read [docs/ENGINEERING.md](docs/ENGINEERING.md) before writing code** — coding standards, production engineering, performance rules, and things to never do.
 
 **Read the relevant doc before modifying a component:**
 
@@ -20,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Oasis
 
-Oasis is an AI agent framework in Go — built to evolve as AI capabilities grow toward AGI. The framework is the product. Reference apps (Telegram bot, etc.) are demos — DO NOT USE BOT CODE AS YOUR GUIDELINE.
+Oasis is a high-performance Go framework for AI agent systems — fast, reliable, and built to scale with AI capabilities. The framework is the product. Reference apps (Telegram bot, etc.) are demos — DO NOT USE BOT CODE AS YOUR GUIDELINE.
 
 ## Build & Test
 
