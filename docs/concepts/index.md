@@ -25,7 +25,6 @@ graph TB
     subgraph Storage
         SQLITE[(SQLite)]
         PG[(PostgreSQL)]
-        LIBSQL[(Turso)]
     end
 
     subgraph Tools
@@ -53,7 +52,6 @@ graph TB
     SCHED --> AGENT
     AGENT --> SQLITE
     AGENT --> PG
-    AGENT --> LIBSQL
     AGENT --> KNOW
     AGENT --> SEARCH
     AGENT --> SHELL
@@ -75,23 +73,14 @@ Every box is a Go interface (except Scheduler, which is a concrete struct wrappi
 
 ## Pages
 
-### Core Interfaces
-
-| Page | Interface | What it does |
-| ---- | --------- | ------------ |
-| [Provider](provider.md) | `Provider`, `EmbeddingProvider`, `BatchProvider` | LLM chat, tool calling, streaming, embedding, batch processing |
-| [Model Catalog](provider.md#model-catalog) | `ModelCatalog` | Dynamic model discovery, validation, pricing metadata, provider creation |
-| [Store](store.md) | `Store`, `KeywordSearcher`, `GraphStore` | Persistence with vector search, full-text search, and graph edges |
-| [Tool](tool.md) | `Tool` | Pluggable agent capabilities |
-
 ### Agent Primitives
 
-| Page | Type | What it does |
-| ---- | ---- | ------------ |
-| [Agent](agent.md) | `Agent`, `LLMAgent` | Single-provider tool-calling loop |
-| [Network](network.md) | `Network` | Multi-agent coordination via LLM router |
-| [Workflow](workflow.md) | `Workflow` | Deterministic DAG-based orchestration |
-| [Scheduler](scheduler.md) | `Scheduler` | Time-based proactive execution |
+| Primitive | Doc | Source Files | Related Guide |
+|-----------|-----|-------------|---------------|
+| Agent | [agent.md](agent.md) | agent.go, llmagent.go | [custom-agent](../guides/custom-agent.md) |
+| Network | [network.md](network.md) | network.go | — |
+| Workflow | [workflow.md](workflow.md) | workflow.go, workflow_exec.go, workflow_steps.go, workflow_definition.go | [execution-plans](../guides/execution-plans.md) |
+| Scheduler | [scheduler.md](scheduler.md) | scheduler.go | — |
 
 #### Network vs Workflow — Which One?
 
@@ -119,34 +108,37 @@ flowchart TD
 
 Both implement `Agent`, so they compose with each other — a Network can contain a Workflow as a subagent, and a Workflow can orchestrate a Network via `AgentStep`.
 
-### Execution Capabilities
+### LLM & Tools
 
-| Page | Feature | What it does |
-| ---- | ------- | ------------ |
-| [Code Execution](code-execution.md) | `Sandbox`, `Manager`, `WithSandbox` | Docker-based sandbox with shell, code execution, file I/O, browser, and MCP tools |
-| [Document Generation](document-generation.md) | Skills + `oasis-render` | PDF, DOCX, XLSX, PPTX generation via sandbox renderers |
+| Primitive | Doc | Source Files | Related Guide |
+|-----------|-----|-------------|---------------|
+| Provider | [provider.md](provider.md) | provider.go, provider/ | [custom-provider](../guides/custom-provider.md) |
+| Tool | [tool.md](tool.md) | tool.go, tools/ | [custom-tool](../guides/custom-tool.md) |
+| Skill | [skill.md](skill.md) | skill.go, skill_builtin.go, skill_scan.go, tools/skill/ | [skills](../guides/skills.md) |
 
 ### Memory & Processing
 
-| Page | Interface | What it does |
-| ---- | --------- | ------------ |
-| [Memory](memory.md) | `MemoryStore` | Long-term user facts with semantic dedup |
-| [Processor](processor.md) | `PreProcessor`, `PostProcessor`, `PostToolProcessor` | Middleware hooks in the agent loop |
-| [InputHandler](input-handler.md) | `InputHandler` | Human-in-the-loop interactions |
+| Primitive | Doc | Source Files | Related Guide |
+|-----------|-----|-------------|---------------|
+| Store | [store.md](store.md) | store.go, store/ | [custom-store](../guides/custom-store.md) |
+| Memory | [memory.md](memory.md) | memory.go, agentmemory.go, memory/ | [memory-and-recall](../guides/memory-and-recall.md) |
+| Processor | [processor.md](processor.md) | processor.go | [processors-and-guardrails](../guides/processors-and-guardrails.md) |
+| Input Handler | [input-handler.md](input-handler.md) | input.go | [human-in-the-loop](../guides/human-in-the-loop.md) |
 
-### RAG Pipeline
+### Data Pipeline
 
-| Page | Interface/Package | What it does |
-| ---- | ----------------- | ------------ |
-| [Ingest](ingest.md) | `ingest` | Document chunking, embedding, and graph extraction pipeline |
-| [Retrieval](retrieval.md) | `Retriever`, `Reranker`, `GraphRetriever` | Hybrid search, RRF, graph traversal, re-ranking |
-| [Graph RAG](graph-rag.md) | `GraphStore`, `GraphRetriever` | Knowledge graph extraction, edge types, multi-hop traversal, score blending |
+| Primitive | Doc | Source Files | Related Guide |
+|-----------|-----|-------------|---------------|
+| Ingest | [ingest.md](ingest.md) | ingest/ | [ingesting-documents](../guides/ingesting-documents.md) |
+| Retrieval | [retrieval.md](retrieval.md) | retriever.go | [rag-pipeline](../guides/rag-pipeline.md) |
+| Graph RAG | [graph-rag.md](graph-rag.md) | ingest/ | [rag-pipeline](../guides/rag-pipeline.md) |
 
 ### Infrastructure
 
-| Page | Package | What it does |
-| ---- | ------- | ------------ |
-| [Observability](observability.md) | `Tracer`, `Span`, `observer` | Core tracing interfaces + OpenTelemetry implementation with cost tracking |
+| Primitive | Doc | Source Files | Related Guide |
+|-----------|-----|-------------|---------------|
+| Observability | [observability.md](observability.md) | observer/ | — |
+| Sandbox | [sandbox.md](sandbox.md) | sandbox/, cmd/ix/ | [code-execution](../guides/code-execution.md), [document-generation](../guides/document-generation.md) |
 
 ## Key Design Decisions
 

@@ -38,27 +38,36 @@ result, err := agent.Execute(ctx, oasis.AgentTask{
 
 ```mermaid
 flowchart TD
-    START([Execute]) --> BUILD[Build messages: system prompt + memory + history + user input]
+    START([Execute]) --> BUILD[Build messages: system prompt + skills + memory + history + user input]
     BUILD --> PRE[PreProcessor hooks]
     PRE -->|ErrHalt| HALT([Return canned response])
+    PRE -->|Suspend| SUSPENDED([Return ErrSuspended])
     PRE --> LLM{Call LLM}
-    LLM --> POST[PostProcessor hooks]
+    LLM --> THINK{Thinking present?}
+    THINK -->|Yes| EMIT_THINK[Emit EventThinking]
+    THINK -->|No| POST
+    EMIT_THINK --> POST[PostProcessor hooks]
     POST -->|ErrHalt| HALT
+    POST -->|Suspend| SUSPENDED
     POST --> CHECK{Has tool calls?}
     CHECK -->|No| DONE([Return AgentResult])
     CHECK -->|Yes| DISPATCH[Execute tools in parallel]
-    DISPATCH --> POSTTOOL[PostToolProcessor hooks]
+    DISPATCH --> POSTTOOL[PostToolProcessor hooks per tool]
     POSTTOOL --> APPEND[Append results to messages]
-    APPEND --> ITER{Max iterations?}
+    APPEND --> COMPRESS{Rune count > threshold?}
+    COMPRESS -->|Yes| SUMMARIZE[Compress old messages via LLM]
+    COMPRESS -->|No| ITER
+    SUMMARIZE --> ITER{Max iterations?}
     ITER -->|No| PRE
     ITER -->|Yes| SYNTH[Force synthesis: ask LLM to summarize]
-    SYNTH --> DONE
+    SYNTH --> SYNTHPOST[PostProcessor hooks on synthesis]
+    SYNTHPOST --> DONE
 ```
 
 ### Key Behaviors
 
-- **Parallel tool execution** — when the LLM returns multiple tool calls in one response, they run concurrently via a fixed worker pool of `min(len(calls), 10)` goroutines pulling from a shared work channel. The dispatch is context-aware: if `ctx` is cancelled while tool calls are in-flight, the function returns immediately with error results for incomplete calls. Single calls run inline without goroutine overhead
-- **Max iterations** — defaults to 10. When reached, the agent appends a synthesis prompt and makes one final LLM call
+- **Parallel tool execution** — when the LLM returns multiple tool calls in one response, they run concurrently via a fixed worker pool of `min(len(calls), 10)` goroutines pulling from a shared work channel. The dispatch is context-aware: if `ctx` is cancelled while tool calls are in-flight, the function returns immediately with error results for incomplete calls. Single calls run inline without goroutine overhead. Individual tool panics are caught by recovery wrappers and converted to error results (`"error: tool <name> panic: <value>"`) — a panicking tool never crashes the agent
+- **Max iterations** — defaults to 10. When reached, the agent appends a synthesis prompt (`"You have used all available tool calls. Summarize what you found and respond to the user."`) and makes one final LLM call without tools. PostProcessor hooks run on the synthesis response as well
 - **Streaming** — LLMAgent implements `StreamingAgent`. Emits `StreamEvent` values throughout execution: tool call start/result events during tool iterations, text-delta events during the final response. All channel sends are context-guarded — if the consumer stops reading or the context is cancelled, the agent loop exits cleanly instead of blocking
 - **Memory** — stateless by default. Enable with `WithConversationMemory` and `WithUserMemory`
 - **Cached tool definitions** — when using static tools (no `WithDynamicTools`), tool definitions are computed once at construction time and reused across `Execute` calls. Dynamic tools still rebuild per-request
@@ -150,6 +159,8 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithTopP(p float64)` | Set nucleus sampling probability (nil = provider default) |
 | `WithTopK(k int)` | Set top-K sampling parameter (nil = provider default) |
 | `WithMaxTokens(n int)` | Set maximum output tokens (nil = provider default) |
+| `WithActiveSkills(skills ...Skill)` | Pre-activate skills — instructions appended to system prompt |
+| `WithSkills(p SkillProvider)` | Register skill provider, adds `skill_discover` and `skill_activate` tools. If provider implements `SkillWriter`, also adds `skill_create` and `skill_update` |
 | `WithTracer(t Tracer)` | Attach a tracer for span creation (`agent.execute` → `agent.loop.iteration`, etc.) |
 | `WithLogger(l *slog.Logger)` | Attach a structured logger (replaces `log.Printf`) |
 
@@ -235,12 +246,21 @@ Both `LLMAgent` and `Network` implement it. The channel carries typed `StreamEve
 
 | Event | Emitted by | Fields |
 | ----- | ---------- | ------ |
+| `EventInputReceived` | Agent | `Content` (task input) — emitted once at start |
+| `EventProcessingStart` | Agent | — emitted when loop begins |
 | `EventTextDelta` | Provider | `Content` (token text) |
 | `EventToolCallStart` | Agent | `Name`, `Args` (JSON) |
+| `EventToolCallDelta` | Provider | `Name`, `Args` (incremental tool arg chunks during streaming) |
 | `EventToolCallResult` | Agent | `Name`, `Content` (result), `Usage`, `Duration` |
+| `EventToolProgress` | StreamingTool | `Name`, `Content` (intermediate progress from streaming tools) |
 | `EventThinking` | Agent | `Content` (reasoning/chain-of-thought text) |
 | `EventAgentStart` | Network | `Name` (subagent name) |
 | `EventAgentFinish` | Network | `Name`, `Content` (output), `Usage`, `Duration` |
+| `EventRoutingDecision` | Network | `Content` (JSON: `{"agents":[...],"tools":[...]}`) |
+| `EventStepStart` | Workflow | `Name` (step name) |
+| `EventStepFinish` | Workflow | `Name`, `Content` (output), `Usage`, `Duration` |
+| `EventStepProgress` | Workflow | `Name`, `Content` (ForEach iteration progress) |
+| `EventFileAttachment` | Sandbox | `Name` (filename), `Content` (file path or ref) |
 
 Check at runtime via type assertion:
 
@@ -293,6 +313,52 @@ if errors.As(err, &suspended) {
 ```
 
 See [Workflow](workflow.md) for DAG-level suspend/resume and [Processors](processor.md) for processor-triggered gates.
+
+## Skills
+
+Skills are file-based instruction packages that agents can discover, activate, and create at runtime. Two options control skill integration:
+
+**`WithActiveSkills`** — pre-activate skills at construction time. Skill instructions are appended to the system prompt with `---` separators:
+
+```go
+agent := oasis.NewLLMAgent("writer", "Technical writer", provider,
+    oasis.WithActiveSkills(codingSkill, styleSkill),
+)
+```
+
+**`WithSkills`** — register a `SkillProvider` for on-demand discovery. Adds `skill_discover` and `skill_activate` tools so the LLM can find and load skills at runtime:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Versatile assistant", provider,
+    oasis.WithSkills(fileSkillProvider),
+)
+```
+
+If the provider implements `SkillWriter`, `skill_create` and `skill_update` tools are also added, letting the agent author new skills.
+
+Both options work on LLMAgent and Network. See [Skills Guide](../guides/skills.md) for details.
+
+## Plan Execution
+
+`WithPlanExecution()` adds the built-in `execute_plan` tool. The LLM batches multiple tool calls in a single turn — all steps run in parallel without re-sampling, reducing latency and tokens for fan-out patterns.
+
+### Restrictions
+
+- **Max 50 steps per plan** — plans exceeding this limit are rejected with an error
+- **No nesting** — `execute_plan` cannot call itself within a plan step
+- **`ask_user` blocked** — human-in-the-loop is not available inside plan steps
+
+## Graceful Shutdown
+
+When using conversation memory, message persistence happens in background goroutines. Call `Drain()` before process exit to ensure all in-flight writes complete:
+
+```go
+result, err := agent.Execute(ctx, task)
+// ... use result ...
+agent.Drain() // wait for background memory persistence to finish
+```
+
+Both `LLMAgent` and `Network` expose `Drain()`. Without it, messages from the last execution may not be persisted.
 
 ## Sub-Agent Spawning
 
@@ -362,7 +428,7 @@ Parent LLM response:
 - [Network](network.md) — multi-agent coordination
 - [Workflow](workflow.md) — deterministic DAG orchestration
 - [Tool](tool.md) — what agents can do
-- [Code Execution](code-execution.md) — sandbox with shell, code execution, file I/O, browser, and MCP
+- [Sandbox](sandbox.md) — Docker container with shell, code execution, file I/O, browser, and MCP
 - [Memory](memory.md) — conversation and user memory
 - [Observability](observability.md) — tracing and structured logging
 - [Custom Agent Guide](../guides/custom-agent.md)

@@ -8,17 +8,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Always read [docs/ENGINEERING.md](docs/ENGINEERING.md) before writing code** — coding standards, production engineering, performance rules, and things to never do.
 
-**Read the relevant doc before modifying a component:**
+**Before modifying any component, find and read all related docs:**
 
-- **[docs/concepts/](docs/concepts/index.md)** — Architecture + every primitive:
-  [provider](docs/concepts/provider.md), [agent](docs/concepts/agent.md), [network](docs/concepts/network.md), [workflow](docs/concepts/workflow.md), [tool](docs/concepts/tool.md), [store](docs/concepts/store.md), [memory](docs/concepts/memory.md), [processor](docs/concepts/processor.md), [input-handler](docs/concepts/input-handler.md), [scheduler](docs/concepts/scheduler.md), [ingest](docs/concepts/ingest.md), [retrieval](docs/concepts/retrieval.md), [graph-rag](docs/concepts/graph-rag.md), [observability](docs/concepts/observability.md), [code-execution](docs/concepts/code-execution.md), [document-generation](docs/concepts/document-generation.md)
-- **[docs/guides/](docs/guides/)** — How-to guides:
-  [custom-tool](docs/guides/custom-tool.md), [custom-provider](docs/guides/custom-provider.md), [custom-store](docs/guides/custom-store.md), [custom-agent](docs/guides/custom-agent.md), [processors-and-guardrails](docs/guides/processors-and-guardrails.md), [human-in-the-loop](docs/guides/human-in-the-loop.md), [memory-and-recall](docs/guides/memory-and-recall.md), [streaming](docs/guides/streaming.md), [background-agents](docs/guides/background-agents.md), [skills](docs/guides/skills.md), [ingesting-documents](docs/guides/ingesting-documents.md), [rag-pipeline](docs/guides/rag-pipeline.md), [execution-plans](docs/guides/execution-plans.md), [code-execution](docs/guides/code-execution.md), [image-generation](docs/guides/image-generation.md), [document-generation](docs/guides/document-generation.md)
-- **[docs/api/](docs/api/)** — [interfaces](docs/api/interfaces.md), [types](docs/api/types.md), [constructors](docs/api/constructors.md), [options](docs/api/options.md), [errors](docs/api/errors.md)
-- **[docs/configuration/](docs/configuration/index.md)** — Config overview + [full reference](docs/configuration/reference.md)
-- **[docs/getting-started/](docs/getting-started/index.md)** — Installation, quick start, reference app
+| Changing...              | Start from                                                  |
+|--------------------------|-------------------------------------------------------------|
+| Framework primitive      | [docs/concepts/](docs/concepts/index.md)                    |
+| How-to / usage pattern   | [docs/guides/](docs/guides/index.md)                        |
+| Interface or type        | [docs/api/](docs/api/index.md)                              |
+| Config options           | [docs/configuration/](docs/configuration/index.md)          |
+| Getting started flow     | [docs/getting-started/](docs/getting-started/index.md)      |
 
-**When you make architectural or convention changes, update the corresponding doc file to keep them in sync.**
+When your change affects multiple areas, search for all docs referencing the component name and update each one. Keep docs in sync with code.
 
 ## What is Oasis
 
@@ -50,7 +50,7 @@ oasis/                              # FRAMEWORK (root package)
 |-- handle.go                      # Spawn() + AgentHandle
 |
 |-- provider/{gemini,openaicompat}/ # LLM providers (raw HTTP, no SDKs)
-|-- store/{sqlite,libsql,postgres}/ # Storage implementations
+|-- store/{sqlite,postgres}/        # Storage implementations
 |-- memory/                        # Storage-agnostic memory helpers
 |-- observer/                       # OTEL observability wrappers
 |-- retriever.go                    # Retrieval pipeline (Retriever, Reranker, HybridRetriever)

@@ -1,6 +1,6 @@
 # Document Generation Guide
 
-This guide shows how to wire document generation skills into your Oasis agents. For the concept overview, see [Document Generation](../concepts/document-generation.md).
+This guide shows how to wire document generation skills into your Oasis agents. Document generation runs inside the [Sandbox](../concepts/sandbox.md) using skill-driven instructions.
 
 ## Prerequisites
 

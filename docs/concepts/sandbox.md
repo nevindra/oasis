@@ -1,6 +1,6 @@
-# Code Execution
+# Sandbox
 
-Code execution lets the LLM write and run code in a sandboxed environment. The sandbox provides a full-featured Docker container with shell access, code execution, file I/O, browser automation, and MCP server integration — all auto-registered as agent tools.
+The sandbox is a managed Docker container that gives agents access to a full execution environment — shell, code execution, file I/O, browser automation, and MCP server integration. It powers both [code execution](../guides/code-execution.md) and [document generation](../guides/document-generation.md) capabilities.
 
 ## Sandbox Interface
 
@@ -337,7 +337,8 @@ The sandbox limits parallel executions via a semaphore. When at capacity, new re
 
 ## See Also
 
+- [Code Execution Guide](../guides/code-execution.md) — patterns and recipes for code execution
+- [Document Generation Guide](../guides/document-generation.md) — PDF, DOCX, XLSX, PPTX via sandbox
 - [Tool](tool.md) — tool interface, plan execution, parallel execution
-- [Code Execution Guide](../guides/code-execution.md) — patterns and recipes
-- [Agent](agent.md) — how agents use tools and code execution
+- [Agent](agent.md) — how agents use tools and sandbox
 - [API Reference: Interfaces](../api/interfaces.md)

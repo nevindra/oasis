@@ -1,6 +1,6 @@
 # Oasis
 
-Build AI agents in Go that actually compose. Single agents, multi-agent networks, DAG workflows, graph-powered RAG, code execution — all as recursive primitives. No LLM SDKs. No vendor lock-in. Just interfaces.
+A high-performance Go framework for AI agent systems — fast, reliable, and built to scale with the next leap in AI capabilities. Single agents, multi-agent networks, DAG workflows, graph-powered RAG, code execution, and long-term memory.
 
 ```go
 import oasis "github.com/nevindra/oasis"
@@ -10,7 +10,7 @@ import oasis "github.com/nevindra/oasis"
 
 Most agent frameworks are wrappers around LLM SDKs with hardcoded abstractions. Oasis is different:
 
-- **Everything is an interface.** LLM providers, storage, tools, memory — swap any component without touching the rest. Write your own in 20 lines.
+- **Opinionated core, composable edges.** The execution loop, memory pipeline, and suspend/resume are framework-owned and optimized as a unit. Providers, tools, stores, and processors are open interfaces — swap any implementation.
 - **Agents compose recursively.** An `LLMAgent` is an `Agent`. A `Network` of agents is an `Agent`. A `Workflow` containing both is an `Agent`. Nest them arbitrarily.
 - **No LLM SDKs.** Every provider uses raw `net/http`. You control the bytes. Zero vendor lock-in, minimal dependencies.
 - **Go-native concurrency.** Parallel tool dispatch, background agents via `Spawn()`, DAG workflows with automatic wave execution — all using goroutines and channels.
@@ -71,10 +71,10 @@ func main() {
 - **Conversation memory** — load/persist history per thread with `MaxHistory` and `MaxTokens` trimming.
 - **Cross-thread recall** — semantic search across all threads with cosine similarity filtering.
 - **User memory** — LLM-extracted facts with semantic deduplication, confidence decay, and contradiction supersession. Runs automatically after each turn.
-- **Graph RAG** — LLM-based graph extraction during ingestion discovers 8 relationship types between chunks. `GraphRetriever` combines vector search with multi-hop BFS traversal. Persistent `GraphStore` in all three backends.
+- **Graph RAG** — LLM-based graph extraction during ingestion discovers 8 relationship types between chunks. `GraphRetriever` combines vector search with multi-hop BFS traversal. Persistent `GraphStore` in all store backends.
 - **Hybrid retrieval** — `HybridRetriever` fuses vector search + FTS keyword search with Reciprocal Rank Fusion, parent-child chunk resolution, and optional LLM re-ranking.
 - **Semantic chunking** — embedding-based topic boundary detection alongside recursive and markdown-aware chunkers.
-- **Skills** — database-persisted instruction packages with semantic search. Agents discover and create skills for each other.
+- **Skills** — file-based instruction packages. Agents discover, activate, and create skills at runtime via `SkillProvider`.
 
 ### Streaming & Events
 
@@ -200,7 +200,7 @@ h.Cancel()
 | Component | Packages |
 | --------- | -------- |
 | **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Groq, Together, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure, and any OpenAI-compatible API) |
-| **Storage** | `store/sqlite` (local, pure-Go), `store/libsql` (Turso/remote), `store/postgres` (PostgreSQL + pgvector). All three support `Store`, `MemoryStore`, `GraphStore`, and `KeywordSearcher` |
+| **Storage** | `store/sqlite` (local, pure-Go), `store/postgres` (PostgreSQL + pgvector). Both support `Store`, `MemoryStore`, `GraphStore`, and `KeywordSearcher` |
 | **Tools** | `tools/knowledge` (RAG), `tools/remember`, `tools/search` (web), `tools/schedule`, `tools/shell`, `tools/file`, `tools/http`, `tools/data` (CSV/JSON transform), `tools/skill` (agent skill management) |
 | **Sandbox** | `sandbox` (Docker-based sandbox), `sandbox/ix` (manager + ix daemon client) |
 | **Retrieval** | `HybridRetriever` (vector + FTS + RRF), `GraphRetriever` (multi-hop BFS), `ScoreReranker`, `LLMReranker` |
@@ -231,7 +231,6 @@ oasis/
 |-- provider/gemini/                    # Google Gemini provider
 |-- provider/openaicompat/              # OpenAI-compatible provider
 |-- store/sqlite/                       # Local SQLite (pure-Go, no CGO)
-|-- store/libsql/                       # Remote Turso store
 |-- store/postgres/                     # PostgreSQL + pgvector
 |-- sandbox/                           # Docker-based sandbox (shell, code, files, browser, MCP)
 |-- observer/                           # OTEL observability
@@ -252,9 +251,10 @@ See [docs/configuration/reference.md](docs/configuration/reference.md) for the f
 - [Getting Started](docs/getting-started/) — installation, quick start, reference app
 - [Concepts](docs/concepts/) — architecture, interfaces, and primitives
 - [Guides](docs/guides/) — how-to guides for building custom components
-- [Configuration](docs/configuration/reference.md) — all config options and environment variables
 - [API Reference](docs/api/) — complete interface definitions, types, and options
-- [Contributing](docs/contributing.md) — engineering principles and coding conventions
+- [Configuration](docs/configuration/reference.md) — all config options and environment variables
+- [Philosophy](docs/PHILOSOPHY.md) — design principles and framework identity
+- [Engineering](docs/ENGINEERING.md) — coding standards and production rules
 - [Deployment](cmd/bot_example/DEPLOYMENT.md) — Docker, cloud deployment for the reference bot
 
 ## MCP Docs Server

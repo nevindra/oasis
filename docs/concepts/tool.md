@@ -769,12 +769,12 @@ The framework auto-registers these tools:
 
 Both can be enabled on the same agent — the LLM picks the right tool for each task.
 
-See [Code Execution](code-execution.md) for the full architecture, safety model, and runtime API reference.
+See [Sandbox](sandbox.md) for the full architecture, safety model, and runtime API reference.
 
 ## See Also
 
 - [Custom Tool Guide](../guides/custom-tool.md) — build your own tool step by step
-- [Code Execution](code-execution.md) — sandbox with shell, code execution, file I/O, browser, and MCP
+- [Sandbox](sandbox.md) — Docker container with shell, code execution, file I/O, browser, and MCP
 - [Code Execution Guide](../guides/code-execution.md) — patterns and recipes
 - [Agent](agent.md) — how agents use tools
 - [API Reference: Interfaces](../api/interfaces.md)

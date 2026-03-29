@@ -42,7 +42,7 @@
 // # Included Implementations
 //
 // Providers: provider/gemini (Google Gemini), provider/openaicompat (OpenAI-compatible APIs).
-// Storage: store/sqlite (local), store/libsql (Turso/remote).
+// Storage: store/sqlite (local), store/postgres (PostgreSQL + pgvector).
 // Tools: tools/knowledge, tools/remember, tools/search, tools/schedule, tools/shell, tools/file, tools/http.
 //
 // See the cmd/bot_example directory for a complete reference application.
