@@ -2,4 +2,5 @@
 *.db
 docs/plans
 /bot_example
+/ix
 oasis.tomlix
