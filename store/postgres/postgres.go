@@ -172,6 +172,15 @@ func (s *Store) Init(ctx context.Context) error {
 	vtype := s.vectorType()
 	hnswWith := s.hnswWithClause()
 
+	// pgvector HNSW indexes support at most 2000 dimensions.
+	// For larger vectors, skip the index (brute-force sequential scan still works).
+	const maxHNSWDim = 2000
+	useHNSW := s.cfg.embeddingDimension <= maxHNSWDim
+	if !useHNSW {
+		s.logger.Warn("postgres: embedding dimension exceeds HNSW limit, skipping vector indexes (sequential scan will be used)",
+			"dimension", s.cfg.embeddingDimension, "max_hnsw", maxHNSWDim)
+	}
+
 	stmts := []string{
 		`CREATE EXTENSION IF NOT EXISTS vector`,
 
@@ -194,8 +203,12 @@ func (s *Store) Init(ctx context.Context) error {
 			created_at BIGINT NOT NULL
 		)`, vtype),
 		`CREATE INDEX IF NOT EXISTS messages_thread_idx ON messages(thread_id)`,
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS messages_embedding_idx ON messages USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
+	}
+	if useHNSW {
+		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS messages_embedding_idx ON messages USING hnsw (embedding vector_cosine_ops)%s`, hnswWith))
+	}
 
+	stmts = append(stmts,
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
@@ -214,7 +227,11 @@ func (s *Store) Init(ctx context.Context) error {
 			metadata JSONB
 		)`, vtype),
 		`CREATE INDEX IF NOT EXISTS chunks_document_idx ON chunks(document_id)`,
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
+	)
+	if useHNSW {
+		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops)%s`, hnswWith))
+	}
+	stmts = append(stmts,
 		`CREATE INDEX IF NOT EXISTS chunks_fts_idx ON chunks USING gin(to_tsvector('english', content))`,
 
 		`CREATE TABLE IF NOT EXISTS config (
@@ -255,7 +272,7 @@ func (s *Store) Init(ctx context.Context) error {
 			created_at BIGINT NOT NULL,
 			updated_at BIGINT NOT NULL
 		)`,
-	}
+	)
 
 	for _, stmt := range stmts {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {

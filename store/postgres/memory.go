@@ -75,6 +75,8 @@ func (s *MemoryStore) Init(ctx context.Context) error {
 	vtype := s.vectorType()
 	hnswWith := s.hnswWithClause()
 
+	const maxHNSWDim = 2000
+
 	stmts := []string{
 		`CREATE EXTENSION IF NOT EXISTS vector`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS user_facts (
@@ -87,7 +89,9 @@ func (s *MemoryStore) Init(ctx context.Context) error {
 			created_at BIGINT NOT NULL,
 			updated_at BIGINT NOT NULL
 		)`, vtype),
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (embedding vector_cosine_ops)%s`, hnswWith),
+	}
+	if s.cfg.embeddingDimension <= maxHNSWDim {
+		stmts = append(stmts, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (embedding vector_cosine_ops)%s`, hnswWith))
 	}
 	for _, stmt := range stmts {
 		if _, err := s.pool.Exec(ctx, stmt); err != nil {
