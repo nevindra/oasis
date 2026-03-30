@@ -28,7 +28,7 @@ Step-by-step how-tos for common tasks. Each guide links back to its related conc
 | Guide | Related Concept |
 |-------|----------------|
 | [ingesting-documents.md](ingesting-documents.md) | [Ingest](../concepts/ingest.md) |
-| [rag-pipeline.md](rag-pipeline.md) | [Retrieval](../concepts/retrieval.md), [Graph RAG](../concepts/graph-rag.md) |
+| [rag-pipeline.md](rag-pipeline.md) | [Retrieval](../concepts/rag.md), [Graph RAG](../concepts/graph-rag.md) |
 
 ## External Capabilities
 

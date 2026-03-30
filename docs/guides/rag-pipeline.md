@@ -1076,7 +1076,7 @@ knowledgeTool := knowledge.New(store, textEmb,
 
 - [Graph RAG Concept](../concepts/graph-rag.md) — graph extraction internals, score blending, decision guides
 - [Ingest Concept](../concepts/ingest.md) — pipeline architecture details
-- [Retrieval Concept](../concepts/retrieval.md) — interfaces and internals
+- [Retrieval Concept](../concepts/rag.md) — interfaces and internals
 - [Store Concept](../concepts/store.md) — persistence and vector search
 - [Ingesting Documents Guide](ingesting-documents.md) — more ingestion examples
 - [Memory and Recall Guide](memory-and-recall.md) — conversation memory (separate from RAG)

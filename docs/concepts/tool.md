@@ -73,6 +73,35 @@ return oasis.ToolResult{Error: "city not found: " + city}, nil
 return oasis.ToolResult{}, fmt.Errorf("city not found: %s", city)
 ```
 
+## StreamingTool
+
+Optional interface for tools that emit progress events during execution:
+
+```go
+type StreamingTool interface {
+    Tool
+    ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error)
+}
+```
+
+When a tool implements `StreamingTool`, the agent calls `ExecuteStream` instead of `Execute` during streaming execution. The tool emits `EventToolProgress` events through the channel for intermediate progress (e.g., search results arriving incrementally).
+
+**Contract:** The tool must NOT close the channel — the caller owns channel lifecycle.
+
+```go
+func (t *MyTool) ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+    // Emit progress events
+    ch <- StreamEvent{Type: EventToolProgress, Name: name, Content: "Searching..."}
+
+    results := doSearch(ctx, args)
+
+    ch <- StreamEvent{Type: EventToolProgress, Name: name, Content: "Found 5 results, ranking..."}
+
+    ranked := rankResults(results)
+    return ToolResult{Content: formatResults(ranked)}, nil
+}
+```
+
 ## ToolRegistry
 
 Holds all registered tools and dispatches execution by name:
@@ -90,6 +119,58 @@ result, err := registry.Execute(ctx, "web_search", argsJSON)
 ```
 
 `ToolRegistry` maintains a `map[string]Tool` index built during `Add()`, providing O(1) dispatch lookups. When agents use `WithDynamicTools`, they build tool definitions and a lookup index directly from the returned `[]Tool` slice, avoiding intermediate `ToolRegistry` allocation.
+
+## Framework-Injected Tools
+
+These tools are injected by the framework based on agent options — they are NOT user-provided:
+
+| Tool | Injected by | Description |
+|------|------------|-------------|
+| `ask_user` | `WithInputHandler` | Queries the human for input. Blocked inside `execute_plan` steps and in sub-agents |
+| `execute_plan` | `WithPlanExecution()` | Batches multiple tool calls for parallel execution. See [Plan Execution](#plan-execution) |
+| `spawn_agent` | `WithSubAgentSpawning()` | Creates ephemeral sub-agents at runtime. Stripped at max spawn depth |
+| `skill_discover` | `WithSkills(provider)` | Lists available skills (name + description + tags) |
+| `skill_activate` | `WithSkills(provider)` | Loads full skill instructions by name |
+| `skill_create` | `WithSkills(provider)` | Creates a new skill on disk. Only if provider implements `SkillWriter` |
+| `skill_update` | `WithSkills(provider)` | Updates an existing skill. Only if provider implements `SkillWriter` |
+
+### Dispatch Priority
+
+When the LLM calls a tool, the agent dispatches in this order:
+
+1. **Framework built-ins** — `ask_user`, `execute_plan` checked first
+2. **Spawn agent** — `spawn_agent` checked next
+3. **Network subagents** — `agent_*` prefix (Network only)
+4. **User tools** — the `ToolRegistry` containing all `WithTools` and `WithSandbox` tools
+
+A framework built-in with the same name as a user tool takes precedence.
+
+## Tool Dispatch Behavior
+
+### Result Truncation
+
+Tool results exceeding **100,000 runes** (~25K tokens) are truncated in the message history sent to the LLM. Stream events and step traces retain the full untruncated content.
+
+### Attachment Accumulation
+
+Tools can return attachments (images, files) in `ToolResult`. These are accumulated across all tool calls per execution with limits:
+
+| Limit | Default |
+|-------|---------|
+| Max attachments | 50 items |
+| Max total size | 50 MB (configurable via `WithMaxAttachmentBytes`) |
+
+When either limit is exceeded, further attachments are silently dropped.
+
+### Panic Recovery
+
+Individual tool panics are caught by a recovery wrapper and converted to error results:
+
+```
+"error: tool \"web_search\" panic: <panic value>"
+```
+
+A panicking tool never crashes the agent — other tool calls in the same parallel batch continue normally.
 
 ## Built-in Tools
 
@@ -715,6 +796,7 @@ sequenceDiagram
 - **Parallel only** — all steps run concurrently, no sequential ordering
 - **No data flow** — step 2 cannot reference step 1's result
 - **No recursion** — steps cannot call `execute_plan` itself
+- **`ask_user` blocked** — human-in-the-loop is not available inside plan steps
 - **Max 50 steps** — capped at 50 steps per call to prevent resource exhaustion
 - **Partial failures** — a failed step reports its error without aborting the others
 - **Opt-in** — the tool is only available when `WithPlanExecution()` is set
@@ -723,7 +805,7 @@ Works with both `LLMAgent` and `Network`. Provider-agnostic — any LLM can use 
 
 ## Sandbox
 
-When the LLM needs more than parallel fan-out — conditionals, loops, data flow between tool calls, shell access, file I/O, or browser automation — use a sandbox. The sandbox provides a Docker container with 7 auto-registered tools.
+When the LLM needs more than parallel fan-out — conditionals, loops, data flow between tool calls, shell access, file I/O, or browser automation — use a sandbox. The sandbox provides a Docker container with auto-registered tools.
 
 Enable with `WithSandbox()`:
 
@@ -741,21 +823,56 @@ defer sb.Close()
 
 agent := oasis.NewLLMAgent("analyst", "Data analyst", provider,
     oasis.WithTools(searchTool, fileTool),
-    oasis.WithSandbox(sb, sandbox.Tools(sb)...), // injects 10 sandbox tools
+    oasis.WithSandbox(sb, sandbox.Tools(sb)...),
 )
 ```
 
-The framework auto-registers these tools:
+The framework auto-registers these tools via `sandbox.Tools(sb)`:
+
+**Core:**
 
 | Tool | Description |
 |---|---|
 | `shell` | Execute shell commands |
 | `execute_code` | Execute code (Python, JS, Bash) |
-| `file_read` | Read file content |
+
+**File Operations:**
+
+| Tool | Description |
+|---|---|
+| `file_read` | Read file content with line numbers |
 | `file_write` | Write content to file |
+| `file_edit` | Surgical string replacement in files |
+| `file_glob` | Find files by glob pattern (`**` supported) |
+| `file_grep` | Search file contents with regex and context lines |
+| `file_tree` | Recursive directory listing with depth limit |
+
+**Web & Network:**
+
+| Tool | Description |
+|---|---|
+| `http_fetch` | Fetch URL with readability extraction |
+| `web_search` | Web search via Brave API |
+
+**Browser Automation:**
+
+| Tool | Description |
+|---|---|
 | `browser` | Browser interactions (navigate, click, type) |
 | `screenshot` | Capture browser/desktop screenshot |
+| `snapshot` | Accessibility tree with semantic element refs |
+| `page_text` | Extract readable text from current page |
+| `export_pdf` | Export current page as PDF |
+| `browser_eval` | Evaluate JavaScript in browser context |
+| `browser_find` | Find elements by CSS selector |
+
+**Integration:**
+
+| Tool | Description |
+|---|---|
 | `mcp_call` | Invoke MCP server tools |
+| `workspace_info` | Environment discovery (OS, arch, available tools) |
+| `deliver_file` | Send files to users as chat attachments (optional, requires `WithFileDelivery`) |
 
 ### Plan vs Sandbox
 

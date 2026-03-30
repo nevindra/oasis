@@ -245,7 +245,7 @@ chunk.Content = "This chunk is from the Authentication section of the API refere
 
 ## Graph Extraction
 
-When enabled, the ingestor discovers relationships between chunks and stores them as weighted edges for [GraphRetriever](retrieval.md) traversal at query time. Two independent edge sources are available:
+When enabled, the ingestor discovers relationships between chunks and stores them as weighted edges for [GraphRetriever](rag.md) traversal at query time. Two independent edge sources are available:
 
 - **LLM-based extraction** (`WithGraphExtraction`) — sends chunks to an LLM in batches, discovers 8 relationship types with confidence weights
 - **Sequence edges** (`WithSequenceEdges`) — deterministic, links consecutive chunks with no LLM cost
@@ -509,7 +509,7 @@ Large documents are embedded in configurable batches (default 64 chunks per `Emb
 ## See Also
 
 - [Graph RAG](graph-rag.md) — graph extraction internals, `GraphRetriever`, score blending
-- [Retrieval](retrieval.md) — the search pipeline that reads ingested chunks
+- [Retrieval](rag.md) — the search pipeline that reads ingested chunks
 - [Store](store.md) — where documents and chunks are stored
 - [RAG Pipeline Guide](../guides/rag-pipeline.md) — end-to-end walkthrough
 - [Ingesting Documents Guide](../guides/ingesting-documents.md)

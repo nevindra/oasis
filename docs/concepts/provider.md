@@ -19,7 +19,7 @@ Two methods handle all interaction patterns:
 | Method | When it's used |
 |--------|---------------|
 | `Chat` | Blocking request/response. When `req.Tools` is non-empty, the response may contain `ToolCalls` |
-| `ChatStream` | Like Chat but emits `StreamEvent` values into `ch` as content is generated. When `req.Tools` is non-empty, emits `EventToolCallDelta` events. The channel is NOT closed by the provider — the caller owns its lifecycle |
+| `ChatStream` | Like Chat but emits `StreamEvent` values into `ch` as content is generated. When `req.Tools` is non-empty, emits `EventToolCallDelta` events. **The provider closes `ch` before returning** — both shipped implementations (Gemini, OpenAI-compat) close the channel on all paths (success, error, context cancellation). The caller should range over the channel, not close it |
 
 Tools are passed via `ChatRequest.Tools` — no separate method needed.
 
@@ -58,6 +58,27 @@ type EmbeddingProvider interface {
 ```
 
 Converts text to vectors for semantic search. Used by Store (vector search), MemoryStore (fact deduplication), and agents (cross-thread recall).
+
+## MultimodalEmbeddingProvider Interface
+
+**File:** `types.go`
+
+Optional capability for embedding providers that support both text and image inputs in a shared vector space:
+
+```go
+type MultimodalEmbeddingProvider interface {
+    EmbedMultimodal(ctx context.Context, inputs []MultimodalInput) ([][]float32, error)
+}
+
+type MultimodalInput struct {
+    Text        string
+    Attachments []Attachment // images, etc.
+}
+```
+
+Discovered via type assertion on `EmbeddingProvider`. When available, text queries naturally match images via cosine similarity (e.g., "black shirt" matches a photo of a black shirt).
+
+The OpenAI-compatible embedding provider implements this for multimodal models like Qwen3-VL-Embedding served via vLLM. See [Multimodal Embedding](#multimodal-embedding) for usage.
 
 ## Shipped Implementations
 
@@ -414,7 +435,8 @@ The rate limiter gates outgoing requests to stay within budget. If a request sti
 ```go
 type ChatRequest struct {
     Messages         []ChatMessage
-    ResponseSchema   *ResponseSchema   // optional: enforce structured JSON output
+    Tools            []ToolDefinition   // tool definitions for function calling
+    ResponseSchema   *ResponseSchema    // optional: enforce structured JSON output
     GenerationParams *GenerationParams  // optional: per-request sampling overrides
 }
 
@@ -432,6 +454,7 @@ type ChatMessage struct {
     Attachments []Attachment    // multimodal content (images, PDFs)
     ToolCalls   []ToolCall
     ToolCallID  string
+    Metadata    json.RawMessage // provider-specific metadata (e.g., Gemini thinking signatures)
 }
 
 type Usage struct {
@@ -440,6 +463,19 @@ type Usage struct {
     CachedTokens int // input tokens served from provider cache (zero when no caching)
 }
 ```
+
+`GenerationParams` uses pointer fields — `nil` means "use provider default", while `0` is a valid explicit value:
+
+```go
+type GenerationParams struct {
+    Temperature *float64 // nil = provider default, 0.0 = deterministic
+    TopP        *float64
+    TopK        *int
+    MaxTokens   *int
+}
+```
+
+Providers map these fields to their native API format (Gemini: `generationConfig`, OpenAI: top-level request fields). Unsupported fields (e.g., `TopK` on OpenAI-compat) emit a warning via the provider's logger and are silently skipped.
 
 Convenience constructors:
 
@@ -763,7 +799,7 @@ cat := catalog.NewModelCatalog(
 
 ## Key Behaviors
 
-- `ChatStream` does **NOT close `ch`** — the caller owns the channel's lifecycle
+- `ChatStream` **closes `ch` before returning** — both shipped providers close the channel on all paths. The caller should range over the channel, not close it
 - When `req.Tools` is non-empty, `Chat` may populate `ChatResponse.ToolCalls`. Each `ToolCall` needs an `ID`, `Name`, and `Args` (JSON)
 - When `req.Tools` is non-empty, `ChatStream` emits `EventToolCallDelta` events with incremental argument chunks, then returns the assembled `ToolCalls` in the response
 - Both implementations parse SSE streams in-process — no goroutine leaks

@@ -1,6 +1,6 @@
 # Store
 
-Store is the persistence layer — messages, documents, threads, scheduled actions, skills, and vector search. Everything that needs to survive a restart goes through Store.
+Store is the persistence layer — messages, documents, threads, scheduled actions, and vector search. Everything that needs to survive a restart goes through Store. Skills are managed separately via the file-based [SkillProvider](skill.md).
 
 ## Store Interface
 
@@ -16,8 +16,8 @@ graph TB
     STORE --> DOCS[Documents + Chunks<br>store + vector search]
     STORE --> CONFIG[Config<br>key-value]
     STORE --> SCHED[Scheduled Actions<br>CRUD + due query]
-    STORE --> SKILLS[Skills<br>CRUD + vector search]
     STORE --> GRAPH[Graph Edges<br>store + query + prune]
+    STORE --> CKPT[Checkpoints<br>ingest resume]
     STORE --> LIFE[Lifecycle<br>Init + Close]
 
     style STORE fill:#e1f5fe
@@ -195,11 +195,12 @@ results, _ := store.SearchChunks(ctx, queryEmb, 10,
 )
 ```
 
-Five convenience constructors cover common patterns:
+Six convenience constructors cover common patterns:
 
 | Constructor | Field | Op | Description |
 | --- | --- | --- | --- |
 | `ByDocument(ids...)` | `document_id` | `OpIn` | Chunks belonging to specific documents |
+| `ByExcludeDocument(id)` | `document_id` | `OpNeq` | Exclude chunks from a specific document |
 | `BySource(source)` | `source` | `OpEq` | Chunks from documents with a given source |
 | `ByMeta(key, value)` | `meta.<key>` | `OpEq` | Chunks where JSON metadata key equals value |
 | `CreatedAfter(unix)` | `created_at` | `OpGt` | Chunks from documents created after timestamp |
@@ -223,7 +224,7 @@ type KeywordSearcher interface {
 
 `SearchChunksKeyword` also accepts `...ChunkFilter` with the same semantics as `SearchChunks`.
 
-SQLite uses an FTS5 virtual table (`chunks_fts`) synchronized in `StoreDocument()`. PostgreSQL uses a GIN expression index on `to_tsvector('english', content)` — no manual sync needed. The [HybridRetriever](retrieval.md) discovers this capability via type assertion and uses it for hybrid vector + keyword search.
+SQLite uses an FTS5 virtual table (`chunks_fts`) synchronized in `StoreDocument()`. PostgreSQL uses a GIN expression index on `to_tsvector('english', content)` — no manual sync needed. The [HybridRetriever](rag.md) discovers this capability via type assertion and uses it for hybrid vector + keyword search.
 
 ## Database Schema
 
@@ -248,9 +249,8 @@ config (key PRIMARY KEY, value)
 scheduled_actions (id, description, schedule, tool_calls, synthesis_prompt,
                    next_run, enabled, skill_id, created_at)
 
--- Skills
-skills (id, name, description, instructions, tools, model, tags,
-        created_by, refs, embedding, created_at, updated_at)
+-- Ingest pipeline
+ingest_checkpoints (document_id PRIMARY KEY, last_chunk_index, completed, updated_at)
 
 -- User memory (MemoryStore)
 user_facts (id, fact, category, confidence, embedding,
@@ -330,30 +330,22 @@ CREATE TABLE IF NOT EXISTS scheduled_actions (
     created_at       BIGINT NOT NULL DEFAULT 0
 );
 
--- Skills
-CREATE TABLE IF NOT EXISTS skills (
-    id           TEXT PRIMARY KEY,
-    name         TEXT NOT NULL,
-    description  TEXT NOT NULL,
-    instructions TEXT NOT NULL,
-    tools        TEXT NOT NULL DEFAULT '',
-    model        TEXT NOT NULL DEFAULT '',
-    tags         TEXT NOT NULL DEFAULT '',
-    created_by   TEXT NOT NULL DEFAULT '',
-    refs         TEXT NOT NULL DEFAULT '',
-    embedding    vector(N),     -- N from WithEmbeddingDimension (required)
-    created_at   BIGINT NOT NULL,
-    updated_at   BIGINT NOT NULL
+-- Ingest Checkpoints
+CREATE TABLE IF NOT EXISTS ingest_checkpoints (
+    document_id      TEXT PRIMARY KEY,
+    last_chunk_index INTEGER NOT NULL DEFAULT 0,
+    completed        BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at       BIGINT NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS skills_embedding_idx ON skills USING hnsw (embedding vector_cosine_ops);
 
 -- Knowledge Graph Edges
 CREATE TABLE IF NOT EXISTS chunk_edges (
-    id        TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    relation  TEXT NOT NULL,
-    weight    REAL NOT NULL,
+    id          TEXT PRIMARY KEY,
+    source_id   TEXT NOT NULL,
+    target_id   TEXT NOT NULL,
+    relation    TEXT NOT NULL,
+    weight      REAL NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
     UNIQUE(source_id, target_id, relation)
 );
 CREATE INDEX IF NOT EXISTS idx_chunk_edges_source ON chunk_edges(source_id);
@@ -378,7 +370,7 @@ CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (em
 | Topic | Detail |
 | ----- | ------ |
 | **Vector columns** | `WithEmbeddingDimension(N)` is **required** — creates `vector(N)` columns needed for HNSW indexes. `Init()` returns an error if not set. Common values: 768 (Gemini), 1536 (OpenAI ada-002), 3072 (OpenAI text-embedding-3-large). Only affects new tables. |
-| **HNSW indexes** | Created on `messages.embedding`, `chunks.embedding`, `skills.embedding`, and `user_facts.embedding`. Tunable via `WithHNSWM(m)` and `WithEFConstruction(ef)` — appended as `WITH (m = M, ef_construction = EF)` on `CREATE INDEX`. |
+| **HNSW indexes** | Created on `messages.embedding`, `chunks.embedding`, and `user_facts.embedding`. Tunable via `WithHNSWM(m)` and `WithEFConstruction(ef)` — appended as `WITH (m = M, ef_construction = EF)` on `CREATE INDEX`. |
 | **ef_search** | Set via `WithEFSearch(ef)`. Applied as `SET hnsw.ef_search = N` (session-level) during `Init()`. Higher values improve recall at the cost of latency. |
 | **Full-text search** | GIN expression index on `to_tsvector('english', content)` — no separate FTS table (unlike SQLite's FTS5 virtual table). Queries use `plainto_tsquery`. |
 | **Metadata** | Stored as `JSONB`. Chunk metadata filters use `metadata->>'key'` operator. Message/thread metadata stored as `JSONB` with `::jsonb` casts on insert. |
@@ -404,26 +396,30 @@ CREATE INDEX IF NOT EXISTS user_facts_embedding_idx ON user_facts USING hnsw (em
 ```go
 type GraphStore interface {
     StoreEdges(ctx context.Context, edges []ChunkEdge) error
-    GetEdges(ctx context.Context, chunkID string) ([]ChunkEdge, error)
-    GetIncomingEdges(ctx context.Context, chunkID string) ([]ChunkEdge, error)
+    GetEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
+    GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
     PruneOrphanEdges(ctx context.Context) (int, error)
 }
 ```
+
+Both `GetEdges` and `GetIncomingEdges` accept a **batch of chunk IDs** and return all edges for those chunks in a single query.
 
 ### ChunkEdge
 
 ```go
 type ChunkEdge struct {
-    SourceChunkID string
-    TargetChunkID string
-    Relation      RelationType  // references, elaborates, depends_on, contradicts, part_of, sequence, caused_by
-    Weight        float64       // edge strength [0, 1]
+    ID          string       // unique edge identifier
+    SourceID    string       // source chunk ID
+    TargetID    string       // target chunk ID
+    Relation    RelationType // references, elaborates, depends_on, contradicts, part_of, similar_to, sequence, caused_by
+    Weight      float32      // edge strength [0, 1]
+    Description string       // human-readable description of the relationship
 }
 ```
 
-Eight relationship types are extracted during ingestion via `WithGraphExtraction(provider)` on the Ingestor. Edges are stored in the `chunk_edges` table and cascade-deleted when the parent document is removed. Orphan edges (where one side's chunk no longer exists) are cleaned up by `PruneOrphanEdges`.
+Eight relationship types are extracted during ingestion via `WithGraphExtraction(provider)` on the Ingestor (`similar_to` is deprecated — not actively prompted but accepted for backward compatibility). Edges are stored in the `chunk_edges` table and cascade-deleted when the parent document is removed. Orphan edges (where one side's chunk no longer exists) are cleaned up by `PruneOrphanEdges`.
 
-The [GraphRetriever](retrieval.md) uses `GraphStore` to perform multi-hop BFS traversal, discovering related content that vector similarity alone would miss.
+The [GraphRetriever](rag.md) uses `GraphStore` to perform multi-hop BFS traversal, discovering related content that vector similarity alone would miss.
 
 ### BidirectionalGraphStore
 
@@ -444,7 +440,28 @@ if gs, ok := store.(oasis.GraphStore); ok {
 }
 ```
 
-See [Ingest](ingest.md) for graph extraction during ingestion and [Retrieval](retrieval.md) for graph-augmented search.
+See [Ingest](ingest.md) for graph extraction during ingestion and [Retrieval](rag.md) for graph-augmented search.
+
+## CheckpointStore
+
+`CheckpointStore` is an optional Store capability for resumable ingestion. When a large document ingestion fails partway through, checkpoints allow resuming from the last successful chunk instead of restarting.
+
+```go
+type CheckpointStore interface {
+    SaveCheckpoint(ctx context.Context, cp IngestCheckpoint) error
+    GetCheckpoint(ctx context.Context, documentID string) (IngestCheckpoint, error)
+    DeleteCheckpoint(ctx context.Context, documentID string) error
+}
+```
+
+Both shipped backends implement it. The `ingest_checkpoints` table tracks `document_id`, `last_chunk_index`, and `completed` status.
+
+```go
+if cs, ok := store.(oasis.CheckpointStore); ok {
+    cp, _ := cs.GetCheckpoint(ctx, docID)
+    // resume from cp.LastChunkIndex
+}
+```
 
 ## DocumentMetaLister
 
@@ -468,5 +485,5 @@ if ml, ok := store.(oasis.DocumentMetaLister); ok {
 
 - [Memory](memory.md) — MemoryStore for user facts (separate interface)
 - [Ingest](ingest.md) — document chunking pipeline that writes to Store
-- [Retrieval](retrieval.md) — search pipeline that reads from Store
+- [Retrieval](rag.md) — search pipeline that reads from Store
 - [Custom Store Guide](../guides/custom-store.md)

@@ -130,7 +130,7 @@ Both implement `Agent`, so they compose with each other — a Network can contai
 | Primitive | Doc | Source Files | Related Guide |
 |-----------|-----|-------------|---------------|
 | Ingest | [ingest.md](ingest.md) | ingest/ | [ingesting-documents](../guides/ingesting-documents.md) |
-| Retrieval | [retrieval.md](retrieval.md) | retriever.go | [rag-pipeline](../guides/rag-pipeline.md) |
+| RAG | [rag.md](rag.md) | retriever.go | [rag-pipeline](../guides/rag-pipeline.md) |
 | Graph RAG | [graph-rag.md](graph-rag.md) | ingest/ | [rag-pipeline](../guides/rag-pipeline.md) |
 
 ### Infrastructure
