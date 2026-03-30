@@ -193,6 +193,18 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 		compressThreshold = defaultCompressThreshold
 	}
 
+	// Detect whether the tool set includes agent_* delegation tools (Network).
+	// Networks suppress router text-deltas when a sub-agent streams, so they
+	// must use non-streaming Chat() for tool-loop iterations to preserve that
+	// deduplication. Single agents stream tool-loop iterations for real-time UX.
+	hasAgentTools := false
+	for _, t := range cfg.tools {
+		if strings.HasPrefix(t.Name, "agent_") || t.Name == "spawn_agent" {
+			hasAgentTools = true
+			break
+		}
+	}
+
 	var lastAgentOutput string
 	var lastThinking string
 	var accumulatedAttachments []Attachment
@@ -230,10 +242,35 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 
 		var resp ChatResponse
 		var err error
+		streamedThisIter := false // true when ChatStream already emitted text deltas
 
 		req.Tools = cfg.tools
 		llmStart := time.Now()
-		if len(cfg.tools) > 0 {
+		if len(cfg.tools) > 0 && ch != nil && !hasAgentTools {
+			// Streaming with tools (single agent only): use an intermediate
+			// channel so the provider's defer-close doesn't shut down the
+			// main stream. Networks use Chat() to preserve router text-delta
+			// deduplication with sub-agent streaming.
+			cfg.logger.Debug("calling LLM (streaming, with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(cfg.tools))
+			iterCh := make(chan StreamEvent, 64)
+			var fwdWg sync.WaitGroup
+			fwdWg.Add(1)
+			go func() {
+				defer fwdWg.Done()
+				for ev := range iterCh {
+					select {
+					case ch <- ev:
+					case <-ctx.Done():
+						for range iterCh {
+						}
+						return
+					}
+				}
+			}()
+			resp, err = cfg.provider.ChatStream(iterCtx, req, iterCh)
+			fwdWg.Wait()
+			streamedThisIter = true
+		} else if len(cfg.tools) > 0 {
 			cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(cfg.tools))
 			resp, err = cfg.provider.Chat(iterCtx, req)
 		} else if ch != nil {
@@ -310,14 +347,13 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 			if content == "" {
 				content = lastAgentOutput
 			}
-			if ch != nil {
-				// Only emit text-delta if no sub-agent already streamed.
-				// When a Network delegates to a streaming sub-agent, its
-				// text-delta events are forwarded to the parent channel in
-				// real time. The router's final response (echo, paraphrase,
-				// or empty) would duplicate the content consumers already
-				// received. Skip the delta entirely; AgentResult.Output
-				// still carries the correct final text for non-streaming use.
+			if ch != nil && !streamedThisIter {
+				// Only emit text-delta if content wasn't already streamed
+				// via ChatStream this iteration, and no sub-agent already
+				// streamed. When a Network delegates to a streaming
+				// sub-agent, its text-delta events are forwarded to the
+				// parent channel in real time. The router's final response
+				// would duplicate content consumers already received.
 				if lastAgentOutput == "" {
 					select {
 					case ch <- StreamEvent{Type: EventTextDelta, Content: content}:
