@@ -364,7 +364,7 @@ network := oasis.NewNetwork("coordinator", "Multi-agent coordinator", router,
 
 ## See Also
 
-- [Code Execution Concept](../concepts/code-execution.md) — architecture, safety model, sandbox interface reference
+- [Sandbox Concept](../concepts/sandbox.md) — architecture, safety model, sandbox interface reference
 - [Tool Concept](../concepts/tool.md) — plan execution, parallel execution
 - [Execution Plans](execution-plans.md) — Workflow-based plan-approve-execute pattern
 - [Custom Tool Guide](custom-tool.md) — build tools that code can call

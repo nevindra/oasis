@@ -1593,3 +1593,34 @@ func TestNetworkThinkingPropagated(t *testing.T) {
 		t.Errorf("Thinking = %q, want %q", result.Thinking, "Network reasoning...")
 	}
 }
+
+func TestWithActiveSkills(t *testing.T) {
+	sk := Skill{
+		Name:         "test-skill",
+		Description:  "A test skill",
+		Instructions: "Always use blue color.",
+	}
+
+	provider := &callbackProvider{
+		name:     "test",
+		response: ChatResponse{Content: "done"},
+		onChat: func(req ChatRequest) {
+			if len(req.Messages) == 0 {
+				t.Fatal("expected messages")
+			}
+			sysMsg := req.Messages[0].Content
+			if !strings.Contains(sysMsg, "Always use blue color.") {
+				t.Errorf("system prompt should contain skill instructions, got: %s", sysMsg[:min(200, len(sysMsg))])
+			}
+		},
+	}
+
+	agent := NewLLMAgent("test", "Base prompt.", provider,
+		WithPrompt("Base prompt."),
+		WithActiveSkills(sk),
+	)
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

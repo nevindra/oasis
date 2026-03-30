@@ -1,6 +1,6 @@
-# Retrieval
+# RAG
 
-The retrieval pipeline searches ingested documents and returns ranked, context-rich results. It composes vector search, full-text keyword search (FTS5), parent-child chunk resolution, and optional re-ranking into a single `Retriever.Retrieve()` call.
+The RAG (Retrieval-Augmented Generation) pipeline searches ingested documents and returns ranked, context-rich results. It composes vector search, full-text keyword search (FTS5), parent-child chunk resolution, and optional re-ranking into a single `Retriever.Retrieve()` call.
 
 ## Pipeline
 
@@ -36,6 +36,7 @@ type RetrievalResult struct {
     Content        string        `json:"content"`
     Score          float32       `json:"score"`
     ChunkID        string        `json:"chunk_id"`
+    ParentID       string        `json:"parent_id,omitempty"`
     DocumentID     string        `json:"document_id"`
     DocumentTitle  string        `json:"document_title"`
     DocumentSource string        `json:"document_source"`
@@ -44,6 +45,10 @@ type RetrievalResult struct {
 ```
 
 Score is in [0, 1]; higher means more relevant. The exact range depends on the scoring method (cosine similarity, RRF, or reranker output).
+
+`DocumentTitle` and `DocumentSource` are populated after retrieval if the Store implements `DocumentGetter` — without it, these fields remain empty.
+
+`ParentID` is set when the result chunk is a child that was resolved to its parent's content via [parent-child resolution](#parent-child-resolution).
 
 `GraphContext` is populated by `GraphRetriever` for chunks discovered via graph traversal (not from the initial seed search). Each `EdgeContext` describes the edge that led to the chunk's discovery, including a human-readable description of the relationship. Seed chunks have an empty `GraphContext`.
 
@@ -80,10 +85,13 @@ The retriever fetches `topK * overfetchMultiplier` candidates from each search m
 RRF merges two ranked lists using the formula:
 
 ```
-score(d) = Σ weight / (k + rank + 1)
+For each result at rank i (0-indexed) in its source list:
+  contribution = weight × (1 / (k + i + 1))
+
+Final score = (Σ contributions) × (k + 1)    // normalization to [0, 1]
 ```
 
-Where `k = 60` (standard constant). This produces stable scores regardless of the original scoring scales. The `keywordWeight` parameter (default 0.3) controls the balance — vector search gets weight `1 - keywordWeight`.
+Where `k = 60` (standard constant). The normalization step (`× (k + 1)`) rescales scores to the [0, 1] range. This produces stable scores regardless of the original scoring scales. The `keywordWeight` parameter (default 0.3) controls the balance — vector search gets weight `1 - keywordWeight`.
 
 ## KeywordSearcher (FTS5)
 
@@ -187,6 +195,20 @@ graph TB
 - If a child has no `ParentID`, it passes through unchanged.
 - If multiple children map to the same parent, only the highest-scored child's result is kept.
 - On any error, results pass through unmodified (graceful degradation).
+
+## DocumentGetter
+
+Optional Store capability for batch document lookup. Discovered via type assertion:
+
+```go
+type DocumentGetter interface {
+    GetDocumentsByIDs(ctx context.Context, ids []string) ([]Document, error)
+}
+```
+
+When available, `HybridRetriever` and `GraphRetriever` automatically populate `DocumentTitle` and `DocumentSource` on results. Without it, these fields remain empty.
+
+Both shipped Store backends implement this interface.
 
 ## Configuration Options
 

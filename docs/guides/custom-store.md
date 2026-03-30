@@ -199,4 +199,4 @@ The `ByMeta(key, value)` chunk filter should query into this JSON field.
 
 - [Store Concept](../concepts/store.md) — full interface and schema reference
 - [Memory Concept](../concepts/memory.md) — MemoryStore interface
-- [Retrieval](../concepts/retrieval.md) — how retrievers use Store capabilities
+- [Retrieval](../concepts/rag.md) — how retrievers use Store capabilities

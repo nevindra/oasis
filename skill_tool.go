@@ -1,32 +1,31 @@
-// Package skill exposes skill management to agents through the standard Tool interface.
-// Agents can discover, activate, create, and update skills stored as folders on disk.
-package skill
+package oasis
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	oasis "github.com/nevindra/oasis"
 )
 
-// Tool manages skills — file-based instruction packages that specialize agent behavior.
-type Tool struct {
-	provider oasis.SkillProvider
+// skillTool exposes skill management to agents through the Tool interface.
+// Registered automatically when WithSkills is used. This is the internal
+// equivalent of tools/skill.Tool — defined here to avoid an import cycle
+// (tools/skill already imports oasis).
+type skillTool struct {
+	provider SkillProvider
 }
 
 // Compile-time interface check.
-var _ oasis.Tool = (*Tool)(nil)
+var _ Tool = (*skillTool)(nil)
 
-// New creates a skill Tool backed by the given SkillProvider.
+// newSkillTool creates a skillTool backed by the given SkillProvider.
 // If the provider also implements SkillWriter, create and update actions are enabled.
-func New(provider oasis.SkillProvider) *Tool {
-	return &Tool{provider: provider}
+func newSkillTool(provider SkillProvider) *skillTool {
+	return &skillTool{provider: provider}
 }
 
-func (t *Tool) Definitions() []oasis.ToolDefinition {
-	defs := []oasis.ToolDefinition{
+func (t *skillTool) Definitions() []ToolDefinition {
+	defs := []ToolDefinition{
 		{
 			Name:        "skill_discover",
 			Description: "List all available skills with their names, descriptions, and tags. Use this to browse what skills exist before activating one.",
@@ -41,9 +40,9 @@ func (t *Tool) Definitions() []oasis.ToolDefinition {
 		},
 	}
 
-	if _, ok := t.provider.(oasis.SkillWriter); ok {
+	if _, ok := t.provider.(SkillWriter); ok {
 		defs = append(defs,
-			oasis.ToolDefinition{
+			ToolDefinition{
 				Name:        "skill_create",
 				Description: "Create a new skill from experience. A skill is a stored instruction package that can specialize agent behavior for specific tasks.",
 				Parameters: json.RawMessage(`{"type":"object","properties":{
@@ -53,13 +52,10 @@ func (t *Tool) Definitions() []oasis.ToolDefinition {
 					"tags":{"type":"array","items":{"type":"string"},"description":"Optional categorization labels"},
 					"tools":{"type":"array","items":{"type":"string"},"description":"Optional list of tool names this skill should use (empty = all)"},
 					"model":{"type":"string","description":"Optional model override"},
-					"references":{"type":"array","items":{"type":"string"},"description":"Optional skill names this skill builds on"},
-					"compatibility":{"type":"string","description":"Optional compatibility string (e.g. oasis>=0.5)"},
-					"license":{"type":"string","description":"Optional license identifier (e.g. MIT, Apache-2.0)"},
-					"metadata":{"type":"object","additionalProperties":{"type":"string"},"description":"Optional key-value metadata pairs"}
+					"references":{"type":"array","items":{"type":"string"},"description":"Optional skill names this skill builds on"}
 				},"required":["name","description","instructions"]}`),
 			},
-			oasis.ToolDefinition{
+			ToolDefinition{
 				Name:        "skill_update",
 				Description: "Update an existing skill. Only provided fields are changed; omitted fields keep their current values.",
 				Parameters: json.RawMessage(`{"type":"object","properties":{
@@ -69,10 +65,7 @@ func (t *Tool) Definitions() []oasis.ToolDefinition {
 					"tags":{"type":"array","items":{"type":"string"},"description":"New tags (replaces existing)"},
 					"tools":{"type":"array","items":{"type":"string"},"description":"New tool list (replaces existing)"},
 					"model":{"type":"string","description":"New model override"},
-					"references":{"type":"array","items":{"type":"string"},"description":"New skill references (replaces existing)"},
-					"compatibility":{"type":"string","description":"New compatibility string"},
-					"license":{"type":"string","description":"New license identifier"},
-					"metadata":{"type":"object","additionalProperties":{"type":"string"},"description":"New metadata (replaces existing)"}
+					"references":{"type":"array","items":{"type":"string"},"description":"New skill references (replaces existing)"}
 				},"required":["name"]}`),
 			},
 		)
@@ -81,7 +74,7 @@ func (t *Tool) Definitions() []oasis.ToolDefinition {
 	return defs
 }
 
-func (t *Tool) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
+func (t *skillTool) Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
 	var result string
 	var err error
 
@@ -95,16 +88,16 @@ func (t *Tool) Execute(ctx context.Context, name string, args json.RawMessage) (
 	case "skill_update":
 		result, err = t.handleUpdate(ctx, args)
 	default:
-		return oasis.ToolResult{Error: "unknown skill tool: " + name}, nil
+		return ToolResult{Error: "unknown skill tool: " + name}, nil
 	}
 
 	if err != nil {
-		return oasis.ToolResult{Error: err.Error()}, nil
+		return ToolResult{Error: err.Error()}, nil
 	}
-	return oasis.ToolResult{Content: result}, nil
+	return ToolResult{Content: result}, nil
 }
 
-func (t *Tool) handleDiscover(ctx context.Context) (string, error) {
+func (t *skillTool) handleDiscover(ctx context.Context) (string, error) {
 	summaries, err := t.provider.Discover(ctx)
 	if err != nil {
 		return "", fmt.Errorf("discover failed: %w", err)
@@ -121,15 +114,12 @@ func (t *Tool) handleDiscover(ctx context.Context) (string, error) {
 		if len(s.Tags) > 0 {
 			fmt.Fprintf(&out, "   Tags: %s\n", strings.Join(s.Tags, ", "))
 		}
-		if s.Compatibility != "" {
-			fmt.Fprintf(&out, "   Compatibility: %s\n", s.Compatibility)
-		}
 		fmt.Fprintln(&out)
 	}
 	return out.String(), nil
 }
 
-func (t *Tool) handleActivate(ctx context.Context, args json.RawMessage) (string, error) {
+func (t *skillTool) handleActivate(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
 		Name string `json:"name"`
 	}
@@ -140,59 +130,44 @@ func (t *Tool) handleActivate(ctx context.Context, args json.RawMessage) (string
 		return "", fmt.Errorf("name is required")
 	}
 
-	skill, err := t.provider.Activate(ctx, p.Name)
+	sk, err := t.provider.Activate(ctx, p.Name)
 	if err != nil {
 		return "", err
 	}
 
 	var out strings.Builder
-	fmt.Fprintf(&out, "Skill: %s\n", skill.Name)
-	fmt.Fprintf(&out, "Description: %s\n", skill.Description)
-	if len(skill.Tags) > 0 {
-		fmt.Fprintf(&out, "Tags: %s\n", strings.Join(skill.Tags, ", "))
+	fmt.Fprintf(&out, "Skill: %s\n", sk.Name)
+	fmt.Fprintf(&out, "Description: %s\n", sk.Description)
+	if len(sk.Tags) > 0 {
+		fmt.Fprintf(&out, "Tags: %s\n", strings.Join(sk.Tags, ", "))
 	}
-	if len(skill.Tools) > 0 {
-		fmt.Fprintf(&out, "Tools: %s\n", strings.Join(skill.Tools, ", "))
+	if len(sk.Tools) > 0 {
+		fmt.Fprintf(&out, "Tools: %s\n", strings.Join(sk.Tools, ", "))
 	}
-	if skill.Model != "" {
-		fmt.Fprintf(&out, "Model: %s\n", skill.Model)
+	if sk.Model != "" {
+		fmt.Fprintf(&out, "Model: %s\n", sk.Model)
 	}
-	if len(skill.References) > 0 {
-		fmt.Fprintf(&out, "References: %s\n", strings.Join(skill.References, ", "))
+	if len(sk.References) > 0 {
+		fmt.Fprintf(&out, "References: %s\n", strings.Join(sk.References, ", "))
 	}
-	if skill.Compatibility != "" {
-		fmt.Fprintf(&out, "Compatibility: %s\n", skill.Compatibility)
-	}
-	if skill.License != "" {
-		fmt.Fprintf(&out, "License: %s\n", skill.License)
-	}
-	if len(skill.Metadata) > 0 {
-		fmt.Fprintf(&out, "Metadata:\n")
-		for k, v := range skill.Metadata {
-			fmt.Fprintf(&out, "  %s: %s\n", k, v)
-		}
-	}
-	fmt.Fprintf(&out, "\nInstructions:\n%s\n", skill.Instructions)
+	fmt.Fprintf(&out, "\nInstructions:\n%s\n", sk.Instructions)
 	return out.String(), nil
 }
 
-func (t *Tool) handleCreate(ctx context.Context, args json.RawMessage) (string, error) {
-	w, ok := t.provider.(oasis.SkillWriter)
+func (t *skillTool) handleCreate(ctx context.Context, args json.RawMessage) (string, error) {
+	w, ok := t.provider.(SkillWriter)
 	if !ok {
 		return "", fmt.Errorf("skill creation is not supported by this provider")
 	}
 
 	var p struct {
-		Name          string            `json:"name"`
-		Description   string            `json:"description"`
-		Instructions  string            `json:"instructions"`
-		Tags          []string          `json:"tags"`
-		Tools         []string          `json:"tools"`
-		Model         string            `json:"model"`
-		References    []string          `json:"references"`
-		Compatibility string            `json:"compatibility"`
-		License       string            `json:"license"`
-		Metadata      map[string]string `json:"metadata"`
+		Name         string   `json:"name"`
+		Description  string   `json:"description"`
+		Instructions string   `json:"instructions"`
+		Tags         []string `json:"tags"`
+		Tools        []string `json:"tools"`
+		Model        string   `json:"model"`
+		References   []string `json:"references"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
@@ -201,43 +176,37 @@ func (t *Tool) handleCreate(ctx context.Context, args json.RawMessage) (string, 
 		return "", fmt.Errorf("name, description, and instructions are required")
 	}
 
-	skill := oasis.Skill{
-		Name:          p.Name,
-		Description:   p.Description,
-		Instructions:  p.Instructions,
-		Tags:          p.Tags,
-		Tools:         p.Tools,
-		Model:         p.Model,
-		References:    p.References,
-		Compatibility: p.Compatibility,
-		License:       p.License,
-		Metadata:      p.Metadata,
+	sk := Skill{
+		Name:         p.Name,
+		Description:  p.Description,
+		Instructions: p.Instructions,
+		Tags:         p.Tags,
+		Tools:        p.Tools,
+		Model:        p.Model,
+		References:   p.References,
 	}
 
-	if err := w.CreateSkill(ctx, skill); err != nil {
+	if err := w.CreateSkill(ctx, sk); err != nil {
 		return "", err
 	}
 
-	return fmt.Sprintf("created skill %q", skill.Name), nil
+	return fmt.Sprintf("created skill %q", sk.Name), nil
 }
 
-func (t *Tool) handleUpdate(ctx context.Context, args json.RawMessage) (string, error) {
-	w, ok := t.provider.(oasis.SkillWriter)
+func (t *skillTool) handleUpdate(ctx context.Context, args json.RawMessage) (string, error) {
+	w, ok := t.provider.(SkillWriter)
 	if !ok {
 		return "", fmt.Errorf("skill updates are not supported by this provider")
 	}
 
 	var p struct {
-		Name          string            `json:"name"`
-		Description   *string           `json:"description"`
-		Instructions  *string           `json:"instructions"`
-		Tags          []string          `json:"tags"`
-		Tools         []string          `json:"tools"`
-		Model         *string           `json:"model"`
-		References    []string          `json:"references"`
-		Compatibility *string           `json:"compatibility"`
-		License       *string           `json:"license"`
-		Metadata      map[string]string `json:"metadata"`
+		Name         string   `json:"name"`
+		Description  *string  `json:"description"`
+		Instructions *string  `json:"instructions"`
+		Tags         []string `json:"tags"`
+		Tools        []string `json:"tools"`
+		Model        *string  `json:"model"`
+		References   []string `json:"references"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
@@ -276,18 +245,6 @@ func (t *Tool) handleUpdate(ctx context.Context, args json.RawMessage) (string, 
 	if p.References != nil {
 		existing.References = p.References
 		changes = append(changes, "references")
-	}
-	if p.Compatibility != nil {
-		existing.Compatibility = *p.Compatibility
-		changes = append(changes, "compatibility")
-	}
-	if p.License != nil {
-		existing.License = *p.License
-		changes = append(changes, "license")
-	}
-	if p.Metadata != nil {
-		existing.Metadata = p.Metadata
-		changes = append(changes, "metadata")
 	}
 
 	if len(changes) == 0 {

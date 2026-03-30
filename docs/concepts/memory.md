@@ -102,6 +102,18 @@ Messages below the minimum score are silently dropped.
 
 Recalled messages are labeled as user-generated context with explicit trust framing to reduce prompt injection risk. When a `chat_id` is present in the task context, recall is scoped to threads belonging to the same chat, preventing cross-user contamination in multi-tenant deployments.
 
+### Auto-Title Generation
+
+When enabled, the agent generates a thread title from the first conversation turn using the agent's own LLM:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store, oasis.AutoTitle()),
+)
+```
+
+The title is generated in a background goroutine after the first exchange and stored via `Store.UpdateThread`. Subsequent turns do not regenerate the title.
+
 ### 3. User Memory
 
 Long-term semantic memory for user facts. Two paths:
@@ -125,16 +137,19 @@ Write requires `WithConversationMemory` — without it, extraction is silently s
 
 ```go
 type MemoryStore interface {
-    UpsertFact(ctx, fact, category string, embedding []float32) error
-    SearchFacts(ctx, embedding []float32, topK int) ([]ScoredFact, error)
-    BuildContext(ctx, queryEmbedding []float32) (string, error)
-    DeleteFact(ctx, factID string) error
-    // pattern is a plain substring match — never SQL LIKE or regex.
-    DeleteMatchingFacts(ctx, pattern string) error
-    DecayOldFacts(ctx) error
-    Init(ctx) error
+    UpsertFact(ctx context.Context, fact, category string, embedding []float32) error
+    SearchFacts(ctx context.Context, embedding []float32, topK int) ([]ScoredFact, error)
+    BuildContext(ctx context.Context, queryEmbedding []float32) (string, error)
+    DeleteFact(ctx context.Context, factID string) error
+    // pattern is treated as a plain substring — implementations use SQL LIKE
+    // internally with %pattern% wrapping, but never regex or wildcards.
+    DeleteMatchingFacts(ctx context.Context, pattern string) error
+    DecayOldFacts(ctx context.Context) error
+    Init(ctx context.Context) error
 }
 ```
+
+`SearchFacts` and `BuildContext` automatically filter to facts with **confidence >= 0.3** — low-confidence facts are excluded from results.
 
 **Shipped implementations:** `store/sqlite` (`sqlite.NewMemoryStore(store.DB())`), `store/postgres` (`postgres.NewMemoryStore(pool)`)
 
@@ -174,7 +189,11 @@ flowchart TD
     UPSERT --> DECAY[DecayOldFacts<br>~5% probability]
 ```
 
-This runs in a background goroutine using the agent's own LLM. No extra configuration needed.
+This runs in a background goroutine using the agent's own LLM. No extra configuration needed. Extraction is capped at **10 facts per turn** to prevent overwhelming the store.
+
+### Token Estimation
+
+`MaxTokens` uses a heuristic: ~4 characters per token, plus 4 tokens overhead per message. This is approximate — actual token counts vary by model and content.
 
 ### Fact Validation
 
@@ -202,9 +221,57 @@ Call `Drain()` on the agent or network during shutdown to wait for in-flight per
 agent.Drain() // blocks until all background persists complete
 ```
 
+## Context Compression
+
+When the total message rune count exceeds a threshold (default **200,000 runes**, ~50K tokens), the agent compresses older messages via an LLM call:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store),
+    oasis.WithCompressThreshold(150_000),                  // trigger earlier
+    oasis.WithCompressModel(func() oasis.Provider { ... }), // use a cheaper model
+)
+```
+
+```mermaid
+flowchart LR
+    CHECK{Rune count > threshold?} -->|Yes| SCAN["Walk backwards through messages<br>find iteration boundaries"]
+    SCAN --> PRESERVE["Preserve last 2 iterations"]
+    PRESERVE --> SUMMARIZE["LLM summarizes older messages"]
+    SUMMARIZE --> REPLACE["Replace old messages with summary"]
+    CHECK -->|No| CONTINUE["Continue normally"]
+```
+
+**Key behaviors:**
+- Last 2 tool-calling iterations are always preserved (never compressed)
+- Prior summaries from earlier compression passes are re-compressed (avoiding summary explosion)
+- Summaries are prefixed with `"[Summary of earlier tool results]\n"`
+- If no messages qualify for compression, it's skipped silently
+- On compression failure, the agent continues uncompressed (graceful degradation)
+
+## Message Truncation Limits
+
+Two distinct truncation limits protect against unbounded growth:
+
+| Limit | Value | Purpose |
+|-------|-------|---------|
+| **Persist content** | 50,000 runes | Max content length when writing messages to the database |
+| **Recall content** | 500 runes | Max content length for cross-thread recalled messages injected into prompts |
+
+The persist limit prevents large tool results from bloating the database. The recall limit keeps injected context compact and reduces prompt injection surface from recalled content.
+
 ## Semantic Deduplication
 
-`UpsertFact` checks for semantically similar existing facts (cosine similarity > 0.85). If found, the existing fact is reinforced rather than creating a duplicate.
+`UpsertFact` checks for semantically similar existing facts (cosine similarity > 0.85). If found, the existing fact is reinforced (+0.1 confidence, capped at 1.0) rather than creating a duplicate.
+
+### Two Similarity Thresholds
+
+The auto-extraction pipeline uses two different thresholds for semantic matching:
+
+| Threshold | Value | Purpose |
+|-----------|-------|---------|
+| **Supersedes** | 0.80 | When a new fact contradicts an existing one (lower because supersedes targets facts that are semantically similar but factually different) |
+| **Dedup** | 0.85 | When a new fact is essentially the same as an existing one (higher to avoid false merges) |
 
 ## Memory Wiring Example
 

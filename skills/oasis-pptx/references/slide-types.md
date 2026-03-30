@@ -1,8 +1,8 @@
 # Slide Types Reference
 
-When to use each slide layout and what makes a good version of each.
+When to use each slide type and what makes a good version of each.
 
-## cover
+## Cover
 
 The first slide. Sets the tone.
 
@@ -11,48 +11,50 @@ The first slide. Sets the tone.
 - Subtitle adds context (audience, purpose)
 - Date grounds the content
 - Clean, uncluttered
+- Dark or branded background
 
 **Bad:**
 - Title longer than one line
 - Multiple subtitles or descriptions
 - Logos and decorative elements (keep it minimal)
 
-## toc
+## Agenda / Table of Contents
 
-Agenda / table of contents. Helps the audience know what's coming.
+Helps the audience know what is coming.
 
 **Good:**
 - 3-5 items (matches actual sections)
 - Short, noun-phrase items ("Financial Overview" not "We will review our financial performance")
 - Items match section slide titles exactly
+- Bullet list with consistent formatting
 
 **Bad:**
 - More than 7 items (too many sections)
 - Long sentences as items
-- Items that don't correspond to actual slides
+- Items that do not correspond to actual slides
 
-## section
+## Section Divider
 
 Section divider between major topics.
 
 **Good:**
 - Title matches the TOC item
 - Optional subtitle gives a one-line preview
-- Different background (use `light` theme color) to visually break the flow
+- Different background color (use `light` from palette) to visually break the flow
 
 **Bad:**
 - Too many section dividers (1 per 3-5 content slides)
 - Subtitle that repeats the title
 
-## content
+## Content
 
 The workhorse slide. Contains data, charts, text, images.
 
 **Good:**
 - One main idea
 - Chart + insight pattern (data on left, takeaway text on right)
-- White space — don't fill every pixel
-- Elements use percentage positioning
+- White space -- do not fill every inch
+- Clear visual hierarchy
 
 **Bad:**
 - Multiple charts competing for attention
@@ -63,8 +65,8 @@ The workhorse slide. Contains data, charts, text, images.
 
 **Chart + Insight:**
 ```
-[    Chart (55%)     ] [ Takeaway (30%) ]
-                       [ KPI card       ]
+[    Chart (7.5in)     ] [ Takeaway (4in) ]
+                         [ KPI card       ]
 ```
 
 **KPI Dashboard:**
@@ -75,10 +77,10 @@ The workhorse slide. Contains data, charts, text, images.
 
 **Comparison:**
 ```
-[  Before (45%)  ] | [  After (45%)   ]
+[  Before (6in)  ] | [  After (6in)   ]
 ```
 
-## summary
+## Summary
 
 Last content slide. Reinforces key messages.
 

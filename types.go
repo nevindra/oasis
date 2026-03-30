@@ -442,23 +442,28 @@ type ScheduledToolCall struct {
 // SkillSummary is a lightweight view of a skill for discovery.
 // Contains only the metadata needed for an agent to decide whether to activate.
 type SkillSummary struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Tags        []string `json:"tags,omitempty"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	Tags          []string `json:"tags,omitempty"`
+	Compatibility string   `json:"compatibility,omitempty"`
 }
 
 // Skill is a stored instruction package that specializes agent behavior.
 // Skills are folders on disk with a SKILL.md file containing YAML frontmatter
-// (metadata) and markdown body (instructions).
+// (metadata) and markdown body (instructions). Compatible with the AgentSkills
+// open specification (https://agentskills.io/specification.md).
 type Skill struct {
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	Instructions string   `json:"instructions"`
-	Tools        []string `json:"tools,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
-	References   []string `json:"references,omitempty"`
-	Dir          string   `json:"-"` // filesystem path to skill directory
+	Name          string            `json:"name"`
+	Description   string            `json:"description"`
+	Instructions  string            `json:"instructions"`
+	Tools         []string          `json:"tools,omitempty"`
+	Model         string            `json:"model,omitempty"`
+	Tags          []string          `json:"tags,omitempty"`
+	References    []string          `json:"references,omitempty"`
+	Dir           string            `json:"-"`
+	Compatibility string            `json:"compatibility,omitempty"`
+	License       string            `json:"license,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
 }
 
 // --- LLM protocol types ---

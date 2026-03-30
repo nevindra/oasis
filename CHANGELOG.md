@@ -6,6 +6,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+- `Compatibility`, `License`, `Metadata map[string]string` fields on `Skill` and `SkillSummary` — aligns with the [AgentSkills open specification](https://agentskills.io).
+- `ActivateWithReferences()` function — resolves skill references at activation time, prepending referenced skill instructions (one level deep, missing refs silently skipped).
+- `WithActiveSkills(skills ...Skill)` agent option — pre-activates skills at init time, injecting their instructions into the system prompt on every LLM call.
+- `WithSkills(p SkillProvider)` agent option — registers a `SkillProvider` and auto-adds `skill_discover`/`skill_activate` tools (plus `skill_create`/`skill_update` if the provider implements `SkillWriter`).
+- `DefaultSkillDirs()` — returns AgentSkills-compatible scan paths (`<cwd>/.agents/skills/`, `~/.agents/skills/`).
+- `{dir}` placeholder in skill instructions resolved to absolute skill directory path at activation time.
+- Frontmatter parser supports indented metadata blocks (for `metadata:` with sub-keys).
+- Prescriptive built-in skills: `oasis-pdf` (HTML/CSS + Playwright), `oasis-docx` (python-docx), `oasis-xlsx` (openpyxl), `oasis-pptx` (PptxGenJS). Agents use underlying libraries directly with full creative freedom and API access.
+
+### Changed
+- **BREAKING:** Built-in document generation skills now teach agents to use underlying libraries directly instead of routing through `oasis-render`. Agents write code that calls python-docx, openpyxl, Playwright, or PptxGenJS — no intermediate JSON spec format.
+- Skill tool `skill_activate` output includes `Compatibility`, `License`, and `Metadata` fields.
+- Skill tool `skill_create`/`skill_update` accepts `Compatibility`, `License`, `Metadata` parameters.
+
+### Removed
+- `bin/oasis-render` CLI — replaced by prescriptive skills that teach agents to use libraries directly.
+- `renderers/` directory — PDF, DOCX, XLSX, PPTX renderer scripts removed.
+- `requirements.txt` — Python deps for renderers (library deps remain in Dockerfile for direct agent use).
+
 ## [0.13.0] - 2026-03-29
 
 ### Added

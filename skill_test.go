@@ -21,6 +21,20 @@ func writeSkillFile(t *testing.T, dir, name, content string) {
 	}
 }
 
+// --- DefaultSkillDirs ---
+
+func TestDefaultSkillDirs(t *testing.T) {
+	dirs := DefaultSkillDirs()
+	if len(dirs) < 1 {
+		t.Fatal("expected at least one default directory")
+	}
+	for _, d := range dirs {
+		if !filepath.IsAbs(d) {
+			t.Errorf("expected absolute path, got %q", d)
+		}
+	}
+}
+
 // --- Task 3: parseFrontmatter ---
 
 func TestParseFrontmatter(t *testing.T) {
@@ -486,5 +500,243 @@ func TestFileSkillProvider_DeleteSkillNotFound(t *testing.T) {
 	err := p.DeleteSkill(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent skill, got nil")
+	}
+}
+
+// --- Skill Architecture v2: new fields ---
+
+func TestFileSkillProvider_ActivateNewFields(t *testing.T) {
+	dir := t.TempDir()
+
+	writeSkillFile(t, dir, "full-skill", `---
+name: full-skill
+description: Skill with all v2 fields
+compatibility: claude-code >= 1.0
+license: MIT
+metadata:
+  author: test-user
+  version: 2.0.0
+  category: productivity
+---
+Do full things.
+`)
+
+	p := NewFileSkillProvider(dir)
+	skill, err := p.Activate(context.Background(), "full-skill")
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+
+	if skill.Compatibility != "claude-code >= 1.0" {
+		t.Errorf("Compatibility = %q, want %q", skill.Compatibility, "claude-code >= 1.0")
+	}
+	if skill.License != "MIT" {
+		t.Errorf("License = %q, want %q", skill.License, "MIT")
+	}
+	if len(skill.Metadata) != 3 {
+		t.Fatalf("Metadata has %d entries, want 3: %v", len(skill.Metadata), skill.Metadata)
+	}
+	if skill.Metadata["author"] != "test-user" {
+		t.Errorf("Metadata[author] = %q, want %q", skill.Metadata["author"], "test-user")
+	}
+	if skill.Metadata["version"] != "2.0.0" {
+		t.Errorf("Metadata[version] = %q, want %q", skill.Metadata["version"], "2.0.0")
+	}
+	if skill.Metadata["category"] != "productivity" {
+		t.Errorf("Metadata[category] = %q, want %q", skill.Metadata["category"], "productivity")
+	}
+}
+
+func TestParseFrontmatterMetadata(t *testing.T) {
+	input := `---
+name: meta-skill
+metadata:
+  author: alice
+  version: 1.0
+  repo: https://github.com/example
+---
+body
+`
+	fm, body, err := parseFrontmatter(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if fm["name"] != "meta-skill" {
+		t.Errorf("name = %q, want %q", fm["name"], "meta-skill")
+	}
+	if fm["metadata.author"] != "alice" {
+		t.Errorf("metadata.author = %q, want %q", fm["metadata.author"], "alice")
+	}
+	if fm["metadata.version"] != "1.0" {
+		t.Errorf("metadata.version = %q, want %q", fm["metadata.version"], "1.0")
+	}
+	if fm["metadata.repo"] != "https://github.com/example" {
+		t.Errorf("metadata.repo = %q, want %q", fm["metadata.repo"], "https://github.com/example")
+	}
+	// Parent key "metadata" should NOT appear as a standalone entry.
+	if _, ok := fm["metadata"]; ok {
+		t.Errorf("metadata should not be a standalone key, got %q", fm["metadata"])
+	}
+	if got := strings.TrimSpace(body); got != "body" {
+		t.Errorf("body = %q, want %q", got, "body")
+	}
+}
+
+func TestFileSkillProvider_CreateSkillNewFields(t *testing.T) {
+	dir := t.TempDir()
+	p := NewFileSkillProvider(dir)
+
+	skill := Skill{
+		Name:          "roundtrip-skill",
+		Description:   "Tests roundtrip of v2 fields",
+		Instructions:  "Roundtrip instructions.",
+		Compatibility: "oasis >= 0.30",
+		License:       "Apache-2.0",
+		Metadata: map[string]string{
+			"author":  "bob",
+			"version": "3.0",
+		},
+	}
+
+	if err := p.CreateSkill(context.Background(), skill); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	// Activate and verify fields survived the roundtrip.
+	got, err := p.Activate(context.Background(), "roundtrip-skill")
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if got.Compatibility != "oasis >= 0.30" {
+		t.Errorf("Compatibility = %q, want %q", got.Compatibility, "oasis >= 0.30")
+	}
+	if got.License != "Apache-2.0" {
+		t.Errorf("License = %q, want %q", got.License, "Apache-2.0")
+	}
+	if got.Metadata["author"] != "bob" {
+		t.Errorf("Metadata[author] = %q, want %q", got.Metadata["author"], "bob")
+	}
+	if got.Metadata["version"] != "3.0" {
+		t.Errorf("Metadata[version] = %q, want %q", got.Metadata["version"], "3.0")
+	}
+	if got.Instructions != "Roundtrip instructions." {
+		t.Errorf("Instructions = %q, want %q", got.Instructions, "Roundtrip instructions.")
+	}
+}
+
+// --- ActivateWithReferences ---
+
+func TestActivateWithReferences(t *testing.T) {
+	dir := t.TempDir()
+
+	writeSkillFile(t, dir, "base-knowledge", `---
+name: base-knowledge
+description: Foundational knowledge
+---
+You have deep expertise in Go concurrency patterns.
+`)
+
+	writeSkillFile(t, dir, "pdf-gen", `---
+name: pdf-gen
+description: PDF generation skill
+references: [base-knowledge]
+---
+Generate PDF reports using Go.
+`)
+
+	p := NewFileSkillProvider(dir)
+	skill, err := ActivateWithReferences(context.Background(), p, "pdf-gen")
+	if err != nil {
+		t.Fatalf("ActivateWithReferences: %v", err)
+	}
+
+	// Referenced skill instructions must be included.
+	if !strings.Contains(skill.Instructions, "You have deep expertise in Go concurrency patterns.") {
+		t.Errorf("Instructions missing referenced content: %s", skill.Instructions)
+	}
+
+	// Own instructions must be included.
+	if !strings.Contains(skill.Instructions, "Generate PDF reports using Go.") {
+		t.Errorf("Instructions missing own content: %s", skill.Instructions)
+	}
+
+	// Referenced content must come BEFORE own content.
+	refIdx := strings.Index(skill.Instructions, "You have deep expertise in Go concurrency patterns.")
+	ownIdx := strings.Index(skill.Instructions, "Generate PDF reports using Go.")
+	if refIdx >= ownIdx {
+		t.Errorf("referenced content (at %d) should come before own content (at %d)", refIdx, ownIdx)
+	}
+}
+
+func TestActivateWithReferencesMissing(t *testing.T) {
+	dir := t.TempDir()
+
+	writeSkillFile(t, dir, "lonely-skill", `---
+name: lonely-skill
+description: References a nonexistent skill
+references: [nonexistent]
+---
+I stand alone.
+`)
+
+	p := NewFileSkillProvider(dir)
+	skill, err := ActivateWithReferences(context.Background(), p, "lonely-skill")
+	if err != nil {
+		t.Fatalf("ActivateWithReferences: %v", err)
+	}
+
+	if skill.Instructions != "I stand alone." {
+		t.Errorf("Instructions = %q, want %q", skill.Instructions, "I stand alone.")
+	}
+}
+
+func TestActivateWithReferencesNone(t *testing.T) {
+	dir := t.TempDir()
+
+	writeSkillFile(t, dir, "no-refs", `---
+name: no-refs
+description: No references at all
+---
+Just me.
+`)
+
+	p := NewFileSkillProvider(dir)
+	skill, err := ActivateWithReferences(context.Background(), p, "no-refs")
+	if err != nil {
+		t.Fatalf("ActivateWithReferences: %v", err)
+	}
+
+	if skill.Instructions != "Just me." {
+		t.Errorf("Instructions = %q, want %q", skill.Instructions, "Just me.")
+	}
+}
+
+func TestFileSkillProvider_ActivateDirResolution(t *testing.T) {
+	dir := t.TempDir()
+
+	writeSkillFile(t, dir, "dir-skill", `---
+name: dir-skill
+description: Tests {dir} placeholder
+---
+Config lives at {dir}/config.yaml
+Run {dir}/scripts/setup.sh to initialize.
+`)
+
+	p := NewFileSkillProvider(dir)
+	skill, err := p.Activate(context.Background(), "dir-skill")
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+
+	expectedDir := filepath.Join(dir, "dir-skill")
+	if strings.Contains(skill.Instructions, "{dir}") {
+		t.Errorf("Instructions still contains {dir}: %s", skill.Instructions)
+	}
+	if !strings.Contains(skill.Instructions, expectedDir+"/config.yaml") {
+		t.Errorf("Instructions missing resolved config path: %s", skill.Instructions)
+	}
+	if !strings.Contains(skill.Instructions, expectedDir+"/scripts/setup.sh") {
+		t.Errorf("Instructions missing resolved script path: %s", skill.Instructions)
 	}
 }

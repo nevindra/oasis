@@ -181,6 +181,8 @@ type agentConfig struct {
 	spawnEnabled   bool     // set by WithSubAgentSpawning
 	maxSpawnDepth  int      // set by MaxSpawnDepth (default 1)
 	denySpawnTools []string // set by DenySpawnTools
+	activeSkills   []Skill        // set by WithActiveSkills
+	skillProvider  SkillProvider   // set by WithSkills
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -375,6 +377,22 @@ func MaxSpawnDepth(n int) SubAgentOption {
 // ask_user is always blocked in sub-agents regardless of this setting.
 func DenySpawnTools(names ...string) SubAgentOption {
 	return func(c *agentConfig) { c.denySpawnTools = append(c.denySpawnTools, names...) }
+}
+
+// WithActiveSkills pre-activates skills whose instructions are appended to
+// the agent's system prompt on every LLM call. Use for capabilities that
+// should always be available. References are NOT auto-resolved here — call
+// ActivateWithReferences before passing skills if needed.
+func WithActiveSkills(skills ...Skill) AgentOption {
+	return func(c *agentConfig) { c.activeSkills = append(c.activeSkills, skills...) }
+}
+
+// WithSkills registers a SkillProvider and automatically adds skill_discover
+// and skill_activate tools so the agent can discover and activate skills at
+// runtime. If the provider also implements SkillWriter, skill_create and
+// skill_update tools are added too.
+func WithSkills(p SkillProvider) AgentOption {
+	return func(c *agentConfig) { c.skillProvider = p }
 }
 
 // WithResponseSchema sets the response schema for structured JSON output.

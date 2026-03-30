@@ -28,6 +28,8 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithTopP(p float64)` | Set nucleus sampling probability for this agent (nil = provider default) |
 | `WithTopK(k int)` | Set top-K sampling parameter for this agent (nil = provider default) |
 | `WithMaxTokens(n int)` | Set maximum output tokens for this agent (nil = provider default) |
+| `WithActiveSkills(skills ...Skill)` | Pre-activate skills — instructions appended to system prompt on every LLM call |
+| `WithSkills(p SkillProvider)` | Register a SkillProvider and auto-add skill discovery/activation tools |
 | `WithTracer(t Tracer)` | Enable deep tracing (agent.execute, loop, memory spans) |
 | `WithLogger(l *slog.Logger)` | Enable structured logging (defaults to no-op) |
 

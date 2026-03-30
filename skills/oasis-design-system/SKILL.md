@@ -1,6 +1,7 @@
 ---
 name: oasis-design-system
-description: Shared design tokens for document generation — color palettes, typography, spacing scale
+description: Shared design tokens for document generation — color palettes, typography, spacing scale. Use when generating any document (PDF, DOCX, XLSX, PPTX) to ensure visual consistency.
+compatibility: No special requirements
 tags: [design, document]
 ---
 

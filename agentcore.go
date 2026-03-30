@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,9 +44,10 @@ type agentCore struct {
 	compressModel       ModelFunc
 	compressThreshold   int
 	generationParams    *GenerationParams
-	spawnEnabled        bool
-	maxSpawnDepth       int
-	denySpawnTools      []string
+	spawnEnabled            bool
+	maxSpawnDepth           int
+	denySpawnTools          []string
+	activeSkillInstructions string // built from WithActiveSkills during initCore
 }
 
 // initCore initializes shared fields on an agentCore from the given config.
@@ -104,6 +106,15 @@ func initCore(c *agentCore, name, description string, provider Provider, cfg age
 	c.spawnEnabled = cfg.spawnEnabled
 	c.maxSpawnDepth = cfg.maxSpawnDepth
 	c.denySpawnTools = cfg.denySpawnTools
+
+	// Build active skill instructions block.
+	if len(cfg.activeSkills) > 0 {
+		var parts []string
+		for _, s := range cfg.activeSkills {
+			parts = append(parts, "## Skill: "+s.Name+"\n\n"+s.Instructions)
+		}
+		c.activeSkillInstructions = strings.Join(parts, "\n\n---\n\n")
+	}
 }
 
 func (c *agentCore) Name() string        { return c.name }

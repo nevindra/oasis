@@ -1,6 +1,6 @@
 # Oasis
 
-An AI agent framework for Go. Composable primitives for tool-calling agents, multi-agent networks, deterministic workflows, Graph RAG, code execution, and long-term memory — designed to evolve alongside AI capabilities.
+A high-performance Go framework for AI agent systems — fast, reliable, and built to scale with the next leap in AI capabilities.
 
 ```go
 import oasis "github.com/nevindra/oasis"
@@ -99,7 +99,7 @@ graph TB
     style OBS fill:#f3e5f5,stroke:#7b1fa2
 ```
 
-Everything above is a Go interface (or built on one). Swap any box without touching the others.
+The core (agent loop, memory pipeline, suspend/resume) is opinionated and optimized as a unit. The edges (providers, tools, stores, processors) are composable interfaces — swap any implementation without touching the rest.
 
 ---
 
@@ -199,7 +199,7 @@ Beyond basic tool calling, agents can leverage advanced execution patterns:
 
 | Capability | Option | What it does |
 | ---------- | ------ | ------------ |
-| [**Code Execution**](concepts/code-execution.md) | `WithSandbox(sb, tools...)` | Docker-based sandbox with shell, code execution, file I/O, browser, and MCP tools |
+| [**Sandbox**](concepts/sandbox.md) | `WithSandbox(sb, tools...)` | Docker-based sandbox with shell, code execution, file I/O, browser, and MCP tools |
 | [**Plan Execution**](guides/execution-plans.md) | `WithPlanExecution()` | LLM batches tool calls → all run in parallel → results returned in one turn |
 | **Dynamic Config** | `WithDynamicPrompt` / `WithDynamicModel` / `WithDynamicTools` | Per-request prompt, model, and tool resolution |
 | **Structured Output** | `WithResponseSchema(schema)` | Enforce JSON output schema on every LLM call |
@@ -226,7 +226,7 @@ graph TB
     subgraph "Knowledge Base"
         GRAPHRAG["Graph RAG<br/><small>8 relation types · multi-hop BFS<br/>persistent GraphStore</small>"]
         HYBRIDRET["Hybrid Retrieval<br/><small>vector + FTS + RRF<br/>parent-child resolution</small>"]
-        SKILLS["Skills<br/><small>agent-created · semantic search</small>"]
+        SKILLS["Skills<br/><small>file-based instruction packages</small>"]
     end
 
     HIST --> LLM["LLM Context"]
@@ -400,29 +400,11 @@ pipeline, _ := oasis.NewWorkflow("pipeline", "Research then write",
 | ------- | ----------------- |
 | [**Getting Started**](getting-started/index.md) | Installation, first agent, reference app |
 | [**Concepts**](concepts/index.md) | How the framework works — one page per primitive |
-| [**Guides**](guides/) | Step-by-step how-tos |
+| [**Guides**](guides/index.md) | Step-by-step how-tos |
+| [**API Reference**](api/index.md) | Complete interface definitions and types |
 | [**Configuration**](configuration/index.md) | All config options and environment variables |
-| [**API Reference**](api/interfaces.md) | Complete interface definitions and types |
-| [**Contributing**](contributing.md) | Engineering principles and coding conventions |
-
-### Guides
-
-| Guide | Topic |
-| ----- | ----- |
-| [Custom Tool](guides/custom-tool.md) | Build your own tools |
-| [Custom Provider](guides/custom-provider.md) | Implement a new LLM provider |
-| [Custom Store](guides/custom-store.md) | Write a storage backend |
-| [Custom Agent](guides/custom-agent.md) | Create a custom agent type |
-| [Memory & Recall](guides/memory-and-recall.md) | Conversation history, cross-thread, user facts |
-| [RAG Pipeline](guides/rag-pipeline.md) | Ingestion, retrieval, Graph RAG |
-| [Ingesting Documents](guides/ingesting-documents.md) | Extract, chunk, embed, store |
-| [Streaming](guides/streaming.md) | Token streaming and SSE |
-| [Processors & Guardrails](guides/processors-and-guardrails.md) | Input/output middleware |
-| [Human-in-the-Loop](guides/human-in-the-loop.md) | InputHandler and suspend/resume |
-| [Background Agents](guides/background-agents.md) | Spawn, cancel, select |
-| [Code Execution](guides/code-execution.md) | Docker-based sandbox with shell, code, files, browser, MCP |
-| [Execution Plans](guides/execution-plans.md) | Parallel tool batching |
-| [Skills](guides/skills.md) | Agent-created instruction packages |
+| [**Philosophy**](PHILOSOPHY.md) | Design principles and framework identity |
+| [**Engineering**](ENGINEERING.md) | Coding standards and production rules |
 
 ---
 
