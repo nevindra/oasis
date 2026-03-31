@@ -10,7 +10,7 @@ import (
 
 // Config holds provider-agnostic configuration for creating a chat Provider.
 type Config struct {
-	Provider string  // "gemini", "openai", "groq", "deepseek", "together", "mistral", "ollama"
+	Provider string  // "gemini", "openai", "groq", "deepseek", "together", "mistral", "ollama", "qwen", "qwen-cn"
 	APIKey   string
 	Model    string
 	BaseURL  string  // required for openai-compat; auto-filled for known providers
@@ -37,7 +37,7 @@ func Provider(cfg Config) (oasis.Provider, error) {
 	switch cfg.Provider {
 	case "gemini":
 		return geminiProvider(cfg), nil
-	case "openai", "groq", "deepseek", "together", "mistral", "ollama":
+	case "openai", "groq", "deepseek", "together", "mistral", "ollama", "qwen", "qwen-cn":
 		return openaiCompatProvider(cfg), nil
 	default:
 		if cfg.BaseURL != "" {
@@ -52,7 +52,7 @@ func EmbeddingProvider(cfg EmbeddingConfig) (oasis.EmbeddingProvider, error) {
 	switch cfg.Provider {
 	case "gemini":
 		return gemini.NewEmbedding(cfg.APIKey, cfg.Model, cfg.Dimensions), nil
-	case "openai", "vllm", "ollama", "together", "mistral":
+	case "openai", "vllm", "ollama", "together", "mistral", "qwen", "qwen-cn":
 		baseURL := cfg.BaseURL
 		if baseURL == "" {
 			baseURL = defaultBaseURL(cfg.Provider)
@@ -123,6 +123,10 @@ func defaultBaseURL(provider string) string {
 		return "http://localhost:11434/v1"
 	case "vllm":
 		return "http://localhost:8000/v1"
+	case "qwen":
+		return "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+	case "qwen-cn":
+		return "https://dashscope.aliyuncs.com/compatible-mode/v1"
 	default:
 		return ""
 	}

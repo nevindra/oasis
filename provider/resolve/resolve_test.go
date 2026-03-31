@@ -16,6 +16,8 @@ func TestDefaultBaseURL(t *testing.T) {
 		{"mistral", "https://api.mistral.ai/v1"},
 		{"ollama", "http://localhost:11434/v1"},
 		{"vllm", "http://localhost:8000/v1"},
+		{"qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
+		{"qwen-cn", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 		{"unknown", ""},
 	}
 	for _, tt := range tests {
@@ -63,7 +65,7 @@ func TestProvider_GeminiWithOptions(t *testing.T) {
 }
 
 func TestProvider_OpenAICompat(t *testing.T) {
-	providers := []string{"openai", "groq", "deepseek", "together", "mistral", "ollama"}
+	providers := []string{"openai", "groq", "deepseek", "together", "mistral", "ollama", "qwen", "qwen-cn"}
 	for _, name := range providers {
 		t.Run(name, func(t *testing.T) {
 			p, err := Provider(Config{
@@ -171,7 +173,7 @@ func TestEmbeddingProvider_Gemini(t *testing.T) {
 }
 
 func TestEmbeddingProvider_OpenAICompat(t *testing.T) {
-	for _, name := range []string{"openai", "vllm", "ollama", "together"} {
+	for _, name := range []string{"openai", "vllm", "ollama", "together", "qwen", "qwen-cn"} {
 		t.Run(name, func(t *testing.T) {
 			_, err := EmbeddingProvider(EmbeddingConfig{
 				Provider:   name,
