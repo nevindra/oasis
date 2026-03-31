@@ -28,6 +28,17 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 	}
 	initCore(&n.agentCore, name, description, router, cfg)
 
+	if cfg.sandbox != nil {
+		for _, t := range cfg.sandboxTools {
+			n.tools.Add(t)
+		}
+	}
+
+	// Register skill tools if a provider is configured.
+	if cfg.skillProvider != nil {
+		n.tools.Add(newSkillTool(cfg.skillProvider))
+	}
+
 	for _, a := range cfg.agents {
 		n.agents[a.Name()] = a
 		n.sortedAgentNames = append(n.sortedAgentNames, a.Name())
@@ -63,6 +74,9 @@ func (n *Network) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- S
 // ch is passed through so makeDispatch can emit agent-start/finish events.
 func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- StreamEvent) loopConfig {
 	prompt, provider := n.resolvePromptAndProvider(ctx, task)
+	if n.activeSkillInstructions != "" {
+		prompt = prompt + "\n\n# Active Skills\n\n" + n.activeSkillInstructions
+	}
 
 	// Resolve tools: dynamic replaces static.
 	var toolDefs []ToolDefinition
