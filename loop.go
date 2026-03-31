@@ -348,17 +348,9 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 				content = lastAgentOutput
 			}
 			if ch != nil && !streamedThisIter {
-				// Only emit text-delta if content wasn't already streamed
-				// via ChatStream this iteration, and no sub-agent already
-				// streamed. When a Network delegates to a streaming
-				// sub-agent, its text-delta events are forwarded to the
-				// parent channel in real time. The router's final response
-				// would duplicate content consumers already received.
-				if lastAgentOutput == "" {
-					select {
-					case ch <- StreamEvent{Type: EventTextDelta, Content: content}:
-					case <-ctx.Done():
-					}
+				select {
+				case ch <- StreamEvent{Type: EventTextDelta, Content: content}:
+				case <-ctx.Done():
 				}
 			}
 			safeCloseCh()

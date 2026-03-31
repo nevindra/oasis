@@ -307,10 +307,10 @@ func TestNetworkExecuteStreamDelegatesToStreamingSubagent(t *testing.T) {
 	if agentFinish != 1 {
 		t.Errorf("agent-finish events = %d, want 1", agentFinish)
 	}
-	// Only the 3 forwarded text-deltas from the subagent; the router's
-	// final response is suppressed to avoid duplication.
-	if len(textDeltas) != 3 {
-		t.Errorf("text-delta events = %d, want 3 (got: %v)", len(textDeltas), textDeltas)
+	// 3 forwarded text-deltas from the subagent + 1 from the router's
+	// final response (router synthesizes after child returns).
+	if len(textDeltas) != 4 {
+		t.Errorf("text-delta events = %d, want 4 (got: %v)", len(textDeltas), textDeltas)
 	}
 	if len(textDeltas) >= 3 {
 		if textDeltas[0] != "hel" || textDeltas[1] != "lo " || textDeltas[2] != "world" {
@@ -319,7 +319,7 @@ func TestNetworkExecuteStreamDelegatesToStreamingSubagent(t *testing.T) {
 	}
 }
 
-func TestNetworkStreamNoDuplicateWhenRouterEchoes(t *testing.T) {
+func TestNetworkStreamRouterTextAfterDelegation(t *testing.T) {
 	subagentOutput := "hello world"
 	router := &mockProvider{
 		name: "router",
@@ -330,8 +330,7 @@ func TestNetworkStreamNoDuplicateWhenRouterEchoes(t *testing.T) {
 				Name: "agent_streamer",
 				Args: json.RawMessage(`{"task":"say hi"}`),
 			}}},
-			// Router echoes the sub-agent output verbatim — common for
-			// pure-routing LLMs. This must NOT produce a second text-delta.
+			// Router produces its own response after child returns.
 			{Content: subagentOutput},
 		},
 	}
@@ -346,7 +345,7 @@ func TestNetworkStreamNoDuplicateWhenRouterEchoes(t *testing.T) {
 		result: AgentResult{Output: subagentOutput},
 	}
 
-	network := NewNetwork("net", "Streaming dedup", router, WithAgents(streamer))
+	network := NewNetwork("net", "Router text after delegation", router, WithAgents(streamer))
 
 	ch := make(chan StreamEvent, 32)
 	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
@@ -362,25 +361,24 @@ func TestNetworkStreamNoDuplicateWhenRouterEchoes(t *testing.T) {
 		events = append(events, ev)
 	}
 
-	// Count text-delta events — should only have the 2 from the sub-agent,
-	// NOT a 3rd duplicate from the router's echoed final response.
+	// 2 text-deltas from sub-agent + 1 from router's response.
 	var textDeltas []string
 	for _, ev := range events {
 		if ev.Type == EventTextDelta {
 			textDeltas = append(textDeltas, ev.Content)
 		}
 	}
-	if len(textDeltas) != 2 {
-		t.Errorf("text-delta events = %d, want 2 (got: %v)", len(textDeltas), textDeltas)
+	if len(textDeltas) != 3 {
+		t.Errorf("text-delta events = %d, want 3 (got: %v)", len(textDeltas), textDeltas)
 	}
-	if len(textDeltas) >= 2 {
-		if textDeltas[0] != "hello " || textDeltas[1] != "world" {
-			t.Errorf("deltas = %v, want [hello , world]", textDeltas)
+	if len(textDeltas) >= 3 {
+		if textDeltas[0] != "hello " || textDeltas[1] != "world" || textDeltas[2] != subagentOutput {
+			t.Errorf("deltas = %v, want [hello , world, %s]", textDeltas, subagentOutput)
 		}
 	}
 }
 
-func TestNetworkStreamNoDuplicateWhenRouterEmpty(t *testing.T) {
+func TestNetworkStreamRouterEmptyFallback(t *testing.T) {
 	subagentOutput := "hello world"
 	router := &mockProvider{
 		name: "router",
@@ -392,7 +390,7 @@ func TestNetworkStreamNoDuplicateWhenRouterEmpty(t *testing.T) {
 				Args: json.RawMessage(`{"task":"say hi"}`),
 			}}},
 			// Router returns empty — falls back to lastAgentOutput.
-			// Must NOT produce a second text-delta.
+			// The fallback content is emitted as a text-delta.
 			{Content: ""},
 		},
 	}
@@ -407,7 +405,7 @@ func TestNetworkStreamNoDuplicateWhenRouterEmpty(t *testing.T) {
 		result: AgentResult{Output: subagentOutput},
 	}
 
-	network := NewNetwork("net", "Streaming dedup empty", router, WithAgents(streamer))
+	network := NewNetwork("net", "Router empty fallback", router, WithAgents(streamer))
 
 	ch := make(chan StreamEvent, 32)
 	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
@@ -423,19 +421,19 @@ func TestNetworkStreamNoDuplicateWhenRouterEmpty(t *testing.T) {
 		events = append(events, ev)
 	}
 
-	// Count text-delta events — should only have the 2 from the sub-agent.
+	// 2 from sub-agent + 1 from router (fallback to lastAgentOutput).
 	var textDeltas []string
 	for _, ev := range events {
 		if ev.Type == EventTextDelta {
 			textDeltas = append(textDeltas, ev.Content)
 		}
 	}
-	if len(textDeltas) != 2 {
-		t.Errorf("text-delta events = %d, want 2 (got: %v)", len(textDeltas), textDeltas)
+	if len(textDeltas) != 3 {
+		t.Errorf("text-delta events = %d, want 3 (got: %v)", len(textDeltas), textDeltas)
 	}
 }
 
-func TestNetworkStreamNoDuplicateWhenRouterParaphrases(t *testing.T) {
+func TestNetworkStreamRouterSynthesizesAfterDelegation(t *testing.T) {
 	router := &mockProvider{
 		name: "router",
 		responses: []ChatResponse{
@@ -445,8 +443,7 @@ func TestNetworkStreamNoDuplicateWhenRouterParaphrases(t *testing.T) {
 				Name: "agent_streamer",
 				Args: json.RawMessage(`{"task":"say hi"}`),
 			}}},
-			// Router paraphrases the sub-agent output (different text,
-			// same meaning). Must NOT produce a second text-delta.
+			// Router synthesizes a new response based on child's output.
 			{Content: "A greeting: hello world!"},
 		},
 	}
@@ -461,14 +458,13 @@ func TestNetworkStreamNoDuplicateWhenRouterParaphrases(t *testing.T) {
 		result: AgentResult{Output: "hello world"},
 	}
 
-	network := NewNetwork("net", "Streaming dedup paraphrase", router, WithAgents(streamer))
+	network := NewNetwork("net", "Router synthesis", router, WithAgents(streamer))
 
 	ch := make(chan StreamEvent, 32)
 	result, err := network.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// AgentResult.Output carries the router's response for non-streaming consumers.
 	if result.Output != "A greeting: hello world!" {
 		t.Errorf("Output = %q, want %q", result.Output, "A greeting: hello world!")
 	}
@@ -478,16 +474,20 @@ func TestNetworkStreamNoDuplicateWhenRouterParaphrases(t *testing.T) {
 		events = append(events, ev)
 	}
 
-	// Only the 2 text-deltas from the sub-agent; the router's paraphrase
-	// is suppressed in the stream (available via AgentResult.Output).
+	// 2 from sub-agent + 1 from router's synthesis.
 	var textDeltas []string
 	for _, ev := range events {
 		if ev.Type == EventTextDelta {
 			textDeltas = append(textDeltas, ev.Content)
 		}
 	}
-	if len(textDeltas) != 2 {
-		t.Errorf("text-delta events = %d, want 2 (got: %v)", len(textDeltas), textDeltas)
+	if len(textDeltas) != 3 {
+		t.Errorf("text-delta events = %d, want 3 (got: %v)", len(textDeltas), textDeltas)
+	}
+	if len(textDeltas) >= 3 {
+		if textDeltas[2] != "A greeting: hello world!" {
+			t.Errorf("router synthesis delta = %q, want %q", textDeltas[2], "A greeting: hello world!")
+		}
 	}
 }
 
