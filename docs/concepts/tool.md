@@ -872,7 +872,7 @@ The framework auto-registers these tools via `sandbox.Tools(sb)`:
 |---|---|
 | `mcp_call` | Invoke MCP server tools |
 | `workspace_info` | Environment discovery (OS, arch, available tools) |
-| `deliver_file` | Send files to users as chat attachments (optional, requires `WithFileDelivery`) |
+| `deliver_file` | Send files to users as chat attachments (optional, requires either `WithMounts` with a writeable mount or the deprecated `WithFileDelivery`). See [Sandbox: Filesystem Mounts](sandbox.md#filesystem-mounts) |
 
 ### Plan vs Sandbox
 

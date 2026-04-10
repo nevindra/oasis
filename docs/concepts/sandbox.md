@@ -119,6 +119,126 @@ When you call `oasis.WithSandbox(sb, sandbox.Tools(sb)...)`, the framework auto-
 
 The LLM decides which tool to use based on the task. Code execution via `execute_code` remains available for complex logic with conditionals, loops, and data flow — but the LLM also has direct access to shell, file I/O (including surgical edits, glob, and grep), browser automation, and MCP without writing code.
 
+## Filesystem Mounts
+
+By default, the sandbox filesystem is **ephemeral** — anything the agent writes lives only inside the container and disappears when the sandbox is reaped. **Filesystem mounts** let an app back specific paths inside the sandbox with external storage (S3, GCS, local disk, etc.) so files can be pre-loaded at start, persisted at write time, and outlive the container.
+
+```mermaid
+flowchart LR
+    Backend[(Backend storage)]
+    Backend --prefetch--> Inputs["/workspace/inputs/<br/>(read-only)"]
+    Output["/workspace/output/<br/>(read-write)"] --publish on write--> Backend
+    Tmp["/tmp/, /workspace/scratch<br/>(no mount)"]
+    Tmp -.-> Container[Sandbox container]
+    Inputs --> Container
+    Output --> Container
+```
+
+A mount is declared with a `MountSpec` and bound to a path inside the sandbox. The framework runs three layers of mechanism on the app's behalf:
+
+1. **Layer 1 — `FilesystemMount` interface.** A small Go interface in `sandbox/` that abstracts the backend (`List`, `Open`, `Put`, `Delete`, `Stat`). Apps implement it once per backend.
+2. **Layer 2 — Tool-level interception.** When the agent uses `file_write`, `file_edit`, or `deliver_file` and the path falls under a writeable mount, the tool wrapper publishes the change to the backend immediately with optimistic version checks. Conflicts surface as tool errors.
+3. **Layer 3 — Lifecycle hooks.** `PrefetchMounts` copies backend files into the sandbox at start so shell, subprocess, and `python open()` can read them. `FlushMounts` scans the sandbox at close and publishes any deltas the tool layer didn't catch (e.g. files written by `make build` or `python script.py > out.csv`).
+
+There's also an opt-in **Layer 4 — `FilesystemMounter` capability** for sandbox runtimes that want to add live FUSE/virtio-fs mounting later. No runtime ships with this today; the seam exists so the framework doesn't need refactoring to add it.
+
+### Mount Modes
+
+```go
+const (
+    MountReadOnly  MountMode = iota // host → sandbox (prefetch only)
+    MountWriteOnly                  // sandbox → host (publish only)
+    MountReadWrite                  // bidirectional
+)
+```
+
+### Declaring a Mount
+
+```go
+import "github.com/nevindra/oasis/sandbox"
+
+mount := myFilesystemMount() // implements sandbox.FilesystemMount
+
+specs := []sandbox.MountSpec{
+    {
+        Path:            "/workspace/inputs",
+        Backend:         mount,
+        Mode:            sandbox.MountReadOnly,
+        PrefetchOnStart: true,
+    },
+    {
+        Path:         "/workspace/output",
+        Backend:      mount,
+        Mode:         sandbox.MountReadWrite,
+        FlushOnClose: true,
+        Exclude:      []string{"*.tmp", "**/__pycache__/**"},
+    },
+}
+
+manifest := sandbox.NewManifest()
+
+// Prefetch readable mounts before the agent runs.
+sb, _ := mgr.Create(ctx, sandbox.CreateOpts{SessionID: "run-123", TTL: time.Hour})
+if err := sandbox.PrefetchMounts(ctx, sb, specs, manifest); err != nil {
+    // Fatal — sandbox is not ready if its inputs aren't there.
+    return err
+}
+defer sandbox.FlushMounts(context.Background(), sb, specs, manifest)
+
+agent := oasis.NewLLMAgent("worker", "Data agent", provider,
+    oasis.WithSandbox(sb, sandbox.Tools(sb, sandbox.WithMounts(specs, manifest))...),
+)
+```
+
+The same `specs` slice and `manifest` are passed to BOTH `Tools(sb, WithMounts(...))` (so Layer 2 publishes work) AND `PrefetchMounts` / `FlushMounts` (so Layers 1 and 3 share state).
+
+### Single Canonical File Model
+
+Mounts are **shared** — there is exactly one canonical file at one key in the backend, and every sandbox that prefetches the mount sees the same content. Writes from any sandbox replace the canonical file in place. The framework does **not** auto-namespace per sandbox or per run; if two runs need separate output files, they should write distinct filenames (or the host app should use a per-run prefix when constructing the `FilesystemMount`).
+
+This is the same mental model as a git remote: one branch at one ref, multiple clones, writes are conditional pushes, conflicts are errors.
+
+### Concurrency — Optimistic Version Checks
+
+When the framework prefetches a file from the backend, it records the version (etag, mtime, or backend equivalent) in a private per-sandbox `Manifest`. When the framework publishes a write — either via Layer 2 (tool-time) or Layer 3 (close-time) — it sends the recorded version as a precondition. If the backend has moved on (because another sandbox wrote first), the publish is rejected with a `VersionMismatchError` (which matches `ErrVersionMismatch` via `errors.Is`).
+
+A rejected write surfaces to the agent as a tool error: *"the file changed under you, re-read before retrying"*. The framework does not auto-retry, does not auto-merge, and does not write to a sibling key. The agent decides how to resolve — typically by re-reading the file, inspecting the new content, deciding whether its previous edit is still applicable, and writing again.
+
+This is the same loop a developer follows when `git push` is rejected.
+
+### Sub-Agent Inheritance
+
+When a parent agent in a [Network](network.md) delegates to a child subagent, the child inherits the parent's mount configuration. Parent and children share one filesystem view, because they conceptually share one task. The framework shares a single sandbox across all nodes in a tree by default; pass the same `specs` and `manifest` to every node's `WithSandbox` call.
+
+### Failure Modes
+
+| Layer | Failure | Behavior |
+|-------|---------|----------|
+| **Prefetch (Layer 3 start)** | Backend unreachable | Fatal — sandbox not ready, return from `PrefetchMounts` |
+| **Tool publish (Layer 2)** | Network error | Tool error returned to agent (write succeeded locally, publish failed) |
+| **Tool publish (Layer 2)** | Version conflict | `VersionMismatchError` returned as tool error; agent should re-read |
+| **Flush (Layer 3 close)** | Network error | **Warning, not fatal** — local sandbox FS is the canonical result. Host logs it |
+| **Flush (Layer 3 close)** | Version conflict | Same — warning, host logs it. Agent's local copy is the source of truth |
+
+The asymmetry between prefetch and flush is deliberate: a 30-minute run shouldn't be killed because the storage backend hiccupped at the very end.
+
+### `MountSpec` Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Path` | `string` | Absolute path inside the sandbox where the mount is rooted (e.g. `/workspace/inputs`) |
+| `Backend` | `FilesystemMount` | The implementation that owns the data |
+| `Mode` | `MountMode` | `MountReadOnly`, `MountWriteOnly`, or `MountReadWrite` |
+| `PrefetchOnStart` | `bool` | If true, `PrefetchMounts` copies matching backend entries into the sandbox at start |
+| `FlushOnClose` | `bool` | If true, `FlushMounts` scans the sandbox at close and publishes deltas |
+| `MirrorDeletes` | `bool` | If true, files removed locally are deleted from the backend at flush. Default `false` because accidental deletion is much worse than a stale leftover file |
+| `Include` | `[]string` | Optional glob filters; empty = everything |
+| `Exclude` | `[]string` | Glob patterns to skip (e.g. `"*.tmp"`, `"**/__pycache__/**"`). Both full key and basename are tested |
+
+### Backward Compatibility
+
+`FileDelivery` is still supported but **deprecated** in favor of `FilesystemMount` with `MountWriteOnly` mode. When passed to `WithFileDelivery`, it acts as a fallback inside `deliver_file` for paths that fall under no mount — letting legacy callers continue to work while new code adopts the mount system.
+
 ## Code vs Plan Execution
 
 Both `WithPlanExecution()` and `WithSandbox()` reduce LLM round-trips, but they solve different problems:

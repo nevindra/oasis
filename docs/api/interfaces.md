@@ -511,6 +511,66 @@ type Manager interface {
 
 ---
 
+## FilesystemMount
+
+**Package:** `github.com/nevindra/oasis/sandbox`
+
+```go
+type FilesystemMount interface {
+    List(ctx context.Context, prefix string) ([]MountEntry, error)
+    Open(ctx context.Context, key string) (io.ReadCloser, error)
+    Put(ctx context.Context, key, mimeType string, size int64, data io.Reader, ifVersion string) (newVersion string, err error)
+    Delete(ctx context.Context, key, ifVersion string) error
+    Stat(ctx context.Context, key string) (MountEntry, error)
+}
+```
+
+Abstracts a key-value-ish file storage backend that can back a path inside a sandbox via a `MountSpec`. All keys are logical (relative to the mount root); the framework joins them with `MountSpec.Path` to form absolute sandbox paths.
+
+| Method | Description |
+|--------|-------------|
+| `List` | Returns the entries under the given prefix (relative to the mount root). Empty prefix lists everything |
+| `Open` | Returns a reader for the file at `key`. Returns an error wrapping `ErrKeyNotFound` if absent |
+| `Put` | Writes data with optional `ifVersion` precondition (empty = unconditional). Returns the new version assigned by the backend. Conflicts return wrapped `ErrVersionMismatch` |
+| `Delete` | Removes the file. `ifVersion` is honored the same way as `Put` |
+| `Stat` | Returns metadata for a single file. Returns an error wrapping `ErrKeyNotFound` if absent |
+
+See [Sandbox concept doc](../concepts/sandbox.md#filesystem-mounts) for the full mechanism (prefetch, tool interception, flush) and [Errors](errors.md) for `ErrVersionMismatch` / `ErrKeyNotFound` semantics.
+
+---
+
+## FilesystemMounter
+
+**Package:** `github.com/nevindra/oasis/sandbox`
+
+```go
+type FilesystemMounter interface {
+    MountFilesystem(ctx context.Context, spec MountSpec) error
+    UnmountFilesystem(ctx context.Context, path string) error
+}
+```
+
+OPTIONAL capability that a `Sandbox` implementation MAY expose to indicate it can perform live, transparent mounting of a `FilesystemMount` into the running container (e.g. via FUSE, virtio-fs, NFS). When a sandbox satisfies this interface, the framework prefers the mounter over the default Layer 2 + Layer 3 publish/flush path for the specific mount.
+
+No sandbox runtime ships with this capability today. The interface exists so that adding live mounting later does not require changes to the framework or applications using mounts.
+
+---
+
+## FileDelivery (deprecated)
+
+**Package:** `github.com/nevindra/oasis/sandbox`
+
+```go
+// Deprecated: Use FilesystemMount with MountWriteOnly mode instead.
+type FileDelivery interface {
+    Deliver(ctx context.Context, name, mimeType string, size int64, data io.Reader) (url string, err error)
+}
+```
+
+Original one-shot push interface for sending sandbox files to the host. Still supported for backward compatibility — when passed to `WithFileDelivery`, it acts as a fallback inside `deliver_file` for paths that fall under no mount. New code should use `FilesystemMount`.
+
+---
+
 ## DispatchResult
 
 **File:** `loop.go`
