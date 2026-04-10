@@ -1020,6 +1020,39 @@ func TestFileWriteToolConflictReturnsError(t *testing.T) {
 	}
 }
 
+func TestFileEditToolPublishesUnderWriteMount(t *testing.T) {
+	mount := newFakeMount()
+	mount.seed("report.md", "first line\nsecond", "v1")
+	sb := newRecordingSandbox()
+	sb.files["/workspace/output/report.md"] = []byte("first line\nsecond")
+
+	manifest := NewManifest()
+	manifest.Record("/workspace/output", "report.md", MountEntry{Key: "report.md", Version: "v1"})
+
+	tools := Tools(sb, WithMounts([]MountSpec{{
+		Path:    "/workspace/output",
+		Backend: mount,
+		Mode:    MountReadWrite,
+	}}, manifest))
+
+	edit := findToolByName(tools, "file_edit")
+	if edit == nil {
+		t.Fatal("file_edit tool not found")
+	}
+
+	args := json.RawMessage(`{"path":"/workspace/output/report.md","old_string":"second","new_string":"second updated"}`)
+	res, err := edit.Execute(context.Background(), "file_edit", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("tool error: %s", res.Error)
+	}
+	if string(mount.entries["report.md"].data) != "first line\nsecond updated" {
+		t.Errorf("backend report.md = %q", mount.entries["report.md"].data)
+	}
+}
+
 func TestFileWriteToolReadOnlyMountSilentlyAbsorbsLocally(t *testing.T) {
 	mount := newFakeMount()
 	sb := newRecordingSandbox()

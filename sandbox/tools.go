@@ -110,7 +110,7 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 		executeCodeTool(sb),
 		fileReadTool(sb),
 		fileWriteTool(sb, cfg),
-		fileEditTool(sb),
+		fileEditTool(sb, cfg),
 		fileGlobTool(sb),
 		fileGrepTool(sb),
 		fileTreeTool(sb),
@@ -287,7 +287,7 @@ func publishToMount(ctx context.Context, cfg *toolsConfig, p string, content []b
 	return nil
 }
 
-func fileEditTool(sb Sandbox) toolImpl {
+func fileEditTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 	return newTool("file_edit", "Edit a file by replacing an exact string match with new content. The old string must appear exactly once in the file. More efficient than reading and rewriting the entire file. Use this instead of sed or awk via shell.", `{
 		"type": "object",
 		"properties": {
@@ -307,6 +307,19 @@ func fileEditTool(sb Sandbox) toolImpl {
 		}
 		if err := sb.EditFile(ctx, EditFileRequest{Path: p.Path, Old: p.OldString, New: p.NewString}); err != nil {
 			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		// After edit, fetch the new content from the sandbox so we publish
+		// the actual on-disk state (handles edge cases like trailing
+		// whitespace and line ending normalization).
+		if cfg != nil && len(cfg.mounts) > 0 {
+			rc, err := sb.DownloadFile(ctx, p.Path)
+			if err == nil {
+				body, _ := io.ReadAll(rc)
+				rc.Close()
+				if err := publishToMount(ctx, cfg, p.Path, body); err != nil {
+					return oasis.ToolResult{Error: "edited locally but publish failed: " + err.Error()}, nil
+				}
+			}
 		}
 		return oasis.ToolResult{Content: "edited " + p.Path}, nil
 	})
