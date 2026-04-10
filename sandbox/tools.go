@@ -41,12 +41,61 @@ type ToolsOption func(*toolsConfig)
 
 type toolsConfig struct {
 	delivery FileDelivery
+	mounts   []MountSpec
+	manifest *Manifest
 }
 
-// WithFileDelivery enables the deliver_file tool. The provided FileDelivery
-// implementation handles persisting files downloaded from the sandbox.
+// WithFileDelivery enables the deliver_file tool with a single legacy
+// FileDelivery destination.
+//
+// Deprecated: Use WithMounts with a MountWriteOnly MountSpec instead.
+// This option remains for backward compatibility and is honored as a
+// fallback inside deliver_file when no mount covers the requested path.
 func WithFileDelivery(fd FileDelivery) ToolsOption {
 	return func(c *toolsConfig) { c.delivery = fd }
+}
+
+// WithMounts attaches a slice of FilesystemMount specs to the tool layer.
+// Tool wrappers consult the mounts to publish writes back to the backend
+// and to look up version preconditions in the supplied manifest.
+//
+// The manifest is shared with PrefetchMounts/FlushMounts so that all three
+// layers see the same per-sandbox version state.
+func WithMounts(specs []MountSpec, manifest *Manifest) ToolsOption {
+	return func(c *toolsConfig) {
+		c.mounts = specs
+		c.manifest = manifest
+	}
+}
+
+// findMountForPath returns the deepest matching mount for an absolute
+// sandbox path, or (nil, "") if no mount covers the path. The deepest
+// match wins so that a nested mount takes precedence over a parent mount.
+// The second return value is the path's logical key relative to the
+// matched mount root.
+func findMountForPath(mounts []MountSpec, p string) (*MountSpec, string) {
+	var best *MountSpec
+	bestLen := -1
+	var bestKey string
+	for i := range mounts {
+		m := &mounts[i]
+		prefix := m.Path
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		// Avoid matching "/workspace/inputs2" when mount is "/workspace/inputs":
+		// the path must either equal the prefix or have "/" right after it.
+		if p != prefix && !strings.HasPrefix(p[len(prefix):], "/") {
+			continue
+		}
+		if len(prefix) > bestLen {
+			best = m
+			bestLen = len(prefix)
+			rel := strings.TrimPrefix(p, prefix)
+			bestKey = strings.TrimPrefix(rel, "/")
+		}
+	}
+	return best, bestKey
 }
 
 // Tools returns Oasis tool implementations backed by the given Sandbox.

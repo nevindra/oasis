@@ -884,3 +884,53 @@ func TestDeliverFileToolNotRegisteredWithoutDelivery(t *testing.T) {
 		}
 	}
 }
+
+func TestFindMountForPath(t *testing.T) {
+	mounts := []MountSpec{
+		{Path: "/workspace/inputs", Mode: MountReadOnly},
+		{Path: "/workspace/output", Mode: MountReadWrite},
+	}
+
+	cases := []struct {
+		path string
+		want string // expected mount path, or "" for no match
+		key  string // expected relative key (when matched)
+	}{
+		{"/workspace/inputs/data.csv", "/workspace/inputs", "data.csv"},
+		{"/workspace/output/report.md", "/workspace/output", "report.md"},
+		{"/workspace/output/sub/dir/x.txt", "/workspace/output", "sub/dir/x.txt"},
+		{"/tmp/scratch", "", ""},
+		{"/workspace/other.txt", "", ""},
+		{"/workspace/inputs2/x", "", ""}, // not under /workspace/inputs
+	}
+	for _, c := range cases {
+		got, key := findMountForPath(mounts, c.path)
+		if c.want == "" {
+			if got != nil {
+				t.Errorf("findMountForPath(%q) = %v, want nil", c.path, got)
+			}
+			continue
+		}
+		if got == nil || got.Path != c.want {
+			t.Errorf("findMountForPath(%q) = %v, want %s", c.path, got, c.want)
+			continue
+		}
+		if key != c.key {
+			t.Errorf("findMountForPath(%q) key = %q, want %q", c.path, key, c.key)
+		}
+	}
+}
+
+func TestFindMountForPathPrefersDeepest(t *testing.T) {
+	mounts := []MountSpec{
+		{Path: "/workspace", Mode: MountReadWrite},
+		{Path: "/workspace/output", Mode: MountWriteOnly},
+	}
+	got, key := findMountForPath(mounts, "/workspace/output/report.md")
+	if got == nil || got.Path != "/workspace/output" {
+		t.Errorf("got = %v, want /workspace/output", got)
+	}
+	if key != "report.md" {
+		t.Errorf("key = %q, want %q", key, "report.md")
+	}
+}
