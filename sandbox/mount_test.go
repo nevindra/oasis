@@ -12,7 +12,7 @@ func TestMountModeDefaultIsReadOnly(t *testing.T) {
 	}
 }
 
-func TestMountModeWriteable(t *testing.T) {
+func TestMountModeWritable(t *testing.T) {
 	cases := []struct {
 		mode MountMode
 		want bool
@@ -22,8 +22,8 @@ func TestMountModeWriteable(t *testing.T) {
 		{MountReadWrite, true},
 	}
 	for _, c := range cases {
-		if got := c.mode.Writeable(); got != c.want {
-			t.Errorf("MountMode(%d).Writeable() = %v, want %v", c.mode, got, c.want)
+		if got := c.mode.Writable(); got != c.want {
+			t.Errorf("MountMode(%d).Writable() = %v, want %v", c.mode, got, c.want)
 		}
 	}
 }
