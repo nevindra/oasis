@@ -921,6 +921,132 @@ func TestFindMountForPath(t *testing.T) {
 	}
 }
 
+func findToolByName(tools []oasis.Tool, name string) oasis.Tool {
+	for _, tl := range tools {
+		for _, def := range tl.Definitions() {
+			if def.Name == name {
+				return tl
+			}
+		}
+	}
+	return nil
+}
+
+func TestFileWriteToolPublishesUnderWriteMount(t *testing.T) {
+	mount := newFakeMount()
+	sb := newRecordingSandbox()
+
+	manifest := NewManifest()
+	specs := []MountSpec{{
+		Path:    "/workspace/output",
+		Backend: mount,
+		Mode:    MountReadWrite,
+	}}
+
+	tools := Tools(sb, WithMounts(specs, manifest))
+	write := findToolByName(tools, "file_write")
+	if write == nil {
+		t.Fatal("file_write tool not found")
+	}
+
+	args := json.RawMessage(`{"path":"/workspace/output/report.md","content":"hello"}`)
+	res, err := write.Execute(context.Background(), "file_write", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("tool returned error: %s", res.Error)
+	}
+
+	if string(mount.entries["report.md"].data) != "hello" {
+		t.Errorf("backend report.md = %q, want %q", mount.entries["report.md"].data, "hello")
+	}
+	if v, _ := manifest.Version("/workspace/output", "report.md"); v == "" {
+		t.Error("manifest should have recorded a version after publish")
+	}
+}
+
+func TestFileWriteToolNoPublishOutsideMount(t *testing.T) {
+	mount := newFakeMount()
+	sb := newRecordingSandbox()
+
+	tools := Tools(sb, WithMounts([]MountSpec{{
+		Path:    "/workspace/output",
+		Backend: mount,
+		Mode:    MountReadWrite,
+	}}, NewManifest()))
+
+	write := findToolByName(tools, "file_write")
+
+	args := json.RawMessage(`{"path":"/tmp/scratch.txt","content":"junk"}`)
+	res, err := write.Execute(context.Background(), "file_write", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("tool returned error: %s", res.Error)
+	}
+	if len(mount.entries) != 0 {
+		t.Errorf("mount should be empty for /tmp write, has %d entries", len(mount.entries))
+	}
+}
+
+func TestFileWriteToolConflictReturnsError(t *testing.T) {
+	mount := newFakeMount()
+	mount.seed("report.md", "remote", "v2")
+	sb := newRecordingSandbox()
+
+	manifest := NewManifest()
+	manifest.Record("/workspace/output", "report.md", MountEntry{Key: "report.md", Version: "v1"})
+
+	tools := Tools(sb, WithMounts([]MountSpec{{
+		Path:    "/workspace/output",
+		Backend: mount,
+		Mode:    MountReadWrite,
+	}}, manifest))
+
+	write := findToolByName(tools, "file_write")
+
+	args := json.RawMessage(`{"path":"/workspace/output/report.md","content":"local"}`)
+	res, err := write.Execute(context.Background(), "file_write", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error == "" {
+		t.Fatal("expected tool error on conflict, got success")
+	}
+	if !strings.Contains(res.Error, "version") && !strings.Contains(res.Error, "mismatch") {
+		t.Errorf("error %q should mention version mismatch", res.Error)
+	}
+}
+
+func TestFileWriteToolReadOnlyMountSilentlyAbsorbsLocally(t *testing.T) {
+	mount := newFakeMount()
+	sb := newRecordingSandbox()
+
+	tools := Tools(sb, WithMounts([]MountSpec{{
+		Path:    "/workspace/inputs",
+		Backend: mount,
+		Mode:    MountReadOnly,
+	}}, NewManifest()))
+
+	write := findToolByName(tools, "file_write")
+	args := json.RawMessage(`{"path":"/workspace/inputs/scratch.txt","content":"local"}`)
+	res, err := write.Execute(context.Background(), "file_write", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("tool error: %s", res.Error)
+	}
+	if string(sb.files["/workspace/inputs/scratch.txt"]) != "local" {
+		t.Error("local sandbox file should be written")
+	}
+	if len(mount.entries) != 0 {
+		t.Errorf("read-only mount should not publish, has %d entries", len(mount.entries))
+	}
+}
+
 func TestFindMountForPathPrefersDeepest(t *testing.T) {
 	mounts := []MountSpec{
 		{Path: "/workspace", Mode: MountReadWrite},

@@ -109,7 +109,7 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 		shellTool(sb),
 		executeCodeTool(sb),
 		fileReadTool(sb),
-		fileWriteTool(sb),
+		fileWriteTool(sb, cfg),
 		fileEditTool(sb),
 		fileGlobTool(sb),
 		fileGrepTool(sb),
@@ -226,7 +226,7 @@ func fileReadTool(sb Sandbox) toolImpl {
 	})
 }
 
-func fileWriteTool(sb Sandbox) toolImpl {
+func fileWriteTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 	return newTool("file_write", "Write content to a file in the sandbox. Creates parent directories if needed. Use this instead of echo/cat redirection via shell.", `{
 		"type": "object",
 		"properties": {
@@ -245,8 +245,46 @@ func fileWriteTool(sb Sandbox) toolImpl {
 		if err := sb.WriteFile(ctx, WriteFileRequest{Path: p.Path, Content: p.Content}); err != nil {
 			return oasis.ToolResult{Error: err.Error()}, nil
 		}
+		if err := publishToMount(ctx, cfg, p.Path, []byte(p.Content)); err != nil {
+			return oasis.ToolResult{Error: "wrote locally but publish failed: " + err.Error()}, nil
+		}
 		return oasis.ToolResult{Content: "wrote to " + p.Path}, nil
 	})
+}
+
+// publishToMount writes content to whichever mount covers path, if any.
+// Returns nil for paths that fall under no mount, or under read-only
+// mounts (which silently absorb the local write without persisting).
+// Returns an error from the backend if the publish fails or conflicts.
+func publishToMount(ctx context.Context, cfg *toolsConfig, p string, content []byte) error {
+	if cfg == nil || len(cfg.mounts) == 0 {
+		return nil
+	}
+	mount, key := findMountForPath(cfg.mounts, p)
+	if mount == nil || !mount.Mode.Writable() {
+		return nil
+	}
+	ver := ""
+	if cfg.manifest != nil {
+		ver, _ = cfg.manifest.Version(mount.Path, key)
+	}
+	mimeType := mime.TypeByExtension(filepath.Ext(p))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	newVer, err := mount.Backend.Put(ctx, key, mimeType, int64(len(content)), bytes.NewReader(content), ver)
+	if err != nil {
+		return err
+	}
+	if cfg.manifest != nil {
+		cfg.manifest.Record(mount.Path, key, MountEntry{
+			Key:      key,
+			Size:     int64(len(content)),
+			MimeType: mimeType,
+			Version:  newVer,
+		})
+	}
+	return nil
 }
 
 func fileEditTool(sb Sandbox) toolImpl {
