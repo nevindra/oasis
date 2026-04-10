@@ -65,7 +65,7 @@ func toolResultToDispatch(result ToolResult, err error) DispatchResult {
 	if result.Error != "" {
 		return DispatchResult{Content: "error: " + result.Error, IsError: true}
 	}
-	return DispatchResult{Content: result.Content}
+	return DispatchResult{Content: result.Content, Attachments: result.Attachments}
 }
 
 // dispatchTool executes a tool via the given executor and converts the result

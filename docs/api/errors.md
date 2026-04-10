@@ -63,6 +63,49 @@ var ErrMaxIterExceeded = errors.New("step reached max iterations without meeting
 
 Returned (wrapped) by `DoUntil`/`DoWhile` steps when the loop cap is reached without the exit condition being met. Use `errors.Is(err, oasis.ErrMaxIterExceeded)` to detect.
 
+## Sandbox Mount Errors
+
+**Package:** `github.com/nevindra/oasis/sandbox`
+
+```go
+// ErrVersionMismatch is the sentinel returned (wrapped) when a Put or
+// Delete fails its precondition check.
+var ErrVersionMismatch = errors.New("version mismatch")
+
+// ErrKeyNotFound is returned (wrapped) by FilesystemMount.Stat, Open,
+// and other key-level operations when the requested key does not exist.
+// Distinct from sandbox.ErrNotFound (sandbox session not found).
+var ErrKeyNotFound = errors.New("key not found")
+
+// VersionMismatchError carries diagnostic info about a precondition
+// failure. It matches ErrVersionMismatch via a custom Is method.
+// Unwrap returns the underlying backend error (Cause), not the sentinel.
+type VersionMismatchError struct {
+    Key   string // logical key that failed
+    Have  string // version the framework had at write time
+    Want  string // version the backend reported (empty if unknown)
+    Cause error  // optional underlying backend error
+}
+```
+
+`errors.Is(err, sandbox.ErrVersionMismatch)` returns true for any wrapped `VersionMismatchError`. Use this to detect mount conflicts in tool error handling and decide whether to re-read the file before retrying.
+
+```go
+result, err := mount.Backend.Put(ctx, key, mime, size, body, manifest.Version(...))
+if errors.Is(err, sandbox.ErrVersionMismatch) {
+    // Backend has a newer version. Re-fetch and reapply.
+}
+```
+
+The `Have`/`Want` fields on `VersionMismatchError` are useful for logging — extract via `errors.As`:
+
+```go
+var vme *sandbox.VersionMismatchError
+if errors.As(err, &vme) {
+    logger.Warn("mount conflict", "key", vme.Key, "had", vme.Have, "backend", vme.Want)
+}
+```
+
 ## ErrSuspended
 
 **File:** `suspend.go`

@@ -58,8 +58,9 @@ The `Parameters` field is a JSON Schema that tells the LLM what arguments to gen
 
 ```go
 type ToolResult struct {
-    Content string  // success: the result content
-    Error   string  // failure: error message for the LLM
+    Content     string       // success: the result content
+    Error       string       // failure: error message for the LLM
+    Attachments []Attachment // multimodal content (images, PDFs, etc.) passed to the LLM
 }
 ```
 
@@ -71,6 +72,17 @@ return oasis.ToolResult{Error: "city not found: " + city}, nil
 
 // Wrong — don't use Go error for expected failures
 return oasis.ToolResult{}, fmt.Errorf("city not found: %s", city)
+```
+
+Tools can return binary attachments alongside text. Attachments flow through the agent loop and are passed to the LLM as multimodal input on the next iteration:
+
+```go
+return oasis.ToolResult{
+    Content: "Screenshot captured",
+    Attachments: []oasis.Attachment{
+        {MimeType: "image/png", Data: pngBytes},
+    },
+}, nil
 ```
 
 ## StreamingTool
@@ -872,7 +884,7 @@ The framework auto-registers these tools via `sandbox.Tools(sb)`:
 |---|---|
 | `mcp_call` | Invoke MCP server tools |
 | `workspace_info` | Environment discovery (OS, arch, available tools) |
-| `deliver_file` | Send files to users as chat attachments (optional, requires `WithFileDelivery`) |
+| `deliver_file` | Send files to users as chat attachments (optional, requires either `WithMounts` with a writeable mount or the deprecated `WithFileDelivery`). See [Sandbox: Filesystem Mounts](sandbox.md#filesystem-mounts) |
 
 ### Plan vs Sandbox
 

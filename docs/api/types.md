@@ -322,8 +322,9 @@ type ToolDefinition struct {
 }
 
 type ToolResult struct {
-    Content string `json:"content"`
-    Error   string `json:"error,omitempty"`
+    Content     string       `json:"content"`
+    Error       string       `json:"error,omitempty"`
+    Attachments []Attachment `json:"attachments,omitempty"` // multimodal content (images, PDFs, etc.) passed to the LLM
 }
 ```
 
@@ -379,6 +380,86 @@ type GrepMatch struct {
     Content string // matching line content
 }
 ```
+
+## Filesystem Mount Types
+
+**Package:** `github.com/nevindra/oasis/sandbox`
+
+```go
+// MountMode declares the direction of data flow for a FilesystemMount.
+type MountMode int
+
+const (
+    MountReadOnly  MountMode = iota // host → sandbox (prefetch only)
+    MountWriteOnly                  // sandbox → host (publish only)
+    MountReadWrite                  // bidirectional
+)
+
+// Predicates used by the framework and tool wrappers.
+func (m MountMode) Readable() bool { /* ... */ }
+func (m MountMode) Writable() bool { /* ... */ }
+
+// MountSpec attaches a FilesystemMount to a path inside the sandbox and
+// declares the lifecycle policy for that mount.
+type MountSpec struct {
+    Path            string          // absolute path inside sandbox (e.g. "/workspace/inputs")
+    Backend         FilesystemMount // implementation that owns the data
+    Mode            MountMode       // ReadOnly | WriteOnly | ReadWrite
+    PrefetchOnStart bool            // copy backend → sandbox at start
+    FlushOnClose    bool            // scan sandbox → publish deltas at close
+    MirrorDeletes   bool            // delete backend entries removed locally; default false
+    Include         []string        // optional include globs
+    Exclude         []string        // glob patterns to skip (e.g. "*.tmp")
+}
+
+// MountEntry describes a single file in a FilesystemMount.
+type MountEntry struct {
+    Key      string    // logical key relative to the mount root
+    Size     int64     // bytes
+    MimeType string    // best-effort
+    Version  string    // backend version token (etag, generation, etc.)
+    Modified time.Time // backend modification timestamp
+}
+```
+
+`Mode` is independent of `PrefetchOnStart` and `FlushOnClose`. The boolean flags are authoritative for lifecycle hook gating; `Mode` is consulted by tool wrappers when deciding whether to publish on write. The two together let apps express asymmetric lifecycle policies (e.g. read at start, write at close, or vice versa).
+
+### Manifest
+
+```go
+// Manifest tracks the backend version of every file the framework has
+// prefetched into a sandbox. It is used by Layer 2 (tool interception)
+// and Layer 3 (lifecycle flush) to send the correct precondition on
+// writes back to the backend. Safe for concurrent use.
+type Manifest struct{ /* ... */ }
+
+func NewManifest() *Manifest
+
+func (m *Manifest) Record(mountPath, key string, entry MountEntry)
+func (m *Manifest) Version(mountPath, key string) (string, bool)
+func (m *Manifest) Lookup(mountPath, key string) (MountEntry, bool)
+func (m *Manifest) Forget(mountPath, key string)
+func (m *Manifest) Keys(mountPath string) []string
+```
+
+The same `*Manifest` instance is shared between `PrefetchMounts`, `WithMounts(specs, manifest)`, and `FlushMounts` so that all three layers see the same per-sandbox version state.
+
+### Lifecycle Functions
+
+```go
+// PrefetchMounts walks every readable mount with PrefetchOnStart=true and
+// copies its backend entries into the sandbox via Sandbox.UploadFile.
+// Records each fetched file's version in manifest. Errors are aggregated.
+func PrefetchMounts(ctx context.Context, sb Sandbox, specs []MountSpec, manifest *Manifest) error
+
+// FlushMounts walks every writeable mount with FlushOnClose=true, scans
+// the sandbox under the mount path via GlobFiles, and publishes any
+// deltas to the backend with the manifest version as precondition.
+// Conflicts return wrapped ErrVersionMismatch.
+func FlushMounts(ctx context.Context, sb Sandbox, specs []MountSpec, manifest *Manifest) error
+```
+
+See [Sandbox concept doc](../concepts/sandbox.md#filesystem-mounts) for the layered architecture and the failure-mode table.
 
 ## Dynamic Config Function Types
 

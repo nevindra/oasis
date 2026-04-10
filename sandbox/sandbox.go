@@ -315,7 +315,11 @@ type WorkspaceInfoResult struct {
 
 // FileDelivery persists a file from the sandbox and returns a download URL.
 // Implementations decide where to store (S3, disk, GCS, etc.).
-// The framework handles downloading from the sandbox; the app handles storage.
+//
+// Deprecated: Use FilesystemMount with MountWriteOnly mode instead.
+// FileDelivery remains supported for backward compatibility but new code
+// should use the more general mount system. See WithMounts and the
+// FilesystemMount interface in mount.go.
 type FileDelivery interface {
 	Deliver(ctx context.Context, name, mimeType string, size int64, data io.Reader) (url string, err error)
 }

@@ -41,12 +41,61 @@ type ToolsOption func(*toolsConfig)
 
 type toolsConfig struct {
 	delivery FileDelivery
+	mounts   []MountSpec
+	manifest *Manifest
 }
 
-// WithFileDelivery enables the deliver_file tool. The provided FileDelivery
-// implementation handles persisting files downloaded from the sandbox.
+// WithFileDelivery enables the deliver_file tool with a single legacy
+// FileDelivery destination.
+//
+// Deprecated: Use WithMounts with a MountWriteOnly MountSpec instead.
+// This option remains for backward compatibility and is honored as a
+// fallback inside deliver_file when no mount covers the requested path.
 func WithFileDelivery(fd FileDelivery) ToolsOption {
 	return func(c *toolsConfig) { c.delivery = fd }
+}
+
+// WithMounts attaches a slice of FilesystemMount specs to the tool layer.
+// Tool wrappers consult the mounts to publish writes back to the backend
+// and to look up version preconditions in the supplied manifest.
+//
+// The manifest is shared with PrefetchMounts/FlushMounts so that all three
+// layers see the same per-sandbox version state.
+func WithMounts(specs []MountSpec, manifest *Manifest) ToolsOption {
+	return func(c *toolsConfig) {
+		c.mounts = specs
+		c.manifest = manifest
+	}
+}
+
+// findMountForPath returns the deepest matching mount for an absolute
+// sandbox path, or (nil, "") if no mount covers the path. The deepest
+// match wins so that a nested mount takes precedence over a parent mount.
+// The second return value is the path's logical key relative to the
+// matched mount root.
+func findMountForPath(mounts []MountSpec, p string) (*MountSpec, string) {
+	var best *MountSpec
+	bestLen := -1
+	var bestKey string
+	for i := range mounts {
+		m := &mounts[i]
+		prefix := m.Path
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		// Avoid matching "/workspace/inputs2" when mount is "/workspace/inputs":
+		// the path must either equal the prefix or have "/" right after it.
+		if p != prefix && !strings.HasPrefix(p[len(prefix):], "/") {
+			continue
+		}
+		if len(prefix) > bestLen {
+			best = m
+			bestLen = len(prefix)
+			rel := strings.TrimPrefix(p, prefix)
+			bestKey = strings.TrimPrefix(rel, "/")
+		}
+	}
+	return best, bestKey
 }
 
 // Tools returns Oasis tool implementations backed by the given Sandbox.
@@ -60,8 +109,8 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 		shellTool(sb),
 		executeCodeTool(sb),
 		fileReadTool(sb),
-		fileWriteTool(sb),
-		fileEditTool(sb),
+		fileWriteTool(sb, cfg),
+		fileEditTool(sb, cfg),
 		fileGlobTool(sb),
 		fileGrepTool(sb),
 		fileTreeTool(sb),
@@ -78,11 +127,22 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 		webSearchTool(sb),
 	}
 
-	if cfg.delivery != nil {
-		tools = append(tools, deliverFileTool(sb, cfg.delivery))
+	// Register deliver_file when ANY destination is available — either an
+	// explicit FileDelivery (legacy) or at least one writeable mount.
+	if cfg.delivery != nil || hasWriteableMount(cfg.mounts) {
+		tools = append(tools, deliverFileTool(sb, cfg))
 	}
 
 	return tools
+}
+
+func hasWriteableMount(mounts []MountSpec) bool {
+	for _, m := range mounts {
+		if m.Mode.Writable() {
+			return true
+		}
+	}
+	return false
 }
 
 func shellTool(sb Sandbox) toolImpl {
@@ -177,7 +237,7 @@ func fileReadTool(sb Sandbox) toolImpl {
 	})
 }
 
-func fileWriteTool(sb Sandbox) toolImpl {
+func fileWriteTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 	return newTool("file_write", "Write content to a file in the sandbox. Creates parent directories if needed. Use this instead of echo/cat redirection via shell.", `{
 		"type": "object",
 		"properties": {
@@ -196,11 +256,49 @@ func fileWriteTool(sb Sandbox) toolImpl {
 		if err := sb.WriteFile(ctx, WriteFileRequest{Path: p.Path, Content: p.Content}); err != nil {
 			return oasis.ToolResult{Error: err.Error()}, nil
 		}
+		if err := publishToMount(ctx, cfg, p.Path, []byte(p.Content)); err != nil {
+			return oasis.ToolResult{Error: "wrote locally but publish failed: " + err.Error()}, nil
+		}
 		return oasis.ToolResult{Content: "wrote to " + p.Path}, nil
 	})
 }
 
-func fileEditTool(sb Sandbox) toolImpl {
+// publishToMount writes content to whichever mount covers path, if any.
+// Returns nil for paths that fall under no mount, or under read-only
+// mounts (which silently absorb the local write without persisting).
+// Returns an error from the backend if the publish fails or conflicts.
+func publishToMount(ctx context.Context, cfg *toolsConfig, p string, content []byte) error {
+	if cfg == nil || len(cfg.mounts) == 0 {
+		return nil
+	}
+	mount, key := findMountForPath(cfg.mounts, p)
+	if mount == nil || !mount.Mode.Writable() {
+		return nil
+	}
+	ver := ""
+	if cfg.manifest != nil {
+		ver, _ = cfg.manifest.Version(mount.Path, key)
+	}
+	mimeType := mime.TypeByExtension(filepath.Ext(p))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	newVer, err := mount.Backend.Put(ctx, key, mimeType, int64(len(content)), bytes.NewReader(content), ver)
+	if err != nil {
+		return err
+	}
+	if cfg.manifest != nil {
+		cfg.manifest.Record(mount.Path, key, MountEntry{
+			Key:      key,
+			Size:     int64(len(content)),
+			MimeType: mimeType,
+			Version:  newVer,
+		})
+	}
+	return nil
+}
+
+func fileEditTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 	return newTool("file_edit", "Edit a file by replacing an exact string match with new content. The old string must appear exactly once in the file. More efficient than reading and rewriting the entire file. Use this instead of sed or awk via shell.", `{
 		"type": "object",
 		"properties": {
@@ -220,6 +318,19 @@ func fileEditTool(sb Sandbox) toolImpl {
 		}
 		if err := sb.EditFile(ctx, EditFileRequest{Path: p.Path, Old: p.OldString, New: p.NewString}); err != nil {
 			return oasis.ToolResult{Error: err.Error()}, nil
+		}
+		// After edit, fetch the new content from the sandbox so we publish
+		// the actual on-disk state (handles edge cases like trailing
+		// whitespace and line ending normalization).
+		if cfg != nil && len(cfg.mounts) > 0 {
+			rc, err := sb.DownloadFile(ctx, p.Path)
+			if err == nil {
+				body, _ := io.ReadAll(rc)
+				rc.Close()
+				if err := publishToMount(ctx, cfg, p.Path, body); err != nil {
+					return oasis.ToolResult{Error: "edited locally but publish failed: " + err.Error()}, nil
+				}
+			}
 		}
 		return oasis.ToolResult{Content: "edited " + p.Path}, nil
 	})
@@ -661,12 +772,12 @@ const maxDeliverFileBytes = 100 * 1024 * 1024 // 100 MB
 // deliverFile implements StreamingTool so it can emit a file_attachment event
 // on the shared stream channel alongside the normal tool result.
 type deliverFile struct {
-	def      oasis.ToolDefinition
-	sandbox  Sandbox
-	delivery FileDelivery
+	def     oasis.ToolDefinition
+	sandbox Sandbox
+	cfg     *toolsConfig
 }
 
-func deliverFileTool(sb Sandbox, fd FileDelivery) *deliverFile {
+func deliverFileTool(sb Sandbox, cfg *toolsConfig) *deliverFile {
 	return &deliverFile{
 		def: oasis.ToolDefinition{
 			Name: "deliver_file",
@@ -682,8 +793,8 @@ func deliverFileTool(sb Sandbox, fd FileDelivery) *deliverFile {
 				"required": ["path"]
 			}`),
 		},
-		sandbox:  sb,
-		delivery: fd,
+		sandbox: sb,
+		cfg:     cfg,
 	}
 }
 
@@ -740,10 +851,37 @@ func (t *deliverFile) executeDelivery(ctx context.Context, args json.RawMessage,
 
 	size := int64(len(data))
 
-	// Deliver via the app-provided implementation.
-	url, err := t.delivery.Deliver(ctx, displayName, mimeType, size, bytes.NewReader(data))
-	if err != nil {
-		return oasis.ToolResult{Error: "delivery failed: " + err.Error()}, nil
+	// Routing: prefer an explicit mount that covers the path; fall back to
+	// the legacy FileDelivery; otherwise error out with a clear message.
+	url := ""
+	if t.cfg != nil && len(t.cfg.mounts) > 0 {
+		mount, key := findMountForPath(t.cfg.mounts, p.Path)
+		if mount != nil && mount.Mode.Writable() {
+			ver := ""
+			if t.cfg.manifest != nil {
+				ver, _ = t.cfg.manifest.Version(mount.Path, key)
+			}
+			newVer, putErr := mount.Backend.Put(ctx, key, mimeType, size, bytes.NewReader(data), ver)
+			if putErr != nil {
+				return oasis.ToolResult{Error: "delivery failed: " + putErr.Error()}, nil
+			}
+			if t.cfg.manifest != nil {
+				t.cfg.manifest.Record(mount.Path, key, MountEntry{Key: key, Size: size, MimeType: mimeType, Version: newVer})
+			}
+			// The framework emits a stable identifier; the host app
+			// translates this to a real URL when serving the file.
+			url = mount.Path + "/" + key
+		}
+	}
+	if url == "" && t.cfg != nil && t.cfg.delivery != nil {
+		var delErr error
+		url, delErr = t.cfg.delivery.Deliver(ctx, displayName, mimeType, size, bytes.NewReader(data))
+		if delErr != nil {
+			return oasis.ToolResult{Error: "delivery failed: " + delErr.Error()}, nil
+		}
+	}
+	if url == "" {
+		return oasis.ToolResult{Error: fmt.Sprintf("path %q is not under any writeable mount and no FileDelivery is configured", p.Path)}, nil
 	}
 
 	// Emit file_attachment event if streaming.

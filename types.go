@@ -116,8 +116,9 @@ type StreamingTool interface {
 
 // ToolResult is the outcome of a tool execution.
 type ToolResult struct {
-	Content string `json:"content"`
-	Error   string `json:"error,omitempty"`
+	Content     string       `json:"content"`
+	Error       string       `json:"error,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"` // multimodal content (images, PDFs, etc.) passed to the LLM
 }
 
 // ToolRegistry holds all registered tools and dispatches execution.

@@ -268,3 +268,14 @@ Passed to `mgr.Create`.
 |-------|---------|-------------|
 | `SessionID` | — | Session identifier for container reuse |
 | `TTL` | — | Time-to-live for the sandbox container |
+
+## Sandbox Tool Options
+
+**Package:** `github.com/nevindra/oasis/sandbox`
+
+Passed to `sandbox.Tools(sb, opts...)`.
+
+| Option | Description |
+|--------|-------------|
+| `WithMounts(specs []MountSpec, manifest *Manifest)` | Wire a slice of `MountSpec` and a shared `Manifest` into the tool layer. Tool wrappers (`file_write`, `file_edit`, `deliver_file`) consult the mounts to publish writes to the backend after a successful local write. Conflicts surface as tool errors. See [Sandbox: Filesystem Mounts](../concepts/sandbox.md#filesystem-mounts) |
+| `WithFileDelivery(fd FileDelivery)` | **Deprecated.** Use `WithMounts` with a `MountWriteOnly` `MountSpec` instead. Continues to work as a fallback inside `deliver_file` for paths that fall under no mount |

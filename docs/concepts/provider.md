@@ -295,10 +295,10 @@ Both text and image embeddings live in the same vector space — a text query "b
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `Provider` | `string` | `"gemini"`, `"openai"`, `"vllm"`, `"ollama"`, `"together"`, `"mistral"` |
+| `Provider` | `string` | `"gemini"`, `"openai"`, `"vllm"`, `"ollama"`, `"together"`, `"mistral"`, `"qwen"`, `"qwen-cn"` |
 | `APIKey` | `string` | API key |
 | `Model` | `string` | Embedding model identifier |
-| `BaseURL` | `string` | Override base URL (auto-filled for known providers) |
+| `BaseURL` | `string` | Override base URL (auto-filled for known providers). Required for unknown providers — treated as OpenAI-compatible. |
 | `Dimensions` | `int` | Output vector dimensions |
 
 > **For dynamic model discovery**, see [Model Catalog](#model-catalog) — it wraps provider resolution with model browsing, validation, and metadata enrichment. Use `resolve.Provider` when you know the exact provider and model. Use the catalog when end users need to discover and pick models at runtime.

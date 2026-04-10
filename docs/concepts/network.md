@@ -36,7 +36,9 @@ writer := oasis.NewLLMAgent("writer", "Writes polished content", llm,
 
 coordinator := oasis.NewNetwork("coordinator", "Routes research and writing", llm,
     oasis.WithAgents(researcher, writer),
-    oasis.WithTools(knowledgeTool),  // direct tools also available to the router
+    oasis.WithTools(knowledgeTool),   // direct tools also available to the router
+    oasis.WithSandbox(sandboxMgr),    // sandbox tools (shell, execute_code, file ops) on the router
+    oasis.WithSkills(skillProvider),   // skill_discover/skill_activate tools on the router
 )
 
 result, err := coordinator.Execute(ctx, oasis.AgentTask{

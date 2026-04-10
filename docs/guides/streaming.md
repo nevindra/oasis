@@ -92,7 +92,9 @@ This lets consumers track individual tool calls through their lifecycle, even wh
 
 ## How It Works
 
-The tool-calling loop uses `ChatStream` for all LLM calls (when streaming), emitting `EventToolCallDelta` as arguments arrive. Tool dispatch emits start/progress/result events. The final text response streams token-by-token:
+The tool-calling loop uses `ChatStream` for LLM calls on single agents (`LLMAgent`), emitting `EventToolCallDelta` as arguments arrive in real-time. Tool dispatch emits start/progress/result events. The final text response streams token-by-token.
+
+> **Network routers** use non-streaming `Chat()` for tool-loop iterations to preserve text-delta deduplication with sub-agent streaming. Sub-agents still stream individually.
 
 ```mermaid
 sequenceDiagram
