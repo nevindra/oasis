@@ -239,6 +239,145 @@ func TestPrefetchMountsSkipsWhenPrefetchOnStartFalse(t *testing.T) {
 	}
 }
 
+func TestFlushMountsPublishesNewFiles(t *testing.T) {
+	mount := newFakeMount()
+	sb := newRecordingSandbox()
+	sb.files["/workspace/output/report.md"] = []byte("hello")
+
+	specs := []MountSpec{{
+		Path:         "/workspace/output",
+		Backend:      mount,
+		Mode:         MountReadWrite,
+		FlushOnClose: true,
+	}}
+
+	if err := FlushMounts(context.Background(), sb, specs, NewManifest()); err != nil {
+		t.Fatalf("FlushMounts: %v", err)
+	}
+	if string(mount.entries["report.md"].data) != "hello" {
+		t.Errorf("backend report.md = %q, want %q", mount.entries["report.md"].data, "hello")
+	}
+}
+
+func TestFlushMountsPublishesModifiedFiles(t *testing.T) {
+	mount := newFakeMount()
+	mount.seed("notes.md", "old", "v1")
+	sb := newRecordingSandbox()
+	sb.files["/workspace/output/notes.md"] = []byte("new")
+
+	manifest := NewManifest()
+	manifest.Record("/workspace/output", "notes.md", MountEntry{Key: "notes.md", Version: "v1"})
+
+	specs := []MountSpec{{
+		Path:         "/workspace/output",
+		Backend:      mount,
+		Mode:         MountReadWrite,
+		FlushOnClose: true,
+	}}
+
+	if err := FlushMounts(context.Background(), sb, specs, manifest); err != nil {
+		t.Fatalf("FlushMounts: %v", err)
+	}
+	if string(mount.entries["notes.md"].data) != "new" {
+		t.Errorf("backend notes.md = %q, want %q", mount.entries["notes.md"].data, "new")
+	}
+}
+
+func TestFlushMountsConflictReturnsError(t *testing.T) {
+	mount := newFakeMount()
+	mount.seed("notes.md", "remote-changed", "v2")
+	sb := newRecordingSandbox()
+	sb.files["/workspace/output/notes.md"] = []byte("local")
+
+	manifest := NewManifest()
+	manifest.Record("/workspace/output", "notes.md", MountEntry{Key: "notes.md", Version: "v1"})
+
+	specs := []MountSpec{{
+		Path:         "/workspace/output",
+		Backend:      mount,
+		Mode:         MountReadWrite,
+		FlushOnClose: true,
+	}}
+
+	err := FlushMounts(context.Background(), sb, specs, manifest)
+	if err == nil {
+		t.Fatal("expected conflict error, got nil")
+	}
+	if !errors.Is(err, ErrVersionMismatch) {
+		t.Errorf("error = %v, want ErrVersionMismatch", err)
+	}
+	if string(mount.entries["notes.md"].data) != "remote-changed" {
+		t.Error("backend should be unchanged after rejected put")
+	}
+}
+
+func TestFlushMountsNoMirrorDeletesByDefault(t *testing.T) {
+	mount := newFakeMount()
+	mount.seed("stale.md", "still here", "v1")
+	sb := newRecordingSandbox()
+
+	manifest := NewManifest()
+	manifest.Record("/workspace/output", "stale.md", MountEntry{Key: "stale.md", Version: "v1"})
+
+	specs := []MountSpec{{
+		Path:         "/workspace/output",
+		Backend:      mount,
+		Mode:         MountReadWrite,
+		FlushOnClose: true,
+	}}
+
+	if err := FlushMounts(context.Background(), sb, specs, manifest); err != nil {
+		t.Fatalf("FlushMounts: %v", err)
+	}
+	if _, ok := mount.entries["stale.md"]; !ok {
+		t.Error("stale.md should NOT be deleted with MirrorDeletes=false")
+	}
+}
+
+func TestFlushMountsMirrorDeletes(t *testing.T) {
+	mount := newFakeMount()
+	mount.seed("gone.md", "x", "v1")
+	sb := newRecordingSandbox()
+
+	manifest := NewManifest()
+	manifest.Record("/workspace/output", "gone.md", MountEntry{Key: "gone.md", Version: "v1"})
+
+	specs := []MountSpec{{
+		Path:          "/workspace/output",
+		Backend:       mount,
+		Mode:          MountReadWrite,
+		FlushOnClose:  true,
+		MirrorDeletes: true,
+	}}
+
+	if err := FlushMounts(context.Background(), sb, specs, manifest); err != nil {
+		t.Fatalf("FlushMounts: %v", err)
+	}
+	if _, ok := mount.entries["gone.md"]; ok {
+		t.Error("gone.md should be deleted from backend")
+	}
+}
+
+func TestFlushMountsSkipsReadOnly(t *testing.T) {
+	mount := newFakeMount()
+	sb := newRecordingSandbox()
+	sb.files["/workspace/inputs/extra.md"] = []byte("local-only")
+
+	specs := []MountSpec{{
+		Path:         "/workspace/inputs",
+		Backend:      mount,
+		Mode:         MountReadOnly,
+		FlushOnClose: true, // ignored for read-only
+	}}
+
+	if err := FlushMounts(context.Background(), sb, specs, NewManifest()); err != nil {
+		t.Fatalf("FlushMounts: %v", err)
+	}
+	if len(mount.entries) != 0 {
+		t.Errorf("read-only mount should not flush, backend has %d entries", len(mount.entries))
+	}
+}
+
 func TestPrefetchMountsHonorsExclude(t *testing.T) {
 	mount := newFakeMount()
 	mount.seed("keep.csv", "data", "v1")

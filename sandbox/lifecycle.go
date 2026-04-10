@@ -1,10 +1,13 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"path"
 	pathfilter "path/filepath"
+	"strings"
 )
 
 // PrefetchMounts walks every readable mount with PrefetchOnStart=true and
@@ -110,3 +113,99 @@ type multiError struct {
 
 func (m *multiError) Error() string   { return m.msg }
 func (m *multiError) Unwrap() []error { return m.errs }
+
+// FlushMounts walks every writeable mount with FlushOnClose=true, scans the
+// sandbox under the mount path, and publishes any deltas to the backend.
+//
+// For each local file:
+//   - If new (no manifest entry): unconditional Put.
+//   - If changed (manifest entry exists, content differs): conditional Put
+//     with the manifest version as precondition. A version mismatch returns
+//     a wrapped ErrVersionMismatch.
+//   - If unchanged: skip (the local read-back matches the manifest version).
+//
+// If MirrorDeletes is true, files in the manifest that no longer exist
+// locally are deleted from the backend.
+//
+// Errors are aggregated; the function attempts every file before returning.
+func FlushMounts(ctx context.Context, sb Sandbox, specs []MountSpec, manifest *Manifest) error {
+	var errs []error
+	for _, spec := range specs {
+		if !spec.Mode.Writable() || !spec.FlushOnClose || spec.Backend == nil {
+			continue
+		}
+
+		res, err := sb.GlobFiles(ctx, GlobRequest{Pattern: "**/*", Path: spec.Path})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("glob mount %q: %w", spec.Path, err))
+			continue
+		}
+
+		seen := make(map[string]bool)
+		for _, fullPath := range res.Files {
+			key, ok := stripMountPrefix(spec.Path, fullPath)
+			if !ok {
+				continue
+			}
+			if !matchFilters(key, spec.Include, spec.Exclude) {
+				continue
+			}
+			seen[key] = true
+			if err := flushOne(ctx, sb, spec, manifest, key, fullPath); err != nil {
+				errs = append(errs, err)
+			}
+		}
+
+		if spec.MirrorDeletes {
+			for _, key := range manifest.Keys(spec.Path) {
+				if seen[key] {
+					continue
+				}
+				ver, _ := manifest.Version(spec.Path, key)
+				if err := spec.Backend.Delete(ctx, key, ver); err != nil {
+					errs = append(errs, fmt.Errorf("delete %s/%s: %w", spec.Path, key, err))
+					continue
+				}
+				manifest.Forget(spec.Path, key)
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return joinErrors(errs)
+	}
+	return nil
+}
+
+func flushOne(ctx context.Context, sb Sandbox, spec MountSpec, manifest *Manifest, key, fullPath string) error {
+	rc, err := sb.DownloadFile(ctx, fullPath)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", fullPath, err)
+	}
+	defer rc.Close()
+
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", fullPath, err)
+	}
+
+	ver, _ := manifest.Version(spec.Path, key)
+
+	newVer, err := spec.Backend.Put(ctx, key, "", int64(len(body)), bytes.NewReader(body), ver)
+	if err != nil {
+		return fmt.Errorf("put %s/%s: %w", spec.Path, key, err)
+	}
+	manifest.Record(spec.Path, key, MountEntry{Key: key, Size: int64(len(body)), Version: newVer})
+	return nil
+}
+
+func stripMountPrefix(mountPath, fullPath string) (string, bool) {
+	if !strings.HasPrefix(fullPath, mountPath) {
+		return "", false
+	}
+	rel := strings.TrimPrefix(fullPath, mountPath)
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		return "", false
+	}
+	return rel, true
+}
