@@ -127,11 +127,22 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
 		webSearchTool(sb),
 	}
 
-	if cfg.delivery != nil {
-		tools = append(tools, deliverFileTool(sb, cfg.delivery))
+	// Register deliver_file when ANY destination is available — either an
+	// explicit FileDelivery (legacy) or at least one writeable mount.
+	if cfg.delivery != nil || hasWriteableMount(cfg.mounts) {
+		tools = append(tools, deliverFileTool(sb, cfg))
 	}
 
 	return tools
+}
+
+func hasWriteableMount(mounts []MountSpec) bool {
+	for _, m := range mounts {
+		if m.Mode.Writable() {
+			return true
+		}
+	}
+	return false
 }
 
 func shellTool(sb Sandbox) toolImpl {
@@ -761,12 +772,12 @@ const maxDeliverFileBytes = 100 * 1024 * 1024 // 100 MB
 // deliverFile implements StreamingTool so it can emit a file_attachment event
 // on the shared stream channel alongside the normal tool result.
 type deliverFile struct {
-	def      oasis.ToolDefinition
-	sandbox  Sandbox
-	delivery FileDelivery
+	def     oasis.ToolDefinition
+	sandbox Sandbox
+	cfg     *toolsConfig
 }
 
-func deliverFileTool(sb Sandbox, fd FileDelivery) *deliverFile {
+func deliverFileTool(sb Sandbox, cfg *toolsConfig) *deliverFile {
 	return &deliverFile{
 		def: oasis.ToolDefinition{
 			Name: "deliver_file",
@@ -782,8 +793,8 @@ func deliverFileTool(sb Sandbox, fd FileDelivery) *deliverFile {
 				"required": ["path"]
 			}`),
 		},
-		sandbox:  sb,
-		delivery: fd,
+		sandbox: sb,
+		cfg:     cfg,
 	}
 }
 
@@ -840,10 +851,37 @@ func (t *deliverFile) executeDelivery(ctx context.Context, args json.RawMessage,
 
 	size := int64(len(data))
 
-	// Deliver via the app-provided implementation.
-	url, err := t.delivery.Deliver(ctx, displayName, mimeType, size, bytes.NewReader(data))
-	if err != nil {
-		return oasis.ToolResult{Error: "delivery failed: " + err.Error()}, nil
+	// Routing: prefer an explicit mount that covers the path; fall back to
+	// the legacy FileDelivery; otherwise error out with a clear message.
+	url := ""
+	if t.cfg != nil && len(t.cfg.mounts) > 0 {
+		mount, key := findMountForPath(t.cfg.mounts, p.Path)
+		if mount != nil && mount.Mode.Writable() {
+			ver := ""
+			if t.cfg.manifest != nil {
+				ver, _ = t.cfg.manifest.Version(mount.Path, key)
+			}
+			newVer, putErr := mount.Backend.Put(ctx, key, mimeType, size, bytes.NewReader(data), ver)
+			if putErr != nil {
+				return oasis.ToolResult{Error: "delivery failed: " + putErr.Error()}, nil
+			}
+			if t.cfg.manifest != nil {
+				t.cfg.manifest.Record(mount.Path, key, MountEntry{Key: key, Size: size, MimeType: mimeType, Version: newVer})
+			}
+			// The framework emits a stable identifier; the host app
+			// translates this to a real URL when serving the file.
+			url = mount.Path + "/" + key
+		}
+	}
+	if url == "" && t.cfg != nil && t.cfg.delivery != nil {
+		var delErr error
+		url, delErr = t.cfg.delivery.Deliver(ctx, displayName, mimeType, size, bytes.NewReader(data))
+		if delErr != nil {
+			return oasis.ToolResult{Error: "delivery failed: " + delErr.Error()}, nil
+		}
+	}
+	if url == "" {
+		return oasis.ToolResult{Error: fmt.Sprintf("path %q is not under any writeable mount and no FileDelivery is configured", p.Path)}, nil
 	}
 
 	// Emit file_attachment event if streaming.

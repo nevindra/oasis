@@ -874,14 +874,105 @@ func TestDeliverFileToolDefaultName(t *testing.T) {
 
 func TestDeliverFileToolNotRegisteredWithoutDelivery(t *testing.T) {
 	sb := &mockSandbox{}
-	tools := Tools(sb) // no WithFileDelivery
+	tools := Tools(sb) // no WithFileDelivery, no WithMounts
 
 	for _, tool := range tools {
 		for _, def := range tool.Definitions() {
 			if def.Name == "deliver_file" {
-				t.Error("deliver_file tool should not be registered without WithFileDelivery")
+				t.Error("deliver_file tool should not be registered without any destination")
 			}
 		}
+	}
+}
+
+func TestDeliverFileRoutesThroughMount(t *testing.T) {
+	mount := newFakeMount()
+	sb := newRecordingSandbox()
+	sb.files["/workspace/output/chart.png"] = []byte("PNG-DATA")
+
+	tools := Tools(sb, WithMounts([]MountSpec{{
+		Path:    "/workspace/output",
+		Backend: mount,
+		Mode:    MountReadWrite,
+	}}, NewManifest()))
+
+	deliver := findToolByName(tools, "deliver_file")
+	if deliver == nil {
+		t.Fatal("deliver_file tool not registered when WithMounts has writeable mount")
+	}
+
+	args := json.RawMessage(`{"path":"/workspace/output/chart.png"}`)
+	res, err := deliver.Execute(context.Background(), "deliver_file", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("tool error: %s", res.Error)
+	}
+	if string(mount.entries["chart.png"].data) != "PNG-DATA" {
+		t.Errorf("backend chart.png = %q", mount.entries["chart.png"].data)
+	}
+}
+
+func TestDeliverFileLegacyFileDeliveryShim(t *testing.T) {
+	// WithFileDelivery should continue to work and produce a registered
+	// deliver_file tool that publishes via the legacy interface.
+	delivered := struct {
+		body []byte
+	}{}
+	fd := &mockFileDelivery{
+		deliverFn: func(ctx context.Context, name, mime string, size int64, data io.Reader) (string, error) {
+			body, _ := io.ReadAll(data)
+			delivered.body = body
+			return "/api/files/x", nil
+		},
+	}
+
+	sb := newRecordingSandbox()
+	sb.files["/foo/bar.txt"] = []byte("legacy content")
+
+	tools := Tools(sb, WithFileDelivery(fd))
+	deliver := findToolByName(tools, "deliver_file")
+	if deliver == nil {
+		t.Fatal("deliver_file tool missing under WithFileDelivery")
+	}
+
+	args := json.RawMessage(`{"path":"/foo/bar.txt"}`)
+	res, err := deliver.Execute(context.Background(), "deliver_file", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("tool error: %s", res.Error)
+	}
+	if string(delivered.body) != "legacy content" {
+		t.Errorf("delivered body = %q, want %q", delivered.body, "legacy content")
+	}
+}
+
+func TestDeliverFileErrorsWithoutDestination(t *testing.T) {
+	mount := newFakeMount()
+	sb := newRecordingSandbox()
+	sb.files["/somewhere/else.txt"] = []byte("orphan")
+
+	// Mount only covers /workspace/output; the path is outside.
+	tools := Tools(sb, WithMounts([]MountSpec{{
+		Path:    "/workspace/output",
+		Backend: mount,
+		Mode:    MountReadWrite,
+	}}, NewManifest()))
+	deliver := findToolByName(tools, "deliver_file")
+	if deliver == nil {
+		t.Fatal("deliver_file should still be registered when there's at least one writeable mount")
+	}
+
+	args := json.RawMessage(`{"path":"/somewhere/else.txt"}`)
+	res, err := deliver.Execute(context.Background(), "deliver_file", args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error == "" {
+		t.Fatal("expected error for path outside any mount with no FileDelivery fallback")
 	}
 }
 
