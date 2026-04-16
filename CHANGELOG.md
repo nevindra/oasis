@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-04-16
+
 ### Added
 - `Compactor` interface and `StructuredCompactor` default implementation for
   per-thread conversation compaction with a 9-section structured summary
@@ -20,6 +22,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `BuildCompactPrompt(extras, focusHint, isRecompact)` prompt template builder.
 - `WithCompaction(Compactor, threshold)` ConversationOption for opt-in
   auto-trigger during `buildMessages`.
+- `provider/catalog.StaticContextWindow(modelID)` — cross-provider static
+  InputContext lookup. Returns 0 when the model ID isn't in the registry.
+  Useful for `threshold × effectiveWindow` math when the caller's provider
+  key doesn't match the static data's provider identifier.
 
 ### Changed
 - `WithCompressThreshold` default changed from 200_000 (enabled) to 0
