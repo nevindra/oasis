@@ -78,6 +78,28 @@ type MultimodalEmbeddingProvider interface {
 
 ---
 
+## Compactor
+
+**File:** `compaction.go`
+
+```go
+type Compactor interface {
+    Compact(ctx context.Context, req CompactRequest) (CompactResult, error)
+}
+```
+
+Turns a message list into a structured summary via an LLM call. Implementations
+MUST be safe to call concurrently — the agent loop may invoke `Compact` from
+background goroutines while a foreground response is being assembled.
+
+| Implementation | Constructor |
+|----------------|------------|
+| `oasis.StructuredCompactor` | `NewStructuredCompactor(defaultProvider Provider) *StructuredCompactor` — 9-section LLM-based summarizer (default) |
+
+See [`CompactRequest`](types.md#compactrequest) and [`CompactResult`](types.md#compactresult) for the input/output shapes, and [Compactor in concepts](../concepts/compaction.md) for the rationale.
+
+---
+
 ## BlobStore
 
 **File:** `types.go`

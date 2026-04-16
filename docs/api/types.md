@@ -803,3 +803,57 @@ oasis.ParseModelID("openai/gpt-4o")       // → "openai", "gpt-4o"
 oasis.ParseModelID("together/meta-llama/Llama-3.1-70B")  // → "together", "meta-llama/Llama-3.1-70B"
 oasis.ParseModelID("invalid")             // → "", ""
 ```
+
+## Compaction Types
+
+**File:** `compaction.go`
+
+### CompactRequest
+
+Input to a single `Compactor.Compact` call.
+
+```go
+type CompactRequest struct {
+    Messages           []ChatMessage    // input messages to summarize; caller decides partitioning
+    SummarizerProvider Provider         // per-call override; nil → use Compactor's configured default
+    FocusHint          string           // optional user directive (e.g., "focus on layout decisions")
+    IsRecompact        bool             // input already contains a prior compact; preserve it by reference
+    OutputBudget       int              // max_tokens cap for the summary; 0 → implementation default (20_000)
+    ExtraSections      []CompactSection // appended after the default 9 sections (e.g., "Active Skills")
+}
+```
+
+### CompactSection
+
+Domain-specific summary section appended to the default 9.
+
+```go
+type CompactSection struct {
+    Title        string // section heading (also used as the key in CompactResult.Sections)
+    Instructions string // prose directed at the summarizer for what to capture
+}
+```
+
+### CompactResult
+
+Output of a `Compactor.Compact` call.
+
+```go
+type CompactResult struct {
+    SummaryText      string            // the full structured summary (<analysis> already stripped)
+    Sections         map[string]string // parsed per-section body, keyed by section title
+    SourceTokens     int               // estimated input token count
+    SummaryTokens    int               // provider-reported output tokens (falls back to heuristic)
+    CompressionRatio float64           // SummaryTokens / SourceTokens; 0 when source is empty
+    SourceMessageIDs []string          // IDs of summarized messages — currently always nil (see note)
+    PersistsTable    []string          // UI transparency: categories the summary preserves
+    LostTable        []string          // UI transparency: categories the summary intentionally drops
+    Warnings         []string          // non-fatal diagnostics (e.g., "summary_truncated_at_budget", "partial_sections")
+}
+```
+
+`SourceMessageIDs` is currently always nil — Oasis `ChatMessage` does not yet carry per-message IDs. Future schema changes may populate it.
+
+`Warnings` is non-empty when the result is usable but imperfect. Surface it in UI — the summary is still the source of truth.
+
+See [`Compactor`](interfaces.md#compactor) for the interface and [Compaction Errors](errors.md#compaction-errors) for failure modes.

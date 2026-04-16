@@ -74,7 +74,7 @@ flowchart TD
 - **Bounded attachments** — tool-result attachments are accumulated up to a cap of 50 per execution and a byte budget (default 50 MB, configurable via `WithMaxAttachmentBytes`). This prevents unbounded memory growth in long-running loops with attachment-heavy tools
 - **Tool result truncation** — tool results exceeding 100,000 runes (~25K tokens) are truncated in the message history with an `[output truncated]` marker. Stream events and step traces retain the full content. This prevents unbounded memory growth from tools returning very large outputs
 - **Suspend snapshot budget** — per-agent limits on concurrent suspended states: max snapshots (default 20) and max bytes (default 256 MB), configurable via `WithSuspendBudget`. When the budget is exceeded, suspension is rejected with an error instead of leaking memory. Counters are decremented when `Resume()` or `Release()` is called
-- **Context compression** — when message rune count exceeds a threshold (default 200K runes, configurable via `WithCompressThreshold`), old tool results are summarized via an LLM call and replaced with a compact summary. Uses a dedicated provider when configured via `WithCompressModel`, falling back to the main provider. The last 2 iterations are always preserved intact. Degrades gracefully on error (continues uncompressed)
+- **Context compression** — per-turn LLM summarization of old tool results when message rune count exceeds the threshold set by `WithCompressThreshold`. **Disabled by default** (the old 200K default is gone). Uses a dedicated provider when configured via `WithCompressModel`, falling back to the main provider. The last 2 iterations are always preserved intact. Degrades gracefully on error (continues uncompressed). For long-running chat threads, prefer per-thread compaction via [`WithCompaction`](compaction.md) — per-turn compression remains useful for narrow scopes where tool results bloat a single execution; per-thread compaction is the better default for ongoing conversations
 - **Generation parameters** — `WithTemperature`, `WithTopP`, `WithTopK`, `WithMaxTokens` set per-agent LLM sampling parameters. All fields are pointer types — nil means "use provider default", so agents sharing one provider can have different temperatures without creating separate provider instances. Parameters are injected into every `ChatRequest.GenerationParams`; providers map them to their native API
 - **Thinking visibility** — when the LLM returns reasoning/chain-of-thought content (e.g., Gemini thinking mode), it's captured in `ChatResponse.Thinking` and exposed via `AgentResult.Thinking` (last reasoning before the final response). An `EventThinking` stream event fires after each LLM call when thinking is present. PostProcessors can inspect reasoning for guardrails or debugging via the full `ChatResponse`
 
@@ -153,8 +153,8 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact injection + auto-extraction |
 | `WithMaxAttachmentBytes(n int64)` | Max accumulated attachment bytes per execution (default 50 MB) |
 | `WithSuspendBudget(maxSnapshots int, maxBytes int64)` | Per-agent suspend snapshot limits (default 20 snapshots, 256 MB) |
-| `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven context compression (falls back to main provider) |
-| `WithCompressThreshold(n int)` | Rune count threshold for triggering compression (default 200K, negative disables) |
+| `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven per-turn context compression (falls back to main provider). See [`WithCompaction`](compaction.md) for per-thread compaction (preferred for long threads) |
+| `WithCompressThreshold(n int)` | Rune count threshold for per-turn tool-result compression. **Disabled by default** (zero or negative). For long threads, prefer [per-thread compaction](compaction.md) |
 | `WithTemperature(t float64)` | Set LLM sampling temperature (nil = provider default) |
 | `WithTopP(p float64)` | Set nucleus sampling probability (nil = provider default) |
 | `WithTopK(k int)` | Set top-K sampling parameter (nil = provider default) |
@@ -391,7 +391,7 @@ Sub-agents are created fresh for each call. They inherit from the parent:
 - Generation parameters (`Temperature`, `TopP`, `TopK`, `MaxTokens`)
 - Logger
 
-They do **not** inherit: store, memory, processors, input handler, response schema, tracer, suspend config, or compress settings. Sub-agents have no access to the parent's conversation history.
+They do **not** inherit: store, memory, processors, input handler, response schema, tracer, suspend config, compress settings, or per-thread compaction settings. Sub-agents have no access to the parent's conversation history.
 
 ### Depth Limiting
 

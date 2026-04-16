@@ -124,10 +124,6 @@ const maxAccumulatedAttachments = 50
 // attachments collected from tool/agent results during the execution loop.
 const maxAccumulatedAttachmentBytes int64 = 50 * 1024 * 1024 // 50 MB
 
-// defaultCompressThreshold is the default rune count at which context
-// compression triggers in the tool-calling loop. ~50K tokens.
-const defaultCompressThreshold = 200_000
-
 // maxParallelDispatch caps the number of concurrent tool call goroutines
 // to avoid overwhelming external services with unbounded parallelism.
 const maxParallelDispatch = 10
@@ -188,10 +184,12 @@ func runLoop(ctx context.Context, cfg loopConfig, task AgentTask, ch chan<- Stre
 	for _, m := range messages {
 		messageRuneCount += utf8.RuneCountInString(m.Content)
 	}
+	// Per-turn LLM compression is disabled by default. Consumers that want
+	// it must explicitly set WithCompressThreshold(n) with n > 0. The loop
+	// gating below uses `compressThreshold > 0`, so zero/negative values
+	// both mean "disabled". Per-thread compaction (see Compactor /
+	// WithCompaction) is now the preferred strategy for long chat threads.
 	compressThreshold := cfg.compressThreshold
-	if compressThreshold == 0 {
-		compressThreshold = defaultCompressThreshold
-	}
 
 	// Detect whether the tool set includes agent_* delegation tools (Network).
 	// Networks suppress router text-deltas when a sub-agent streams, so they

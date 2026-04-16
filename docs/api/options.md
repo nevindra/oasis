@@ -22,8 +22,8 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact read/write |
 | `WithMaxAttachmentBytes(n int64)` | Max accumulated attachment bytes per execution (default 50 MB) |
 | `WithSuspendBudget(maxSnapshots int, maxBytes int64)` | Per-agent suspend snapshot limits (default 20 snapshots, 256 MB) |
-| `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven context compression (falls back to main provider) |
-| `WithCompressThreshold(n int)` | Rune count threshold for triggering compression (default 200K, negative disables) |
+| `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven per-turn context compression (falls back to main provider). See `WithCompaction` for per-thread compaction (preferred for long threads) |
+| `WithCompressThreshold(n int)` | Rune count threshold for per-turn tool-result compression. **Disabled by default** (zero or negative). Set explicitly to enable. See [Compactor](../concepts/compaction.md) for the preferred per-thread strategy |
 | `WithTemperature(t float64)` | Set LLM sampling temperature for this agent (nil = provider default) |
 | `WithTopP(p float64)` | Set nucleus sampling probability for this agent (nil = provider default) |
 | `WithTopK(k int)` | Set top-K sampling parameter for this agent (nil = provider default) |
@@ -44,6 +44,7 @@ Passed to `WithConversationMemory`.
 | `CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption)` | — | Enable cross-thread semantic recall |
 | `WithSemanticTrimming(e EmbeddingProvider, opts ...SemanticTrimmingOption)` | — | Enable relevance-based history trimming (cosine similarity to current query). Falls back to oldest-first on embedding failure |
 | `AutoTitle()` | disabled | Generate a short title from the first user message. Runs in background, idempotent (skipped if thread already has a title) |
+| `WithCompaction(c Compactor, threshold float64)` | disabled | Per-thread structured compaction; threshold is a fraction (0.0–1.0) of the effective context window. Recommended: 0.80. Passing nil compactor or threshold ≤ 0 disables. See [Compactor](../concepts/compaction.md) |
 
 ## SemanticOption
 

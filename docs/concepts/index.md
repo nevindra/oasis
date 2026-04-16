@@ -122,6 +122,7 @@ Both implement `Agent`, so they compose with each other — a Network can contai
 |-----------|-----|-------------|---------------|
 | Store | [store.md](store.md) | store.go, store/ | [custom-store](../guides/custom-store.md) |
 | Memory | [memory.md](memory.md) | memory.go, agentmemory.go, memory/ | [memory-and-recall](../guides/memory-and-recall.md) |
+| Compaction | [compaction.md](compaction.md) | compaction.go, compaction_helpers.go, compaction_prompt.go, compaction_structured.go | [memory-and-recall](../guides/memory-and-recall.md) |
 | Processor | [processor.md](processor.md) | processor.go | [processors-and-guardrails](../guides/processors-and-guardrails.md) |
 | Input Handler | [input-handler.md](input-handler.md) | input.go | [human-in-the-loop](../guides/human-in-the-loop.md) |
 

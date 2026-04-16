@@ -223,12 +223,12 @@ agent.Drain() // blocks until all background persists complete
 
 ## Context Compression
 
-When the total message rune count exceeds a threshold (default **200,000 runes**, ~50K tokens), the agent compresses older messages via an LLM call:
+**Disabled by default.** Enable per-turn compression by passing `WithCompressThreshold(n)` with a positive value. When the total message rune count exceeds `n`, the agent compresses older tool results via an LLM call:
 
 ```go
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithConversationMemory(store),
-    oasis.WithCompressThreshold(150_000),                  // trigger earlier
+    oasis.WithCompressThreshold(150_000),                  // opt-in, triggers at 150K runes
     oasis.WithCompressModel(func() oasis.Provider { ... }), // use a cheaper model
 )
 ```
@@ -248,6 +248,54 @@ flowchart LR
 - Summaries are prefixed with `"[Summary of earlier tool results]\n"`
 - If no messages qualify for compression, it's skipped silently
 - On compression failure, the agent continues uncompressed (graceful degradation)
+
+For long-running chat threads, see the [Per-Thread Compaction](#per-thread-compaction) section below — that's the preferred strategy now.
+
+## Per-Thread Compaction
+
+A one-shot LLM summarization of an entire thread into a structured 9-section format, triggered when the conversation approaches the model's context window. Unlike per-turn compression — which only rewrites old tool results inside a single `Execute` call — per-thread compaction produces a durable summary that survives across turns.
+
+Wire it via `WithConversationMemory`:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithConversationMemory(store,
+        oasis.WithCompaction(oasis.NewStructuredCompactor(summarizer), 0.80),
+    ),
+)
+```
+
+The threshold (`0.80` above) is a fraction of the effective context window. When estimated tokens cross it, the Compactor runs against the loaded history.
+
+### Default 9 Sections
+
+`StructuredCompactor` asks the summarizer to produce a `<summary>` block with these numbered sections:
+
+1. Primary Request and Intent
+2. Key Technical Concepts
+3. Files and Artifacts
+4. Errors and Fixes
+5. Problem Solving
+6. All User Messages
+7. Pending Tasks
+8. Current Work
+9. Optional Next Step
+
+### Extending the Prompt
+
+Append domain-specific sections via `ExtraSections` on a custom `CompactRequest` (or by wrapping `StructuredCompactor` in a Compactor that sets them):
+
+```go
+extras := []oasis.CompactSection{
+    {Title: "Active Skills", Instructions: "List every skill loaded during this thread, verbatim name."},
+}
+```
+
+### Focus Hints and Re-Compaction
+
+`CompactRequest.FocusHint` is a free-form string injected as a preservation directive — the summarizer biases toward keeping material matching the hint ("focus on layout decisions"). `CompactRequest.IsRecompact = true` signals that the input already contains a prior compact; the prompt then instructs the model to preserve the prior summary by reference and only summarize NEW progress, preventing summary explosion across repeated compactions.
+
+See [`concepts/compaction.md`](compaction.md) for the deep dive — interface shape, helpers, prompt construction, and when to skip the framework's auto-trigger.
 
 ## Message Truncation Limits
 

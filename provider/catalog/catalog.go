@@ -498,6 +498,19 @@ func PricingMap() map[string]oasis.ModelPricing {
 	return pm
 }
 
+// StaticContextWindow returns the InputContext for the given model ID from the
+// static registry, searching across ALL providers. Returns 0 if not found.
+// Useful when the caller's provider key doesn't match the static data's provider
+// (e.g., user registered "qwen" but static data uses "alibaba").
+func StaticContextWindow(modelID string) int {
+	for _, m := range staticModels {
+		if strings.EqualFold(m.ID, modelID) && m.InputContext > 0 {
+			return m.InputContext
+		}
+	}
+	return 0
+}
+
 // staticByProvider returns static models matching the given provider identifier.
 func staticByProvider(provider string) []oasis.ModelInfo {
 	var out []oasis.ModelInfo

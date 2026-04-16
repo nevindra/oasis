@@ -6,6 +6,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+- `Compactor` interface and `StructuredCompactor` default implementation for
+  per-thread conversation compaction with a 9-section structured summary
+  format (primary intent, technical concepts, files, errors, problem solving,
+  all user messages, pending tasks, current work, next step).
+- `CompactRequest`, `CompactResult`, `CompactSection` types for compaction.
+- `EstimateContextTokens(messages, model)` helper for token estimation.
+- `StripMediaBlocks(messages)` helper to remove image/document attachments
+  before compaction LLM calls.
+- `CompactableToolNames()` helper returning the default whitelist of tool
+  names whose results are safe to compact (callers extend this list).
+- `BuildCompactPrompt(extras, focusHint, isRecompact)` prompt template builder.
+- `WithCompaction(Compactor, threshold)` ConversationOption for opt-in
+  auto-trigger during `buildMessages`.
+
+### Changed
+- `WithCompressThreshold` default changed from 200_000 (enabled) to 0
+  (disabled). Per-turn LLM compression must now be opted into explicitly.
+  Per-thread compaction is the preferred strategy.
+- Updated docstrings on `WithCompressModel` and `WithCompressThreshold` to
+  cross-reference the new compaction primitives.
+
 ## [0.14.0] - 2026-04-10
 
 ### Added

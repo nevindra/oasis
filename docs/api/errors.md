@@ -155,6 +155,32 @@ if errors.As(err, &suspended) {
 }
 ```
 
+## Compaction Errors
+
+**File:** `compaction.go`
+
+```go
+var (
+    ErrEmptyMessages      = errors.New("compaction: messages list is empty")
+    ErrNoProvider         = errors.New("compaction: no summarizer provider")
+    ErrSummaryParseFailed = errors.New("compaction: failed to parse <summary> block from response")
+)
+```
+
+Returned by `Compactor.Compact`. Use `errors.Is` to detect:
+
+- `ErrEmptyMessages` — caller passed `req.Messages` of length 0.
+- `ErrNoProvider` — neither `req.SummarizerProvider` nor the Compactor's default is set.
+- `ErrSummaryParseFailed` — the summarizer's response did not contain a parseable `<summary>...</summary>` block. The wrapping error includes a truncated copy of the raw response for diagnosis.
+
+```go
+result, err := compactor.Compact(ctx, req)
+if errors.Is(err, oasis.ErrSummaryParseFailed) {
+    // Model produced free-form text without the expected tags.
+    // Retry with a stricter prompt or a more capable model.
+}
+```
+
 ## Error Patterns
 
 ### Tool Errors

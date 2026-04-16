@@ -174,6 +174,8 @@ type agentConfig struct {
 	maxSuspendBytes     int64          // set by WithSuspendBudget
 	compressModel       ModelFunc          // set by WithCompressModel
 	compressThreshold   int                // set by WithCompressThreshold
+	compactor           Compactor          // set by WithCompaction (per-thread compaction)
+	compactThreshold    float64            // set by WithCompaction (0 = disabled)
 	generationParams    *GenerationParams  // set by WithTemperature, WithTopP, etc.
 	semanticTrimming    bool               // enabled by WithSemanticTrimming
 	trimmingEmbedding   EmbeddingProvider  // set by WithSemanticTrimming
@@ -253,10 +255,14 @@ func WithCompressModel(fn ModelFunc) AgentOption {
 	return func(c *agentConfig) { c.compressModel = fn }
 }
 
-// WithCompressThreshold sets the rune count at which context compression
-// triggers. When the total message content exceeds this threshold, older
-// tool results are summarized via an LLM call. Default is 200,000 runes
-// (~50K tokens). Negative value disables compression.
+// WithCompressThreshold sets the rune count at which per-turn tool-result
+// LLM summarization is triggered. DISABLED BY DEFAULT (zero or negative).
+// Enable explicitly by passing a positive value (e.g., 200_000).
+//
+// NOTE: For per-thread (across-turn) compaction, see WithCompaction and
+// the Compactor interface — that's the preferred pattern for long chat
+// threads. Per-turn compression is narrow in scope and unsafe for
+// skill-heavy agents (skill_activate results can be summarized away).
 func WithCompressThreshold(n int) AgentOption {
 	return func(c *agentConfig) { c.compressThreshold = n }
 }
@@ -512,6 +518,37 @@ func MaxHistory(n int) ConversationOption {
 // The zero value (or omitting this option) disables token-based trimming.
 func MaxTokens(n int) ConversationOption {
 	return func(c *agentConfig) { c.maxTokens = n }
+}
+
+// WithCompaction wires a Compactor to run automatically when conversation
+// memory is loaded and token count exceeds threshold × effectiveWindow.
+// This is an opt-in convenience for consumers that don't want to
+// orchestrate compaction at the application layer.
+//
+// threshold is a fraction (0.0–1.0) of the effective context window.
+// Recommended default: 0.80.
+//
+// Passing nil compactor or threshold <= 0 disables this option (noop).
+//
+// Example:
+//
+//	oasis.WithConversationMemory(store,
+//	    oasis.MaxTokens(100_000),
+//	    oasis.WithCompaction(
+//	        oasis.NewStructuredCompactor(summarizer),
+//	        0.80))
+//
+// NOTE: Consumers that orchestrate compaction themselves (e.g., Athena)
+// should NOT use this option — they build pre-compacted message lists
+// before invoking the agent.
+func WithCompaction(c Compactor, threshold float64) ConversationOption {
+	return func(cfg *agentConfig) {
+		if c == nil || threshold <= 0 {
+			return
+		}
+		cfg.compactor = c
+		cfg.compactThreshold = threshold
+	}
 }
 
 // AutoTitle enables automatic thread title generation. When set, the agent

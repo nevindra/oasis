@@ -89,7 +89,7 @@ This means Network inherits **every execution behavior** from the shared loop:
 | Parallel tool/agent dispatch | max 10 goroutines | Agent calls and tool calls run concurrently |
 | Max iterations + synthesis | 10 iterations | When reached, forces a final LLM summary (no tools) |
 | Tool result truncation | 100K runes | Subagent outputs truncated in message history; step traces retain full content |
-| Context compression | 200K rune threshold | Old messages summarized via LLM when threshold exceeded |
+| Context compression | Disabled by default (opt-in via `WithCompressThreshold`) | Old tool results summarized via LLM when threshold exceeded. For long threads, prefer [per-thread compaction](compaction.md) |
 | Attachment accumulation | 50 items / 50 MB | Subagent attachments subject to same caps as tool attachments |
 | Thinking visibility | automatic | Router's chain-of-thought captured in `AgentResult.Thinking` |
 | Processor hooks | PreLLM, PostLLM, PostTool | All three hook points fire in the same order as LLMAgent |
@@ -102,7 +102,7 @@ All `AgentOption` values accepted by `NewLLMAgent` also work on `NewNetwork`, in
 - **Skills:** `WithActiveSkills`, `WithSkills`
 - **Generation params:** `WithTemperature`, `WithTopP`, `WithTopK`, `WithMaxTokens`
 - **Execution:** `WithPlanExecution`, `WithSubAgentSpawning`, `WithSandbox`
-- **Compression:** `WithCompressModel`, `WithCompressThreshold`
+- **Compression:** `WithCompressModel`, `WithCompressThreshold`, `WithCompaction` (via `WithConversationMemory`) — per-thread compaction is the recommended path for long-running networks; see [Compaction](compaction.md)
 - **Limits:** `WithMaxIter`, `WithMaxAttachmentBytes`, `WithSuspendBudget`
 - **Dynamic:** `WithDynamicPrompt`, `WithDynamicModel`, `WithDynamicTools`
 - **Observability:** `WithTracer`, `WithLogger`

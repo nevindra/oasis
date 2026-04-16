@@ -139,6 +139,41 @@ scheduler.Start(ctx context.Context) error  // blocks until ctx cancelled
 handle := oasis.Spawn(ctx context.Context, agent Agent, task AgentTask) *AgentHandle
 ```
 
+## StructuredCompactor
+
+**File:** `compaction_structured.go`
+
+```go
+compactor := oasis.NewStructuredCompactor(defaultProvider Provider) *StructuredCompactor
+```
+
+Default `Compactor` implementation. Calls `defaultProvider.Chat` once with a 9-section structured prompt, strips media attachments beforehand (via `StripMediaBlocks`), and parses the `<summary>...</summary>` block from the response.
+
+`defaultProvider` may be nil if every `CompactRequest` will populate its own `SummarizerProvider` — otherwise, passing nil and an empty per-call provider returns `ErrNoProvider`.
+
+Wire it into an agent via `WithCompaction`:
+
+```go
+agent := oasis.NewLLMAgent("assistant", "Helpful assistant", chatProvider,
+    oasis.WithConversationMemory(store,
+        oasis.WithCompaction(oasis.NewStructuredCompactor(summarizer), 0.80),
+    ),
+)
+```
+
+## Compaction Helpers
+
+**File:** `compaction_helpers.go`, `compaction_prompt.go`
+
+```go
+oasis.EstimateContextTokens(messages []ChatMessage, model ModelInfo) int
+oasis.StripMediaBlocks(messages []ChatMessage) []ChatMessage  // returns a copy
+oasis.CompactableToolNames() []string                           // fresh-copy whitelist
+oasis.BuildCompactPrompt(extras []CompactSection, focusHint string, isRecompact bool) string
+```
+
+`EstimateContextTokens` is a heuristic (~10–15% accurate); prefer `ChatResponse.Usage.InputTokens` for exact counts. `StripMediaBlocks` replaces image and document attachments with `[image]` / `[document]` markers — used as defense-in-depth before a compaction call. `CompactableToolNames` returns a fresh copy of the default whitelist of tool names whose results are safe to summarize. `BuildCompactPrompt` composes the full prompt string; callers writing their own `Compactor` can reuse it directly.
+
 ## ProcessorChain
 
 **File:** `processor.go`

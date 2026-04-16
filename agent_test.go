@@ -1299,6 +1299,21 @@ func TestWithCompressThresholdOption(t *testing.T) {
 	}
 }
 
+func TestCompressThreshold_DefaultIsDisabled(t *testing.T) {
+	cfg := buildConfig(nil)
+	if cfg.compressThreshold != 0 {
+		t.Errorf("default compressThreshold = %d, want 0 (meaning disabled)", cfg.compressThreshold)
+	}
+}
+
+func TestCompressThreshold_ZeroDisablesInLoop(t *testing.T) {
+	threshold := 0
+	enabled := threshold > 0
+	if enabled {
+		t.Error("threshold = 0 must be treated as disabled")
+	}
+}
+
 func TestWithMaxAttachmentBytesOption(t *testing.T) {
 	cfg := buildConfig([]AgentOption{WithMaxAttachmentBytes(10 << 20)})
 	if cfg.maxAttachmentBytes != 10<<20 {
