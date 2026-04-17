@@ -6,6 +6,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+- **`tools/todo` package** — Claude-Code-style `todo_write` tool for agent task
+  tracking. Exposes a single tool function (`todo_write`) that accepts a list
+  of `{content, activeForm, status}` items (status ∈ `pending` /
+  `in_progress` / `completed`). Validates length (max 50 items, 1000-char
+  content, 200-char activeForm) and auto-clears the stored list when every
+  item is `completed` so downstream UIs can hide the panel.
+- **`todo.Backend` interface** — storage adapter (`Get`/`Set` by key) so
+  embedders can persist task lists to whatever fits (in-memory, JSONB column,
+  file, etc.). Implementations must serialize concurrent `Set` on the same
+  key.
+- **`todo.New(backend, keyFn)` constructor** — `keyFn(ctx)` extracts the
+  scoping identifier (conversation ID, session ID, …) from the agent's
+  execution context, letting a single tool instance serve many concurrent
+  conversations.
+- **`todo.ToolDescription` constant** — full prompt ported from Claude
+  Code's `TodoWriteTool/prompt.ts` so the LLM actually uses the tool. The
+  port replaces the `${FILE_EDIT_TOOL_NAME}` template with a literal
+  "file edit tool"; the verification-agent nudge logic is not part of the
+  prompt text and is not ported.
+
 ## [0.15.0] - 2026-04-16
 
 ### Added

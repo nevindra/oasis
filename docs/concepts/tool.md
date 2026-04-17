@@ -197,6 +197,7 @@ A panicking tool never crashes the agent — other tool calls in the same parall
 | `tools/http` | `http_fetch` | (none) |
 | `tools/data` | `data_parse`, `data_filter`, `data_aggregate`, `data_transform` | (none) |
 | `tools/skill` | `skill_discover`, `skill_activate`, `skill_create`, `skill_update` | SkillProvider |
+| `tools/todo` | `todo_write` | Backend, keyFn |
 
 ## Built-in Tool Reference
 
@@ -714,6 +715,79 @@ import "github.com/nevindra/oasis/tools/skill"
 
 provider := oasis.NewFileSkillProvider("./skills")
 tool := skill.New(provider)
+```
+
+---
+
+### todo — Task List
+
+**Package:** `tools/todo`
+**Constructor:** `todo.New(backend, keyFn)`
+
+Claude-Code-style task list. Gives the agent a single tool (`todo_write`) to maintain a structured list of pending / in-progress / completed items for the current session. Intended to keep long multi-step turns organized and to surface progress to the user.
+
+**Constructor arguments:**
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `backend` | `todo.Backend` | Storage adapter. Must implement `Get(ctx, key) ([]Item, error)` and `Set(ctx, key, items) error`. Implementations must serialize concurrent `Set` calls on the same key. |
+| `keyFn` | `func(context.Context) string` | Extracts the scoping identifier (conversation ID, session ID, …) from the agent's execution context so one tool instance can serve many concurrent conversations. |
+
+**Tool schema — `todo_write`:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `todos` | array of objects | yes | Full replacement list. Each item has `content`, `activeForm`, `status`. |
+
+Each item:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `content` | string | yes | Imperative form, e.g. `"Run tests"`. Max 1000 chars. |
+| `activeForm` | string | yes | Present continuous, e.g. `"Running tests"`. Max 200 chars. |
+| `status` | string | yes | One of `pending`, `in_progress`, `completed`. |
+
+**Behavior:**
+
+- The call replaces the entire stored list — the LLM is expected to send the updated full list on every call, not a diff.
+- Max 50 items per list.
+- When **every** item is `completed`, the tool clears the stored list (writes `nil`) so UIs can auto-hide the panel. Mirrors Claude Code's `TodoWriteTool.ts` behavior.
+- On success, returns a nudge message that reminds the LLM to keep using the tool (`"Todos have been modified successfully. …"`). This exactly matches Claude Code's wording and is the single biggest lever for actually getting the model to use the tool.
+- Validation errors (empty fields, unknown status, over-length, too many items, malformed JSON) are returned as `ToolResult.Error` so the LLM can retry without crashing the turn.
+- The tool prompt (`todo.ToolDescription`) is ported from Claude Code's `TodoWriteTool/prompt.ts`. Two adaptations: `${FILE_EDIT_TOOL_NAME}` is replaced with the literal string `"file edit tool"`, and the verification-agent nudge logic from the TypeScript source is not part of the prompt string and is not ported.
+
+**Example:**
+
+```go
+import (
+    "context"
+    "github.com/nevindra/oasis/tools/todo"
+)
+
+// A trivial in-process backend — replace with your own (JSONB column,
+// file, Redis, etc.) for durable storage.
+type memBackend struct{ m map[string][]todo.Item }
+
+func (b *memBackend) Get(_ context.Context, k string) ([]todo.Item, error) {
+    return b.m[k], nil
+}
+func (b *memBackend) Set(_ context.Context, k string, items []todo.Item) error {
+    b.m[k] = items
+    return nil
+}
+
+// Scope the list per conversation. The key extractor reads whatever
+// your runtime stashes in ctx (conversation ID, session ID, user ID...).
+type ctxKey string
+const convKey ctxKey = "conv"
+
+tool := todo.New(
+    &memBackend{m: map[string][]todo.Item{}},
+    func(ctx context.Context) string {
+        v, _ := ctx.Value(convKey).(string)
+        return v
+    },
+)
 ```
 
 ## Parallel Execution
