@@ -26,6 +26,31 @@ type MCPRegistry struct {
 	eventsCh chan MCPEvent       // buffered 64, drop-oldest
 	logger   *slog.Logger
 	toolReg  *ToolRegistry
+	defer_   *deferConfig // nil = deferred mode off (Plan α-2)
+}
+
+// SetDeferredMode configures deferred MCP-schema behavior. Call BEFORE
+// registering servers so newly-registered tools respect the mode. Typically
+// invoked by NewLLMAgent when WithDeferredSchemas was passed.
+func (r *MCPRegistry) SetDeferredMode(cfg *deferConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.defer_ = cfg
+}
+
+// isDeferred reports whether the named server's tools should be registered
+// without their input schemas.
+func (r *MCPRegistry) isDeferred(serverName string) bool {
+	r.mu.RLock()
+	cfg := r.defer_
+	r.mu.RUnlock()
+	if cfg == nil || !cfg.enabled {
+		return false
+	}
+	if cfg.exclude[serverName] {
+		return false
+	}
+	return true
 }
 
 // MCPController is the user-facing controller returned by (*LLMAgent).MCP().
@@ -97,9 +122,9 @@ type mcpToolEntry struct {
 	rawName    string       // "create_issue"
 	aliasName  string       // "" or override
 	fullName   string       // "mcp__github__create_issue"
-	schema     atomic.Value // *json.RawMessage; nil = deferred + not loaded (Plan α-2)
+	def        atomic.Pointer[ToolDefinition]
+	schema     atomic.Value // json.RawMessage; cached schema for deferred tools (Plan α-2)
 	schemaMu   sync.Mutex   // serializes lazy fetch
-	def        ToolDefinition
 }
 
 type backoffState struct {
@@ -350,6 +375,8 @@ func (r *MCPRegistry) registerTools(entry *mcpServerEntry, tools []mcp.ToolDefin
 		return errors.New("MCPToolFilter: Include and Exclude are mutually exclusive")
 	}
 
+	deferred := r.isDeferred(serverName)
+
 	entry.toolsMu.Lock()
 	defer entry.toolsMu.Unlock()
 
@@ -388,12 +415,18 @@ func (r *MCPRegistry) registerTools(entry *mcpServerEntry, tools []mcp.ToolDefin
 			rawName:    t.Name,
 			aliasName:  shortName,
 			fullName:   fullName,
-			def: ToolDefinition{
-				Name:        fullName,
-				Description: t.Description,
-				Parameters:  params,
-			},
 		}
+		def := ToolDefinition{Name: fullName, Description: t.Description}
+		if deferred {
+			// Hide the schema from Definitions(); cache it so EnsureSchema can
+			// restore it without re-fetching from the server.
+			if len(params) > 0 {
+				toolEntry.schema.Store(params)
+			}
+		} else {
+			def.Parameters = params
+		}
+		toolEntry.def.Store(&def)
 		entry.tools[shortName] = toolEntry
 		r.toolReg.Add(&mcpToolWrapper{entry: toolEntry, server: entry, parent: r})
 	}

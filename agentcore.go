@@ -133,6 +133,16 @@ func initCore(c *agentCore, name, description string, provider Provider, cfg age
 	if cfg.mcpLifecycleHandler != nil {
 		c.mcpRegistry.SetLifecycleHandler(cfg.mcpLifecycleHandler)
 	}
+
+	// Deferred schemas (Plan α-2): set BEFORE startup MCP servers register so
+	// new tools respect the mode. Auto-register ToolSearch and prepend the
+	// system-prompt block that teaches the model about the mcp__ deferral.
+	if cfg.deferConfig != nil && cfg.deferConfig.enabled {
+		c.mcpRegistry.SetDeferredMode(cfg.deferConfig)
+		c.tools.Add(newToolSearchTool(c.tools))
+		c.systemPrompt = deferredToolsPromptSection() + "\n\n" + c.systemPrompt
+	}
+
 	// Register startup MCP servers (soft-degrade: log and continue on failure).
 	for _, mcfg := range cfg.mcpStartupConfigs {
 		if err := c.mcpRegistry.Register(context.Background(), mcfg); err != nil {

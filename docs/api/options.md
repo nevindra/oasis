@@ -34,8 +34,19 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithMCPServers(cfgs ...MCPServerConfig)` | Register multiple MCP servers at construction; variadic variant of `WithMCPServer` |
 | `WithSharedMCPRegistry(r *MCPRegistry)` | Bind the agent to a process-shared `MCPRegistry`, reusing connections across agents |
 | `WithMCPLifecycleHandler(h MCPLifecycleHandler)` | Install a handler for MCP connect/disconnect/tool-call/tool-result events |
+| `WithDeferredSchemas(opts ...DeferOption)` | Hide MCP tool input schemas from the model; auto-register `ToolSearch` for on-demand schema loading. See [Deferred schemas](../guides/connecting-mcp-servers.md#deferred-schemas-opt-in) |
 | `WithTracer(t Tracer)` | Enable deep tracing (agent.execute, loop, memory spans) |
 | `WithLogger(l *slog.Logger)` | Enable structured logging (defaults to no-op) |
+
+## DeferOption
+
+Passed to `WithDeferredSchemas`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `DeferThreshold(percent int)` | — | **Reserved for v1.x; ignored in v1.** Auto-activate deferred mode when MCP schemas exceed N% of the context window. Values are clamped to [0, 100] |
+| `DeferAlwaysOn()` | — | Force all MCP tool schemas deferred regardless of threshold. Equivalent to plain `WithDeferredSchemas()` in v1 |
+| `DeferExclude(serverNames ...string)` | — | Keep the named MCP servers' schemas eager (never deferred), even when deferred mode is active |
 
 ## ConversationOption
 

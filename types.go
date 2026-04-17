@@ -172,6 +172,56 @@ func (r *ToolRegistry) AllDefinitions() []ToolDefinition {
 	return defs
 }
 
+// DeferredDefinitions returns tool definitions whose Parameters schema is
+// currently empty — i.e., MCP tools registered with deferred-schema mode that
+// haven't been resolved yet. Used by ToolSearch to enumerate candidates.
+func (r *ToolRegistry) DeferredDefinitions() []ToolDefinition {
+	var out []ToolDefinition
+	for _, t := range r.tools {
+		for _, d := range t.Definitions() {
+			if len(d.Parameters) == 0 {
+				out = append(out, d)
+			}
+		}
+	}
+	return out
+}
+
+// SchemaEnsurer is the optional capability for tools that support deferred
+// input-schema loading. ToolRegistry.EnsureSchema invokes EnsureSchema on
+// the tool when its current Definition has no Parameters. The MCP client
+// (mcpToolWrapper) implements this; users may implement it on their own
+// tools to participate in deferred-schema mode.
+type SchemaEnsurer interface {
+	EnsureSchema(ctx context.Context) error
+}
+
+// EnsureSchema lazy-loads the Parameters schema for a deferred tool.
+// Tools opt into deferred-schema support by implementing SchemaEnsurer.
+//
+// No-op for:
+//   - Tools whose Definition's Parameters is already non-empty
+//   - Tools that do not implement SchemaEnsurer
+//
+// Returns an error only if the named tool is not registered, or if the
+// underlying EnsureSchema call fails.
+func (r *ToolRegistry) EnsureSchema(ctx context.Context, name string) error {
+	tool, ok := r.index[name]
+	if !ok {
+		return fmt.Errorf("tool %q not registered", name)
+	}
+	for _, d := range tool.Definitions() {
+		if d.Name == name && len(d.Parameters) > 0 {
+			return nil
+		}
+	}
+	ensurer, ok := tool.(SchemaEnsurer)
+	if !ok {
+		return nil
+	}
+	return ensurer.EnsureSchema(ctx)
+}
+
 // Execute dispatches a tool call by name using the pre-built index.
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
 	if t, ok := r.index[name]; ok {

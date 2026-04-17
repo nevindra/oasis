@@ -190,6 +190,7 @@ type agentConfig struct {
 	mcpStartupConfigs   []MCPServerConfig   // set by WithMCPServer / WithMCPServers
 	sharedMCPRegistry   *MCPRegistry        // set by WithSharedMCPRegistry
 	mcpLifecycleHandler MCPLifecycleHandler // set by WithMCPLifecycleHandler
+	deferConfig         *deferConfig        // set by WithDeferredSchemas
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -439,6 +440,32 @@ func WithSharedMCPRegistry(r *MCPRegistry) AgentOption {
 // registry (last-writer wins across agents sharing the registry).
 func WithMCPLifecycleHandler(h MCPLifecycleHandler) AgentOption {
 	return func(c *agentConfig) { c.mcpLifecycleHandler = h }
+}
+
+// WithDeferredSchemas opts the agent into deferred schema loading for MCP tools.
+// MCP tools are advertised to the LLM by name + description only; their input
+// schemas are loaded on-demand via an auto-registered ToolSearch tool.
+//
+// Trade-off: adds one LLM round-trip per novel MCP tool call, but saves the
+// context tokens of all unloaded schemas (~600 tokens/tool average). Worth it
+// for setups with 20+ MCP tools; net loss for fewer than 10.
+//
+// When enabled, NewLLMAgent additionally:
+//   - registers the ToolSearch tool into the agent's tool registry
+//   - prepends a system-prompt section explaining the mechanism to the model
+//
+// Options:
+//   - DeferThreshold(n): reserved for v1.x; accepted but ignored in v1
+//   - DeferAlwaysOn(): equivalent to plain WithDeferredSchemas in v1
+//   - DeferExclude(servers...): keep named servers' schemas eager
+func WithDeferredSchemas(opts ...DeferOption) AgentOption {
+	return func(c *agentConfig) {
+		cfg := &deferConfig{enabled: true}
+		for _, o := range opts {
+			o(cfg)
+		}
+		c.deferConfig = cfg
+	}
 }
 
 

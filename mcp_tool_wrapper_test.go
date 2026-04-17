@@ -84,7 +84,8 @@ func TestMcpToolWrapper_Execute_TransportError(t *testing.T) {
 
 func TestMcpToolWrapper_Definitions(t *testing.T) {
 	def := ToolDefinition{Name: "mcp__test__echo", Description: "echo tool"}
-	entry := &mcpToolEntry{fullName: "mcp__test__echo", def: def}
+	entry := &mcpToolEntry{fullName: "mcp__test__echo"}
+	entry.def.Store(&def)
 	w := &mcpToolWrapper{entry: entry, server: &mcpServerEntry{}}
 
 	defs := w.Definitions()

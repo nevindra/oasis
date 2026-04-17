@@ -184,3 +184,41 @@ if ma, ok := agent.(oasis.MCPAccessor); ok {
 ```
 
 Currently implemented by `*LLMAgent` only.
+
+## Deferred schemas (opt-in)
+
+Attaching many MCP servers (GitHub + Filesystem + SQLite + custom = 50+ tools)
+can consume 30K+ context tokens of input schemas on every inference call.
+Deferred schemas delay that cost:
+
+```go
+agent := oasis.NewLLMAgent("a", "description", provider,
+    oasis.WithMCPServers(servers...),
+    oasis.WithDeferredSchemas(),
+)
+```
+
+When enabled:
+
+- MCP tools are advertised to the model with name + description, **no input schema**.
+- A `ToolSearch` tool is auto-registered.
+- A system-prompt block is auto-prepended that instructs the model to call
+  `ToolSearch` before invoking any `mcp__*` tool whose schema it has not seen.
+
+**Trade-off**: one extra LLM round-trip per novel MCP tool call vs. ~600 tokens
+saved per tool schema. Worth it for 20+ MCP tools; net loss for fewer than 10.
+
+### Keeping specific servers eager
+
+```go
+oasis.WithDeferredSchemas(oasis.DeferExclude("github"))
+```
+
+GitHub's tools keep their full schemas; everything else is deferred.
+
+### Roadmap
+
+- `DeferThreshold(n)` (v1.x): auto-activate when schema tokens exceed N% of
+  the context window. Accepted in v1 but currently ignored.
+- `DeferAlwaysOn()` (v1.x): semantic placeholder; equivalent to plain
+  `WithDeferredSchemas()` in v1.

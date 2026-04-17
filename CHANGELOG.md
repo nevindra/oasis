@@ -7,6 +7,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ## [Unreleased]
 
 ### Added
+- **Deferred MCP tool schemas** (opt-in via `WithDeferredSchemas`): advertise
+  MCP tool names + descriptions without their input schemas; load schemas on
+  demand via an auto-registered `ToolSearch` tool. Saves ~600 tokens per
+  unloaded tool schema for setups with many MCP servers. Auto-prepends a
+  system-prompt block teaching the model the deferral mechanism. New options
+  `WithDeferredSchemas`, `DeferOption`, `DeferThreshold`, `DeferAlwaysOn`,
+  `DeferExclude`. New methods `ToolRegistry.EnsureSchema`,
+  `ToolRegistry.DeferredDefinitions`, `MCPRegistry.SetDeferredMode`. New
+  capability interface `SchemaEnsurer` (tools may implement to participate in
+  deferred-schema loading). See [`docs/guides/connecting-mcp-servers.md`](docs/guides/connecting-mcp-servers.md) §
+  "Deferred schemas".
 - **MCP client** — connect agents to external Model Context Protocol servers over
   stdio and HTTP transports. Tools from MCP servers register into the existing
   `ToolRegistry` under `mcp__<server>__<tool>` namespacing and are callable like
