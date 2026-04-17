@@ -77,10 +77,11 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 	var toolDefs []ToolDefinition
 	var executeTool toolExecFunc
 	var executeToolStream toolExecStreamFunc
-	if dynDefs, dynExec := a.resolveDynamicTools(ctx, task); dynDefs != nil {
+	if dynDefs, dynExec, dynExecStream := a.resolveDynamicTools(ctx, task); dynDefs != nil {
 		a.logger.Debug("using dynamic tools", "agent", a.name, "tool_count", len(dynDefs))
 		toolDefs = a.cacheBuiltinToolDefs(dynDefs)
 		executeTool = dynExec
+		executeToolStream = dynExecStream
 	} else {
 		toolDefs = a.cachedToolDefs
 		executeTool = a.tools.Execute
@@ -103,15 +104,19 @@ func (a *LLMAgent) makeDispatch(executeTool toolExecFunc, executeToolStream tool
 		}
 		if tc.Name == "spawn_agent" && a.spawnEnabled {
 			return executeSpawnAgent(ctx, tc.Args, subAgentConfig{
-				provider:       a.provider,
-				toolDefs:       resolvedToolDefs,
-				executeTool:    executeTool,
-				maxIter:        a.maxIter,
-				maxSpawnDepth:  a.maxSpawnDepth,
-				denySpawnTools: a.denySpawnTools,
-				planExecution:  a.planExecution,
-				logger:         a.logger,
-				genParams:      a.generationParams,
+				provider:          a.provider,
+				toolDefs:          resolvedToolDefs,
+				executeTool:       executeTool,
+				executeToolStream: executeToolStream,
+				maxIter:           a.maxIter,
+				maxSpawnDepth:     a.maxSpawnDepth,
+				denySpawnTools:    a.denySpawnTools,
+				planExecution:     a.planExecution,
+				logger:            a.logger,
+				tracer:            a.tracer,
+				genParams:         a.generationParams,
+				mcpRegistry:       a.mcpRegistry,
+				ch:                ch,
 			})
 		}
 		return dispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
@@ -314,16 +319,26 @@ var spawnAgentToolDef = ToolDefinition{
 	}`),
 }
 
-// funcTool wraps resolved tool definitions and an executor into the Tool interface.
-// Used by spawn_agent to pass the parent's (possibly filtered) tools to the
-// ephemeral sub-agent without reconstructing a ToolRegistry.
+// funcTool wraps resolved tool definitions and executors into the Tool /
+// StreamingTool interfaces. Used by spawn_agent to pass the parent's
+// (possibly filtered) tools to the ephemeral sub-agent without reconstructing
+// a ToolRegistry. When execStream is set and ch is non-nil, ExecuteStream
+// routes to the parent's streaming executor so StreamingTool progress events
+// inside sub-agents reach the parent's stream.
 type funcTool struct {
-	defs []ToolDefinition
-	exec toolExecFunc
+	defs       []ToolDefinition
+	exec       toolExecFunc
+	execStream toolExecStreamFunc
 }
 
 func (f *funcTool) Definitions() []ToolDefinition { return f.defs }
 func (f *funcTool) Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
+	return f.exec(ctx, name, args)
+}
+func (f *funcTool) ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+	if f.execStream != nil && ch != nil {
+		return f.execStream(ctx, name, args, ch)
+	}
 	return f.exec(ctx, name, args)
 }
 
@@ -354,15 +369,19 @@ const subAgentPrompt = "You are a sub-agent. Complete the given task thoroughly 
 // subAgentConfig carries the parent's state needed to construct a sub-agent.
 // Passed through makeDispatch closures — no context keys needed.
 type subAgentConfig struct {
-	provider       Provider
-	toolDefs       []ToolDefinition
-	executeTool    toolExecFunc
-	maxIter        int
-	maxSpawnDepth  int
-	denySpawnTools []string
-	planExecution  bool       // inherit parent's execute_plan capability
-	logger         *slog.Logger
-	genParams      *GenerationParams
+	provider          Provider
+	toolDefs          []ToolDefinition
+	executeTool       toolExecFunc
+	executeToolStream toolExecStreamFunc // parent's streaming tool executor; propagates StreamingTool progress
+	maxIter           int
+	maxSpawnDepth     int
+	denySpawnTools    []string
+	planExecution     bool // inherit parent's execute_plan capability
+	logger            *slog.Logger
+	tracer            Tracer             // parent's tracer; sub-agent spans are children of parent's span
+	genParams         *GenerationParams
+	mcpRegistry       *MCPRegistry       // parent's MCP registry, shared to avoid per-spawn channel/map allocation
+	ch                chan<- StreamEvent // parent's stream channel; when non-nil, child events are forwarded
 }
 
 // executeSpawnAgent handles the spawn_agent tool call. Constructs an ephemeral
@@ -402,34 +421,38 @@ func executeSpawnAgent(ctx context.Context, args json.RawMessage, cfg subAgentCo
 		}
 	}
 
-	// Build filtered executor that respects deny list.
+	// Build filtered executors that respect the deny list. Both Execute and
+	// ExecuteStream need the same filtering so StreamingTool progress events
+	// still flow through for allowed tools.
 	filteredExec := func(ctx context.Context, toolName string, toolArgs json.RawMessage) (ToolResult, error) {
 		if deny[toolName] {
 			return ToolResult{Error: "tool " + toolName + " is not available to sub-agents"}, nil
 		}
 		return cfg.executeTool(ctx, toolName, toolArgs)
 	}
+	var filteredExecStream toolExecStreamFunc
+	if cfg.executeToolStream != nil {
+		filteredExecStream = func(ctx context.Context, toolName string, toolArgs json.RawMessage, streamCh chan<- StreamEvent) (ToolResult, error) {
+			if deny[toolName] {
+				return ToolResult{Error: "tool " + toolName + " is not available to sub-agents"}, nil
+			}
+			return cfg.executeToolStream(ctx, toolName, toolArgs, streamCh)
+		}
+	}
 
 	// Build ephemeral options.
 	opts := []AgentOption{
 		WithPrompt(subAgentPrompt),
-		WithTools(&funcTool{defs: filteredDefs, exec: filteredExec}),
+		WithTools(&funcTool{defs: filteredDefs, exec: filteredExec, execStream: filteredExecStream}),
 		WithMaxIter(cfg.maxIter),
 		WithLogger(cfg.logger),
+		WithGenerationParams(cfg.genParams),
 	}
-	if cfg.genParams != nil {
-		if cfg.genParams.Temperature != nil {
-			opts = append(opts, WithTemperature(*cfg.genParams.Temperature))
-		}
-		if cfg.genParams.TopP != nil {
-			opts = append(opts, WithTopP(*cfg.genParams.TopP))
-		}
-		if cfg.genParams.TopK != nil {
-			opts = append(opts, WithTopK(*cfg.genParams.TopK))
-		}
-		if cfg.genParams.MaxTokens != nil {
-			opts = append(opts, WithMaxTokens(*cfg.genParams.MaxTokens))
-		}
+	if cfg.tracer != nil {
+		opts = append(opts, WithTracer(cfg.tracer))
+	}
+	if cfg.mcpRegistry != nil {
+		opts = append(opts, WithSharedMCPRegistry(cfg.mcpRegistry))
 	}
 	// Enable spawning on child if it won't be at max depth.
 	if !childAtMaxDepth {
@@ -445,9 +468,12 @@ func executeSpawnAgent(ctx context.Context, args json.RawMessage, cfg subAgentCo
 
 	child := NewLLMAgent("sub:"+name, "sub-agent: "+params.Task, cfg.provider, opts...)
 
-	// Execute with incremented depth.
+	// Execute with incremented depth. When the parent is streaming, use
+	// executeAgent to forward the child's events through the parent's channel
+	// (panic recovery + EventInputReceived filtering handled there).
 	childCtx := withSpawnDepth(ctx, depth+1)
-	result, err := child.Execute(childCtx, AgentTask{Input: params.Task})
+	childTask := AgentTask{Input: params.Task}
+	result, err := executeAgent(childCtx, child, name, childTask, cfg.ch, cfg.logger)
 	if err != nil {
 		return DispatchResult{Content: "error: sub-agent failed: " + err.Error(), IsError: true}
 	}

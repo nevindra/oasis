@@ -7,6 +7,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ## [Unreleased]
 
 ### Added
+- `WithGenerationParams(*GenerationParams)` agent option — sets the full
+  `GenerationParams` struct in one call. The params are deep-copied (struct +
+  each inner pointer) so later mutations to the caller's values do not affect
+  the agent. Companion to the existing `WithTemperature` / `WithTopP` /
+  `WithTopK` / `WithMaxTokens` setters; useful when forwarding a pre-built
+  `GenerationParams` to a sub-agent so new fields added to `GenerationParams`
+  propagate automatically.
 - **Deferred MCP tool schemas** (opt-in via `WithDeferredSchemas`): advertise
   MCP tool names + descriptions without their input schemas; load schemas on
   demand via an auto-registered `ToolSearch` tool. Saves ~600 tokens per
@@ -56,6 +63,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   port replaces the `${FILE_EDIT_TOOL_NAME}` template with a literal
   "file edit tool"; the verification-agent nudge logic is not part of the
   prompt text and is not ported.
+
+### Fixed
+- `WithDynamicTools` path now honors `StreamingTool` — tools implementing
+  `StreamingTool` emit `EventToolProgress` events during `ExecuteStream` even
+  when resolved dynamically per request. Previously the dynamic path only
+  built a non-streaming executor, silently dropping progress events.
+- `spawn_agent` now forwards the child's stream events through the parent's
+  channel (text deltas, tool-call start/result, thinking, routing decisions).
+  Previously `executeSpawnAgent` always called `child.Execute`, so callers of
+  `ExecuteStream` saw only the final `EventToolCallResult` from the spawn.
+  Child's `EventInputReceived` is filtered so it does not duplicate the
+  parent's input event. Tool-level progress events from `StreamingTool` also
+  propagate through spawned children via a `funcTool.ExecuteStream` method.
+- `spawn_agent` now reuses the parent's `MCPRegistry` via
+  `WithSharedMCPRegistry` instead of allocating a fresh registry (with 64-cap
+  events channel + maps) per spawn. Relevant for fan-out workloads that call
+  `spawn_agent` in parallel.
+- `spawn_agent` now inherits the parent's `Tracer`. Previously the child's
+  iterations, LLM calls, and tool dispatches were untraced when the parent
+  was configured with `WithTracer`.
+- `spawn_agent` now forwards `GenerationParams` via `WithGenerationParams`
+  instead of hand-copying four fields. Future fields added to
+  `GenerationParams` now propagate to sub-agents automatically.
 
 ### Notes
 - Deferred MCP tool schemas + `ToolSearch` follow in next release (Plan α-2).

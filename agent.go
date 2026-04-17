@@ -319,6 +319,49 @@ func WithMaxTokens(n int) AgentOption {
 	}
 }
 
+// WithGenerationParams sets the full GenerationParams for this agent in one call.
+// The params are deep-copied (struct + each inner pointer) so later mutations
+// to the caller's values do not affect the agent. Nil is a no-op.
+//
+// Useful when forwarding a pre-built GenerationParams (e.g., when constructing
+// sub-agents that should inherit the parent's sampling configuration), so new
+// fields added to GenerationParams propagate automatically.
+func WithGenerationParams(p *GenerationParams) AgentOption {
+	return func(c *agentConfig) {
+		if p == nil {
+			return
+		}
+		c.generationParams = cloneGenerationParams(p)
+	}
+}
+
+// cloneGenerationParams returns a deep copy of p: the struct itself plus
+// freshly-allocated pointer fields. Callers can mutate the originals
+// without affecting the clone.
+func cloneGenerationParams(p *GenerationParams) *GenerationParams {
+	if p == nil {
+		return nil
+	}
+	out := &GenerationParams{}
+	if p.Temperature != nil {
+		v := *p.Temperature
+		out.Temperature = &v
+	}
+	if p.TopP != nil {
+		v := *p.TopP
+		out.TopP = &v
+	}
+	if p.TopK != nil {
+		v := *p.TopK
+		out.TopK = &v
+	}
+	if p.MaxTokens != nil {
+		v := *p.MaxTokens
+		out.MaxTokens = &v
+	}
+	return out
+}
+
 // WithAgents adds subagents to a Network. Ignored by LLMAgent.
 func WithAgents(agents ...Agent) AgentOption {
 	return func(c *agentConfig) { c.agents = append(c.agents, agents...) }

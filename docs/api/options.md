@@ -28,6 +28,7 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithTopP(p float64)` | Set nucleus sampling probability for this agent (nil = provider default) |
 | `WithTopK(k int)` | Set top-K sampling parameter for this agent (nil = provider default) |
 | `WithMaxTokens(n int)` | Set maximum output tokens for this agent (nil = provider default) |
+| `WithGenerationParams(p *GenerationParams)` | Set the full `GenerationParams` struct in one call. Deep-copies the struct and each inner pointer so later mutations of the caller's values do not affect the agent. Nil is a no-op. Useful when forwarding a pre-built `GenerationParams` (e.g., when building sub-agents) so new fields propagate automatically |
 | `WithActiveSkills(skills ...Skill)` | Pre-activate skills — instructions appended to system prompt on every LLM call |
 | `WithSkills(p SkillProvider)` | Register a SkillProvider and auto-add skill discovery/activation tools |
 | `WithMCPServer(cfg MCPServerConfig)` | Register a single MCP server at agent construction (soft-degrade on failure) |

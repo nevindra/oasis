@@ -159,6 +159,7 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithTopP(p float64)` | Set nucleus sampling probability (nil = provider default) |
 | `WithTopK(k int)` | Set top-K sampling parameter (nil = provider default) |
 | `WithMaxTokens(n int)` | Set maximum output tokens (nil = provider default) |
+| `WithGenerationParams(p *GenerationParams)` | Set the full `GenerationParams` in one call (deep-copies struct + inner pointers). Nil is a no-op |
 | `WithActiveSkills(skills ...Skill)` | Pre-activate skills — instructions appended to system prompt |
 | `WithSkills(p SkillProvider)` | Register skill provider, adds `skill_discover` and `skill_activate` tools. If provider implements `SkillWriter`, also adds `skill_create` and `skill_update` |
 | `WithTracer(t Tracer)` | Attach a tracer for span creation (`agent.execute` → `agent.loop.iteration`, etc.) |
@@ -388,10 +389,13 @@ Sub-agents are created fresh for each call. They inherit from the parent:
 - Provider (same LLM backend)
 - Tools (same tool set, minus any in `DenySpawnTools`)
 - `MaxIter`
-- Generation parameters (`Temperature`, `TopP`, `TopK`, `MaxTokens`)
+- Generation parameters (forwarded via `WithGenerationParams`, so any field on `GenerationParams` propagates)
 - Logger
+- **Tracer** — child iterations, LLM calls, and tool dispatches appear under the parent's span
+- **MCP registry** — shared with the parent via `WithSharedMCPRegistry`; no per-spawn connection or events-channel allocation
+- **Streaming channel** — when the parent is running under `ExecuteStream`, the child's events (text deltas, tool-call start/result, tool progress, thinking, routing decisions) are forwarded through the parent's channel. The child's `EventInputReceived` is filtered so it does not duplicate the parent's
 
-They do **not** inherit: store, memory, processors, input handler, response schema, tracer, suspend config, compress settings, or per-thread compaction settings. Sub-agents have no access to the parent's conversation history.
+They do **not** inherit: store, memory, processors, input handler, response schema, suspend config, compress settings, or per-thread compaction settings. Sub-agents have no access to the parent's conversation history.
 
 ### Depth Limiting
 

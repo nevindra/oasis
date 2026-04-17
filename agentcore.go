@@ -209,11 +209,14 @@ func (c *agentCore) resolvePromptAndProvider(ctx context.Context, task AgentTask
 	return prompt, provider
 }
 
-// resolveDynamicTools returns tool definitions and an executor for a dynamic request.
-// Returns nil, nil when dynamicTools is not configured (caller should use cached defs).
-func (c *agentCore) resolveDynamicTools(ctx context.Context, task AgentTask) ([]ToolDefinition, toolExecFunc) {
+// resolveDynamicTools returns tool definitions and executors for a dynamic request.
+// Returns nil, nil, nil when dynamicTools is not configured (caller should use
+// cached defs). The streaming executor routes to StreamingTool.ExecuteStream
+// when the resolved tool implements that interface and ch is non-nil, falling
+// back to Execute otherwise — matching ToolRegistry.ExecuteStream semantics.
+func (c *agentCore) resolveDynamicTools(ctx context.Context, task AgentTask) ([]ToolDefinition, toolExecFunc, toolExecStreamFunc) {
 	if c.dynamicTools == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	dynTools := c.dynamicTools(ctx, task)
 	var toolDefs []ToolDefinition
@@ -230,7 +233,19 @@ func (c *agentCore) resolveDynamicTools(ctx context.Context, task AgentTask) ([]
 		}
 		return ToolResult{Error: "unknown tool: " + name}, nil
 	}
-	return toolDefs, executeTool
+	executeToolStream := func(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+		t, ok := index[name]
+		if !ok {
+			return ToolResult{Error: "unknown tool: " + name}, nil
+		}
+		if ch != nil {
+			if st, ok := t.(StreamingTool); ok {
+				return st.ExecuteStream(ctx, name, args, ch)
+			}
+		}
+		return t.Execute(ctx, name, args)
+	}
+	return toolDefs, executeTool, executeToolStream
 }
 
 // baseLoopConfig assembles a loopConfig from resolved values.

@@ -200,6 +200,10 @@ func (t *MyTool) ExecuteStream(ctx context.Context, name string, args json.RawMe
 
 When the agent streams, `ExecuteStream` is called automatically. When the agent uses non-streaming `Execute`, the regular `Execute` method is called — no special handling needed.
 
+Works with both static tools (`WithTools`) and dynamic tools (`WithDynamicTools`) — the dynamic tool executor type-asserts each resolved tool to `StreamingTool` and routes progress through the parent's channel when the agent is streaming.
+
+`StreamingTool` progress also propagates through `spawn_agent`: when a parent running `ExecuteStream` spawns a child and the child calls a `StreamingTool`, the progress events reach the parent's channel.
+
 ## Stream Resume
 
 When a suspended agent or workflow is resumed, use `ResumeStream` for streaming output:

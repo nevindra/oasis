@@ -82,10 +82,11 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 	var toolDefs []ToolDefinition
 	var executeTool toolExecFunc
 	var executeToolStream toolExecStreamFunc
-	if dynDefs, dynExec := n.resolveDynamicTools(ctx, task); dynDefs != nil {
+	if dynDefs, dynExec, dynExecStream := n.resolveDynamicTools(ctx, task); dynDefs != nil {
 		n.logger.Debug("using dynamic tools", "network", n.name, "tool_count", len(dynDefs))
 		toolDefs = n.cacheBuiltinToolDefs(n.buildToolDefs(dynDefs))
 		executeTool = dynExec
+		executeToolStream = dynExecStream
 	} else {
 		toolDefs = n.cachedToolDefs
 		executeTool = n.tools.Execute
@@ -110,15 +111,19 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 		// spawn_agent: dynamic sub-agent creation.
 		if tc.Name == "spawn_agent" && n.spawnEnabled {
 			return executeSpawnAgent(ctx, tc.Args, subAgentConfig{
-				provider:       n.provider,
-				toolDefs:       resolvedToolDefs,
-				executeTool:    executeTool,
-				maxIter:        n.maxIter,
-				maxSpawnDepth:  n.maxSpawnDepth,
-				denySpawnTools: n.denySpawnTools,
-				planExecution:  n.planExecution,
-				logger:         n.logger,
-				genParams:      n.generationParams,
+				provider:          n.provider,
+				toolDefs:          resolvedToolDefs,
+				executeTool:       executeTool,
+				executeToolStream: executeToolStream,
+				maxIter:           n.maxIter,
+				maxSpawnDepth:     n.maxSpawnDepth,
+				denySpawnTools:    n.denySpawnTools,
+				planExecution:     n.planExecution,
+				logger:            n.logger,
+				tracer:            n.tracer,
+				genParams:         n.generationParams,
+				mcpRegistry:       n.mcpRegistry,
+				ch:                ch,
 			})
 		}
 
