@@ -65,6 +65,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   prompt text and is not ported.
 
 ### Fixed
+- Memory: `buildMessages` now merges adjacent `role:"system"` messages before
+  returning. When a caller combined `WithPrompt`, `WithCompaction`, and
+  `CrossThreadSearch`, the LLM request previously contained up to three
+  consecutive system messages (base prompt + `[Prior conversation summary]`
+  + cross-thread recall block). Anthropic and some OpenAI-compatible servers
+  reject consecutive system messages outright; merging into a single block
+  keeps wire format valid regardless of which features are enabled.
+- Memory: when the conversation store's `GetMessages` fails, compaction and
+  cross-thread recall are now skipped for that turn. Previously the error
+  was logged and the agent continued — running compaction on empty history
+  is a no-op, but cross-thread recall still fired, injecting a "recalled
+  from past conversations" block without any local history to anchor it.
+  The turn now degrades to a plain system+user request.
+- Memory: persist-backpressure timeout bumped from 2s to 30s
+  (`persistBackpressureTimeout`). The old value silently dropped user and
+  assistant messages when the lightweight-persist path queued behind
+  full-persist goroutines running slow embedding calls (5-15s typical).
 - `WithDynamicTools` path now honors `StreamingTool` — tools implementing
   `StreamingTool` emit `EventToolProgress` events during `ExecuteStream` even
   when resolved dynamically per request. Previously the dynamic path only

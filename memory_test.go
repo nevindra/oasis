@@ -234,6 +234,35 @@ func TestLLMAgentConversationMemory(t *testing.T) {
 	}
 }
 
+// TestPersistBackpressureTimeoutIsGenerous guards against regression to a
+// too-aggressive timeout. The lightweight-persist path queues behind
+// full-persist goroutines that run embedding calls; embedding providers
+// commonly take 5-15s. A timeout under 10s silently drops user messages
+// under normal load on slow providers.
+func TestPersistBackpressureTimeoutIsGenerous(t *testing.T) {
+	const floor = 10 * time.Second
+	if persistBackpressureTimeout < floor {
+		t.Fatalf("persistBackpressureTimeout = %v, want >= %v — too aggressive, will silently drop messages when embedding is slow",
+			persistBackpressureTimeout, floor)
+	}
+}
+
+// errorHistoryStore simulates a store whose GetMessages fails, used to
+// verify that downstream memory features (compaction, cross-thread recall)
+// degrade gracefully rather than running on empty history.
+type errorHistoryStore struct {
+	stubStore
+	related []ScoredMessage
+}
+
+func (s *errorHistoryStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error) {
+	return nil, errors.New("database unavailable")
+}
+
+func (s *errorHistoryStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]ScoredMessage, error) {
+	return s.related, nil
+}
+
 // limitCapturingStore records the limit passed to GetMessages.
 type limitCapturingStore struct {
 	stubStore

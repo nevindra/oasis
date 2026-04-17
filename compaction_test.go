@@ -387,6 +387,128 @@ func TestWithCompaction_NoopBelowThreshold(t *testing.T) {
 	}
 }
 
+// TestWithCompaction_MergesWithCrossThreadRecall verifies that when
+// compaction and cross-thread recall both fire on the same turn, the
+// resulting LLM request does NOT contain two adjacent system messages
+// (the compaction summary and the recall block). Some providers reject
+// consecutive system messages outright; all are cleaner with a single
+// merged block.
+func TestWithCompaction_MergesWithCrossThreadRecall(t *testing.T) {
+	big := strings.Repeat("filler text blob blob blob ", 40)
+	store := &recordingStore{
+		history: []Message{
+			{Role: "user", Content: big},
+			{Role: "assistant", Content: big},
+			{Role: "user", Content: big},
+			{Role: "assistant", Content: big},
+		},
+		related: []ScoredMessage{
+			{Message: Message{ThreadID: "other-thread", Role: "user", Content: "earlier note"}, Score: 0.9},
+		},
+		threads: map[string]Thread{"t1": {ID: "t1"}},
+	}
+	compactor := &recordingCompactor{result: CompactResult{
+		SummaryText:   "USER wanted X. ASSISTANT delivered Y.",
+		SourceTokens:  1200,
+		SummaryTokens: 20,
+	}}
+
+	emb := &stubEmbedding{}
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	agent := NewLLMAgent("test", "test", provider,
+		WithPrompt("base system"),
+		WithConversationMemory(store,
+			MaxHistory(50),
+			MaxTokens(1000),
+			WithCompaction(compactor, 0.5),
+			CrossThreadSearch(emb),
+		),
+	)
+
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"}.WithThreadID("t1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := provider.firstCall().Messages
+	for i := 1; i < len(msgs); i++ {
+		if msgs[i-1].Role == "system" && msgs[i].Role == "system" {
+			t.Fatalf("adjacent system messages at index %d..%d; full role sequence: %s",
+				i-1, i, roleSequence(msgs))
+		}
+	}
+
+	// Sanity: the summary and recall content must still reach the LLM,
+	// just inside a single merged block.
+	var combined strings.Builder
+	for _, m := range msgs {
+		if m.Role == "system" {
+			combined.WriteString(m.Content)
+			combined.WriteString("\n---\n")
+		}
+	}
+	merged := combined.String()
+	if !strings.Contains(merged, "Prior conversation summary") {
+		t.Error("compaction summary missing from merged system block")
+	}
+	if !strings.Contains(merged, "recalled from past conversations") {
+		t.Error("cross-thread recall missing from merged system block")
+	}
+}
+
+// TestMemoryLoadHistoryError_SkipsCompactionAndRecall verifies that when
+// the conversation store fails to return history, the agent does NOT
+// fabricate downstream context: compaction is skipped (no summary), and
+// cross-thread recall is skipped too (recall on top of missing history
+// is misleading — the LLM has no idea what it lacks). The request still
+// goes through with system prompt + user input only.
+func TestMemoryLoadHistoryError_SkipsCompactionAndRecall(t *testing.T) {
+	store := &errorHistoryStore{
+		related: []ScoredMessage{
+			{Message: Message{ThreadID: "other", Role: "user", Content: "earlier note"}, Score: 0.9},
+		},
+	}
+	compactor := &recordingCompactor{result: CompactResult{SummaryText: "unused summary"}}
+	emb := &stubEmbedding{}
+
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	agent := NewLLMAgent("test", "test", provider,
+		WithPrompt("base system"),
+		WithConversationMemory(store,
+			MaxTokens(1000),
+			WithCompaction(compactor, 0.5),
+			CrossThreadSearch(emb),
+		),
+	)
+
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"}.WithThreadID("t1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := compactor.calls.Load(); got != 0 {
+		t.Errorf("Compact called %d times after history load failed; want 0", got)
+	}
+
+	msgs := provider.firstCall().Messages
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "Prior conversation summary") {
+			t.Error("compaction summary present after history load error")
+		}
+		if strings.Contains(m.Content, "recalled from past conversations") {
+			t.Error("cross-thread recall present after history load error")
+		}
+	}
+}
+
+func roleSequence(msgs []ChatMessage) string {
+	roles := make([]string, len(msgs))
+	for i, m := range msgs {
+		roles[i] = m.Role
+	}
+	return strings.Join(roles, ",")
+}
+
 // TestWithCompaction_FallsBackOnError verifies that a Compactor error
 // is logged and the agent continues with the uncompacted history.
 func TestWithCompaction_FallsBackOnError(t *testing.T) {

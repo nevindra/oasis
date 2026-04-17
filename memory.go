@@ -73,6 +73,15 @@ func estimateTokens(msg ChatMessage) int {
 // provider is slow, preventing unbounded goroutine growth.
 const maxPersistGoroutines = 16
 
+// persistBackpressureTimeout caps how long a turn waits for a persist slot
+// before dropping the message. The lightweight persist path runs only a DB
+// write, but it queues behind heavier full-persist goroutines (embedding +
+// fact extraction), which routinely take 5-15s on real embedding providers.
+// A too-small timeout here silently drops user/assistant messages under
+// normal load. 30s is generous enough to survive slow embedders while still
+// bounding memory in pathological cases.
+const persistBackpressureTimeout = 30 * time.Second
+
 // agentMemory provides shared memory wiring for LLMAgent and Network.
 // All fields are optional — nil means the feature is disabled.
 type agentMemory struct {
@@ -182,9 +191,16 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 	}
 
 	// Conversation history
+	//
+	// Why: when the store fails, we skip compaction and cross-thread recall
+	// entirely. Running those features on empty history would inject a
+	// misleading summary or recall block without the conversation they are
+	// meant to reference. Better to degrade to a plain system+user turn and
+	// let the caller see the error in logs than to ship distorted context.
+	historyLoadFailed := needsHistory && historyErr != nil
 	if needsHistory {
 		if historyErr != nil {
-			m.logger.Error("load history failed", "agent", agentName, "error", historyErr)
+			m.logger.Error("load history failed; skipping compaction and cross-thread recall", "agent", agentName, "error", historyErr)
 		}
 		for _, msg := range history {
 			messages = append(messages, ChatMessage{Role: msg.Role, Content: msg.Content})
@@ -193,7 +209,7 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 		// Per-thread compaction: when configured, summarize history before
 		// token-trimming runs. Compaction is transient — the loaded history is
 		// replaced in-memory for this turn; the store is unchanged.
-		if m.compactor != nil && m.compactThreshold > 0 && m.maxTokens > 0 {
+		if !historyLoadFailed && m.compactor != nil && m.compactThreshold > 0 && m.maxTokens > 0 {
 			messages = m.compactIfOverThreshold(ctx, agentName, messages)
 		}
 
@@ -221,7 +237,7 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 
 		// Cross-thread recall: search relevant messages across all threads,
 		// excluding the current thread (already in history) and low-score results.
-		if m.crossThreadSearch && len(inputEmbedding) > 0 {
+		if !historyLoadFailed && m.crossThreadSearch && len(inputEmbedding) > 0 {
 			minScore := m.semanticMinScore
 			if minScore == 0 {
 				minScore = defaultSemanticRecallMinScore
@@ -264,7 +280,36 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 	// Current user message, with optional multimodal attachments.
 	userMsg := ChatMessage{Role: "user", Content: task.Input, Attachments: task.Attachments}
 	messages = append(messages, userMsg)
-	return messages
+
+	// Why: compaction, cross-thread recall, and a caller-supplied system prompt
+	// each emit their own role:"system" message. Several providers (Anthropic in
+	// particular) reject consecutive system messages. Merging them into a single
+	// block keeps wire format valid regardless of which features are enabled.
+	return mergeAdjacentSystemMessages(messages)
+}
+
+// mergeAdjacentSystemMessages concatenates runs of consecutive system messages
+// into a single system message, joined by a blank line. Non-system messages
+// and their ordering are unchanged.
+func mergeAdjacentSystemMessages(messages []ChatMessage) []ChatMessage {
+	if len(messages) < 2 {
+		return messages
+	}
+	out := make([]ChatMessage, 0, len(messages))
+	for _, m := range messages {
+		if len(out) > 0 && out[len(out)-1].Role == "system" && m.Role == "system" {
+			prev := out[len(out)-1]
+			if prev.Content == "" {
+				prev.Content = m.Content
+			} else if m.Content != "" {
+				prev.Content = prev.Content + "\n\n" + m.Content
+			}
+			out[len(out)-1] = prev
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // compactIfOverThreshold invokes the configured Compactor when the loaded
@@ -482,14 +527,16 @@ func (m *agentMemory) persistMessages(ctx context.Context, agentName string, tas
 	default:
 		m.logger.Warn("persist backpressure: falling back to lightweight persist (no embedding/extraction)", "agent", agentName, "thread_id", threadID)
 		fullPersist = false
-		// Block briefly for a slot — lightweight persist is fast (DB write only).
-		// If still unavailable after 2 seconds, drop to prevent goroutine pile-up.
-		t := time.NewTimer(2 * time.Second)
+		// Block for a slot — lightweight persist is fast (DB write only) but
+		// queues behind in-flight full-persist goroutines, which can take
+		// 5-15s on slow embedding providers. Drop only after a generous
+		// timeout to prevent silent message loss under normal load.
+		t := time.NewTimer(persistBackpressureTimeout)
 		select {
 		case m.sem <- struct{}{}:
 			t.Stop()
 		case <-t.C:
-			m.logger.Error("persist backpressure: dropping message persist (store unresponsive)", "agent", agentName, "thread_id", threadID)
+			m.logger.Error("persist backpressure: dropping message persist (store unresponsive)", "agent", agentName, "thread_id", threadID, "timeout", persistBackpressureTimeout)
 			return
 		}
 	}

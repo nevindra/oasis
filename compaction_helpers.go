@@ -37,7 +37,11 @@ func EstimateContextTokens(messages []ChatMessage, model ModelInfo) int {
 		}
 	}
 
-	// Base: chars/4, padded by 4/3 to be conservative.
+	// Why: the naive heuristic is ~4 chars per token. We pad by a 4/3 factor
+	// so the estimate runs hot rather than cold — trimming prematurely is
+	// recoverable (more recent context survives), but overflowing a real
+	// context window is a hard provider error. Effective rate: ~1 token per
+	// 3 runes.
 	base := (runes * 4) / 3 / 4
 
 	if strings.EqualFold(model.Provider, "gemini") {

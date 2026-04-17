@@ -210,8 +210,8 @@ These validations prevent malicious content from being persisted into the memory
 
 Background persist goroutines are bounded by a semaphore (cap 16). When the store or embedding provider is slow and all slots are occupied, the persist pipeline degrades gracefully:
 
-1. **Lightweight persist (first fallback)** — skips embedding, fact extraction, and title generation. Only writes the user and assistant messages to the database. Conversation history is preserved; cross-thread search quality degrades temporarily. Waits up to 2 seconds for a semaphore slot.
-2. **Drop (last resort)** — if no slot becomes available within 2 seconds, the persist is dropped with an Error-level log. This only happens when the store itself is unresponsive.
+1. **Lightweight persist (first fallback)** — skips embedding, fact extraction, and title generation. Only writes the user and assistant messages to the database. Conversation history is preserved; cross-thread search quality degrades temporarily. Waits up to 30 seconds for a semaphore slot — generous enough to survive slow embedding providers (typical calls run 5-15s), so normal backpressure does not drop messages.
+2. **Drop (last resort)** — if no slot becomes available within the 30-second window, the persist is dropped with an Error-level log. This only happens when the store itself is unresponsive.
 
 This two-tier approach prevents silent data loss under normal backpressure (slow embedding API) while still bounding goroutine growth when the store is truly overloaded.
 
@@ -296,6 +296,13 @@ extras := []oasis.CompactSection{
 `CompactRequest.FocusHint` is a free-form string injected as a preservation directive — the summarizer biases toward keeping material matching the hint ("focus on layout decisions"). `CompactRequest.IsRecompact = true` signals that the input already contains a prior compact; the prompt then instructs the model to preserve the prior summary by reference and only summarize NEW progress, preventing summary explosion across repeated compactions.
 
 See [`concepts/compaction.md`](compaction.md) for the deep dive — interface shape, helpers, prompt construction, and when to skip the framework's auto-trigger.
+
+## Failure Modes
+
+The memory load path runs inside every turn and must never take the agent down with it. Two explicit degradations:
+
+- **History load failure** — when `Store.GetMessages` returns an error, the turn drops compaction and cross-thread recall for that request and proceeds with `[system-prompt, user-input]` only. Running those features on empty history would inject a prior-conversation summary or a "recalled from past conversations" block without the local history they are meant to reference. The error is logged at `ERROR` level; the turn itself is not failed.
+- **Adjacent system messages are merged** — the base system prompt, the `[Prior conversation summary]` system message emitted by compaction, and the cross-thread recall block are each `role:"system"`. Consecutive system messages are rejected outright by some providers (Anthropic) and are structurally questionable for others. `buildMessages` merges any run of adjacent system messages into a single block joined by a blank line before returning.
 
 ## Message Truncation Limits
 
