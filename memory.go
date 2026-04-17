@@ -90,6 +90,8 @@ type agentMemory struct {
 	keepRecent        int               // 0 = use defaultKeepRecent
 	tracer            Tracer            // nil = no tracing
 	logger            *slog.Logger      // never nil (nopLogger fallback)
+	compactor         Compactor         // nil = compaction disabled
+	compactThreshold  float64           // fraction of maxTokens that triggers compaction
 	semOnce           sync.Once        // guards sem initialization
 	sem               chan struct{}     // bounded concurrency for background goroutines
 	wg                sync.WaitGroup   // tracks in-flight persist goroutines
@@ -188,6 +190,13 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 			messages = append(messages, ChatMessage{Role: msg.Role, Content: msg.Content})
 		}
 
+		// Per-thread compaction: when configured, summarize history before
+		// token-trimming runs. Compaction is transient — the loaded history is
+		// replaced in-memory for this turn; the store is unchanged.
+		if m.compactor != nil && m.compactThreshold > 0 && m.maxTokens > 0 {
+			messages = m.compactIfOverThreshold(ctx, agentName, messages)
+		}
+
 		// Token-based trimming: drop messages until budget is met.
 		if m.maxTokens > 0 && len(messages) > 0 {
 			// Find the boundary between non-history and history messages.
@@ -256,6 +265,60 @@ func (m *agentMemory) buildMessages(ctx context.Context, agentName, systemPrompt
 	userMsg := ChatMessage{Role: "user", Content: task.Input, Attachments: task.Attachments}
 	messages = append(messages, userMsg)
 	return messages
+}
+
+// compactIfOverThreshold invokes the configured Compactor when the loaded
+// history exceeds compactThreshold × maxTokens. On success, the history is
+// replaced with a single system message containing the summary. On failure,
+// the original messages are returned and the existing trim path takes over.
+//
+// Transient per-load: the store is NOT updated. Subsequent turns recompact
+// from scratch if they cross the threshold again.
+func (m *agentMemory) compactIfOverThreshold(ctx context.Context, agentName string, messages []ChatMessage) []ChatMessage {
+	historyStart := 0
+	if len(messages) > 0 && messages[0].Role == "system" {
+		historyStart = 1
+	}
+	if historyStart >= len(messages) {
+		return messages
+	}
+
+	total := 0
+	for i := historyStart; i < len(messages); i++ {
+		total += estimateTokens(messages[i])
+	}
+	trigger := int(m.compactThreshold * float64(m.maxTokens))
+	if total <= trigger {
+		return messages
+	}
+
+	compactCtx := ctx
+	if m.tracer != nil {
+		var span Span
+		compactCtx, span = m.tracer.Start(ctx, "agent.memory.compact",
+			IntAttr("history_tokens", total),
+			IntAttr("trigger", trigger))
+		defer span.End()
+	}
+
+	history := messages[historyStart:]
+	result, err := m.compactor.Compact(compactCtx, CompactRequest{Messages: history})
+	if err != nil {
+		m.logger.Warn("compaction failed, falling back to trim", "agent", agentName, "error", err)
+		return messages
+	}
+
+	m.logger.Info("history compacted",
+		"agent", agentName,
+		"source_tokens", result.SourceTokens,
+		"summary_tokens", result.SummaryTokens,
+		"ratio", result.CompressionRatio)
+
+	summary := SystemMessage("[Prior conversation summary]\n" + result.SummaryText)
+	out := make([]ChatMessage, 0, historyStart+1)
+	out = append(out, messages[:historyStart]...)
+	out = append(out, summary)
+	return out
 }
 
 // trimHistory trims history messages to fit within m.maxTokens.

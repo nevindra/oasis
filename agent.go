@@ -631,13 +631,17 @@ func MaxTokens(n int) ConversationOption {
 	return func(c *agentConfig) { c.maxTokens = n }
 }
 
-// WithCompaction wires a Compactor to run automatically when conversation
-// memory is loaded and token count exceeds threshold × effectiveWindow.
-// This is an opt-in convenience for consumers that don't want to
-// orchestrate compaction at the application layer.
+// WithCompaction wires a Compactor to run inside buildMessages when the
+// loaded history's estimated tokens exceed threshold × MaxTokens. On
+// success, the history is replaced in-memory for this turn with a single
+// "[Prior conversation summary]" system message. The underlying store is
+// unchanged — the option is transient per load, not persistence. Compactor
+// errors log-warn and fall through to the existing token-based trim path.
 //
-// threshold is a fraction (0.0–1.0) of the effective context window.
-// Recommended default: 0.80.
+// threshold is a fraction (0.0–1.0) of the MaxTokens budget configured on
+// the same WithConversationMemory call. Recommended default: 0.80. If
+// MaxTokens is 0 (or not set), the threshold has nothing to scale against
+// and auto-compaction is a noop.
 //
 // Passing nil compactor or threshold <= 0 disables this option (noop).
 //
@@ -649,9 +653,9 @@ func MaxTokens(n int) ConversationOption {
 //	        oasis.NewStructuredCompactor(summarizer),
 //	        0.80))
 //
-// NOTE: Consumers that orchestrate compaction themselves (e.g., Athena)
-// should NOT use this option — they build pre-compacted message lists
-// before invoking the agent.
+// NOTE: Consumers that need persistent compacts should NOT use this option
+// — they build pre-compacted message lists at the application layer and
+// hand the agent a ready-to-run history.
 func WithCompaction(c Compactor, threshold float64) ConversationOption {
 	return func(cfg *agentConfig) {
 		if c == nil || threshold <= 0 {

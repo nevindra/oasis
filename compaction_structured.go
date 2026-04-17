@@ -3,7 +3,6 @@ package oasis
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
 )
@@ -15,7 +14,6 @@ const defaultCompactOutputBudget = 20_000
 // (plus extras) and parses the <summary> block out of the response.
 type StructuredCompactor struct {
 	defaultProvider Provider
-	logger          *slog.Logger
 }
 
 // Compile-time interface check.
@@ -25,10 +23,7 @@ var _ Compactor = (*StructuredCompactor)(nil)
 // The provider can be overridden per-call via CompactRequest.SummarizerProvider.
 // Pass nil to require that every CompactRequest specifies its own provider.
 func NewStructuredCompactor(defaultProvider Provider) *StructuredCompactor {
-	return &StructuredCompactor{
-		defaultProvider: defaultProvider,
-		logger:          slog.Default().With("component", "oasis.structured-compactor"),
-	}
+	return &StructuredCompactor{defaultProvider: defaultProvider}
 }
 
 // Compact runs the compaction call.
@@ -95,10 +90,10 @@ func (s *StructuredCompactor) Compact(ctx context.Context, req CompactRequest) (
 
 	// Populate warnings.
 	var warnings []string
-	if budget > 0 && resp.Usage.OutputTokens == budget {
+	if budget > 0 && resp.Usage.OutputTokens >= budget {
 		warnings = append(warnings, "summary_truncated_at_budget")
 	}
-	if len(sections) < 9 {
+	if len(sections) < 9+len(req.ExtraSections) {
 		warnings = append(warnings, "partial_sections")
 	}
 

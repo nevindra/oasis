@@ -82,6 +82,8 @@ func initCore(c *agentCore, name, description string, provider Provider, cfg age
 	c.mem.keepRecent = cfg.keepRecent
 	c.mem.tracer = cfg.tracer
 	c.mem.logger = cfg.logger
+	c.mem.compactor = cfg.compactor
+	c.mem.compactThreshold = cfg.compactThreshold
 
 	for _, t := range cfg.tools {
 		c.tools.Add(t)

@@ -1,10 +1,28 @@
 package oasis
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+// recordingCompactor wraps a canned CompactResult and counts calls.
+// Used to verify agent-level wiring of WithCompaction.
+type recordingCompactor struct {
+	result CompactResult
+	err    error
+	calls  atomic.Int32
+}
+
+func (c *recordingCompactor) Compact(_ context.Context, _ CompactRequest) (CompactResult, error) {
+	c.calls.Add(1)
+	if c.err != nil {
+		return CompactResult{}, c.err
+	}
+	return c.result, nil
+}
 
 func TestCompactionErrors_Distinct(t *testing.T) {
 	if errors.Is(ErrEmptyMessages, ErrNoProvider) {
@@ -277,5 +295,133 @@ func TestWithCompaction_OmittedLeavesNilCompactor(t *testing.T) {
 	})
 	if cfg.compactor != nil {
 		t.Error("compactor should be nil when WithCompaction not used")
+	}
+}
+
+// TestWithCompaction_FiresWhenThresholdCrossed verifies the agent-level
+// wiring: when loaded history exceeds compactThreshold × MaxTokens, the
+// Compactor is invoked and the captured ChatRequest sees the summary
+// instead of the raw history.
+func TestWithCompaction_FiresWhenThresholdCrossed(t *testing.T) {
+	// Seed ~1200 tokens of history (~4800 chars). With MaxTokens=1000 and
+	// threshold=0.5, trigger = 500 tokens — comfortably crossed.
+	big := strings.Repeat("filler text blob blob blob ", 40) // ~1080 chars each
+	store := &recordingStore{
+		history: []Message{
+			{Role: "user", Content: big},
+			{Role: "assistant", Content: big},
+			{Role: "user", Content: big},
+			{Role: "assistant", Content: big},
+		},
+		threads: map[string]Thread{"t1": {ID: "t1"}},
+	}
+	compactor := &recordingCompactor{result: CompactResult{
+		SummaryText:   "USER wanted X. ASSISTANT delivered Y.",
+		SourceTokens:  1200,
+		SummaryTokens: 20,
+	}}
+
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store,
+			MaxHistory(50),
+			MaxTokens(1000),
+			WithCompaction(compactor, 0.5),
+		),
+	)
+
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"}.WithThreadID("t1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := compactor.calls.Load(); got != 1 {
+		t.Fatalf("Compact called %d times, want 1", got)
+	}
+
+	msgs := provider.firstCall().Messages
+	foundSummary := false
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "Prior conversation summary") &&
+			strings.Contains(m.Content, "USER wanted X") {
+			foundSummary = true
+			break
+		}
+	}
+	if !foundSummary {
+		t.Errorf("expected summary system message in LLM request, got %d messages; none contained the summary marker", len(msgs))
+	}
+
+	// Raw history should NOT be in the request — it was replaced.
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "filler text blob") {
+			t.Error("raw history leaked into LLM request after compaction")
+			break
+		}
+	}
+}
+
+// TestWithCompaction_NoopBelowThreshold verifies the Compactor is not
+// invoked when history is under the trigger.
+func TestWithCompaction_NoopBelowThreshold(t *testing.T) {
+	store := &recordingStore{
+		history: []Message{{Role: "user", Content: "short"}},
+		threads: map[string]Thread{"t1": {ID: "t1"}},
+	}
+	compactor := &recordingCompactor{result: CompactResult{SummaryText: "unused"}}
+
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store,
+			MaxHistory(10),
+			MaxTokens(10_000),
+			WithCompaction(compactor, 0.8),
+		),
+	)
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"}.WithThreadID("t1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compactor.calls.Load(); got != 0 {
+		t.Fatalf("Compact called %d times below threshold, want 0", got)
+	}
+}
+
+// TestWithCompaction_FallsBackOnError verifies that a Compactor error
+// is logged and the agent continues with the uncompacted history.
+func TestWithCompaction_FallsBackOnError(t *testing.T) {
+	big := strings.Repeat("filler text blob blob blob ", 40)
+	store := &recordingStore{
+		history: []Message{
+			{Role: "user", Content: big},
+			{Role: "assistant", Content: big},
+			{Role: "user", Content: big},
+			{Role: "assistant", Content: big},
+		},
+		threads: map[string]Thread{"t1": {ID: "t1"}},
+	}
+	compactor := &recordingCompactor{err: errors.New("summarizer unavailable")}
+
+	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	agent := NewLLMAgent("test", "test", provider,
+		WithConversationMemory(store,
+			MaxHistory(50),
+			MaxTokens(1000),
+			WithCompaction(compactor, 0.5),
+		),
+	)
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"}.WithThreadID("t1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compactor.calls.Load(); got != 1 {
+		t.Fatalf("Compact called %d times, want 1", got)
+	}
+	// Fallback path runs trim instead of insertion, so no summary marker.
+	msgs := provider.firstCall().Messages
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "Prior conversation summary") {
+			t.Error("summary system message should not be present when compactor errored")
+		}
 	}
 }

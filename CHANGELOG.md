@@ -93,6 +93,33 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   the `agent_` prefix, so every call produced `unknown tool: agent_<name>`
   while still costing tokens on the request. `agent_*` defs are now stripped
   alongside `ask_user`.
+- `WithCompaction` auto-trigger is now actually wired. The 0.15.0 option
+  stored the `Compactor` and `threshold` on `agentConfig` but nothing read
+  them at runtime, so consumers got a silent no-op despite docs promising
+  auto-trigger during `buildMessages`. The wiring now: when the loaded
+  conversation history's estimated tokens exceed
+  `compactThreshold × MaxTokens`, the Compactor is invoked and the history
+  is replaced in-memory for this turn with a single
+  `[Prior conversation summary]` system message. Transient per-load — the
+  store is not rewritten. On Compactor error, the option logs a warning
+  and falls through to the existing token-based trim path. If `MaxTokens`
+  is unset (0), auto-compaction is a noop since there is no budget to
+  scale the threshold against.
+- `StructuredCompactor` `partial_sections` warning now accounts for
+  `ExtraSections` — previously it only tripped when fewer than 9 total
+  sections parsed, silently hiding cases where user-supplied extras went
+  missing. Threshold is now `9 + len(req.ExtraSections)`.
+- `StructuredCompactor` `summary_truncated_at_budget` warning now uses
+  `OutputTokens >= budget` instead of exact equality, catching truncation
+  when providers report slightly over-budget token counts.
+
+### Changed
+- `EstimateContextTokens` dropped no-op per-family multiplication branches
+  for `anthropic` / `openai` / `openaicompat` (all were `* 100 / 100`).
+  Only `gemini` has a non-identity adjustment (~5% tighter); others use
+  the base estimate. No behavior change.
+- `StructuredCompactor` dropped the unused internal `logger` field. The
+  constructor no longer allocates an unused `slog.Logger`.
 
 ### Notes
 - Deferred MCP tool schemas + `ToolSearch` follow in next release (Plan α-2).

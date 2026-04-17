@@ -19,6 +19,7 @@ const imageTokenEstimate = 2000
 // regardless of data size.
 //
 // Unknown providers use a conservative fallback: runeCount * 4/3 / 4.
+// Gemini is ~5% tighter than other families.
 func EstimateContextTokens(messages []ChatMessage, model ModelInfo) int {
 	if len(messages) == 0 {
 		return 0
@@ -39,14 +40,8 @@ func EstimateContextTokens(messages []ChatMessage, model ModelInfo) int {
 	// Base: chars/4, padded by 4/3 to be conservative.
 	base := (runes * 4) / 3 / 4
 
-	// Per-family tuning.
-	switch strings.ToLower(model.Provider) {
-	case "gemini":
-		base = (base * 95) / 100 // ~5% tighter
-	case "anthropic":
-		base = (base * 100) / 100 // baseline
-	case "openai", "openaicompat":
-		base = (base * 100) / 100 // baseline
+	if strings.EqualFold(model.Provider, "gemini") {
+		base = (base * 95) / 100
 	}
 
 	return base + mediaCount*imageTokenEstimate
