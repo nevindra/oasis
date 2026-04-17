@@ -382,6 +382,90 @@ func TestSpawnAgentDenyTools(t *testing.T) {
 	}
 }
 
+// TestNetworkSpawnAgentStripsAgentTools verifies that when a Network spawns a
+// sub-agent, the child does not inherit the `agent_*` router tool defs.
+// The child is an LLMAgent whose dispatch does not route the agent_ prefix,
+// so inheriting those defs would waste tokens and produce "unknown tool"
+// errors if the child called them.
+func TestNetworkSpawnAgentStripsAgentTools(t *testing.T) {
+	var mu sync.Mutex
+	var allToolNames [][]string
+	callIdx := 0
+
+	provider := &syncCallbackProvider{
+		name: "test",
+		onChat: func(req ChatRequest) ChatResponse {
+			mu.Lock()
+			var names []string
+			for _, td := range req.Tools {
+				names = append(names, td.Name)
+			}
+			allToolNames = append(allToolNames, names)
+			idx := callIdx
+			callIdx++
+			mu.Unlock()
+
+			if idx == 0 {
+				return ChatResponse{ToolCalls: []ToolCall{{
+					ID:   "1",
+					Name: "spawn_agent",
+					Args: json.RawMessage(`{"task":"do work","name":"worker"}`),
+				}}}
+			}
+			return ChatResponse{Content: "done"}
+		},
+	}
+
+	worker := NewLLMAgent("worker_agent", "does work", provider)
+	network := NewNetwork("net", "routes work", provider,
+		WithAgents(worker),
+		WithTools(mockTool{}),
+		WithSubAgentSpawning(),
+	)
+
+	_, err := network.Execute(context.Background(), AgentTask{Input: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(allToolNames) < 2 {
+		t.Fatalf("expected at least 2 Chat calls, got %d", len(allToolNames))
+	}
+
+	// Parent (router) sees agent_worker_agent.
+	parentHasAgentTool := false
+	for _, name := range allToolNames[0] {
+		if name == "agent_worker_agent" {
+			parentHasAgentTool = true
+		}
+	}
+	if !parentHasAgentTool {
+		t.Error("router should see agent_worker_agent in its tool list")
+	}
+
+	// Child (sub-agent) must NOT see any agent_* tool.
+	for _, name := range allToolNames[1] {
+		if strings.HasPrefix(name, "agent_") {
+			t.Errorf("sub-agent should not inherit agent_* tool %q (cannot be routed by LLMAgent dispatch)", name)
+		}
+		if name == "ask_user" {
+			t.Error("ask_user should always be blocked in sub-agents")
+		}
+	}
+	// Sanity: child still has the direct tool.
+	directFound := false
+	for _, name := range allToolNames[1] {
+		if name == "greet" {
+			directFound = true
+		}
+	}
+	if !directFound {
+		t.Error("direct tool 'greet' should be inherited by sub-agent")
+	}
+}
+
 // --- Task 8: Parallel Spawn Test ---
 
 func TestSpawnAgentParallel(t *testing.T) {

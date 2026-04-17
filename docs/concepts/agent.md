@@ -414,6 +414,7 @@ oasis.SubAgentConfig{
 ### Blocked Behaviors
 
 - `ask_user` is always blocked in sub-agents — human-in-the-loop cannot be delegated downward
+- `agent_*` router tools are stripped when a `Network` spawns a sub-agent — the child is an `LLMAgent` whose dispatch does not route the `agent_` prefix, so inheriting those defs would waste tokens and produce `unknown tool` errors
 - `spawn_agent` is blocked inside `execute_code` — sandboxed code cannot trigger agent spawning
 
 ### Parallel Execution

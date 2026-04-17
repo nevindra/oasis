@@ -86,6 +86,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `spawn_agent` now forwards `GenerationParams` via `WithGenerationParams`
   instead of hand-copying four fields. Future fields added to
   `GenerationParams` now propagate to sub-agents automatically.
+- `spawn_agent` in a `Network` no longer leaks the router's `agent_*`
+  delegation tools into the child's tool definitions. Previously the child
+  inherited every `agent_<name>` entry from the parent's tool list but could
+  not call them — the child is an `LLMAgent` whose dispatch does not route
+  the `agent_` prefix, so every call produced `unknown tool: agent_<name>`
+  while still costing tokens on the request. `agent_*` defs are now stripped
+  alongside `ask_user`.
 
 ### Notes
 - Deferred MCP tool schemas + `ToolSearch` follow in next release (Plan α-2).

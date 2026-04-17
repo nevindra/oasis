@@ -103,21 +103,7 @@ func (a *LLMAgent) makeDispatch(executeTool toolExecFunc, executeToolStream tool
 			return r
 		}
 		if tc.Name == "spawn_agent" && a.spawnEnabled {
-			return executeSpawnAgent(ctx, tc.Args, subAgentConfig{
-				provider:          a.provider,
-				toolDefs:          resolvedToolDefs,
-				executeTool:       executeTool,
-				executeToolStream: executeToolStream,
-				maxIter:           a.maxIter,
-				maxSpawnDepth:     a.maxSpawnDepth,
-				denySpawnTools:    a.denySpawnTools,
-				planExecution:     a.planExecution,
-				logger:            a.logger,
-				tracer:            a.tracer,
-				genParams:         a.generationParams,
-				mcpRegistry:       a.mcpRegistry,
-				ch:                ch,
-			})
+			return executeSpawnAgent(ctx, tc.Args, a.newSubAgentConfig(resolvedToolDefs, executeTool, executeToolStream, ch))
 		}
 		return dispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
 	}
@@ -405,9 +391,12 @@ func executeSpawnAgent(ctx context.Context, args json.RawMessage, cfg subAgentCo
 
 	// Filter tool definitions: remove denied tools + ask_user.
 	// When child will be at max depth, also strip spawn_agent.
+	// agent_* tools (from Network's router) are always stripped — the child
+	// is an LLMAgent whose dispatch does not route the agent_ prefix, so
+	// inheriting those defs would just waste tokens and produce
+	// "unknown tool" errors if the child tried to call them.
 	childAtMaxDepth := depth+1 >= cfg.maxSpawnDepth
-	var filteredDefs []ToolDefinition
-	deny := make(map[string]bool, len(cfg.denySpawnTools)+1)
+	deny := make(map[string]bool, len(cfg.denySpawnTools)+2)
 	deny["ask_user"] = true
 	for _, n := range cfg.denySpawnTools {
 		deny[n] = true
@@ -415,10 +404,12 @@ func executeSpawnAgent(ctx context.Context, args json.RawMessage, cfg subAgentCo
 	if childAtMaxDepth {
 		deny["spawn_agent"] = true
 	}
+	filteredDefs := make([]ToolDefinition, 0, len(cfg.toolDefs))
 	for _, d := range cfg.toolDefs {
-		if !deny[d.Name] {
-			filteredDefs = append(filteredDefs, d)
+		if deny[d.Name] || strings.HasPrefix(d.Name, "agent_") {
+			continue
 		}
+		filteredDefs = append(filteredDefs, d)
 	}
 
 	// Build filtered executors that respect the deny list. Both Execute and

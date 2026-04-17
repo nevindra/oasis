@@ -110,21 +110,7 @@ func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, exec
 
 		// spawn_agent: dynamic sub-agent creation.
 		if tc.Name == "spawn_agent" && n.spawnEnabled {
-			return executeSpawnAgent(ctx, tc.Args, subAgentConfig{
-				provider:          n.provider,
-				toolDefs:          resolvedToolDefs,
-				executeTool:       executeTool,
-				executeToolStream: executeToolStream,
-				maxIter:           n.maxIter,
-				maxSpawnDepth:     n.maxSpawnDepth,
-				denySpawnTools:    n.denySpawnTools,
-				planExecution:     n.planExecution,
-				logger:            n.logger,
-				tracer:            n.tracer,
-				genParams:         n.generationParams,
-				mcpRegistry:       n.mcpRegistry,
-				ch:                ch,
-			})
+			return executeSpawnAgent(ctx, tc.Args, n.newSubAgentConfig(resolvedToolDefs, executeTool, executeToolStream, ch))
 		}
 
 		// Check if it's an agent call (prefixed with "agent_")

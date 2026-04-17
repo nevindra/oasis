@@ -248,6 +248,32 @@ func (c *agentCore) resolveDynamicTools(ctx context.Context, task AgentTask) ([]
 	return toolDefs, executeTool, executeToolStream
 }
 
+// newSubAgentConfig assembles a subAgentConfig from agentCore fields for
+// spawn_agent dispatch. Shared by LLMAgent and Network so new spawn inputs
+// only need to be wired here once.
+func (c *agentCore) newSubAgentConfig(
+	toolDefs []ToolDefinition,
+	exec toolExecFunc,
+	execStream toolExecStreamFunc,
+	ch chan<- StreamEvent,
+) subAgentConfig {
+	return subAgentConfig{
+		provider:          c.provider,
+		toolDefs:          toolDefs,
+		executeTool:       exec,
+		executeToolStream: execStream,
+		maxIter:           c.maxIter,
+		maxSpawnDepth:     c.maxSpawnDepth,
+		denySpawnTools:    c.denySpawnTools,
+		planExecution:     c.planExecution,
+		logger:            c.logger,
+		tracer:            c.tracer,
+		genParams:         c.generationParams,
+		mcpRegistry:       c.mcpRegistry,
+		ch:                ch,
+	}
+}
+
 // baseLoopConfig assembles a loopConfig from resolved values.
 // Callers provide the name prefix, resolved prompt/provider/tools, and dispatch function.
 func (c *agentCore) baseLoopConfig(name, prompt string, provider Provider, tools []ToolDefinition, dispatch DispatchFunc) loopConfig {
