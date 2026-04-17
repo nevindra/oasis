@@ -48,6 +48,8 @@ type agentCore struct {
 	maxSpawnDepth           int
 	denySpawnTools          []string
 	activeSkillInstructions string // built from WithActiveSkills during initCore
+
+	mcpRegistry *MCPRegistry // never nil after initCore; may be shared across agents
 }
 
 // initCore initializes shared fields on an agentCore from the given config.
@@ -114,6 +116,31 @@ func initCore(c *agentCore, name, description string, provider Provider, cfg age
 			parts = append(parts, "## Skill: "+s.Name+"\n\n"+s.Instructions)
 		}
 		c.activeSkillInstructions = strings.Join(parts, "\n\n---\n\n")
+	}
+
+	// MCP registry: shared if provided, else per-agent.
+	if cfg.sharedMCPRegistry != nil {
+		c.mcpRegistry = cfg.sharedMCPRegistry
+	} else {
+		c.mcpRegistry = &MCPRegistry{
+			servers:  make(map[string]*mcpServerEntry),
+			handler:  NoopMCPLifecycle{},
+			eventsCh: make(chan MCPEvent, 64),
+			logger:   c.logger,
+			toolReg:  c.tools,
+		}
+	}
+	if cfg.mcpLifecycleHandler != nil {
+		c.mcpRegistry.SetLifecycleHandler(cfg.mcpLifecycleHandler)
+	}
+	// Register startup MCP servers (soft-degrade: log and continue on failure).
+	for _, mcfg := range cfg.mcpStartupConfigs {
+		if err := c.mcpRegistry.Register(context.Background(), mcfg); err != nil {
+			if c.logger != nil {
+				c.logger.Warn("MCP startup registration failed (continuing)",
+					"server", mcfg.mcpServerName(), "err", err)
+			}
+		}
 	}
 }
 

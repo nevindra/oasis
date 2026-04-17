@@ -35,8 +35,9 @@ type response struct {
 
 // rpcError is a JSON-RPC 2.0 error object.
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 // Standard JSON-RPC 2.0 error codes.
@@ -163,4 +164,64 @@ type resourceContent struct {
 // resourceReadResult is the response to resources/read.
 type resourceReadResult struct {
 	Contents []resourceContent `json:"contents"`
+}
+
+// --- Client-side response types ---
+
+// InitializeResult is the parsed server response to an MCP initialize request.
+type InitializeResult struct {
+	ProtocolVersion string                 `json:"protocolVersion"`
+	Capabilities    map[string]interface{} `json:"capabilities"`
+	ServerInfo      ServerInfo             `json:"serverInfo"`
+}
+
+// ServerInfo holds the name and version reported by an MCP server.
+type ServerInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// ListToolsResult is the parsed server response to a tools/list request.
+type ListToolsResult struct {
+	Tools      []ToolDefinition `json:"tools"`
+	NextCursor string           `json:"nextCursor,omitempty"`
+}
+
+// CallToolResult is the parsed server response to a tools/call request.
+// It uses ContentBlock slices so callers can handle text, image, and resource
+// content uniformly. (The server-side ToolCallResult uses the narrower
+// textContent type and is not changed.)
+type CallToolResult struct {
+	Content []ContentBlock  `json:"content"`
+	IsError bool            `json:"isError,omitempty"`
+	Meta    json.RawMessage `json:"_meta,omitempty"`
+}
+
+// ContentBlock is a single content item inside a CallToolResult.
+// Type is one of "text", "image", or "resource".
+type ContentBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`    // base64-encoded for images
+	MimeType string `json:"mimeType,omitempty"`
+	URI      string `json:"uri,omitempty"`
+}
+
+// --- JSON-RPC framing primitives for the client ---
+
+// rpcRequest is an outgoing JSON-RPC 2.0 request or notification used by the
+// MCP client. Notifications omit the ID field (nil).
+type rpcRequest struct {
+	JSONRPC string          `json:"jsonrpc"`       // always "2.0"
+	ID      interface{}     `json:"id,omitempty"`  // nil for notifications
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+// rpcResponse is an incoming JSON-RPC 2.0 response received by the MCP client.
+type rpcResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      interface{}     `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }

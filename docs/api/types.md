@@ -857,3 +857,174 @@ type CompactResult struct {
 `Warnings` is non-empty when the result is usable but imperfect. Surface it in UI — the summary is still the source of truth.
 
 See [`Compactor`](interfaces.md#compactor) for the interface and [Compaction Errors](errors.md#compaction-errors) for failure modes.
+
+## MCP Types
+
+**Files:** `mcp_config_types.go`, `mcp_state.go`, `mcp_client.go`
+
+### StdioMCPConfig
+
+Configures an MCP server launched as a child process via stdio.
+
+```go
+type StdioMCPConfig struct {
+    Name     string
+    Command  string
+    Args     []string
+    Env      map[string]string // merged with os.Environ() at spawn time
+    WorkDir  string            // default: current working directory
+    Disabled bool
+    Filter   *MCPToolFilter
+    Aliases  map[string]string // raw tool name → registry short name
+}
+```
+
+### HTTPMCPConfig
+
+Configures an MCP server accessed via HTTP/SSE.
+
+```go
+type HTTPMCPConfig struct {
+    Name     string
+    URL      string
+    Headers  map[string]string // applied to every request; ${ENV_VAR} interpolation
+    Auth     Auth              // pluggable auth; nil = use Headers only
+    Timeout  time.Duration     // per-request; default 30s if zero
+    Disabled bool
+    Filter   *MCPToolFilter
+    Aliases  map[string]string
+}
+```
+
+### MCPToolFilter
+
+Restricts which tools are exposed from a server. `Include` and `Exclude` are
+glob patterns matched against the raw tool name (before alias). Setting both is
+a registration error.
+
+```go
+type MCPToolFilter struct {
+    Include []string
+    Exclude []string
+}
+```
+
+### Auth / BearerAuth
+
+`Auth` is a type alias to `mcp.Auth`. `BearerAuth` is a type alias to
+`mcp.BearerAuth`. Both are re-exported from the root package for ergonomic
+user-facing API.
+
+```go
+type BearerAuth struct {
+    Token  string // literal value; prefer EnvVar in production
+    EnvVar string // read from environment at request time
+}
+```
+
+### MCPServerState
+
+Connection state of an MCP server.
+
+```go
+type MCPServerState int
+
+const (
+    MCPStateConnecting   MCPServerState = iota
+    MCPStateHealthy
+    MCPStateReconnecting
+    MCPStateDead
+)
+```
+
+### MCPServerStatus
+
+Snapshot of an MCP server's runtime state, returned by `(*MCPRegistry).List()`.
+
+```go
+type MCPServerStatus struct {
+    Name        string
+    Transport   string // "stdio" or "http"
+    State       MCPServerState
+    ToolCount   int
+    LastError   error
+    ConnectedAt time.Time
+    ServerInfo  MCPServerInfo
+}
+```
+
+### MCPServerInfo
+
+Metadata reported by the MCP server during initialization.
+
+```go
+type MCPServerInfo struct {
+    Name            string
+    Version         string
+    ProtocolVersion string
+    Capabilities    map[string]interface{}
+}
+```
+
+### MCPEvent
+
+A single lifecycle event emitted by the MCP client. Delivered via
+`(*MCPRegistry).Subscribe()`.
+
+```go
+type MCPEvent struct {
+    Type      MCPEventType
+    Server    string
+    Tool      string // populated for tool-related events
+    Err       error
+    Timestamp time.Time
+}
+```
+
+### MCPEventType
+
+```go
+type MCPEventType int
+
+const (
+    MCPEventConnected    MCPEventType = iota
+    MCPEventDisconnected              // 1
+    MCPEventReconnecting              // 2
+    MCPEventToolCall                  // 3
+    MCPEventToolResult                // 4
+)
+```
+
+### MCPRegistry
+
+The per-process or per-agent owner of MCP server connections. Construct with
+`NewSharedMCPRegistry()` when sharing across agents; otherwise created
+automatically by `NewLLMAgent`.
+
+Key methods: `Register`, `Unregister`, `Reconnect`, `Reload`, `GetTool`,
+`List`, `Subscribe`, `SetLifecycleHandler`.
+
+### MCPController
+
+User-facing controller returned by `(*LLMAgent).MCP()`. Thin wrapper around
+`*MCPRegistry` providing the same methods scoped to the agent.
+
+### NoopMCPLifecycle
+
+Zero-value embed helper for partial `MCPLifecycleHandler` implementations.
+
+```go
+type NoopMCPLifecycle struct{}
+```
+
+See `MCPLifecycleHandler` in [interfaces.md](interfaces.md#mcplifecyclehandler).
+
+### NewSharedMCPRegistry
+
+```go
+func NewSharedMCPRegistry() *MCPRegistry
+```
+
+Constructs an `MCPRegistry` intended to be shared across multiple agents via
+`WithSharedMCPRegistry`. Includes a default noop lifecycle handler and a fresh
+`ToolRegistry`.

@@ -185,6 +185,11 @@ type agentConfig struct {
 	denySpawnTools []string // set by DenySpawnTools
 	activeSkills   []Skill        // set by WithActiveSkills
 	skillProvider  SkillProvider   // set by WithSkills
+
+	// MCP
+	mcpStartupConfigs   []MCPServerConfig   // set by WithMCPServer / WithMCPServers
+	sharedMCPRegistry   *MCPRegistry        // set by WithSharedMCPRegistry
+	mcpLifecycleHandler MCPLifecycleHandler // set by WithMCPLifecycleHandler
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -400,6 +405,42 @@ func WithActiveSkills(skills ...Skill) AgentOption {
 func WithSkills(p SkillProvider) AgentOption {
 	return func(c *agentConfig) { c.skillProvider = p }
 }
+
+// WithMCPServer registers a single MCP server at agent construction.
+// Failures are logged via the agent logger and the agent continues without
+// that server (soft-degrade). For hard-fail behavior, use
+// agent.MCP().Register(ctx, cfg) at runtime and check the error.
+func WithMCPServer(cfg MCPServerConfig) AgentOption {
+	return func(c *agentConfig) {
+		c.mcpStartupConfigs = append(c.mcpStartupConfigs, cfg)
+	}
+}
+
+// WithMCPServers is the variadic variant of WithMCPServer for batch registration.
+func WithMCPServers(cfgs ...MCPServerConfig) AgentOption {
+	return func(c *agentConfig) {
+		c.mcpStartupConfigs = append(c.mcpStartupConfigs, cfgs...)
+	}
+}
+
+// WithSharedMCPRegistry binds the agent to a process-shared MCPRegistry.
+// Multiple agents constructed with the same registry share connections,
+// avoiding spawning duplicate stdio processes for the same server.
+//
+// If both WithSharedMCPRegistry and WithMCPServer(s) are used, startup
+// configs are registered into the shared registry (if not already present).
+func WithSharedMCPRegistry(r *MCPRegistry) AgentOption {
+	return func(c *agentConfig) { c.sharedMCPRegistry = r }
+}
+
+// WithMCPLifecycleHandler installs a handler that receives connect/disconnect/
+// tool-call/tool-result events for all MCP servers attached to this agent.
+// When using WithSharedMCPRegistry, the handler is installed on the shared
+// registry (last-writer wins across agents sharing the registry).
+func WithMCPLifecycleHandler(h MCPLifecycleHandler) AgentOption {
+	return func(c *agentConfig) { c.mcpLifecycleHandler = h }
+}
+
 
 // WithResponseSchema sets the response schema for structured JSON output.
 // When set, the provider enforces structured output matching the schema.

@@ -140,6 +140,29 @@ func (r *ToolRegistry) Add(t Tool) {
 	}
 }
 
+// Remove deletes a tool from the registry by one of its definition names.
+// All definition names that the tool exposes are removed from the index.
+// Returns an error if no tool is registered under the given name.
+func (r *ToolRegistry) Remove(name string) error {
+	t, ok := r.index[name]
+	if !ok {
+		return fmt.Errorf("tool %q not registered", name)
+	}
+	// Remove all index entries belonging to this tool.
+	for _, d := range t.Definitions() {
+		delete(r.index, d.Name)
+	}
+	// Remove the tool from the slice.
+	filtered := r.tools[:0]
+	for _, existing := range r.tools {
+		if existing != t {
+			filtered = append(filtered, existing)
+		}
+	}
+	r.tools = filtered
+	return nil
+}
+
 // AllDefinitions returns tool definitions from all registered tools.
 func (r *ToolRegistry) AllDefinitions() []ToolDefinition {
 	var defs []ToolDefinition

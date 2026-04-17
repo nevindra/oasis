@@ -134,6 +134,12 @@ Both implement `Agent`, so they compose with each other — a Network can contai
 | RAG | [rag.md](rag.md) | retriever.go | [rag-pipeline](../guides/rag-pipeline.md) |
 | Graph RAG | [graph-rag.md](graph-rag.md) | ingest/ | [rag-pipeline](../guides/rag-pipeline.md) |
 
+### External Integrations
+
+| Primitive | Doc | Source Files | Related Guide |
+|-----------|-----|-------------|---------------|
+| MCP Client | — | mcp_client.go, mcp_config_types.go, mcp_state.go, mcp_tool_wrapper.go, mcp/, mcp/config/ | [connecting-mcp-servers](../guides/connecting-mcp-servers.md) |
+
 ### Infrastructure
 
 | Primitive | Doc | Source Files | Related Guide |

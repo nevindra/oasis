@@ -42,6 +42,14 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	return a
 }
 
+// MCP returns the agent's MCP controller for runtime server management.
+// The controller is backed by the agent's MCPRegistry (which may be shared
+// across agents when WithSharedMCPRegistry was used at construction).
+// The returned value is never nil.
+func (a *LLMAgent) MCP() *MCPController {
+	return &MCPController{reg: a.mcpRegistry}
+}
+
 // Execute runs the tool-calling loop until the LLM produces a final text response.
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)

@@ -7,6 +7,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ## [Unreleased]
 
 ### Added
+- **MCP client** — connect agents to external Model Context Protocol servers over
+  stdio and HTTP transports. Tools from MCP servers register into the existing
+  `ToolRegistry` under `mcp__<server>__<tool>` namespacing and are callable like
+  any other tool. Reconnect loop uses exponential backoff (500ms → 30s cap,
+  10 attempts, ±25% jitter). New options `WithMCPServer`, `WithMCPServers`,
+  `WithSharedMCPRegistry`, `WithMCPLifecycleHandler`; runtime management via
+  `(*LLMAgent).MCP()` controller. File-based config loader at `mcp/config`
+  (Claude Desktop compatible schema, `${ENV_VAR}` interpolation). See
+  [`docs/guides/connecting-mcp-servers.md`](docs/guides/connecting-mcp-servers.md).
+- New root types: `MCPServerConfig`, `StdioMCPConfig`, `HTTPMCPConfig`, `Auth`,
+  `BearerAuth`, `MCPToolFilter`, `MCPServerStatus`, `MCPServerInfo`,
+  `MCPServerState`, `MCPLifecycleHandler`, `NoopMCPLifecycle`, `MCPController`,
+  `MCPRegistry`, `MCPEvent`, `MCPEventType`, `MCPAccessor`.
+- New `mcp` package client types: `Client`, `StdioClient`, `HTTPClient`, `Auth`,
+  `BearerAuth`, `InitializeResult`, `ListToolsResult`, `CallToolResult`,
+  `ContentBlock`, `ServerInfo`. Test fixture at `mcp/mcptest`.
+- `ToolRegistry.Remove(name string) error` method — required for removing MCP
+  tools on server unregister; also usable by any caller that needs dynamic
+  tool removal.
 - **`tools/todo` package** — Claude-Code-style `todo_write` tool for agent task
   tracking. Exposes a single tool function (`todo_write`) that accepts a list
   of `{content, activeForm, status}` items (status ∈ `pending` /
@@ -26,6 +45,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   port replaces the `${FILE_EDIT_TOOL_NAME}` template with a literal
   "file edit tool"; the verification-agent nudge logic is not part of the
   prompt text and is not ported.
+
+### Notes
+- Deferred MCP tool schemas + `ToolSearch` follow in next release (Plan α-2).
 
 ## [0.15.0] - 2026-04-16
 

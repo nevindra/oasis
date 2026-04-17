@@ -688,3 +688,87 @@ type ContextChunker interface {
 | `RecursiveChunker` | `ingest.NewRecursiveChunker(opts ...ChunkerOption)` |
 | `MarkdownChunker` | `ingest.NewMarkdownChunker(opts ...ChunkerOption)` |
 | `SemanticChunker` | `ingest.NewSemanticChunker(embed EmbedFunc, opts ...ChunkerOption)` |
+
+---
+
+## MCP Interfaces
+
+### MCPServerConfig
+
+**File:** `mcp_config_types.go`
+
+Sealed interface implemented by transport-specific configs. Users do not
+implement this directly — use `StdioMCPConfig` or `HTTPMCPConfig`.
+
+```go
+type MCPServerConfig interface {
+    mcpServerName() string
+    isMCPServerConfig()
+}
+```
+
+| Implementation | Notes |
+|----------------|-------|
+| `StdioMCPConfig` | Launches an MCP server as a child process via stdio |
+| `HTTPMCPConfig` | Connects to an MCP server via HTTP/SSE |
+
+---
+
+### Auth
+
+**File:** `mcp_config_types.go`
+
+Type alias to `mcp.Auth`. Interface for applying authentication to outgoing HTTP
+requests from HTTP-transport MCP clients.
+
+```go
+type Auth = mcp.Auth   // interface { Apply(req *http.Request) }
+```
+
+| Implementation | Notes |
+|----------------|-------|
+| `BearerAuth` | Reads a token from a literal value or environment variable at request time |
+
+---
+
+### MCPLifecycleHandler
+
+**File:** `mcp_state.go`
+
+Receives lifecycle notifications from the MCP client. Embed `NoopMCPLifecycle`
+for partial implementations.
+
+```go
+type MCPLifecycleHandler interface {
+    OnConnect(name string, info MCPServerInfo)
+    OnDisconnect(name string, err error)
+    OnToolCall(name, tool string, args json.RawMessage)
+    OnToolResult(name, tool string, result *MCPToolResult, err error)
+}
+```
+
+Installed via `WithMCPLifecycleHandler` or `(*MCPRegistry).SetLifecycleHandler`.
+
+---
+
+### MCPAccessor
+
+**File:** `mcp_state.go`
+
+Optional capability interface for agents that expose MCP server management.
+Currently implemented by `*LLMAgent`. Discover via type assertion.
+
+```go
+type MCPAccessor interface {
+    Agent
+    MCP() *MCPController
+}
+```
+
+Usage:
+
+```go
+if ma, ok := agent.(oasis.MCPAccessor); ok {
+    ma.MCP().Register(ctx, cfg)
+}
+```

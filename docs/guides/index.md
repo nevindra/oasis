@@ -34,6 +34,7 @@ Step-by-step how-tos for common tasks. Each guide links back to its related conc
 
 | Guide | Related Concept |
 |-------|----------------|
+| [connecting-mcp-servers.md](connecting-mcp-servers.md) | — |
 | [code-execution.md](code-execution.md) | [Sandbox](../concepts/sandbox.md) |
 | [image-generation.md](image-generation.md) | — |
 | [document-generation.md](document-generation.md) | [Sandbox](../concepts/sandbox.md) |

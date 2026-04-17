@@ -30,6 +30,10 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithMaxTokens(n int)` | Set maximum output tokens for this agent (nil = provider default) |
 | `WithActiveSkills(skills ...Skill)` | Pre-activate skills — instructions appended to system prompt on every LLM call |
 | `WithSkills(p SkillProvider)` | Register a SkillProvider and auto-add skill discovery/activation tools |
+| `WithMCPServer(cfg MCPServerConfig)` | Register a single MCP server at agent construction (soft-degrade on failure) |
+| `WithMCPServers(cfgs ...MCPServerConfig)` | Register multiple MCP servers at construction; variadic variant of `WithMCPServer` |
+| `WithSharedMCPRegistry(r *MCPRegistry)` | Bind the agent to a process-shared `MCPRegistry`, reusing connections across agents |
+| `WithMCPLifecycleHandler(h MCPLifecycleHandler)` | Install a handler for MCP connect/disconnect/tool-call/tool-result events |
 | `WithTracer(t Tracer)` | Enable deep tracing (agent.execute, loop, memory spans) |
 | `WithLogger(l *slog.Logger)` | Enable structured logging (defaults to no-op) |
 
