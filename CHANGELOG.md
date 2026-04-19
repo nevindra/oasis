@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-04-19
+
 ### Added
 - `WithGenerationParams(*GenerationParams)` agent option — sets the full
   `GenerationParams` struct in one call. The params are deep-copied (struct +
@@ -286,7 +288,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`enrichLiveWithStatic` handles new fields** — live/static merge now preserves Family, Modalities, KnowledgeCutoff, ReleaseDate, and OpenWeights from static data when live API doesn't provide them
 - **CI workflow references models.dev** — `update-models.yml` now checks both `models_gen.go` and `platforms_gen.go` for changes, and PR descriptions reference models.dev
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/nevindra/oasis/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/nevindra/oasis/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/nevindra/oasis/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/nevindra/oasis/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/nevindra/oasis/compare/v0.12.0...v0.12.1
