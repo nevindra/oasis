@@ -7,6 +7,33 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ## [Unreleased]
 
 ### Changed
+- **BREAKING**: `InjectionGuard`, `ContentGuard`, `KeywordGuard`,
+  `MaxToolCallsGuard` and their constructors/options moved to a separate
+  Go module `github.com/nevindra/oasis/guardrail`.
+  - Migration:
+    ```go
+    // Before
+    import "github.com/nevindra/oasis"
+    guard := oasis.NewInjectionGuard()
+
+    // After
+    import (
+        oasis "github.com/nevindra/oasis"
+        "github.com/nevindra/oasis/guardrail"
+    )
+    guard := guardrail.NewInjectionGuard()
+    ```
+  - Symbols moved: `InjectionGuard`, `NewInjectionGuard`, `InjectionOption`,
+    `InjectionResponse`, `InjectionPatterns`, `InjectionRegex`,
+    `ScanAllMessages`, `InjectionLogger`, `SkipLayers`, `ContentGuard`,
+    `NewContentGuard`, `ContentOption`, `MaxInputLength`, `MaxOutputLength`,
+    `ContentLogger`, `ContentResponse`, `KeywordGuard`, `NewKeywordGuard`,
+    `WithRegex` (on KeywordGuard), `WithKeywordLogger`, `WithResponse` (on
+    KeywordGuard), `MaxToolCallsGuard`, `NewMaxToolCallsGuard`.
+  - Second extraction in the microkernel migration. See
+    `docs/superpowers/specs/2026-05-17-microkernel-migration-design.md`.
+
+### Changed
 - **BREAKING**: `RateLimitOption`, `RPM`, `TPM`, `WithRateLimit` moved to
   separate Go module `github.com/nevindra/oasis/ratelimit`.
   - Migration:
