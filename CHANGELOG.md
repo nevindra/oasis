@@ -7,6 +7,33 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ## [Unreleased]
 
 ### Changed
+- **BREAKING**: `RateLimitOption`, `RPM`, `TPM`, `WithRateLimit` moved to
+  separate Go module `github.com/nevindra/oasis/ratelimit`.
+  - Migration:
+    ```go
+    // Before
+    import "github.com/nevindra/oasis"
+    limited := oasis.WithRateLimit(provider, oasis.RPM(60), oasis.TPM(100_000))
+
+    // After
+    import (
+        oasis "github.com/nevindra/oasis"
+        "github.com/nevindra/oasis/ratelimit"
+    )
+    limited := ratelimit.WithRateLimit(provider,
+        ratelimit.RPM(60),
+        ratelimit.TPM(100_000),
+    )
+    ```
+  - First extraction in the microkernel migration. See
+    `docs/superpowers/specs/2026-05-17-microkernel-migration-design.md`.
+
+### Added
+- `go.work` workspace file for local multi-module development.
+- `scripts/check-module-deps.sh` enforces microkernel dependency invariants
+  in CI.
+
+### Changed
 - **BREAKING — `Tool` interface reshaped from bundle to atomic.** One
   implementation now describes exactly one operation. New types:
   - `AnyTool`: type-erased atomic interface (`Name() / Definition() /
