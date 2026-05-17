@@ -284,6 +284,19 @@ func (r *Registry) Tools() []oasis.AnyTool {
 	return out
 }
 
+// toolDefinitionsForTest returns all tool definitions registered with r.
+// Same-package internal helper used by mcp/*_test.go to inspect registry
+// state without exposing the internal tool list to consumers.
+func (r *Registry) toolDefinitionsForTest() []oasis.ToolDefinition {
+	r.toolMu.RLock()
+	defer r.toolMu.RUnlock()
+	defs := make([]oasis.ToolDefinition, 0, len(r.toolList))
+	for _, t := range r.toolList {
+		defs = append(defs, t.Definition())
+	}
+	return defs
+}
+
 // Register connects to an MCP server, fetches its tool list, and adds each
 // tool to the registry's internal tool list.
 func (r *Registry) Register(ctx context.Context, cfg ServerConfig) error {
@@ -697,4 +710,12 @@ func (r *Registry) GetTool(server, tool string) (oasis.AnyTool, bool) {
 		return nil, false
 	}
 	return &toolWrapper{entry: te, server: entry, parent: r}, true
+}
+
+// RegisterTestClient is a test-only entry point that bypasses transport
+// construction. Production code should use Register, which builds the
+// transport from a ServerConfig. Intended for use with mcp/mcptest fixtures
+// or other in-process Client implementations.
+func (r *Registry) RegisterTestClient(ctx context.Context, cfg ServerConfig, client Client) error {
+	return r.registerWithClient(ctx, cfg, client)
 }
