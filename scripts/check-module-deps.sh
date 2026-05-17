@@ -72,7 +72,7 @@ check_kernel
 check_satellite ratelimit
 # check_satellite catalog
 # check_satellite network
-# check_satellite guardrail
+check_satellite guardrail
 # check_satellite compaction
 # check_satellite mcp
 # check_satellite workflow
