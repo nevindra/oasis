@@ -1,4 +1,4 @@
-package oasis
+package guardrail
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	oasis "github.com/nevindra/oasis"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -199,7 +200,7 @@ func SkipLayers(layers ...int) InjectionOption {
 // PreLLM checks user messages for injection patterns.
 // By default only the last user message is checked; enable ScanAllMessages()
 // to check all user messages in the conversation history.
-func (g *InjectionGuard) PreLLM(_ context.Context, req *ChatRequest) error {
+func (g *InjectionGuard) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
 	contents := userContents(req.Messages, g.scanAll)
 	for _, content := range contents {
 		if layer, err := g.checkContent(content); err != nil {
@@ -223,7 +224,7 @@ func (g *InjectionGuard) checkContent(content string) (int, error) {
 	if !g.skipLayers[1] {
 		for _, phrase := range g.phrases {
 			if strings.Contains(lower, phrase) {
-				return 1, &ErrHalt{Response: g.response}
+				return 1, &oasis.ErrHalt{Response: g.response}
 			}
 		}
 	}
@@ -233,7 +234,7 @@ func (g *InjectionGuard) checkContent(content string) (int, error) {
 		if injectionRolePrefix.MatchString(cleaned) ||
 			injectionMarkdownRole.MatchString(cleaned) ||
 			injectionXMLRole.MatchString(cleaned) {
-			return 2, &ErrHalt{Response: g.response}
+			return 2, &oasis.ErrHalt{Response: g.response}
 		}
 	}
 
@@ -241,7 +242,7 @@ func (g *InjectionGuard) checkContent(content string) (int, error) {
 	if !g.skipLayers[3] {
 		if injectionFakeBoundary.MatchString(cleaned) ||
 			injectionSeparatorRole.MatchString(cleaned) {
-			return 3, &ErrHalt{Response: g.response}
+			return 3, &oasis.ErrHalt{Response: g.response}
 		}
 	}
 
@@ -261,7 +262,7 @@ func (g *InjectionGuard) checkContent(content string) (int, error) {
 				decodedLower := strings.ToLower(string(decoded))
 				for _, phrase := range g.phrases {
 					if strings.Contains(decodedLower, phrase) {
-						return 4, &ErrHalt{Response: g.response}
+						return 4, &oasis.ErrHalt{Response: g.response}
 					}
 				}
 			}
@@ -272,7 +273,7 @@ func (g *InjectionGuard) checkContent(content string) (int, error) {
 	if !g.skipLayers[5] {
 		for _, re := range g.custom {
 			if re.MatchString(cleaned) {
-				return 5, &ErrHalt{Response: g.response}
+				return 5, &oasis.ErrHalt{Response: g.response}
 			}
 		}
 	}
@@ -283,7 +284,7 @@ func (g *InjectionGuard) checkContent(content string) (int, error) {
 // userContents returns user message content to scan. When scanAll is false,
 // returns only the last user message. When true, returns all user messages.
 // Returns nil if no user messages exist.
-func userContents(messages []ChatMessage, scanAll bool) []string {
+func userContents(messages []oasis.ChatMessage, scanAll bool) []string {
 	if !scanAll {
 		for i := len(messages) - 1; i >= 0; i-- {
 			if messages[i].Role == "user" {
@@ -303,7 +304,7 @@ func userContents(messages []ChatMessage, scanAll bool) []string {
 
 // lastUserContent returns the content of the last message with role "user".
 // Returns "" if no user message exists.
-func lastUserContent(messages []ChatMessage) string {
+func lastUserContent(messages []oasis.ChatMessage) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
 			return messages[i].Content
@@ -313,7 +314,7 @@ func lastUserContent(messages []ChatMessage) string {
 }
 
 // compile-time check
-var _ PreProcessor = (*InjectionGuard)(nil)
+var _ oasis.PreProcessor = (*InjectionGuard)(nil)
 
 // --- ContentGuard ---
 
@@ -374,7 +375,7 @@ func ContentResponse(msg string) ContentOption {
 }
 
 // PreLLM checks the last user message length against maxInputLen.
-func (g *ContentGuard) PreLLM(_ context.Context, req *ChatRequest) error {
+func (g *ContentGuard) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
 	if g.maxInputLen <= 0 {
 		return nil
 	}
@@ -382,28 +383,28 @@ func (g *ContentGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 	runeLen := len([]rune(content))
 	if runeLen > g.maxInputLen {
 		g.logger.Warn("input content exceeds limit", "length", runeLen, "max", g.maxInputLen)
-		return &ErrHalt{Response: g.response}
+		return &oasis.ErrHalt{Response: g.response}
 	}
 	return nil
 }
 
 // PostLLM checks the LLM response length against maxOutputLen.
-func (g *ContentGuard) PostLLM(_ context.Context, resp *ChatResponse) error {
+func (g *ContentGuard) PostLLM(_ context.Context, resp *oasis.ChatResponse) error {
 	if g.maxOutputLen <= 0 {
 		return nil
 	}
 	runeLen := len([]rune(resp.Content))
 	if runeLen > g.maxOutputLen {
 		g.logger.Warn("output content exceeds limit", "length", runeLen, "max", g.maxOutputLen)
-		return &ErrHalt{Response: g.response}
+		return &oasis.ErrHalt{Response: g.response}
 	}
 	return nil
 }
 
 // compile-time checks
 var (
-	_ PreProcessor  = (*ContentGuard)(nil)
-	_ PostProcessor = (*ContentGuard)(nil)
+	_ oasis.PreProcessor  = (*ContentGuard)(nil)
+	_ oasis.PostProcessor = (*ContentGuard)(nil)
 )
 
 // --- KeywordGuard ---
@@ -455,7 +456,7 @@ func (g *KeywordGuard) WithResponse(msg string) *KeywordGuard {
 }
 
 // PreLLM checks the last user message for blocked keywords and regex matches.
-func (g *KeywordGuard) PreLLM(_ context.Context, req *ChatRequest) error {
+func (g *KeywordGuard) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
 	content := lastUserContent(req.Messages)
 	if content == "" {
 		return nil
@@ -465,14 +466,14 @@ func (g *KeywordGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 	for _, kw := range g.keywords {
 		if strings.Contains(lower, kw) {
 			g.logger.Warn("keyword blocked", "keyword", kw)
-			return &ErrHalt{Response: g.response}
+			return &oasis.ErrHalt{Response: g.response}
 		}
 	}
 
 	for _, re := range g.regexes {
 		if re.MatchString(content) {
 			g.logger.Warn("regex pattern blocked", "pattern", re.String())
-			return &ErrHalt{Response: g.response}
+			return &oasis.ErrHalt{Response: g.response}
 		}
 	}
 
@@ -480,7 +481,7 @@ func (g *KeywordGuard) PreLLM(_ context.Context, req *ChatRequest) error {
 }
 
 // compile-time check
-var _ PreProcessor = (*KeywordGuard)(nil)
+var _ oasis.PreProcessor = (*KeywordGuard)(nil)
 
 // --- MaxToolCallsGuard ---
 
@@ -500,7 +501,7 @@ func NewMaxToolCallsGuard(max int) *MaxToolCallsGuard {
 }
 
 // PostLLM trims excess tool calls from the response.
-func (g *MaxToolCallsGuard) PostLLM(_ context.Context, resp *ChatResponse) error {
+func (g *MaxToolCallsGuard) PostLLM(_ context.Context, resp *oasis.ChatResponse) error {
 	if len(resp.ToolCalls) > g.max {
 		resp.ToolCalls = resp.ToolCalls[:g.max]
 	}
@@ -508,4 +509,4 @@ func (g *MaxToolCallsGuard) PostLLM(_ context.Context, resp *ChatResponse) error
 }
 
 // compile-time check
-var _ PostProcessor = (*MaxToolCallsGuard)(nil)
+var _ oasis.PostProcessor = (*MaxToolCallsGuard)(nil)
