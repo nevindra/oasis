@@ -39,32 +39,32 @@ func (nopStore) Init(_ context.Context) error { return nil }
 func (nopStore) Close() error                                                         { return nil }
 
 // --- Tool mocks (shared across agent_test.go, workflow_test.go) ---
+//
+// Each mock implements AnyTool directly. The "greet"/"calc"/"fail" tools are
+// atomic; multiTool was a bundle in the old shape and now lives as two
+// independent atomic instances (readTool + writeTool).
 
 type mockTool struct{}
 
-func (m mockTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: "greet", Description: "Say hello"}}
-}
-
-func (m mockTool) Execute(_ context.Context, name string, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "hello from " + name}, nil
+func (m mockTool) Name() string               { return "greet" }
+func (m mockTool) Definition() ToolDefinition { return ToolDefinition{Name: "greet", Description: "Say hello"} }
+func (m mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{Content: "hello from greet"}, nil
 }
 
 type mockToolCalc struct{}
 
-func (m mockToolCalc) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: "calc", Description: "Calculate"}}
-}
-func (m mockToolCalc) Execute(_ context.Context, name string, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "result from " + name}, nil
+func (m mockToolCalc) Name() string               { return "calc" }
+func (m mockToolCalc) Definition() ToolDefinition { return ToolDefinition{Name: "calc", Description: "Calculate"} }
+func (m mockToolCalc) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{Content: "result from calc"}, nil
 }
 
 type errTool struct{}
 
-func (e errTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: "fail", Description: "Always fails"}}
-}
-func (e errTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (e errTool) Name() string               { return "fail" }
+func (e errTool) Definition() ToolDefinition { return ToolDefinition{Name: "fail", Description: "Always fails"} }
+func (e errTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	return ToolResult{}, errors.New("tool broken")
 }
 
@@ -95,24 +95,33 @@ type contextReadingTool struct {
 	onExecute func(ctx context.Context)
 }
 
-func (t *contextReadingTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: "ctx_reader", Description: "Reads context"}}
+func (t *contextReadingTool) Name() string { return "ctx_reader" }
+func (t *contextReadingTool) Definition() ToolDefinition {
+	return ToolDefinition{Name: "ctx_reader", Description: "Reads context"}
 }
-func (t *contextReadingTool) Execute(ctx context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (t *contextReadingTool) ExecuteRaw(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
 	if t.onExecute != nil {
 		t.onExecute(ctx)
 	}
 	return ToolResult{Content: "ok"}, nil
 }
 
-type multiTool struct{}
+// readTool and writeTool replace the legacy bundle-style multiTool with two
+// atomic tools. Tests previously asserting "two definitions from one Add" now
+// register both and observe two tools in the registry.
 
-func (m multiTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{
-		{Name: "read", Description: "Read file"},
-		{Name: "write", Description: "Write file"},
-	}
+type readTool struct{}
+
+func (readTool) Name() string               { return "read" }
+func (readTool) Definition() ToolDefinition { return ToolDefinition{Name: "read", Description: "Read file"} }
+func (readTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{Content: "did read"}, nil
 }
-func (m multiTool) Execute(_ context.Context, name string, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "did " + name}, nil
+
+type writeTool struct{}
+
+func (writeTool) Name() string               { return "write" }
+func (writeTool) Definition() ToolDefinition { return ToolDefinition{Name: "write", Description: "Write file"} }
+func (writeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{Content: "did write"}, nil
 }

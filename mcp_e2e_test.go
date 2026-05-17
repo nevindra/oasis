@@ -64,14 +64,14 @@ func TestE2E_T1_HappyPath(t *testing.T) {
 		t.Fatal("GetTool returned false")
 	}
 
-	defs := tool.Definitions()
-	if len(defs) == 0 || defs[0].Name != "mcp__demo__greet" {
-		t.Errorf("unexpected tool name: %v", defs)
+	def := tool.Definition()
+	if def.Name != "mcp__demo__greet" {
+		t.Errorf("unexpected tool name: %v", def)
 	}
 
-	result, err := tool.Execute(context.Background(), "mcp__demo__greet", json.RawMessage(`{}`))
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
-		t.Fatalf("Execute returned Go error: %v", err)
+		t.Fatalf("ExecuteRaw returned Go error: %v", err)
 	}
 	if result.Error != "" {
 		t.Errorf("ToolResult.Error = %q, want empty", result.Error)
@@ -283,9 +283,9 @@ func TestE2E_T7_NamespaceCollision(t *testing.T) {
 		t.Fatal("original math/add was removed after failed duplicate registration")
 	}
 
-	defs := tool.Definitions()
-	if len(defs) == 0 || defs[0].Name != "mcp__math__add" {
-		t.Errorf("unexpected tool def: %v", defs)
+	def := tool.Definition()
+	if def.Name != "mcp__math__add" {
+		t.Errorf("unexpected tool def: %v", def)
 	}
 
 	// Only one server in the registry.
@@ -442,7 +442,7 @@ func TestE2E_T8_TransportError_ToolResultError(t *testing.T) {
 	}
 
 	// Execute must return ToolResult.Error (no Go error per PHILOSOPHY §4).
-	result, err := tool.Execute(context.Background(), "mcp__authsrv__secret_op", nil)
+	result, err := tool.ExecuteRaw(context.Background(), nil)
 	if err != nil {
 		t.Errorf("Execute must not return Go error (PHILOSOPHY §4), got: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestE2E_T8_StdioTransportError(t *testing.T) {
 		t.Fatal("tool not found")
 	}
 
-	result, err := tool.Execute(callCtx, "mcp__broken__fragile", nil)
+	result, err := tool.ExecuteRaw(callCtx, nil)
 	if err != nil {
 		t.Errorf("Execute must not return Go error (PHILOSOPHY §4), got: %v", err)
 	}

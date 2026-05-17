@@ -99,7 +99,7 @@ func TestFromDefinitionToolNode(t *testing.T) {
 	}
 
 	reg := DefinitionRegistry{
-		Tools: map[string]Tool{"greeter": tool},
+		Tools: map[string]AnyTool{"greeter": tool},
 	}
 
 	wf, err := FromDefinition(def, reg)
@@ -279,7 +279,7 @@ func TestFromDefinitionValidationErrors(t *testing.T) {
 			WorkflowDefinition{Name: "bad-tool", Nodes: []NodeDefinition{
 				{ID: "a", Type: NodeTool, Tool: "missing"},
 			}},
-			DefinitionRegistry{Tools: map[string]Tool{}},
+			DefinitionRegistry{Tools: map[string]AnyTool{}},
 		},
 		{
 			"condition no branches",
@@ -323,7 +323,7 @@ func TestFromDefinitionToolWithTemplateArgs(t *testing.T) {
 	}
 
 	reg := DefinitionRegistry{
-		Tools: map[string]Tool{"echo": echoTool},
+		Tools: map[string]AnyTool{"echo": echoTool},
 	}
 
 	wf, err := FromDefinition(def, reg)
@@ -344,10 +344,11 @@ func TestFromDefinitionToolWithTemplateArgs(t *testing.T) {
 // argEchoTool is a test tool that returns its arguments as the result content.
 type argEchoTool struct{}
 
-func (a *argEchoTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: "echo_args", Description: "Echoes args"}}
+func (a *argEchoTool) Name() string { return "echo_args" }
+func (a *argEchoTool) Definition() ToolDefinition {
+	return ToolDefinition{Name: "echo_args", Description: "Echoes args"}
 }
 
-func (a *argEchoTool) Execute(_ context.Context, _ string, args json.RawMessage) (ToolResult, error) {
+func (a *argEchoTool) ExecuteRaw(_ context.Context, args json.RawMessage) (ToolResult, error) {
 	return ToolResult{Content: string(args)}, nil
 }

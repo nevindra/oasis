@@ -695,9 +695,9 @@ func (r *MCPRegistry) Reload(ctx context.Context, name string, cfg MCPServerConf
 	return r.Register(ctx, cfg)
 }
 
-// GetTool returns the wrapped Tool for direct invocation (testing/debug).
+// GetTool returns the wrapped AnyTool for direct invocation (testing/debug).
 // The tool parameter is the short name (after alias, before mcp__ prefix).
-func (r *MCPRegistry) GetTool(server, tool string) (Tool, bool) {
+func (r *MCPRegistry) GetTool(server, tool string) (AnyTool, bool) {
 	r.mu.RLock()
 	entry, ok := r.servers[server]
 	r.mu.RUnlock()
@@ -735,8 +735,8 @@ func (c *MCPController) Reload(ctx context.Context, name string, cfg MCPServerCo
 	return c.reg.Reload(ctx, name, cfg)
 }
 
-// GetTool returns the wrapped Tool for the given server + short tool name.
-func (c *MCPController) GetTool(server, tool string) (Tool, bool) {
+// GetTool returns the wrapped AnyTool for the given server + short tool name.
+func (c *MCPController) GetTool(server, tool string) (AnyTool, bool) {
 	return c.reg.GetTool(server, tool)
 }
 

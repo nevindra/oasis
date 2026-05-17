@@ -30,9 +30,10 @@ func newTool(name, description, schema string, exec func(ctx context.Context, ar
 	}
 }
 
-func (t toolImpl) Definitions() []oasis.ToolDefinition { return []oasis.ToolDefinition{t.def} }
+func (t toolImpl) Name() string                       { return t.def.Name }
+func (t toolImpl) Definition() oasis.ToolDefinition   { return t.def }
 
-func (t toolImpl) Execute(ctx context.Context, _ string, args json.RawMessage) (oasis.ToolResult, error) {
+func (t toolImpl) ExecuteRaw(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 	return t.execute(ctx, args)
 }
 
@@ -99,13 +100,13 @@ func findMountForPath(mounts []MountSpec, p string) (*MountSpec, string) {
 }
 
 // Tools returns Oasis tool implementations backed by the given Sandbox.
-func Tools(sb Sandbox, opts ...ToolsOption) []oasis.Tool {
+func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 	cfg := &toolsConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
 
-	tools := []oasis.Tool{
+	tools := []oasis.AnyTool{
 		shellTool(sb),
 		executeCodeTool(sb),
 		fileReadTool(sb),
@@ -769,8 +770,8 @@ func mcpCallTool(sb Sandbox) toolImpl {
 // unbounded memory allocation when reading sandbox files into memory.
 const maxDeliverFileBytes = 100 * 1024 * 1024 // 100 MB
 
-// deliverFile implements StreamingTool so it can emit a file_attachment event
-// on the shared stream channel alongside the normal tool result.
+// deliverFile implements oasis.StreamingAnyTool so it can emit a file_attachment
+// event on the shared stream channel alongside the normal tool result.
 type deliverFile struct {
 	def     oasis.ToolDefinition
 	sandbox Sandbox
@@ -798,15 +799,14 @@ func deliverFileTool(sb Sandbox, cfg *toolsConfig) *deliverFile {
 	}
 }
 
-func (t *deliverFile) Definitions() []oasis.ToolDefinition {
-	return []oasis.ToolDefinition{t.def}
-}
+func (t *deliverFile) Name() string                     { return t.def.Name }
+func (t *deliverFile) Definition() oasis.ToolDefinition { return t.def }
 
-func (t *deliverFile) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
+func (t *deliverFile) ExecuteRaw(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 	return t.executeDelivery(ctx, args, nil)
 }
 
-func (t *deliverFile) ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- oasis.StreamEvent) (oasis.ToolResult, error) {
+func (t *deliverFile) ExecuteStream(ctx context.Context, args json.RawMessage, ch chan<- oasis.StreamEvent) (oasis.ToolResult, error) {
 	return t.executeDelivery(ctx, args, ch)
 }
 
@@ -921,6 +921,6 @@ func humanSize(b int64) string {
 
 // compile-time checks
 var (
-	_ oasis.Tool          = (*deliverFile)(nil)
-	_ oasis.StreamingTool = (*deliverFile)(nil)
+	_ oasis.AnyTool          = (*deliverFile)(nil)
+	_ oasis.StreamingAnyTool = (*deliverFile)(nil)
 )

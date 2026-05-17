@@ -241,9 +241,9 @@ func TestMCPRegistry_GetTool(t *testing.T) {
 	if !ok {
 		t.Fatal("tool not found")
 	}
-	defs := tool.Definitions()
-	if len(defs) == 0 || defs[0].Name != "mcp__s__echo" {
-		t.Errorf("name: %v", defs)
+	def := tool.Definition()
+	if def.Name != "mcp__s__echo" {
+		t.Errorf("name: %v", def)
 	}
 
 	_, ok = reg.GetTool("s", "nonexistent")

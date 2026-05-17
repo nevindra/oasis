@@ -1012,8 +1012,8 @@ func TestLLMAgentDynamicTools(t *testing.T) {
 
 	agent := NewLLMAgent("dynamic", "Dynamic tools", provider,
 		WithTools(mockTool{}), // static: greet
-		WithDynamicTools(func(_ context.Context, task AgentTask) []Tool {
-			return []Tool{mockToolCalc{}}
+		WithDynamicTools(func(_ context.Context, task AgentTask) []AnyTool {
+			return []AnyTool{mockToolCalc{}}
 		}),
 	)
 
@@ -1088,10 +1088,11 @@ func TestTaskFromContextMissing(t *testing.T) {
 // bigResultTool returns a large string result (500 runes per call).
 type bigResultTool struct{}
 
-func (bigResultTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: "big", Description: "Returns big content"}}
+func (bigResultTool) Name() string { return "big" }
+func (bigResultTool) Definition() ToolDefinition {
+	return ToolDefinition{Name: "big", Description: "Returns big content"}
 }
-func (bigResultTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (bigResultTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	return ToolResult{Content: strings.Repeat("x", 500)}, nil
 }
 

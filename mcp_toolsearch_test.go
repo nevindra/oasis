@@ -42,7 +42,7 @@ func TestScoreToolMatch_NoMatchZero(t *testing.T) {
 	}
 }
 
-// fakeDeferredTool is a Tool that participates in deferred-schema loading.
+// fakeDeferredTool implements AnyTool + SchemaEnsurer for deferred-schema tests.
 type fakeDeferredTool struct {
 	name      string
 	desc      string
@@ -52,14 +52,16 @@ type fakeDeferredTool struct {
 	loadCount int
 }
 
-func (f *fakeDeferredTool) Definitions() []ToolDefinition {
+func (f *fakeDeferredTool) Name() string { return f.name }
+
+func (f *fakeDeferredTool) Definition() ToolDefinition {
 	d := ToolDefinition{Name: f.name, Description: f.desc}
 	if f.loaded {
 		d.Parameters = f.schema
 	}
-	return []ToolDefinition{d}
+	return d
 }
-func (f *fakeDeferredTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (f *fakeDeferredTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	return ToolResult{Content: "ok"}, nil
 }
 func (f *fakeDeferredTool) EnsureSchema(_ context.Context) error {
@@ -71,7 +73,7 @@ func (f *fakeDeferredTool) EnsureSchema(_ context.Context) error {
 	return nil
 }
 
-func newRegistryWith(tools ...Tool) *ToolRegistry {
+func newRegistryWith(tools ...AnyTool) *ToolRegistry {
 	r := NewToolRegistry()
 	for _, t := range tools {
 		r.Add(t)
@@ -87,7 +89,7 @@ func TestToolSearch_Execute_HappyPath(t *testing.T) {
 	ts := newToolSearchTool(r)
 
 	args, _ := json.Marshal(map[string]interface{}{"query": "create issue"})
-	res, err := ts.Execute(context.Background(), toolSearchName, args)
+	res, err := ts.ExecuteRaw(context.Background(), args)
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -106,7 +108,7 @@ func TestToolSearch_Execute_EmptyQuery(t *testing.T) {
 	r := newRegistryWith(&fakeDeferredTool{name: "x"})
 	ts := newToolSearchTool(r)
 	args, _ := json.Marshal(map[string]interface{}{"query": ""})
-	res, _ := ts.Execute(context.Background(), toolSearchName, args)
+	res, _ := ts.ExecuteRaw(context.Background(), args)
 	if res.Error == "" {
 		t.Error("empty query should error")
 	}
@@ -126,7 +128,7 @@ func TestToolSearch_Execute_MaxResultsClamp(t *testing.T) {
 		{0, 10}, {-1, 10}, {50, 25}, {5, 5},
 	} {
 		args, _ := json.Marshal(map[string]interface{}{"query": "tool", "max_results": tc.input})
-		res, _ := ts.Execute(context.Background(), toolSearchName, args)
+		res, _ := ts.ExecuteRaw(context.Background(), args)
 		n := strings.Count(res.Content, `"name":`)
 		if n != tc.want {
 			t.Errorf("max_results=%d: got %d tools, want %d", tc.input, n, tc.want)
@@ -140,7 +142,7 @@ func TestToolSearch_Execute_LoadsSchemaViaEnsure(t *testing.T) {
 	ts := newToolSearchTool(r)
 
 	args, _ := json.Marshal(map[string]interface{}{"query": "do"})
-	if _, err := ts.Execute(context.Background(), toolSearchName, args); err != nil {
+	if _, err := ts.ExecuteRaw(context.Background(), args); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
 
@@ -153,7 +155,7 @@ func TestToolSearch_Execute_NoMatchesReturnsNote(t *testing.T) {
 	r := newRegistryWith(&fakeDeferredTool{name: "mcp__s__alpha", desc: "alpha"})
 	ts := newToolSearchTool(r)
 	args, _ := json.Marshal(map[string]interface{}{"query": "nonexistent_keyword_xyzzy"})
-	res, _ := ts.Execute(context.Background(), toolSearchName, args)
+	res, _ := ts.ExecuteRaw(context.Background(), args)
 	if res.Error != "" {
 		t.Errorf("should not error: %s", res.Error)
 	}
@@ -162,14 +164,10 @@ func TestToolSearch_Execute_NoMatchesReturnsNote(t *testing.T) {
 	}
 }
 
-func TestToolSearch_Definitions(t *testing.T) {
+func TestToolSearch_Definition(t *testing.T) {
 	r := NewToolRegistry()
 	ts := newToolSearchTool(r)
-	defs := ts.Definitions()
-	if len(defs) != 1 {
-		t.Fatalf("want 1 def, got %d", len(defs))
-	}
-	def := defs[0]
+	def := ts.Definition()
 	if def.Name != "ToolSearch" {
 		t.Errorf("name: %s", def.Name)
 	}
@@ -178,5 +176,8 @@ func TestToolSearch_Definitions(t *testing.T) {
 	}
 	if !strings.Contains(def.Description, "mcp__") {
 		t.Errorf("description should mention mcp__ prefix: %s", def.Description)
+	}
+	if ts.Name() != "ToolSearch" {
+		t.Errorf("Name() = %q", ts.Name())
 	}
 }

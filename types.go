@@ -92,28 +92,6 @@ type BlobStore interface {
 	DeleteBlob(ctx context.Context, ref string) error
 }
 
-// Tool defines an agent capability with one or more tool functions.
-type Tool interface {
-	Definitions() []ToolDefinition
-	Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error)
-}
-
-// StreamingTool is an optional capability for tools that support progress
-// streaming during execution. Check via type assertion:
-//
-//	if st, ok := tool.(StreamingTool); ok {
-//	    result, err := st.ExecuteStream(ctx, name, args, ch)
-//	}
-//
-// Tools emit EventToolProgress events on ch to report intermediate progress.
-// The channel is shared with the parent agent's stream — events appear
-// inline with other agent events.
-// The channel is NOT closed by the tool — the caller owns its lifecycle.
-type StreamingTool interface {
-	Tool
-	ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error)
-}
-
 // ToolResult is the outcome of a tool execution.
 type ToolResult struct {
 	Content     string       `json:"content"`
@@ -121,38 +99,33 @@ type ToolResult struct {
 	Attachments []Attachment `json:"attachments,omitempty"` // multimodal content (images, PDFs, etc.) passed to the LLM
 }
 
-// ToolRegistry holds all registered tools and dispatches execution.
+// ToolRegistry holds all registered atomic tools and dispatches execution.
+// Each AnyTool represents exactly one operation; the registry indexes them
+// by Name() for O(1) lookup.
 type ToolRegistry struct {
-	tools []Tool
-	index map[string]Tool // name → Tool for O(1) dispatch
+	tools []AnyTool
+	index map[string]AnyTool // name → AnyTool for O(1) dispatch
 }
 
 // NewToolRegistry creates an empty registry.
 func NewToolRegistry() *ToolRegistry {
-	return &ToolRegistry{index: make(map[string]Tool)}
+	return &ToolRegistry{index: make(map[string]AnyTool)}
 }
 
-// Add registers a tool and indexes its definitions for O(1) lookup.
-func (r *ToolRegistry) Add(t Tool) {
+// Add registers a tool, indexed by t.Name().
+func (r *ToolRegistry) Add(t AnyTool) {
 	r.tools = append(r.tools, t)
-	for _, d := range t.Definitions() {
-		r.index[d.Name] = t
-	}
+	r.index[t.Name()] = t
 }
 
-// Remove deletes a tool from the registry by one of its definition names.
-// All definition names that the tool exposes are removed from the index.
+// Remove deletes a tool from the registry by name.
 // Returns an error if no tool is registered under the given name.
 func (r *ToolRegistry) Remove(name string) error {
 	t, ok := r.index[name]
 	if !ok {
 		return fmt.Errorf("tool %q not registered", name)
 	}
-	// Remove all index entries belonging to this tool.
-	for _, d := range t.Definitions() {
-		delete(r.index, d.Name)
-	}
-	// Remove the tool from the slice.
+	delete(r.index, name)
 	filtered := r.tools[:0]
 	for _, existing := range r.tools {
 		if existing != t {
@@ -167,7 +140,7 @@ func (r *ToolRegistry) Remove(name string) error {
 func (r *ToolRegistry) AllDefinitions() []ToolDefinition {
 	var defs []ToolDefinition
 	for _, t := range r.tools {
-		defs = append(defs, t.Definitions()...)
+		defs = append(defs, t.Definition())
 	}
 	return defs
 }
@@ -178,10 +151,9 @@ func (r *ToolRegistry) AllDefinitions() []ToolDefinition {
 func (r *ToolRegistry) DeferredDefinitions() []ToolDefinition {
 	var out []ToolDefinition
 	for _, t := range r.tools {
-		for _, d := range t.Definitions() {
-			if len(d.Parameters) == 0 {
-				out = append(out, d)
-			}
+		d := t.Definition()
+		if len(d.Parameters) == 0 {
+			out = append(out, d)
 		}
 	}
 	return out
@@ -210,10 +182,8 @@ func (r *ToolRegistry) EnsureSchema(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("tool %q not registered", name)
 	}
-	for _, d := range tool.Definitions() {
-		if d.Name == name && len(d.Parameters) > 0 {
-			return nil
-		}
+	if len(tool.Definition().Parameters) > 0 {
+		return nil
 	}
 	ensurer, ok := tool.(SchemaEnsurer)
 	if !ok {
@@ -225,25 +195,25 @@ func (r *ToolRegistry) EnsureSchema(ctx context.Context, name string) error {
 // Execute dispatches a tool call by name using the pre-built index.
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
 	if t, ok := r.index[name]; ok {
-		return t.Execute(ctx, name, args)
+		return t.ExecuteRaw(ctx, args)
 	}
 	return ToolResult{Error: "unknown tool: " + name}, nil
 }
 
 // ExecuteStream dispatches a tool call with streaming support. If the resolved
-// tool implements StreamingTool and ch is non-nil, it calls ExecuteStream.
-// Otherwise falls back to Execute.
+// tool implements StreamingAnyTool and ch is non-nil, it calls ExecuteStream.
+// Otherwise falls back to ExecuteRaw.
 func (r *ToolRegistry) ExecuteStream(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
 	t, ok := r.index[name]
 	if !ok {
 		return ToolResult{Error: "unknown tool: " + name}, nil
 	}
 	if ch != nil {
-		if st, ok := t.(StreamingTool); ok {
-			return st.ExecuteStream(ctx, name, args, ch)
+		if st, ok := t.(StreamingAnyTool); ok {
+			return st.ExecuteStream(ctx, args, ch)
 		}
 	}
-	return t.Execute(ctx, name, args)
+	return t.ExecuteRaw(ctx, args)
 }
 
 // Store abstracts persistence with vector search capabilities.
@@ -741,8 +711,10 @@ type NodeDefinition struct {
 type DefinitionRegistry struct {
 	// Agents maps names to Agent implementations (for LLM nodes).
 	Agents map[string]Agent
-	// Tools maps names to Tool implementations (for Tool nodes).
-	Tools map[string]Tool
+	// Tools maps names to AnyTool implementations (for Tool nodes).
+	// Each entry is one atomic tool — the map key is the registry name used
+	// in NodeDefinition.Tool and matches the tool's own Name().
+	Tools map[string]AnyTool
 	// Conditions maps names to custom condition functions (escape hatch for
 	// complex logic that can't be expressed as a simple comparison).
 	Conditions map[string]func(*WorkflowContext) bool

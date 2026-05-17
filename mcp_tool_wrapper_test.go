@@ -39,7 +39,7 @@ func TestMcpToolWrapper_Execute_Healthy(t *testing.T) {
 	w := &mcpToolWrapper{entry: entry, server: server}
 
 	// Real oasis.Tool interface: Execute(ctx, name string, args json.RawMessage) (ToolResult, error)
-	result, err := w.Execute(context.Background(), "mcp__test__echo", json.RawMessage(`{"x":1}`))
+	result, err := w.ExecuteRaw(context.Background(), json.RawMessage(`{"x":1}`))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestMcpToolWrapper_Execute_NotHealthy(t *testing.T) {
 	w := &mcpToolWrapper{entry: &mcpToolEntry{fullName: "mcp__x__y"}, server: server}
 
 	// Real interface: returns (ToolResult, error) — value, not pointer
-	result, _ := w.Execute(context.Background(), "mcp__x__y", nil)
+	result, _ := w.ExecuteRaw(context.Background(), nil)
 	if result.Error == "" {
 		t.Error("expected ToolResult.Error to be set")
 	}
@@ -73,7 +73,7 @@ func TestMcpToolWrapper_Execute_TransportError(t *testing.T) {
 	}
 
 	// Must not return a Go error per PHILOSOPHY §4 — transport errors become ToolResult.Error
-	result, err := w.Execute(context.Background(), "mcp__x__y", nil)
+	result, err := w.ExecuteRaw(context.Background(), nil)
 	if err != nil {
 		t.Errorf("Go err must be nil per PHILOSOPHY §4: %v", err)
 	}
@@ -88,12 +88,12 @@ func TestMcpToolWrapper_Definitions(t *testing.T) {
 	entry.def.Store(&def)
 	w := &mcpToolWrapper{entry: entry, server: &mcpServerEntry{}}
 
-	defs := w.Definitions()
-	if len(defs) != 1 {
-		t.Fatalf("Definitions() returned %d items, want 1", len(defs))
+	got := w.Definition()
+	if got.Name != "mcp__test__echo" {
+		t.Errorf("definition name = %q, want %q", got.Name, "mcp__test__echo")
 	}
-	if defs[0].Name != "mcp__test__echo" {
-		t.Errorf("definition name = %q, want %q", defs[0].Name, "mcp__test__echo")
+	if w.Name() != "mcp__test__echo" {
+		t.Errorf("Name() = %q", w.Name())
 	}
 }
 
@@ -113,7 +113,7 @@ func TestMcpToolWrapper_Execute_ContentMapping(t *testing.T) {
 		server: server,
 	}
 
-	result, err := w.Execute(context.Background(), "mcp__test__multi", nil)
+	result, err := w.ExecuteRaw(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestMcpToolWrapper_Execute_IsError(t *testing.T) {
 		server: server,
 	}
 
-	result, err := w.Execute(context.Background(), "mcp__test__failing", nil)
+	result, err := w.ExecuteRaw(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}

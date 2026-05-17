@@ -19,11 +19,13 @@ type barrierTool struct {
 	started chan struct{}
 }
 
-func (b *barrierTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: b.name, Description: "barrier tool"}}
+func (b *barrierTool) Name() string { return b.name }
+
+func (b *barrierTool) Definition() ToolDefinition {
+	return ToolDefinition{Name: b.name, Description: "barrier tool"}
 }
 
-func (b *barrierTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (b *barrierTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	b.started <- struct{}{} // signal: I have started
 	<-b.barrier             // wait for release
 	return ToolResult{Content: "done from " + b.name}, nil
@@ -35,7 +37,7 @@ func TestLLMAgentParallelToolExecution(t *testing.T) {
 	started := make(chan struct{}, numTools)
 
 	// Create tools that share a barrier
-	var tools []Tool
+	var tools []AnyTool
 	for i := 0; i < numTools; i++ {
 		tools = append(tools, &barrierTool{
 			name:    fmt.Sprintf("tool_%d", i),
@@ -100,7 +102,7 @@ func TestNetworkParallelToolExecution(t *testing.T) {
 	barrier := make(chan struct{})
 	started := make(chan struct{}, numTools)
 
-	var tools []Tool
+	var tools []AnyTool
 	for i := 0; i < numTools; i++ {
 		tools = append(tools, &barrierTool{
 			name:    fmt.Sprintf("tool_%d", i),
@@ -795,11 +797,12 @@ type largeTool struct {
 	content string
 }
 
-func (l *largeTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: "large", Description: "Returns large content"}}
+func (l *largeTool) Name() string { return "large" }
+func (l *largeTool) Definition() ToolDefinition {
+	return ToolDefinition{Name: "large", Description: "Returns large content"}
 }
 
-func (l *largeTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (l *largeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	return ToolResult{Content: l.content}, nil
 }
 

@@ -455,11 +455,14 @@ func AgentStep(name string, agent Agent, opts ...StepOption) WorkflowOption {
 	}
 }
 
-// ToolStep defines a workflow step that calls a single tool function by name.
+// ToolStep defines a workflow step that calls a single tool by name.
 // Args are read from the context key specified by ArgsFrom(). If ArgsFrom is not set,
 // empty JSON object ({}) is used.
 // The tool result is written to context as "{name}.result" (or the key specified by OutputTo()).
-func ToolStep(name string, tool Tool, toolName string, opts ...StepOption) WorkflowOption {
+//
+// With atomic tools, one AnyTool is one operation; toolName is retained for
+// labelling/error messages but no longer dispatches sub-operations.
+func ToolStep(name string, tool AnyTool, toolName string, opts ...StepOption) WorkflowOption {
 	return func(c *workflowConfig) {
 		cfg := buildStepConfig(name, nil, stepTypeBasic, opts)
 		cfg.fn = toolStepFunc(tool, toolName, cfg)

@@ -146,7 +146,7 @@ type StepTrace struct {
 
 // agentConfig holds shared configuration for LLMAgent and Network.
 type agentConfig struct {
-	tools            []Tool
+	tools            []AnyTool
 	agents           []Agent
 	prompt           string
 	maxIter          int
@@ -162,7 +162,7 @@ type agentConfig struct {
 	autoTitle         bool    // set by AutoTitle inside WithConversationMemory
 	planExecution     bool            // enabled by WithPlanExecution option
 	sandbox           any             // set by WithSandbox option; holds a sandbox.Sandbox
-	sandboxTools      []Tool          // tools auto-registered by WithSandbox
+	sandboxTools      []AnyTool       // tools auto-registered by WithSandbox
 	responseSchema    *ResponseSchema // set by WithResponseSchema option
 	dynamicPrompt     PromptFunc      // set by WithDynamicPrompt option
 	dynamicModel      ModelFunc       // set by WithDynamicModel option
@@ -217,10 +217,10 @@ type ModelFunc func(ctx context.Context, task AgentTask) Provider
 // When set via WithDynamicTools, it is called at the start of every
 // Execute/ExecuteStream call. The returned tools REPLACE (not append to)
 // the construction-time tools for that execution.
-type ToolsFunc func(ctx context.Context, task AgentTask) []Tool
+type ToolsFunc func(ctx context.Context, task AgentTask) []AnyTool
 
 // WithTools adds tools to the agent or network.
-func WithTools(tools ...Tool) AgentOption {
+func WithTools(tools ...AnyTool) AgentOption {
 	return func(c *agentConfig) { c.tools = append(c.tools, tools...) }
 }
 
@@ -345,7 +345,7 @@ func WithPlanExecution() AgentOption {
 //
 //	sb, _ := mgr.Create(ctx, sandbox.CreateOpts{SessionID: "s1"})
 //	agent := oasis.NewLLMAgent("a", "d", provider, oasis.WithSandbox(sb, sandbox.Tools(sb)...))
-func WithSandbox(sb any, tools ...Tool) AgentOption {
+func WithSandbox(sb any, tools ...AnyTool) AgentOption {
 	return func(c *agentConfig) {
 		c.sandbox = sb
 		c.sandboxTools = tools
@@ -772,8 +772,8 @@ func WithTaskContext(ctx context.Context, task AgentTask) context.Context {
 
 // TaskFromContext retrieves the AgentTask from ctx.
 // Returns the task and true if present, or zero AgentTask and false if not.
-// Use this in Tool.Execute to access task metadata (user ID, thread ID, etc.)
-// without changing the Tool interface.
+// Use this in AnyTool.ExecuteRaw to access task metadata (user ID, thread ID, etc.)
+// without changing the AnyTool interface.
 func TaskFromContext(ctx context.Context) (AgentTask, bool) {
 	task, ok := ctx.Value(taskCtxKey{}).(AgentTask)
 	return task, ok

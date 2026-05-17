@@ -9,22 +9,32 @@ import (
 
 const defaultMCPToolCallTimeout = 60 * time.Second
 
-// mcpToolWrapper implements oasis.Tool. Forwards calls to the underlying
-// mcp.Client, translating between Oasis types and MCP types.
+// mcpToolWrapper implements oasis.AnyTool. Forwards calls to the underlying
+// mcp.Client, translating between Oasis types and MCP types. Each wrapper
+// represents exactly one MCP tool (one definition).
 type mcpToolWrapper struct {
 	entry  *mcpToolEntry
 	server *mcpServerEntry
 	parent *MCPRegistry
 }
 
-// Definitions implements oasis.Tool. Returns the single tool definition.
-// Reads through atomic.Pointer so a concurrent ensureSchema swap is observed
-// safely (no torn reads of the Parameters slice header).
-func (w *mcpToolWrapper) Definitions() []ToolDefinition {
+// Name implements oasis.AnyTool. Returns the MCP tool's full registry name.
+func (w *mcpToolWrapper) Name() string {
 	if d := w.entry.def.Load(); d != nil {
-		return []ToolDefinition{*d}
+		return d.Name
 	}
-	return nil
+	return w.entry.fullName
+}
+
+// Definition implements oasis.AnyTool. Returns the single tool definition.
+// Reads through atomic.Pointer so a concurrent ensureSchema swap is observed
+// safely (no torn reads of the Parameters slice header). Returns a zero
+// ToolDefinition if the entry has not been populated yet.
+func (w *mcpToolWrapper) Definition() ToolDefinition {
+	if d := w.entry.def.Load(); d != nil {
+		return *d
+	}
+	return ToolDefinition{}
 }
 
 // EnsureSchema implements oasis.SchemaEnsurer. Loads the cached schema (or
@@ -79,9 +89,9 @@ func (w *mcpToolWrapper) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-// Execute implements oasis.Tool. The name parameter matches w.entry.fullName
-// (registry-dispatched); it is not forwarded — the raw MCP name is used instead.
-func (w *mcpToolWrapper) Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
+// ExecuteRaw implements oasis.AnyTool. The raw MCP tool name (w.entry.rawName)
+// is forwarded to the server.
+func (w *mcpToolWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	callCtx, cancel := context.WithTimeout(ctx, defaultMCPToolCallTimeout)
 	defer cancel()
 

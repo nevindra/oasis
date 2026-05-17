@@ -30,7 +30,9 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 
 	// Register skill tools if a provider is configured.
 	if cfg.skillProvider != nil {
-		a.tools.Add(newSkillTool(cfg.skillProvider))
+		for _, t := range newSkillTools(cfg.skillProvider) {
+			a.tools.Add(t)
+		}
 	}
 
 	// Pre-compute tool definitions for the non-dynamic path.
@@ -93,7 +95,7 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 // makeDispatch returns a DispatchFunc that executes tools via the given
 // executor function and handles the ask_user, execute_plan,
 // and spawn_agent special cases via the shared dispatchBuiltins helper.
-// When executeToolStream and ch are non-nil, tools implementing StreamingTool
+// When executeToolStream and ch are non-nil, tools implementing StreamingAnyTool
 // emit progress events during execution.
 func (a *LLMAgent) makeDispatch(executeTool toolExecFunc, executeToolStream toolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition) DispatchFunc {
 	var dispatch DispatchFunc
@@ -314,17 +316,19 @@ var spawnAgentToolDef = ToolDefinition{
 	}`),
 }
 
-// funcTool wraps resolved tool definitions and an executor into the Tool interface.
+// funcTool adapts a single ToolDefinition + executor into AnyTool.
 // Used by spawn_agent to pass the parent's (possibly filtered) tools to the
-// ephemeral sub-agent without reconstructing a ToolRegistry.
+// ephemeral sub-agent without reconstructing a ToolRegistry. Each filtered
+// definition becomes one funcTool.
 type funcTool struct {
-	defs []ToolDefinition
+	def  ToolDefinition
 	exec toolExecFunc
 }
 
-func (f *funcTool) Definitions() []ToolDefinition { return f.defs }
-func (f *funcTool) Execute(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
-	return f.exec(ctx, name, args)
+func (f *funcTool) Name() string               { return f.def.Name }
+func (f *funcTool) Definition() ToolDefinition { return f.def }
+func (f *funcTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	return f.exec(ctx, f.def.Name, args)
 }
 
 // spawnAgentArgs is the parsed arguments for the spawn_agent tool call.
@@ -410,10 +414,14 @@ func executeSpawnAgent(ctx context.Context, args json.RawMessage, cfg subAgentCo
 		return cfg.executeTool(ctx, toolName, toolArgs)
 	}
 
-	// Build ephemeral options.
+	// Build ephemeral options. Wrap each definition as its own AnyTool.
+	subTools := make([]AnyTool, len(filteredDefs))
+	for i, d := range filteredDefs {
+		subTools[i] = &funcTool{def: d, exec: filteredExec}
+	}
 	opts := []AgentOption{
 		WithPrompt(subAgentPrompt),
-		WithTools(&funcTool{defs: filteredDefs, exec: filteredExec}),
+		WithTools(subTools...),
 		WithMaxIter(cfg.maxIter),
 		WithLogger(cfg.logger),
 	}

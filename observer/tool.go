@@ -14,29 +14,32 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// ObservedTool wraps an oasis.Tool with OTEL instrumentation.
+// ObservedTool wraps an oasis.AnyTool with OTEL instrumentation.
 type ObservedTool struct {
-	inner oasis.Tool
+	inner oasis.AnyTool
 	inst  *Instruments
 }
 
 // WrapTool returns an instrumented tool.
-func WrapTool(inner oasis.Tool, inst *Instruments) *ObservedTool {
+func WrapTool(inner oasis.AnyTool, inst *Instruments) *ObservedTool {
 	return &ObservedTool{inner: inner, inst: inst}
 }
 
-func (o *ObservedTool) Definitions() []oasis.ToolDefinition {
-	return o.inner.Definitions()
+func (o *ObservedTool) Name() string { return o.inner.Name() }
+
+func (o *ObservedTool) Definition() oasis.ToolDefinition {
+	return o.inner.Definition()
 }
 
-func (o *ObservedTool) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
+func (o *ObservedTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+	name := o.inner.Name()
 	ctx, span := o.inst.Tracer.Start(ctx, "tool.execute", trace.WithAttributes(
 		AttrToolName.String(name),
 	))
 	defer span.End()
 	start := time.Now()
 
-	result, err := o.inner.Execute(ctx, name, args)
+	result, err := o.inner.ExecuteRaw(ctx, args)
 
 	durationMs := float64(time.Since(start).Milliseconds())
 	status := "ok"
@@ -76,3 +79,6 @@ func (o *ObservedTool) Execute(ctx context.Context, name string, args json.RawMe
 
 	return result, err
 }
+
+// compile-time check
+var _ oasis.AnyTool = (*ObservedTool)(nil)

@@ -75,9 +75,10 @@ func agentStepFunc(agent Agent, cfg *stepConfig) StepFunc {
 	}
 }
 
-// toolStepFunc wraps a Tool call into a StepFunc. Args are read from context
-// (via ArgsFrom key) and the tool result is written back to context.
-func toolStepFunc(tool Tool, toolName string, cfg *stepConfig) StepFunc {
+// toolStepFunc wraps an AnyTool call into a StepFunc. Args are read from context
+// (via ArgsFrom key) and the tool result is written back to context. toolName
+// is preserved for error-message labelling; the AnyTool itself owns dispatch.
+func toolStepFunc(tool AnyTool, toolName string, cfg *stepConfig) StepFunc {
 	return func(ctx context.Context, wCtx *WorkflowContext) error {
 		var args json.RawMessage
 		if cfg.argsFrom != "" {
@@ -100,7 +101,7 @@ func toolStepFunc(tool Tool, toolName string, cfg *stepConfig) StepFunc {
 			args = json.RawMessage(`{}`)
 		}
 
-		result, err := tool.Execute(ctx, toolName, args)
+		result, err := tool.ExecuteRaw(ctx, args)
 		if err != nil {
 			return err
 		}

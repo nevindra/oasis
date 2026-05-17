@@ -37,7 +37,7 @@ func TestE2E_ParallelEnsureSchema_ThunderingHerd(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			args, _ := json.Marshal(map[string]interface{}{"query": "echos"})
-			res, err := ts.Execute(context.Background(), toolSearchName, args)
+			res, err := ts.ExecuteRaw(context.Background(), args)
 			if err != nil {
 				t.Errorf("exec: %v", err)
 			}
@@ -61,7 +61,7 @@ func TestE2E_ToolSearch_EmptyQuery(t *testing.T) {
 	reg := newTestRegistry(t)
 	ts := newToolSearchTool(reg.toolReg)
 	args, _ := json.Marshal(map[string]interface{}{"query": ""})
-	res, _ := ts.Execute(context.Background(), toolSearchName, args)
+	res, _ := ts.ExecuteRaw(context.Background(), args)
 	if res.Error == "" {
 		t.Error("expected error")
 	}
@@ -87,7 +87,7 @@ func TestE2E_ToolSearch_MaxResultsZero(t *testing.T) {
 
 	ts := newToolSearchTool(reg.toolReg)
 	args, _ := json.Marshal(map[string]interface{}{"query": "things", "max_results": 0})
-	res, _ := ts.Execute(context.Background(), toolSearchName, args)
+	res, _ := ts.ExecuteRaw(context.Background(), args)
 
 	n := strings.Count(res.Content, `"name":`)
 	if n != 10 {

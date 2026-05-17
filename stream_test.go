@@ -835,28 +835,30 @@ func TestThinkingEventEmitted(t *testing.T) {
 	}
 }
 
-// --- StreamingTool tests ---
+// --- StreamingAnyTool tests ---
 
-// progressTool implements StreamingTool for testing.
+// progressTool implements StreamingAnyTool for testing.
 type progressTool struct{}
 
-func (t progressTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{
+func (t progressTool) Name() string { return "slow_search" }
+
+func (t progressTool) Definition() ToolDefinition {
+	return ToolDefinition{
 		Name:        "slow_search",
 		Description: "Slow search with progress",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
-	}}
+	}
 }
 
-func (t progressTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (t progressTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	return ToolResult{Content: "found 3 results"}, nil
 }
 
-func (t progressTool) ExecuteStream(_ context.Context, name string, _ json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+func (t progressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
 	for i := 1; i <= 3; i++ {
 		ch <- StreamEvent{
 			Type:    EventToolProgress,
-			Name:    name,
+			Name:    "slow_search",
 			Content: fmt.Sprintf(`{"found":%d}`, i),
 		}
 	}
@@ -900,8 +902,8 @@ func TestStreamingToolEmitsProgress(t *testing.T) {
 }
 
 func TestStreamingToolFallsBackToExecute(t *testing.T) {
-	// When not streaming (Execute, not ExecuteStream), StreamingTool should
-	// fall back to regular Execute.
+	// When not streaming (Execute, not ExecuteStream), StreamingAnyTool should
+	// fall back to ExecuteRaw.
 	provider := &mockProvider{
 		name: "test",
 		responses: []ChatResponse{

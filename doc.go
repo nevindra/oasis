@@ -36,7 +36,7 @@
 //   - [EmbeddingProvider] — text-to-vector embedding
 //   - [Store] — persistence with vector search
 //   - [MemoryStore] — long-term semantic memory
-//   - [Tool] — pluggable capability for LLM function calling
+//   - [AnyTool] — pluggable atomic capability for LLM function calling (use [Tool] for type-safe authoring + [Erase])
 //   - [PreProcessor], [PostProcessor], [PostToolProcessor] — message/response/tool result transformers
 //
 // # Included Implementations

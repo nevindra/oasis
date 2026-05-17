@@ -1,6 +1,9 @@
 // Package data provides structured data transform tools for CSV/JSON processing.
-// The LLM composes four functions — parse, filter, aggregate, transform — as
+// The LLM composes four atomic tools — parse, filter, aggregate, transform — as
 // building blocks for data pipelines without needing Python subprocess overhead.
+//
+// Each function is its own oasis.Tool[In, Out] implementation; use New() to
+// obtain the full set as []oasis.AnyTool ready for registration.
 package data
 
 import (
@@ -21,171 +24,76 @@ const (
 	maxOutputSize = 32 * 1024 // 32KB
 )
 
-// Tool provides structured data transform functions.
-type Tool struct{}
-
-// New creates a data transform tool.
-func New() *Tool { return &Tool{} }
-
-func (t *Tool) Definitions() []oasis.ToolDefinition {
-	return []oasis.ToolDefinition{
-		{
-			Name:        "data_parse",
-			Description: "Parse raw CSV, JSON, or JSONL text into structured records. Returns an array of objects with column names as keys. Use this to convert raw file content into a format that data_filter, data_aggregate, and data_transform can process.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"content": {
-						"type": "string",
-						"description": "Raw text content to parse (CSV, JSON array, or JSONL)"
-					},
-					"format": {
-						"type": "string",
-						"enum": ["csv", "json", "jsonl"],
-						"description": "Data format. Auto-detected if omitted."
-					},
-					"limit": {
-						"type": "integer",
-						"description": "Max records to return (default 1000)"
-					}
-				},
-				"required": ["content"]
-			}`),
-		},
-		{
-			Name:        "data_filter",
-			Description: "Filter records by conditions. All conditions are AND-ed. Operators: ==, !=, >, <, >=, <=, contains (case-insensitive substring), in (value in array). Numeric strings are auto-coerced for comparisons.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"records": {
-						"type": "array",
-						"description": "Array of record objects to filter"
-					},
-					"where": {
-						"type": "array",
-						"description": "Array of conditions: [{column, op, value}, ...]",
-						"items": {
-							"type": "object",
-							"properties": {
-								"column": {"type": "string"},
-								"op": {"type": "string", "enum": ["==", "!=", ">", "<", ">=", "<=", "contains", "in"]},
-								"value": {}
-							},
-							"required": ["column", "op", "value"]
-						}
-					}
-				},
-				"required": ["records", "where"]
-			}`),
-		},
-		{
-			Name:        "data_aggregate",
-			Description: "Group records and compute aggregate metrics. Operations: sum, count, avg, min, max. Without group_by, aggregates over all records. Non-numeric values are skipped for sum/avg/min/max.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"records": {
-						"type": "array",
-						"description": "Array of record objects to aggregate"
-					},
-					"group_by": {
-						"type": "array",
-						"items": {"type": "string"},
-						"description": "Columns to group by (optional — omit to aggregate all records)"
-					},
-					"metrics": {
-						"type": "array",
-						"description": "Aggregation metrics: [{column, op}, ...]",
-						"items": {
-							"type": "object",
-							"properties": {
-								"column": {"type": "string"},
-								"op": {"type": "string", "enum": ["sum", "count", "avg", "min", "max"]}
-							},
-							"required": ["column", "op"]
-						}
-					}
-				},
-				"required": ["records", "metrics"]
-			}`),
-		},
-		{
-			Name:        "data_transform",
-			Description: "Select, rename, sort, and limit records. Use to pick specific columns, rename them, sort by a column (numeric-aware), and limit output size.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"records": {
-						"type": "array",
-						"description": "Array of record objects to transform"
-					},
-					"select": {
-						"type": "array",
-						"items": {"type": "string"},
-						"description": "Columns to keep (omit to keep all)"
-					},
-					"rename": {
-						"type": "object",
-						"description": "Column rename map: {old_name: new_name, ...}"
-					},
-					"sort_by": {
-						"type": "string",
-						"description": "Column to sort by (numeric-aware)"
-					},
-					"sort_desc": {
-						"type": "boolean",
-						"description": "Sort descending (default false)"
-					},
-					"limit": {
-						"type": "integer",
-						"description": "Max records to return"
-					}
-				},
-				"required": ["records"]
-			}`),
-		},
-	}
-}
-
-func (t *Tool) Execute(ctx context.Context, name string, args json.RawMessage) (oasis.ToolResult, error) {
-	switch name {
-	case "data_parse":
-		return dataParse(args)
-	case "data_filter":
-		return dataFilter(args)
-	case "data_aggregate":
-		return dataAggregate(args)
-	case "data_transform":
-		return dataTransform(args)
-	default:
-		return oasis.ToolResult{Error: "unknown data tool: " + name}, nil
+// New returns the data toolkit as a slice of atomic AnyTool implementations.
+// Tools included: data_parse, data_filter, data_aggregate, data_transform.
+func New() []oasis.AnyTool {
+	return []oasis.AnyTool{
+		oasis.Erase[ParseInput, ParseOutput](&ParseTool{}),
+		oasis.Erase[FilterInput, FilterOutput](&FilterTool{}),
+		oasis.Erase[AggregateInput, AggregateOutput](&AggregateTool{}),
+		oasis.Erase[TransformInput, TransformOutput](&TransformTool{}),
 	}
 }
 
 // --- data_parse ---
 
-type parseArgs struct {
+// ParseInput is the input payload for data_parse.
+type ParseInput struct {
 	Content string `json:"content"`
 	Format  string `json:"format"`
 	Limit   int    `json:"limit"`
 }
 
-func dataParse(args json.RawMessage) (oasis.ToolResult, error) {
-	var p parseArgs
-	if err := json.Unmarshal(args, &p); err != nil {
-		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+// ParseOutput is the output of data_parse.
+type ParseOutput struct {
+	Records []map[string]any `json:"records"`
+	Columns []string         `json:"columns"`
+	Count   int              `json:"count"`
+}
+
+// ParseTool implements data_parse.
+type ParseTool struct{}
+
+func (t *ParseTool) Name() string { return "data_parse" }
+
+func (t *ParseTool) Definition() oasis.ToolDefinition {
+	return oasis.ToolDefinition{
+		Name:        "data_parse",
+		Description: "Parse raw CSV, JSON, or JSONL text into structured records. Returns an array of objects with column names as keys. Use this to convert raw file content into a format that data_filter, data_aggregate, and data_transform can process.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"content": {
+					"type": "string",
+					"description": "Raw text content to parse (CSV, JSON array, or JSONL)"
+				},
+				"format": {
+					"type": "string",
+					"enum": ["csv", "json", "jsonl"],
+					"description": "Data format. Auto-detected if omitted."
+				},
+				"limit": {
+					"type": "integer",
+					"description": "Max records to return (default 1000)"
+				}
+			},
+			"required": ["content"]
+		}`),
 	}
-	if p.Content == "" {
-		return oasis.ToolResult{Error: "content is required"}, nil
+}
+
+func (t *ParseTool) Execute(ctx context.Context, in ParseInput) (ParseOutput, error) {
+	if in.Content == "" {
+		return ParseOutput{}, fmt.Errorf("content is required")
 	}
-	if p.Limit <= 0 {
-		p.Limit = defaultLimit
+	limit := in.Limit
+	if limit <= 0 {
+		limit = defaultLimit
 	}
 
-	format := p.Format
+	format := in.Format
 	if format == "" {
-		format = detectFormat(p.Content)
+		format = detectFormat(in.Content)
 	}
 
 	var records []map[string]any
@@ -195,23 +103,23 @@ func dataParse(args json.RawMessage) (oasis.ToolResult, error) {
 
 	switch format {
 	case "csv":
-		records, columns, totalCount, err = parseCSV(p.Content, p.Limit)
+		records, columns, totalCount, err = parseCSV(in.Content, limit)
 	case "json":
-		records, columns, totalCount, err = parseJSON(p.Content, p.Limit)
+		records, columns, totalCount, err = parseJSON(in.Content, limit)
 	case "jsonl":
-		records, columns, totalCount, err = parseJSONL(p.Content, p.Limit)
+		records, columns, totalCount, err = parseJSONL(in.Content, limit)
 	default:
-		return oasis.ToolResult{Error: "unknown format: " + format + " (use csv, json, or jsonl)"}, nil
+		return ParseOutput{}, fmt.Errorf("unknown format: %s (use csv, json, or jsonl)", format)
 	}
 	if err != nil {
-		return oasis.ToolResult{Error: err.Error()}, nil
+		return ParseOutput{}, err
 	}
 
-	return marshalResult(map[string]any{
-		"records": records,
-		"columns": columns,
-		"count":   totalCount,
+	out := ParseOutput{Records: records, Columns: columns, Count: totalCount}
+	truncateRecordsBySize(&out.Records, &out.Count, func() ([]byte, error) {
+		return json.Marshal(out)
 	})
+	return out, nil
 }
 
 func detectFormat(content string) string {
@@ -335,43 +243,82 @@ func extractColumns(records []map[string]any) []string {
 
 // --- data_filter ---
 
-type filterArgs struct {
-	Records []map[string]any `json:"records"`
-	Where   []condition      `json:"where"`
-}
-
-type condition struct {
+// Condition is one row of the filter where-clause.
+type Condition struct {
 	Column string `json:"column"`
 	Op     string `json:"op"`
 	Value  any    `json:"value"`
 }
 
-func dataFilter(args json.RawMessage) (oasis.ToolResult, error) {
-	var f filterArgs
-	if err := json.Unmarshal(args, &f); err != nil {
-		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+// FilterInput is the input payload for data_filter.
+type FilterInput struct {
+	Records []map[string]any `json:"records"`
+	Where   []Condition      `json:"where"`
+}
+
+// FilterOutput is the output of data_filter.
+type FilterOutput struct {
+	Records []map[string]any `json:"records"`
+	Count   int              `json:"count"`
+}
+
+// FilterTool implements data_filter.
+type FilterTool struct{}
+
+func (t *FilterTool) Name() string { return "data_filter" }
+
+func (t *FilterTool) Definition() oasis.ToolDefinition {
+	return oasis.ToolDefinition{
+		Name:        "data_filter",
+		Description: "Filter records by conditions. All conditions are AND-ed. Operators: ==, !=, >, <, >=, <=, contains (case-insensitive substring), in (value in array). Numeric strings are auto-coerced for comparisons.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"records": {
+					"type": "array",
+					"description": "Array of record objects to filter"
+				},
+				"where": {
+					"type": "array",
+					"description": "Array of conditions: [{column, op, value}, ...]",
+					"items": {
+						"type": "object",
+						"properties": {
+							"column": {"type": "string"},
+							"op": {"type": "string", "enum": ["==", "!=", ">", "<", ">=", "<=", "contains", "in"]},
+							"value": {}
+						},
+						"required": ["column", "op", "value"]
+					}
+				}
+			},
+			"required": ["records", "where"]
+		}`),
 	}
-	if len(f.Where) == 0 {
-		return oasis.ToolResult{Error: "where conditions are required"}, nil
+}
+
+func (t *FilterTool) Execute(ctx context.Context, in FilterInput) (FilterOutput, error) {
+	if len(in.Where) == 0 {
+		return FilterOutput{}, fmt.Errorf("where conditions are required")
 	}
 
 	var filtered []map[string]any
-	for _, rec := range f.Records {
-		if matchesAll(rec, f.Where) {
+	for _, rec := range in.Records {
+		if matchesAll(rec, in.Where) {
 			filtered = append(filtered, rec)
 		}
 	}
 	if filtered == nil {
 		filtered = []map[string]any{}
 	}
-
-	return marshalResult(map[string]any{
-		"records": filtered,
-		"count":   len(filtered),
+	out := FilterOutput{Records: filtered, Count: len(filtered)}
+	truncateRecordsBySize(&out.Records, &out.Count, func() ([]byte, error) {
+		return json.Marshal(out)
 	})
+	return out, nil
 }
 
-func matchesAll(rec map[string]any, conditions []condition) bool {
+func matchesAll(rec map[string]any, conditions []Condition) bool {
 	for _, c := range conditions {
 		if !matchCondition(rec, c) {
 			return false
@@ -380,7 +327,7 @@ func matchesAll(rec map[string]any, conditions []condition) bool {
 	return true
 }
 
-func matchCondition(rec map[string]any, c condition) bool {
+func matchCondition(rec map[string]any, c Condition) bool {
 	val, ok := rec[c.Column]
 	if !ok {
 		return false
@@ -471,35 +418,78 @@ func toFloat(v any) (float64, bool) {
 
 // --- data_aggregate ---
 
-type aggregateArgs struct {
-	Records []map[string]any `json:"records"`
-	GroupBy []string         `json:"group_by"`
-	Metrics []metric         `json:"metrics"`
-}
-
-type metric struct {
+// Metric describes a single aggregation operation.
+type Metric struct {
 	Column string `json:"column"`
 	Op     string `json:"op"`
 }
 
-func dataAggregate(args json.RawMessage) (oasis.ToolResult, error) {
-	var a aggregateArgs
-	if err := json.Unmarshal(args, &a); err != nil {
-		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+// AggregateInput is the input payload for data_aggregate.
+type AggregateInput struct {
+	Records []map[string]any `json:"records"`
+	GroupBy []string         `json:"group_by"`
+	Metrics []Metric         `json:"metrics"`
+}
+
+// AggregateOutput is the output of data_aggregate.
+type AggregateOutput struct {
+	Groups []map[string]any `json:"groups"`
+	Count  int              `json:"count"`
+}
+
+// AggregateTool implements data_aggregate.
+type AggregateTool struct{}
+
+func (t *AggregateTool) Name() string { return "data_aggregate" }
+
+func (t *AggregateTool) Definition() oasis.ToolDefinition {
+	return oasis.ToolDefinition{
+		Name:        "data_aggregate",
+		Description: "Group records and compute aggregate metrics. Operations: sum, count, avg, min, max. Without group_by, aggregates over all records. Non-numeric values are skipped for sum/avg/min/max.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"records": {
+					"type": "array",
+					"description": "Array of record objects to aggregate"
+				},
+				"group_by": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "Columns to group by (optional — omit to aggregate all records)"
+				},
+				"metrics": {
+					"type": "array",
+					"description": "Aggregation metrics: [{column, op}, ...]",
+					"items": {
+						"type": "object",
+						"properties": {
+							"column": {"type": "string"},
+							"op": {"type": "string", "enum": ["sum", "count", "avg", "min", "max"]}
+						},
+						"required": ["column", "op"]
+					}
+				}
+			},
+			"required": ["records", "metrics"]
+		}`),
 	}
-	if len(a.Metrics) == 0 {
-		return oasis.ToolResult{Error: "metrics are required"}, nil
+}
+
+func (t *AggregateTool) Execute(ctx context.Context, in AggregateInput) (AggregateOutput, error) {
+	if len(in.Metrics) == 0 {
+		return AggregateOutput{}, fmt.Errorf("metrics are required")
 	}
 
 	// Group records.
 	groups := make(map[string][]map[string]any)
 	groupKeys := make(map[string]map[string]any) // group key string -> group-by values
-	for _, rec := range a.Records {
-		key := buildGroupKey(rec, a.GroupBy)
+	for _, rec := range in.Records {
+		key := buildGroupKey(rec, in.GroupBy)
 		groups[key] = append(groups[key], rec)
 		if _, ok := groupKeys[key]; !ok {
 			gk := make(map[string]any)
-			for _, col := range a.GroupBy {
+			for _, col := range in.GroupBy {
 				gk[col] = rec[col]
 			}
 			groupKeys[key] = gk
@@ -515,7 +505,7 @@ func dataAggregate(args json.RawMessage) (oasis.ToolResult, error) {
 			row[k] = v
 		}
 		// Compute each metric.
-		for _, m := range a.Metrics {
+		for _, m := range in.Metrics {
 			name := m.Op + "_" + m.Column
 			row[name] = computeMetric(recs, m)
 		}
@@ -523,9 +513,9 @@ func dataAggregate(args json.RawMessage) (oasis.ToolResult, error) {
 	}
 
 	// Sort groups for deterministic output.
-	if len(a.GroupBy) > 0 {
+	if len(in.GroupBy) > 0 {
 		sort.Slice(result, func(i, j int) bool {
-			for _, col := range a.GroupBy {
+			for _, col := range in.GroupBy {
 				si := fmt.Sprintf("%v", result[i][col])
 				sj := fmt.Sprintf("%v", result[j][col])
 				if si != sj {
@@ -536,10 +526,11 @@ func dataAggregate(args json.RawMessage) (oasis.ToolResult, error) {
 		})
 	}
 
-	return marshalResult(map[string]any{
-		"groups": result,
-		"count":  len(result),
+	out := AggregateOutput{Groups: result, Count: len(result)}
+	truncateRecordsBySize(&out.Groups, &out.Count, func() ([]byte, error) {
+		return json.Marshal(out)
 	})
+	return out, nil
 }
 
 func buildGroupKey(rec map[string]any, groupBy []string) string {
@@ -553,7 +544,7 @@ func buildGroupKey(rec map[string]any, groupBy []string) string {
 	return strings.Join(parts, "\x00")
 }
 
-func computeMetric(records []map[string]any, m metric) any {
+func computeMetric(records []map[string]any, m Metric) any {
 	switch m.Op {
 	case "count":
 		return len(records)
@@ -615,7 +606,8 @@ func computeMetric(records []map[string]any, m metric) any {
 
 // --- data_transform ---
 
-type transformArgs struct {
+// TransformInput is the input payload for data_transform.
+type TransformInput struct {
 	Records  []map[string]any  `json:"records"`
 	Select   []string          `json:"select"`
 	Rename   map[string]string `json:"rename"`
@@ -624,25 +616,69 @@ type transformArgs struct {
 	Limit    int               `json:"limit"`
 }
 
-func dataTransform(args json.RawMessage) (oasis.ToolResult, error) {
-	var t transformArgs
-	if err := json.Unmarshal(args, &t); err != nil {
-		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-	}
+// TransformOutput is the output of data_transform.
+type TransformOutput struct {
+	Records []map[string]any `json:"records"`
+	Count   int              `json:"count"`
+}
 
-	result := make([]map[string]any, len(t.Records))
-	for i, rec := range t.Records {
+// TransformTool implements data_transform.
+type TransformTool struct{}
+
+func (t *TransformTool) Name() string { return "data_transform" }
+
+func (t *TransformTool) Definition() oasis.ToolDefinition {
+	return oasis.ToolDefinition{
+		Name:        "data_transform",
+		Description: "Select, rename, sort, and limit records. Use to pick specific columns, rename them, sort by a column (numeric-aware), and limit output size.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"records": {
+					"type": "array",
+					"description": "Array of record objects to transform"
+				},
+				"select": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "Columns to keep (omit to keep all)"
+				},
+				"rename": {
+					"type": "object",
+					"description": "Column rename map: {old_name: new_name, ...}"
+				},
+				"sort_by": {
+					"type": "string",
+					"description": "Column to sort by (numeric-aware)"
+				},
+				"sort_desc": {
+					"type": "boolean",
+					"description": "Sort descending (default false)"
+				},
+				"limit": {
+					"type": "integer",
+					"description": "Max records to return"
+				}
+			},
+			"required": ["records"]
+		}`),
+	}
+}
+
+func (t *TransformTool) Execute(ctx context.Context, in TransformInput) (TransformOutput, error) {
+	result := make([]map[string]any, len(in.Records))
+	for i, rec := range in.Records {
 		result[i] = rec
 	}
 
 	// Select columns.
-	if len(t.Select) > 0 {
-		selectSet := make(map[string]bool, len(t.Select))
-		for _, col := range t.Select {
+	if len(in.Select) > 0 {
+		selectSet := make(map[string]bool, len(in.Select))
+		for _, col := range in.Select {
 			selectSet[col] = true
 		}
 		for i, rec := range result {
-			filtered := make(map[string]any, len(t.Select))
+			filtered := make(map[string]any, len(in.Select))
 			for k, v := range rec {
 				if selectSet[k] {
 					filtered[k] = v
@@ -653,11 +689,11 @@ func dataTransform(args json.RawMessage) (oasis.ToolResult, error) {
 	}
 
 	// Rename columns.
-	if len(t.Rename) > 0 {
+	if len(in.Rename) > 0 {
 		for i, rec := range result {
 			renamed := make(map[string]any, len(rec))
 			for k, v := range rec {
-				if newName, ok := t.Rename[k]; ok {
+				if newName, ok := in.Rename[k]; ok {
 					renamed[newName] = v
 				} else {
 					renamed[k] = v
@@ -668,12 +704,12 @@ func dataTransform(args json.RawMessage) (oasis.ToolResult, error) {
 	}
 
 	// Sort.
-	if t.SortBy != "" {
+	if in.SortBy != "" {
 		sort.SliceStable(result, func(i, j int) bool {
-			vi := result[i][t.SortBy]
-			vj := result[j][t.SortBy]
+			vi := result[i][in.SortBy]
+			vj := result[j][in.SortBy]
 			cmp := compareValues(vi, vj)
-			if t.SortDesc {
+			if in.SortDesc {
 				return cmp > 0
 			}
 			return cmp < 0
@@ -681,38 +717,47 @@ func dataTransform(args json.RawMessage) (oasis.ToolResult, error) {
 	}
 
 	// Limit.
-	if t.Limit > 0 && len(result) > t.Limit {
-		result = result[:t.Limit]
+	if in.Limit > 0 && len(result) > in.Limit {
+		result = result[:in.Limit]
 	}
 
-	return marshalResult(map[string]any{
-		"records": result,
-		"count":   len(result),
+	out := TransformOutput{Records: result, Count: len(result)}
+	truncateRecordsBySize(&out.Records, &out.Count, func() ([]byte, error) {
+		return json.Marshal(out)
 	})
+	return out, nil
 }
 
 // --- helpers ---
 
-func marshalResult(v map[string]any) (oasis.ToolResult, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return oasis.ToolResult{Error: "marshal error: " + err.Error()}, nil
+// truncateRecordsBySize ensures the JSON-marshalled representation of an
+// output stays within maxOutputSize. If the marshalled size exceeds the
+// limit, it halves the records slice until it fits (or only 1 record remains).
+// remarshal returns the current JSON encoding of the output (used to test size).
+func truncateRecordsBySize(records *[]map[string]any, count *int, remarshal func() ([]byte, error)) {
+	data, err := remarshal()
+	if err != nil || len(data) <= maxOutputSize {
+		return
 	}
-	content := string(data)
-	if len(content) > maxOutputSize {
-		// Truncate records and re-marshal.
-		if records, ok := v["records"].([]map[string]any); ok {
-			for len(records) > 1 {
-				records = records[:len(records)/2]
-				v["records"] = records
-				v["count"] = len(records)
-				data, _ = json.Marshal(v)
-				if len(data) <= maxOutputSize {
-					break
-				}
-			}
-			content = string(data)
+	recs := *records
+	for len(recs) > 1 {
+		recs = recs[:len(recs)/2]
+		*records = recs
+		*count = len(recs)
+		data, err = remarshal()
+		if err != nil {
+			return
+		}
+		if len(data) <= maxOutputSize {
+			return
 		}
 	}
-	return oasis.ToolResult{Content: content}, nil
 }
+
+// compile-time checks
+var (
+	_ oasis.Tool[ParseInput, ParseOutput]         = (*ParseTool)(nil)
+	_ oasis.Tool[FilterInput, FilterOutput]       = (*FilterTool)(nil)
+	_ oasis.Tool[AggregateInput, AggregateOutput] = (*AggregateTool)(nil)
+	_ oasis.Tool[TransformInput, TransformOutput] = (*TransformTool)(nil)
+)

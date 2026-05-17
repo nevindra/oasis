@@ -47,7 +47,7 @@ const (
 	toolSearchHardMax    = 25
 )
 
-// toolSearchTool is the internal Tool auto-registered by WithDeferredSchemas.
+// toolSearchTool is the internal AnyTool auto-registered by WithDeferredSchemas.
 // It searches the agent's ToolRegistry for deferred tool definitions matching
 // a keyword query and lazy-loads their schemas via ToolRegistry.EnsureSchema.
 type toolSearchTool struct {
@@ -58,12 +58,14 @@ func newToolSearchTool(registry *ToolRegistry) *toolSearchTool {
 	return &toolSearchTool{registry: registry}
 }
 
-func (t *toolSearchTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{
+func (t *toolSearchTool) Name() string { return toolSearchName }
+
+func (t *toolSearchTool) Definition() ToolDefinition {
+	return ToolDefinition{
 		Name:        toolSearchName,
 		Description: toolSearchDescription,
 		Parameters:  json.RawMessage(toolSearchInputSchema),
-	}}
+	}
 }
 
 type toolSearchInput struct {
@@ -83,7 +85,7 @@ type toolSearchOutput struct {
 	Note  string            `json:"note,omitempty"`
 }
 
-func (t *toolSearchTool) Execute(ctx context.Context, _ string, args json.RawMessage) (ToolResult, error) {
+func (t *toolSearchTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var in toolSearchInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		return ToolResult{Error: "invalid args: " + err.Error()}, nil
@@ -207,4 +209,4 @@ Tools NOT prefixed with "mcp__" have full schemas and can be called directly.
 }
 
 // Compile-time assertion.
-var _ Tool = (*toolSearchTool)(nil)
+var _ AnyTool = (*toolSearchTool)(nil)

@@ -9,14 +9,13 @@ import (
 
 type stubRegistryTool struct{ name string }
 
-func (s stubRegistryTool) Definitions() []ToolDefinition {
-	return []ToolDefinition{{Name: s.name}}
-}
-func (s stubRegistryTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (s stubRegistryTool) Name() string               { return s.name }
+func (s stubRegistryTool) Definition() ToolDefinition { return ToolDefinition{Name: s.name} }
+func (s stubRegistryTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	return ToolResult{Content: "ok"}, nil
 }
 
-// deferredStubTool implements Tool + SchemaEnsurer.
+// deferredStubTool implements AnyTool + SchemaEnsurer.
 type deferredStubTool struct {
 	name      string
 	hasSchema bool
@@ -24,14 +23,16 @@ type deferredStubTool struct {
 	loadCount int
 }
 
-func (t *deferredStubTool) Definitions() []ToolDefinition {
+func (t *deferredStubTool) Name() string { return t.name }
+
+func (t *deferredStubTool) Definition() ToolDefinition {
 	d := ToolDefinition{Name: t.name, Description: "test"}
 	if t.hasSchema {
 		d.Parameters = json.RawMessage(`{"type":"object"}`)
 	}
-	return []ToolDefinition{d}
+	return d
 }
-func (t *deferredStubTool) Execute(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (t *deferredStubTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	return ToolResult{Content: "ok"}, nil
 }
 func (t *deferredStubTool) EnsureSchema(_ context.Context) error {

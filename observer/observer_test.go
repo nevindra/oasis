@@ -54,15 +54,18 @@ func (m *mockProviderManyEvents) ChatStream(_ context.Context, _ oasis.ChatReque
 	return m.chatResp, nil
 }
 
-// mockTool for observer tests.
+// mockTool for observer tests. Implements oasis.AnyTool — atomic, single
+// definition. Tests that previously asserted N definitions now register N
+// instances of mockTool.
 type mockTool struct {
-	defs   []oasis.ToolDefinition
+	def    oasis.ToolDefinition
 	result oasis.ToolResult
 	err    error
 }
 
-func (m *mockTool) Definitions() []oasis.ToolDefinition { return m.defs }
-func (m *mockTool) Execute(_ context.Context, _ string, _ json.RawMessage) (oasis.ToolResult, error) {
+func (m *mockTool) Name() string                       { return m.def.Name }
+func (m *mockTool) Definition() oasis.ToolDefinition   { return m.def }
+func (m *mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (oasis.ToolResult, error) {
 	return m.result, m.err
 }
 
@@ -273,36 +276,31 @@ func TestObservedProviderChatStreamContextCancel(t *testing.T) {
 // ObservedTool tests
 // ---------------------------------------------------------------------------
 
-func TestObservedToolDefinitions(t *testing.T) {
-	defs := []oasis.ToolDefinition{
-		{Name: "search", Description: "web search"},
-		{Name: "calc", Description: "calculator"},
-	}
-	inner := &mockTool{defs: defs}
+func TestObservedToolDefinition(t *testing.T) {
+	def := oasis.ToolDefinition{Name: "search", Description: "web search"}
+	inner := &mockTool{def: def}
 	ot := WrapTool(inner, testInstruments(t))
 
-	got := ot.Definitions()
-	if len(got) != len(defs) {
-		t.Fatalf("Definitions length = %d, want %d", len(got), len(defs))
+	got := ot.Definition()
+	if got.Name != def.Name {
+		t.Errorf("Definition.Name = %q, want %q", got.Name, def.Name)
 	}
-	for i, d := range got {
-		if d.Name != defs[i].Name {
-			t.Errorf("Definitions[%d].Name = %q, want %q", i, d.Name, defs[i].Name)
-		}
-		if d.Description != defs[i].Description {
-			t.Errorf("Definitions[%d].Description = %q, want %q", i, d.Description, defs[i].Description)
-		}
+	if got.Description != def.Description {
+		t.Errorf("Definition.Description = %q, want %q", got.Description, def.Description)
+	}
+	if ot.Name() != def.Name {
+		t.Errorf("Name() = %q, want %q", ot.Name(), def.Name)
 	}
 }
 
 func TestObservedToolExecute(t *testing.T) {
 	want := oasis.ToolResult{Content: "result data"}
-	inner := &mockTool{result: want}
+	inner := &mockTool{def: oasis.ToolDefinition{Name: "search"}, result: want}
 	ot := WrapTool(inner, testInstruments(t))
 
-	got, err := ot.Execute(context.Background(), "search", json.RawMessage(`{"q":"test"}`))
+	got, err := ot.ExecuteRaw(context.Background(), json.RawMessage(`{"q":"test"}`))
 	if err != nil {
-		t.Fatalf("Execute returned unexpected error: %v", err)
+		t.Fatalf("ExecuteRaw returned unexpected error: %v", err)
 	}
 	if got.Content != want.Content {
 		t.Errorf("Content = %q, want %q", got.Content, want.Content)
@@ -314,12 +312,12 @@ func TestObservedToolExecute(t *testing.T) {
 
 func TestObservedToolExecuteError(t *testing.T) {
 	wantErr := errors.New("tool broken")
-	inner := &mockTool{err: wantErr}
+	inner := &mockTool{def: oasis.ToolDefinition{Name: "search"}, err: wantErr}
 	ot := WrapTool(inner, testInstruments(t))
 
-	_, err := ot.Execute(context.Background(), "search", json.RawMessage(`{}`))
+	_, err := ot.ExecuteRaw(context.Background(), json.RawMessage(`{}`))
 	if !errors.Is(err, wantErr) {
-		t.Errorf("Execute error = %v, want %v", err, wantErr)
+		t.Errorf("ExecuteRaw error = %v, want %v", err, wantErr)
 	}
 }
 

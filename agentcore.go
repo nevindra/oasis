@@ -217,16 +217,14 @@ func (c *agentCore) resolveDynamicTools(ctx context.Context, task AgentTask) ([]
 	}
 	dynTools := c.dynamicTools(ctx, task)
 	var toolDefs []ToolDefinition
-	index := make(map[string]Tool, len(dynTools))
+	index := make(map[string]AnyTool, len(dynTools))
 	for _, t := range dynTools {
-		for _, d := range t.Definitions() {
-			toolDefs = append(toolDefs, d)
-			index[d.Name] = t
-		}
+		toolDefs = append(toolDefs, t.Definition())
+		index[t.Name()] = t
 	}
 	executeTool := func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error) {
 		if t, ok := index[name]; ok {
-			return t.Execute(ctx, name, args)
+			return t.ExecuteRaw(ctx, args)
 		}
 		return ToolResult{Error: "unknown tool: " + name}, nil
 	}

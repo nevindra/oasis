@@ -39,7 +39,7 @@ const (
 	// call ID for correlation with the eventual tool-call-start/result events.
 	EventToolCallDelta StreamEventType = "tool-call-delta"
 	// EventToolProgress carries intermediate progress from a long-running tool.
-	// Emitted by tools that implement StreamingTool. Name carries the tool name;
+	// Emitted by tools that implement StreamingAnyTool. Name carries the tool name;
 	// Content carries free-form progress JSON.
 	EventToolProgress StreamEventType = "tool-progress"
 	// EventStepStart signals a workflow step has begun execution.

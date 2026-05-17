@@ -36,7 +36,9 @@ func NewNetwork(name, description string, router Provider, opts ...AgentOption) 
 
 	// Register skill tools if a provider is configured.
 	if cfg.skillProvider != nil {
-		n.tools.Add(newSkillTool(cfg.skillProvider))
+		for _, t := range newSkillTools(cfg.skillProvider) {
+			n.tools.Add(t)
+		}
 	}
 
 	for _, a := range cfg.agents {
@@ -98,7 +100,7 @@ func (n *Network) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<-
 // makeDispatch returns a DispatchFunc that routes tool calls to subagents,
 // the shared built-in tools, or direct tools. When ch is non-nil, agent-start
 // and agent-finish events are emitted for subagent delegation. Tools
-// implementing StreamingTool emit progress events via executeToolStream.
+// implementing StreamingAnyTool emit progress events via executeToolStream.
 func (n *Network) makeDispatch(parentTask AgentTask, ch chan<- StreamEvent, executeTool toolExecFunc, executeToolStream toolExecStreamFunc, resolvedToolDefs []ToolDefinition) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {

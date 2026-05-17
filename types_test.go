@@ -547,9 +547,13 @@ func TestBlobStore_TypeAssertion(t *testing.T) {
 	}
 }
 
-func TestToolRegistryMultiDefinitionTool(t *testing.T) {
+// TestToolRegistry_MultipleAtomicTools registers two related atomic tools
+// (read + write) that previously formed a single bundle. Each is its own
+// AnyTool with its own Name(); the registry indexes them independently.
+func TestToolRegistry_MultipleAtomicTools(t *testing.T) {
 	reg := NewToolRegistry()
-	reg.Add(multiTool{})
+	reg.Add(readTool{})
+	reg.Add(writeTool{})
 
 	defs := reg.AllDefinitions()
 	if len(defs) != 2 {

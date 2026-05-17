@@ -5,7 +5,24 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	oasis "github.com/nevindra/oasis"
 )
+
+// oasisToolResult is a local alias for ergonomic access in tests.
+type oasisToolResult = oasis.ToolResult
+
+// dispatch looks up the atomic tool by name from the toolkit returned by New()
+// and runs it via the AnyTool surface so tests cover the Erase round-trip.
+func dispatch(t *testing.T, name string, raw json.RawMessage) (oasisToolResult, error) {
+	t.Helper()
+	for _, tool := range New() {
+		if tool.Name() == name {
+			return tool.ExecuteRaw(context.Background(), raw)
+		}
+	}
+	return oasisToolResult{Error: "unknown data tool: " + name}, nil
+}
 
 func call(t *testing.T, name string, args any) map[string]any {
 	t.Helper()
@@ -13,10 +30,9 @@ func call(t *testing.T, name string, args any) map[string]any {
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)
 	}
-	tool := New()
-	result, err := tool.Execute(context.Background(), name, raw)
+	result, err := dispatch(t, name, raw)
 	if err != nil {
-		t.Fatalf("Execute returned error: %v", err)
+		t.Fatalf("ExecuteRaw returned error: %v", err)
 	}
 	if result.Error != "" {
 		t.Fatalf("tool error: %s", result.Error)
@@ -34,10 +50,9 @@ func callErr(t *testing.T, name string, args any) string {
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)
 	}
-	tool := New()
-	result, err := tool.Execute(context.Background(), name, raw)
+	result, err := dispatch(t, name, raw)
 	if err != nil {
-		t.Fatalf("Execute returned error: %v", err)
+		t.Fatalf("ExecuteRaw returned error: %v", err)
 	}
 	if result.Error == "" {
 		t.Fatal("expected tool error but got none")
@@ -643,14 +658,13 @@ func TestTransformSortAndLimit(t *testing.T) {
 // ---- definitions + dispatch ----
 
 func TestDefinitions(t *testing.T) {
-	tool := New()
-	defs := tool.Definitions()
-	if len(defs) != 4 {
-		t.Fatalf("expected 4 definitions, got %d", len(defs))
+	tools := New()
+	if len(tools) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(tools))
 	}
 	names := make(map[string]bool)
-	for _, d := range defs {
-		names[d.Name] = true
+	for _, tool := range tools {
+		names[tool.Definition().Name] = true
 	}
 	for _, want := range []string{"data_parse", "data_filter", "data_aggregate", "data_transform"} {
 		if !names[want] {
@@ -660,8 +674,9 @@ func TestDefinitions(t *testing.T) {
 }
 
 func TestUnknownFunction(t *testing.T) {
-	tool := New()
-	result, err := tool.Execute(context.Background(), "data_unknown", json.RawMessage(`{}`))
+	// With atomic tools, an unknown name is resolved by the registry, not the
+	// tool itself. The test helper synthesizes the same error message.
+	result, err := dispatch(t, "data_unknown", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -771,13 +786,15 @@ func TestTransformEmptyRecords(t *testing.T) {
 }
 
 func TestToolInterface(t *testing.T) {
-	// Verify Tool implements oasis.Tool at compile time.
-	var _ interface {
-		Execute(context.Context, string, json.RawMessage) (struct {
-			Content string
-			Error   string
-		}, error)
+	// Verify each atomic tool implements oasis.AnyTool at runtime.
+	tools := New()
+	for _, tool := range tools {
+		_ = oasis.AnyTool(tool)
+		if tool.Name() == "" {
+			t.Errorf("tool has empty name: %T", tool)
+		}
+		if tool.Definition().Name != tool.Name() {
+			t.Errorf("name/definition mismatch for %T", tool)
+		}
 	}
-	// The real check is that data.New() is accepted where oasis.Tool is needed.
-	// This test just ensures the package compiles with the interface.
 }

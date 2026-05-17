@@ -16,7 +16,15 @@ import (
 	"github.com/nevindra/oasis/ingest"
 )
 
-// Tool fetches URLs and extracts readable content.
+// FetchInput is the input payload for the http_fetch tool.
+type FetchInput struct {
+	URL string `json:"url"`
+}
+
+// Tool fetches URLs and extracts readable content. It implements
+// oasis.Tool[FetchInput, string] — one tool = one operation. The output is
+// kept as a bare string for ergonomic LLM consumption: the model just sees
+// the extracted text, and Erase wraps it as JSON automatically.
 type Tool struct {
 	client *http.Client
 }
@@ -28,32 +36,29 @@ func New() *Tool {
 	}
 }
 
-func (t *Tool) Definitions() []oasis.ToolDefinition {
-	return []oasis.ToolDefinition{{
+// Name implements oasis.Tool.
+func (t *Tool) Name() string { return "http_fetch" }
+
+// Definition implements oasis.Tool.
+func (t *Tool) Definition() oasis.ToolDefinition {
+	return oasis.ToolDefinition{
 		Name:        "http_fetch",
 		Description: "Fetch a URL and extract its readable text content. Use for reading web pages, articles, documentation.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","description":"URL to fetch"}},"required":["url"]}`),
-	}}
+	}
 }
 
-func (t *Tool) Execute(ctx context.Context, _ string, args json.RawMessage) (oasis.ToolResult, error) {
-	var params struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-	}
-
-	content, err := t.Fetch(ctx, params.URL)
+// Execute implements oasis.Tool. Returns the extracted, possibly-truncated
+// readable text for the given URL.
+func (t *Tool) Execute(ctx context.Context, in FetchInput) (string, error) {
+	content, err := t.Fetch(ctx, in.URL)
 	if err != nil {
-		return oasis.ToolResult{Error: err.Error()}, nil
+		return "", err
 	}
-
 	if len(content) > 8000 {
 		content = content[:8000] + "\n... (truncated)"
 	}
-
-	return oasis.ToolResult{Content: content}, nil
+	return content, nil
 }
 
 // Fetch downloads a URL and extracts readable text. Exported for use by other tools.
@@ -91,3 +96,6 @@ func (t *Tool) Fetch(ctx context.Context, rawURL string) (string, error) {
 	// Fallback: simple HTML stripping
 	return ingest.StripHTML(html), nil
 }
+
+// compile-time check
+var _ oasis.Tool[FetchInput, string] = (*Tool)(nil)

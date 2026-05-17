@@ -219,7 +219,7 @@ func toolNodeBaseOpts(n NodeDefinition, when func(*WorkflowContext) bool) []Step
 
 // buildToolNodeTemplateArgs generates a resolver step (resolves {{}} placeholders)
 // followed by the tool call step.
-func buildToolNodeTemplateArgs(n NodeDefinition, tool Tool, toolName string, after []string, when func(*WorkflowContext) bool, baseOpts []StepOption) ([]WorkflowOption, error) {
+func buildToolNodeTemplateArgs(n NodeDefinition, tool AnyTool, toolName string, after []string, when func(*WorkflowContext) bool, baseOpts []StepOption) ([]WorkflowOption, error) {
 	resolverID := n.ID + argResolverSuffix
 	var resolverAfter []StepOption
 	if len(after) > 0 {
@@ -255,7 +255,7 @@ func buildToolNodeTemplateArgs(n NodeDefinition, tool Tool, toolName string, aft
 
 // buildToolNodeStaticArgs generates an arg-setter step (marshals static args)
 // followed by the tool call step.
-func buildToolNodeStaticArgs(n NodeDefinition, tool Tool, toolName string, after []string, baseOpts []StepOption) ([]WorkflowOption, error) {
+func buildToolNodeStaticArgs(n NodeDefinition, tool AnyTool, toolName string, after []string, baseOpts []StepOption) ([]WorkflowOption, error) {
 	argsKey := n.ID + argResolverSuffix
 
 	// The arg-setter inherits After + base opts so it runs at the right time.
