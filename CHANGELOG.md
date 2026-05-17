@@ -7,6 +7,36 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ## [Unreleased]
 
 ### Changed
+- **BREAKING**: Compaction *implementation* moved to a separate Go module
+  `github.com/nevindra/oasis/compaction`. The `Compactor` interface and
+  `CompactRequest`/`CompactSection`/`CompactResult` types remain in the
+  root `oasis` package — they are the kernel contract that
+  `oasis.WithCompaction` consumes.
+  - Symbols moved: `StructuredCompactor`, `NewStructuredCompactor`,
+    `BuildCompactPrompt`, `EstimateContextTokens`, `StripMediaBlocks`,
+    `CompactableToolNames`, `ErrEmptyMessages`, `ErrNoProvider`,
+    `ErrSummaryParseFailed`.
+  - Symbols retained in root: `Compactor`, `CompactRequest`, `CompactResult`,
+    `CompactSection`, `WithCompaction`.
+  - Migration:
+    ```go
+    // Before
+    import "github.com/nevindra/oasis"
+    c := oasis.NewStructuredCompactor(provider)
+
+    // After
+    import (
+        oasis "github.com/nevindra/oasis"
+        "github.com/nevindra/oasis/compaction"
+    )
+    c := compaction.NewStructuredCompactor(provider)
+    // oasis.CompactRequest, oasis.CompactResult, oasis.WithCompaction still in root.
+    ```
+  - Third extraction in the microkernel migration. First one exercising
+    the "kernel-consumed interface stays, satellite implementation moves"
+    split. See `docs/superpowers/specs/2026-05-17-microkernel-migration-design.md` §6.
+
+### Changed
 - **BREAKING**: `InjectionGuard`, `ContentGuard`, `KeywordGuard`,
   `MaxToolCallsGuard` and their constructors/options moved to a separate
   Go module `github.com/nevindra/oasis/guardrail`.
