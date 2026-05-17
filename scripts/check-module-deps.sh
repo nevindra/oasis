@@ -69,7 +69,7 @@ check_satellite() {
 check_kernel
 
 # === Satellite modules (extend this list as extractions land) ===
-# check_satellite ratelimit  # uncomment after extraction
+check_satellite ratelimit
 # check_satellite catalog
 # check_satellite network
 # check_satellite guardrail
