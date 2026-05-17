@@ -1,15 +1,17 @@
-package oasis
+package ratelimit
 
 import (
 	"context"
 	"sync"
 	"time"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 // rateLimitProvider wraps a Provider with proactive rate limiting.
 // Requests are blocked until the rate budget allows them to proceed.
 type rateLimitProvider struct {
-	inner Provider
+	inner oasis.Provider
 	mu    sync.Mutex
 
 	// RPM state: sliding window of request timestamps.
@@ -44,10 +46,10 @@ func TPM(n int) RateLimitOption {
 
 // WithRateLimit wraps p with proactive rate limiting. Compose with other wrappers:
 //
-//	chatLLM = oasis.WithRateLimit(provider, oasis.RPM(60))
-//	chatLLM = oasis.WithRateLimit(provider, oasis.RPM(60), oasis.TPM(100000))
-//	chatLLM = oasis.WithRateLimit(oasis.WithRetry(provider), oasis.RPM(60))
-func WithRateLimit(p Provider, opts ...RateLimitOption) Provider {
+//	chatLLM = ratelimit.WithRateLimit(provider, ratelimit.RPM(60))
+//	chatLLM = ratelimit.WithRateLimit(provider, ratelimit.RPM(60), ratelimit.TPM(100000))
+//	chatLLM = ratelimit.WithRateLimit(oasisRetry.WithRetry(provider), ratelimit.RPM(60))
+func WithRateLimit(p oasis.Provider, opts ...RateLimitOption) oasis.Provider {
 	r := &rateLimitProvider{inner: p}
 	for _, opt := range opts {
 		opt(r)
@@ -57,9 +59,9 @@ func WithRateLimit(p Provider, opts ...RateLimitOption) Provider {
 
 func (r *rateLimitProvider) Name() string { return r.inner.Name() }
 
-func (r *rateLimitProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+func (r *rateLimitProvider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
 	if err := r.waitForBudget(ctx); err != nil {
-		return ChatResponse{}, err
+		return oasis.ChatResponse{}, err
 	}
 	resp, err := r.inner.Chat(ctx, req)
 	if err == nil {
@@ -68,10 +70,10 @@ func (r *rateLimitProvider) Chat(ctx context.Context, req ChatRequest) (ChatResp
 	return resp, err
 }
 
-func (r *rateLimitProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (r *rateLimitProvider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	if err := r.waitForBudget(ctx); err != nil {
 		close(ch)
-		return ChatResponse{}, err
+		return oasis.ChatResponse{}, err
 	}
 	resp, err := r.inner.ChatStream(ctx, req, ch)
 	if err == nil {
@@ -143,7 +145,7 @@ func (r *rateLimitProvider) waitForBudget(ctx context.Context) error {
 }
 
 // recordUsage adds token counts to the TPM sliding window.
-func (r *rateLimitProvider) recordUsage(u Usage) {
+func (r *rateLimitProvider) recordUsage(u oasis.Usage) {
 	if r.tpm <= 0 {
 		return
 	}
@@ -175,4 +177,4 @@ func pruneTpm(s []tpmEntry, cutoff time.Time) []tpmEntry {
 }
 
 // compile-time check
-var _ Provider = (*rateLimitProvider)(nil)
+var _ oasis.Provider = (*rateLimitProvider)(nil)
