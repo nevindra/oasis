@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/mcp"
 )
 
 func writeConfig(t *testing.T, dir, content string) string {
@@ -51,7 +51,7 @@ func TestLoad_StdioServer(t *testing.T) {
 	if len(cfgs) != 1 {
 		t.Fatalf("expected 1 cfg, got %d", len(cfgs))
 	}
-	s, ok := cfgs[0].(oasis.StdioMCPConfig)
+	s, ok := cfgs[0].(mcp.StdioConfig)
 	if !ok {
 		t.Fatalf("expected StdioMCPConfig, got %T", cfgs[0])
 	}
@@ -83,7 +83,7 @@ func TestLoad_HTTPServer_BearerEnvVar(t *testing.T) {
 	if len(cfgs) != 1 {
 		t.Fatalf("expected 1, got %d", len(cfgs))
 	}
-	h, ok := cfgs[0].(oasis.HTTPMCPConfig)
+	h, ok := cfgs[0].(mcp.HTTPConfig)
 	if !ok {
 		t.Fatalf("type: %T", cfgs[0])
 	}
@@ -93,7 +93,7 @@ func TestLoad_HTTPServer_BearerEnvVar(t *testing.T) {
 	if h.Headers["X-API-Version"] != "2022" {
 		t.Errorf("headers: %+v", h.Headers)
 	}
-	auth, ok := h.Auth.(oasis.BearerAuth)
+	auth, ok := h.Auth.(mcp.BearerAuth)
 	if !ok {
 		t.Fatalf("auth type: %T", h.Auth)
 	}
@@ -115,7 +115,7 @@ func TestLoad_EnvVarInterpolationInHeaders(t *testing.T) {
         }
     }`)
 	cfgs, _ := Load(dir)
-	h := cfgs[0].(oasis.HTTPMCPConfig)
+	h := cfgs[0].(mcp.HTTPConfig)
 	if h.Headers["X-Custom"] != "interpolated-value" {
 		t.Errorf("not interpolated: %s", h.Headers["X-Custom"])
 	}
@@ -180,7 +180,7 @@ func TestLoad_FilterAndAlias(t *testing.T) {
         }
     }`)
 	cfgs, _ := Load(dir)
-	h := cfgs[0].(oasis.HTTPMCPConfig)
+	h := cfgs[0].(mcp.HTTPConfig)
 	if h.Filter == nil || len(h.Filter.Include) != 1 {
 		t.Errorf("filter: %+v", h.Filter)
 	}
@@ -198,7 +198,7 @@ func TestLoad_Disabled(t *testing.T) {
         }
     }`)
 	cfgs, _ := Load(dir)
-	s := cfgs[0].(oasis.StdioMCPConfig)
+	s := cfgs[0].(mcp.StdioConfig)
 	if !s.Disabled {
 		t.Error("disabled not parsed")
 	}

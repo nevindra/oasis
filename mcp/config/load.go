@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/mcp"
 )
 
 const configFileName = "mcp.json"
@@ -18,7 +18,7 @@ const configDirName = ".oasis"
 // Load discovers the nearest .oasis/mcp.json walking up from startDir,
 // parses it, applies ${ENV_VAR} interpolation, and returns server configs.
 // Missing file = empty result + nil error (soft default).
-func Load(startDir string) ([]oasis.MCPServerConfig, error) {
+func Load(startDir string) ([]mcp.ServerConfig, error) {
 	path, ok := findConfigFile(startDir)
 	if !ok {
 		return nil, nil
@@ -27,7 +27,7 @@ func Load(startDir string) ([]oasis.MCPServerConfig, error) {
 }
 
 // LoadFile parses a specific config file path.
-func LoadFile(path string) ([]oasis.MCPServerConfig, error) {
+func LoadFile(path string) ([]mcp.ServerConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -40,7 +40,7 @@ func LoadFile(path string) ([]oasis.MCPServerConfig, error) {
 		return nil, fmt.Errorf("unsupported config version %d (expected 1)", schema.Version)
 	}
 
-	out := make([]oasis.MCPServerConfig, 0, len(schema.MCPServers))
+	out := make([]mcp.ServerConfig, 0, len(schema.MCPServers))
 	for name, raw := range schema.MCPServers {
 		cfg, err := parseServer(name, raw)
 		if err != nil {
@@ -79,7 +79,7 @@ func findConfigFile(startDir string) (string, bool) {
 	}
 }
 
-func parseServer(name string, raw json.RawMessage) (oasis.MCPServerConfig, error) {
+func parseServer(name string, raw json.RawMessage) (mcp.ServerConfig, error) {
 	var r rawServer
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, err
@@ -100,13 +100,13 @@ func parseServer(name string, raw json.RawMessage) (oasis.MCPServerConfig, error
 		return nil, fmt.Errorf("headers: %w", err)
 	}
 
-	var filter *oasis.MCPToolFilter
+	var filter *mcp.ToolFilter
 	if r.Filter != nil {
-		filter = &oasis.MCPToolFilter{Include: r.Filter.Include, Exclude: r.Filter.Exclude}
+		filter = &mcp.ToolFilter{Include: r.Filter.Include, Exclude: r.Filter.Exclude}
 	}
 
 	if hasCmd {
-		return oasis.StdioMCPConfig{
+		return mcp.StdioConfig{
 			Name:     name,
 			Command:  r.Command,
 			Args:     r.Args,
@@ -118,11 +118,11 @@ func parseServer(name string, raw json.RawMessage) (oasis.MCPServerConfig, error
 		}, nil
 	}
 
-	var auth oasis.Auth
+	var auth mcp.Auth
 	if r.Auth != nil {
 		switch r.Auth.Type {
 		case "bearer":
-			auth = oasis.BearerAuth{Token: r.Auth.Token, EnvVar: r.Auth.EnvVar}
+			auth = mcp.BearerAuth{Token: r.Auth.Token, EnvVar: r.Auth.EnvVar}
 		default:
 			return nil, fmt.Errorf("unsupported auth type %q (only \"bearer\" supported in v1)", r.Auth.Type)
 		}
@@ -137,7 +137,7 @@ func parseServer(name string, raw json.RawMessage) (oasis.MCPServerConfig, error
 		timeout = d
 	}
 
-	return oasis.HTTPMCPConfig{
+	return mcp.HTTPConfig{
 		Name:     name,
 		URL:      r.URL,
 		Headers:  headers,

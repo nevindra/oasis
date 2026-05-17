@@ -1,17 +1,11 @@
-package oasis
+package mcp
 
 // deferConfig holds configuration for deferred MCP schema behavior.
-//
-// In v1, only the "opt-in" flag (set by WithDeferredSchemas being called at
-// all) is honored. Threshold-based auto-defer is accepted in the API but not
-// implemented yet — it will land in a v1.x minor release once telemetry
-// informs a sensible default. DeferAlwaysOn behaves identically to plain
-// opt-in in v1.
 type deferConfig struct {
-	enabled          bool            // true if WithDeferredSchemas was called
-	alwaysOn         bool            // reserved for v1.x behavior
-	thresholdPercent int             // 0-100; reserved for v1.x
-	exclude          map[string]bool // server names that should NOT be deferred
+	enabled          bool
+	alwaysOn         bool
+	thresholdPercent int
+	exclude          map[string]bool
 }
 
 // DeferOption configures WithDeferredSchemas.
@@ -19,7 +13,6 @@ type DeferOption func(*deferConfig)
 
 // DeferThreshold sets the percentage of context window above which deferred
 // loading activates. Reserved for v1.x; accepted in v1 but ignored.
-// Values are clamped to [0, 100].
 func DeferThreshold(percent int) DeferOption {
 	return func(c *deferConfig) {
 		if percent < 0 {
@@ -38,9 +31,7 @@ func DeferAlwaysOn() DeferOption {
 	return func(c *deferConfig) { c.alwaysOn = true }
 }
 
-// DeferExclude keeps the named MCP servers' schemas eager (never deferred),
-// even when deferred mode is active. Useful for servers whose tools are
-// frequently called and worth their schema cost up-front.
+// DeferExclude keeps the named MCP servers' schemas eager (never deferred).
 func DeferExclude(serverNames ...string) DeferOption {
 	return func(c *deferConfig) {
 		if c.exclude == nil {

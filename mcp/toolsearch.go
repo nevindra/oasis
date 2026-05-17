@@ -1,4 +1,4 @@
-package oasis
+package mcp
 
 import (
 	"context"
@@ -6,10 +6,11 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	oasis "github.com/nevindra/oasis"
 )
 
-// toolSearchName is the public name of the auto-registered ToolSearch tool.
-const toolSearchName = "ToolSearch"
+const ToolSearchName = "ToolSearch"
 
 const toolSearchDescription = `Find available tools by keyword search. Many MCP tools are loaded on-demand to save context — their input schemas are NOT visible until you query them.
 
@@ -47,22 +48,20 @@ const (
 	toolSearchHardMax    = 25
 )
 
-// toolSearchTool is the internal AnyTool auto-registered by WithDeferredSchemas.
-// It searches the agent's ToolRegistry for deferred tool definitions matching
-// a keyword query and lazy-loads their schemas via ToolRegistry.EnsureSchema.
+// toolSearchTool is an AnyTool that searches the registry's tools for
+// deferred (schema-empty) entries matching a keyword query, lazy-loading
+// their schemas via SchemaEnsurer when a match is selected.
 type toolSearchTool struct {
-	registry *ToolRegistry
+	reg *Registry
 }
 
-func newToolSearchTool(registry *ToolRegistry) *toolSearchTool {
-	return &toolSearchTool{registry: registry}
-}
+func newToolSearchTool(r *Registry) *toolSearchTool { return &toolSearchTool{reg: r} }
 
-func (t *toolSearchTool) Name() string { return toolSearchName }
+func (t *toolSearchTool) Name() string { return ToolSearchName }
 
-func (t *toolSearchTool) Definition() ToolDefinition {
-	return ToolDefinition{
-		Name:        toolSearchName,
+func (t *toolSearchTool) Definition() oasis.ToolDefinition {
+	return oasis.ToolDefinition{
+		Name:        ToolSearchName,
 		Description: toolSearchDescription,
 		Parameters:  json.RawMessage(toolSearchInputSchema),
 	}
@@ -85,13 +84,13 @@ type toolSearchOutput struct {
 	Note  string            `json:"note,omitempty"`
 }
 
-func (t *toolSearchTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+func (t *toolSearchTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 	var in toolSearchInput
 	if err := json.Unmarshal(args, &in); err != nil {
-		return ToolResult{Error: "invalid args: " + err.Error()}, nil
+		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
 	if in.Query == "" {
-		return ToolResult{Error: "query must not be empty"}, nil
+		return oasis.ToolResult{Error: "query must not be empty"}, nil
 	}
 
 	n := in.MaxResults
@@ -104,19 +103,31 @@ func (t *toolSearchTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (
 
 	qWords := tokenizeQuery(in.Query)
 	if len(qWords) == 0 {
-		return ToolResult{Error: "query contained no searchable words"}, nil
+		return oasis.ToolResult{Error: "query contained no searchable words"}, nil
 	}
 
 	type scored struct {
-		def   ToolDefinition
+		def   oasis.ToolDefinition
+		tool  oasis.AnyTool
 		score float64
 	}
-	defs := t.registry.DeferredDefinitions()
+
+	// Snapshot of the registry's tool list under toolMu.
+	t.reg.toolMu.RLock()
+	candidates := make([]oasis.AnyTool, 0, len(t.reg.toolList))
+	candidates = append(candidates, t.reg.toolList...)
+	t.reg.toolMu.RUnlock()
+
 	var matches []scored
-	for _, d := range defs {
+	for _, tl := range candidates {
+		d := tl.Definition()
+		// Deferred = no params loaded yet.
+		if len(d.Parameters) != 0 {
+			continue
+		}
 		s := scoreToolMatch(qWords, d.Name, d.Description)
 		if s > 0 {
-			matches = append(matches, scored{def: d, score: s})
+			matches = append(matches, scored{def: d, tool: tl, score: s})
 		}
 	}
 	sort.SliceStable(matches, func(i, j int) bool {
@@ -129,14 +140,11 @@ func (t *toolSearchTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (
 	out := toolSearchOutput{Tools: make([]toolSearchMatch, 0, len(matches))}
 	for _, m := range matches {
 		mj := toolSearchMatch{Name: m.def.Name, Description: m.def.Description}
-		if err := t.registry.EnsureSchema(ctx, m.def.Name); err != nil {
-			mj.LoadError = err.Error()
-		} else {
-			for _, d := range t.registry.AllDefinitions() {
-				if d.Name == m.def.Name {
-					mj.InputSchema = d.Parameters
-					break
-				}
+		if ensurer, ok := m.tool.(oasis.SchemaEnsurer); ok {
+			if err := ensurer.EnsureSchema(ctx); err != nil {
+				mj.LoadError = err.Error()
+			} else {
+				mj.InputSchema = m.tool.Definition().Parameters
 			}
 		}
 		out.Tools = append(out.Tools, mj)
@@ -147,13 +155,11 @@ func (t *toolSearchTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (
 
 	content, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
-		return ToolResult{Error: "format result: " + err.Error()}, nil
+		return oasis.ToolResult{Error: "format result: " + err.Error()}, nil
 	}
-	return ToolResult{Content: string(content)}, nil
+	return oasis.ToolResult{Content: string(content)}, nil
 }
 
-// tokenizeQuery splits a query into lowercase word tokens.
-// Splits on whitespace and any non-letter/digit rune.
 func tokenizeQuery(query string) []string {
 	var words []string
 	var cur strings.Builder
@@ -173,9 +179,6 @@ func tokenizeQuery(query string) []string {
 	return words
 }
 
-// scoreToolMatch scores how well the query words match a tool's name and
-// description. Name matches are weighted 3x higher than description.
-// Case-insensitive substring matching.
 func scoreToolMatch(queryWords []string, toolName, description string) float64 {
 	name := strings.ToLower(toolName)
 	desc := strings.ToLower(description)
@@ -191,10 +194,16 @@ func scoreToolMatch(queryWords []string, toolName, description string) float64 {
 	return score
 }
 
-// deferredToolsPromptSection returns the system-prompt block prepended when
-// WithDeferredSchemas is enabled. It explains the mcp__ deferral mechanism
-// and instructs the model to call ToolSearch before invoking deferred tools.
-func deferredToolsPromptSection() string {
+// DeferredToolsPromptSection returns the system-prompt block that explains
+// the mcp__ deferral mechanism to the LLM. Prepend it to your prompt when
+// using WithDeferredSchemas:
+//
+//	prompt := mcp.DeferredToolsPromptSection() + "\n\n" + userPrompt
+//	agent := oasis.NewLLMAgent("a", "d", p,
+//	    oasis.WithPrompt(prompt),
+//	    oasis.WithTools(reg.Tools()...),
+//	)
+func DeferredToolsPromptSection() string {
 	return `<deferred-tools>
 You have access to additional tools whose schemas are loaded on-demand.
 Tools prefixed with "mcp__" appear in your tool list with name and description
@@ -207,6 +216,3 @@ This returns the full schema. After receiving the schema, call the tool normally
 Tools NOT prefixed with "mcp__" have full schemas and can be called directly.
 </deferred-tools>`
 }
-
-// Compile-time assertion.
-var _ AnyTool = (*toolSearchTool)(nil)
