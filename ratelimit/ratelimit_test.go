@@ -1,21 +1,66 @@
-package oasis
+package ratelimit
 
 import (
 	"context"
 	"testing"
 	"time"
+
+	oasis "github.com/nevindra/oasis"
 )
+
+// stubResult is a single scripted response from stubProvider.
+// Copied from the root package's test helpers (retry_test.go); kept
+// private to this module so ratelimit's tests are self-contained.
+type stubResult struct {
+	resp   oasis.ChatResponse
+	tokens []string // tokens written to ch in ChatStream
+	err    error
+}
+
+// stubProvider returns canned responses in order.
+// All three methods share the same result queue via a shared call counter.
+type stubProvider struct {
+	calls   int
+	results []stubResult
+}
+
+func (s *stubProvider) Name() string { return "stub" }
+
+func (s *stubProvider) next() stubResult {
+	i := s.calls
+	s.calls++
+	if i < len(s.results) {
+		return s.results[i]
+	}
+	return stubResult{}
+}
+
+func (s *stubProvider) Chat(_ context.Context, _ oasis.ChatRequest) (oasis.ChatResponse, error) {
+	r := s.next()
+	return r.resp, r.err
+}
+
+func (s *stubProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+	defer close(ch)
+	r := s.next()
+	for _, tok := range r.tokens {
+		ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: tok}
+	}
+	return r.resp, r.err
+}
+
+var _ oasis.Provider = (*stubProvider)(nil)
 
 // --- RPM tests (Task 4) ---
 
 func TestWithRateLimit_RPM_AllowsWithinLimit(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{resp: ChatResponse{Content: "a"}},
-		{resp: ChatResponse{Content: "b"}},
+		{resp: oasis.ChatResponse{Content: "a"}},
+		{resp: oasis.ChatResponse{Content: "b"}},
 	}}
 	p := WithRateLimit(stub, RPM(60))
 
-	resp, err := p.Chat(context.Background(), ChatRequest{})
+	resp, err := p.Chat(context.Background(), oasis.ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -26,13 +71,13 @@ func TestWithRateLimit_RPM_AllowsWithinLimit(t *testing.T) {
 
 func TestWithRateLimit_RPM_BlocksWhenExceeded(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{resp: ChatResponse{Content: "a"}},
-		{resp: ChatResponse{Content: "b"}},
+		{resp: oasis.ChatResponse{Content: "a"}},
+		{resp: oasis.ChatResponse{Content: "b"}},
 	}}
 	// RPM(1) = 1 request per minute. Second call should block.
 	p := WithRateLimit(stub, RPM(1))
 
-	_, err := p.Chat(context.Background(), ChatRequest{})
+	_, err := p.Chat(context.Background(), oasis.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +85,7 @@ func TestWithRateLimit_RPM_BlocksWhenExceeded(t *testing.T) {
 	// Second call with a short-lived context should timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err = p.Chat(ctx, ChatRequest{})
+	_, err = p.Chat(ctx, oasis.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected context deadline exceeded, got nil")
 	}
@@ -58,18 +103,18 @@ func TestWithRateLimit_Name(t *testing.T) {
 
 func TestWithRateLimit_TPM_AllowsWithinLimit(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{resp: ChatResponse{Content: "a", Usage: Usage{InputTokens: 100, OutputTokens: 50}}},
-		{resp: ChatResponse{Content: "b", Usage: Usage{InputTokens: 100, OutputTokens: 50}}},
+		{resp: oasis.ChatResponse{Content: "a", Usage: oasis.Usage{InputTokens: 100, OutputTokens: 50}}},
+		{resp: oasis.ChatResponse{Content: "b", Usage: oasis.Usage{InputTokens: 100, OutputTokens: 50}}},
 	}}
 	p := WithRateLimit(stub, TPM(1000))
 
 	// First call: 150 tokens, well within 1000 TPM.
-	_, err := p.Chat(context.Background(), ChatRequest{})
+	_, err := p.Chat(context.Background(), oasis.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Second call: 300 total, still within 1000.
-	_, err = p.Chat(context.Background(), ChatRequest{})
+	_, err = p.Chat(context.Background(), oasis.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,13 +125,13 @@ func TestWithRateLimit_TPM_AllowsWithinLimit(t *testing.T) {
 
 func TestWithRateLimit_TPM_BlocksWhenExceeded(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{resp: ChatResponse{Content: "a", Usage: Usage{InputTokens: 500, OutputTokens: 500}}},
-		{resp: ChatResponse{Content: "b", Usage: Usage{InputTokens: 100, OutputTokens: 100}}},
+		{resp: oasis.ChatResponse{Content: "a", Usage: oasis.Usage{InputTokens: 500, OutputTokens: 500}}},
+		{resp: oasis.ChatResponse{Content: "b", Usage: oasis.Usage{InputTokens: 100, OutputTokens: 100}}},
 	}}
 	// TPM(1000). First call uses 1000 tokens = at limit.
 	p := WithRateLimit(stub, TPM(1000))
 
-	_, err := p.Chat(context.Background(), ChatRequest{})
+	_, err := p.Chat(context.Background(), oasis.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +139,7 @@ func TestWithRateLimit_TPM_BlocksWhenExceeded(t *testing.T) {
 	// Second call should block (1000 tokens already used in this minute).
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err = p.Chat(ctx, ChatRequest{})
+	_, err = p.Chat(ctx, oasis.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected context deadline exceeded, got nil")
 	}
@@ -102,13 +147,13 @@ func TestWithRateLimit_TPM_BlocksWhenExceeded(t *testing.T) {
 
 func TestWithRateLimit_RPMAndTPM(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{resp: ChatResponse{Content: "a", Usage: Usage{InputTokens: 10, OutputTokens: 10}}},
-		{resp: ChatResponse{Content: "b", Usage: Usage{InputTokens: 10, OutputTokens: 10}}},
+		{resp: oasis.ChatResponse{Content: "a", Usage: oasis.Usage{InputTokens: 10, OutputTokens: 10}}},
+		{resp: oasis.ChatResponse{Content: "b", Usage: oasis.Usage{InputTokens: 10, OutputTokens: 10}}},
 	}}
 	// RPM high, TPM low — TPM should be the bottleneck after first call fills budget.
 	p := WithRateLimit(stub, RPM(100), TPM(20))
 
-	_, err := p.Chat(context.Background(), ChatRequest{})
+	_, err := p.Chat(context.Background(), oasis.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +161,7 @@ func TestWithRateLimit_RPMAndTPM(t *testing.T) {
 	// First call used 20 tokens = at TPM limit. Second should block.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err = p.Chat(ctx, ChatRequest{})
+	_, err = p.Chat(ctx, oasis.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected timeout due to TPM limit")
 	}
@@ -126,12 +171,12 @@ func TestWithRateLimit_RPMAndTPM(t *testing.T) {
 
 func TestWithRateLimit_ChatWithToolsOnRequest(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{resp: ChatResponse{Content: "ok", Usage: Usage{InputTokens: 50, OutputTokens: 50}}},
+		{resp: oasis.ChatResponse{Content: "ok", Usage: oasis.Usage{InputTokens: 50, OutputTokens: 50}}},
 	}}
 	p := WithRateLimit(stub, RPM(60))
 
-	resp, err := p.Chat(context.Background(), ChatRequest{
-		Tools: []ToolDefinition{{Name: "test"}},
+	resp, err := p.Chat(context.Background(), oasis.ChatRequest{
+		Tools: []oasis.ToolDefinition{{Name: "test"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -143,12 +188,12 @@ func TestWithRateLimit_ChatWithToolsOnRequest(t *testing.T) {
 
 func TestWithRateLimit_ChatStream(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{tokens: []string{"hel", "lo"}, resp: ChatResponse{Content: "hello", Usage: Usage{InputTokens: 30, OutputTokens: 20}}},
+		{tokens: []string{"hel", "lo"}, resp: oasis.ChatResponse{Content: "hello", Usage: oasis.Usage{InputTokens: 30, OutputTokens: 20}}},
 	}}
 	p := WithRateLimit(stub, RPM(60), TPM(1000))
 
-	ch := make(chan StreamEvent, 8)
-	resp, err := p.ChatStream(context.Background(), ChatRequest{}, ch)
+	ch := make(chan oasis.StreamEvent, 8)
+	resp, err := p.ChatStream(context.Background(), oasis.ChatRequest{}, ch)
 	if err != nil {
 		t.Fatal(err)
 	}
