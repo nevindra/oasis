@@ -1,8 +1,10 @@
-package oasis
+package compaction
 
 import (
 	"strings"
 	"unicode/utf8"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 // imageTokenEstimate is the per-image-attachment token cost heuristic.
@@ -19,7 +21,7 @@ const imageTokenEstimate = 2000
 // regardless of data size.
 //
 // Unknown providers use a conservative fallback: runeCount * 4/3 / 4.
-func EstimateContextTokens(messages []ChatMessage, model ModelInfo) int {
+func EstimateContextTokens(messages []oasis.ChatMessage, model oasis.ModelInfo) int {
 	if len(messages) == 0 {
 		return 0
 	}
@@ -59,14 +61,14 @@ func EstimateContextTokens(messages []ChatMessage, model ModelInfo) int {
 //   (b) save tokens — visual content doesn't help summary generation
 //
 // Does NOT modify the original messages. Non-media attachments are preserved.
-func StripMediaBlocks(messages []ChatMessage) []ChatMessage {
-	out := make([]ChatMessage, len(messages))
+func StripMediaBlocks(messages []oasis.ChatMessage) []oasis.ChatMessage {
+	out := make([]oasis.ChatMessage, len(messages))
 	for i, m := range messages {
 		if len(m.Attachments) == 0 {
 			out[i] = m
 			continue
 		}
-		var kept []Attachment
+		var kept []oasis.Attachment
 		var markers []string
 		for _, att := range m.Attachments {
 			switch {
