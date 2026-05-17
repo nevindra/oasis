@@ -603,7 +603,7 @@ func MaxTokens(n int) ConversationOption {
 //	oasis.WithConversationMemory(store,
 //	    oasis.MaxTokens(100_000),
 //	    oasis.WithCompaction(
-//	        oasis.NewStructuredCompactor(summarizer),
+//	        compaction.NewStructuredCompactor(summarizer),
 //	        0.80))
 //
 // NOTE: Consumers that orchestrate compaction themselves (e.g., Athena)

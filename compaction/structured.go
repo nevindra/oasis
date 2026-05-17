@@ -1,4 +1,4 @@
-package oasis
+package compaction
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 const defaultCompactOutputBudget = 20_000
@@ -14,17 +16,17 @@ const defaultCompactOutputBudget = 20_000
 // It calls an LLM provider once with a structured 9-section prompt
 // (plus extras) and parses the <summary> block out of the response.
 type StructuredCompactor struct {
-	defaultProvider Provider
+	defaultProvider oasis.Provider
 	logger          *slog.Logger
 }
 
 // Compile-time interface check.
-var _ Compactor = (*StructuredCompactor)(nil)
+var _ oasis.Compactor = (*StructuredCompactor)(nil)
 
 // NewStructuredCompactor creates a StructuredCompactor with a default provider.
 // The provider can be overridden per-call via CompactRequest.SummarizerProvider.
 // Pass nil to require that every CompactRequest specifies its own provider.
-func NewStructuredCompactor(defaultProvider Provider) *StructuredCompactor {
+func NewStructuredCompactor(defaultProvider oasis.Provider) *StructuredCompactor {
 	return &StructuredCompactor{
 		defaultProvider: defaultProvider,
 		logger:          slog.Default().With("component", "oasis.structured-compactor"),
@@ -32,9 +34,9 @@ func NewStructuredCompactor(defaultProvider Provider) *StructuredCompactor {
 }
 
 // Compact runs the compaction call.
-func (s *StructuredCompactor) Compact(ctx context.Context, req CompactRequest) (CompactResult, error) {
+func (s *StructuredCompactor) Compact(ctx context.Context, req oasis.CompactRequest) (oasis.CompactResult, error) {
 	if len(req.Messages) == 0 {
-		return CompactResult{}, ErrEmptyMessages
+		return oasis.CompactResult{}, ErrEmptyMessages
 	}
 
 	provider := req.SummarizerProvider
@@ -42,7 +44,7 @@ func (s *StructuredCompactor) Compact(ctx context.Context, req CompactRequest) (
 		provider = s.defaultProvider
 	}
 	if provider == nil {
-		return CompactResult{}, ErrNoProvider
+		return oasis.CompactResult{}, ErrNoProvider
 	}
 
 	// Defense-in-depth: strip media blocks even if caller didn't.
@@ -51,8 +53,8 @@ func (s *StructuredCompactor) Compact(ctx context.Context, req CompactRequest) (
 	// Build prompt and prepend as a system message to the stripped history.
 	prompt := BuildCompactPrompt(req.ExtraSections, req.FocusHint, req.IsRecompact)
 
-	chatMsgs := make([]ChatMessage, 0, len(stripped)+1)
-	chatMsgs = append(chatMsgs, ChatMessage{Role: "system", Content: prompt})
+	chatMsgs := make([]oasis.ChatMessage, 0, len(stripped)+1)
+	chatMsgs = append(chatMsgs, oasis.ChatMessage{Role: "system", Content: prompt})
 	chatMsgs = append(chatMsgs, stripped...)
 
 	budget := req.OutputBudget
@@ -60,30 +62,30 @@ func (s *StructuredCompactor) Compact(ctx context.Context, req CompactRequest) (
 		budget = defaultCompactOutputBudget
 	}
 
-	chatReq := ChatRequest{
+	chatReq := oasis.ChatRequest{
 		Messages:         chatMsgs,
-		GenerationParams: &GenerationParams{MaxTokens: &budget},
+		GenerationParams: &oasis.GenerationParams{MaxTokens: &budget},
 	}
 
 	resp, err := provider.Chat(ctx, chatReq)
 	if err != nil {
-		return CompactResult{}, fmt.Errorf("compact: provider chat: %w", err)
+		return oasis.CompactResult{}, fmt.Errorf("compact: provider chat: %w", err)
 	}
 
 	summary, err := extractSummaryBlock(resp.Content)
 	if err != nil {
-		return CompactResult{}, fmt.Errorf("compact: parse summary: %w (raw response: %q)",
+		return oasis.CompactResult{}, fmt.Errorf("compact: parse summary: %w (raw response: %q)",
 			err, truncateForError(resp.Content, 500))
 	}
 
 	sections := parseNumberedSections(summary)
 
 	// Token accounting.
-	sourceTokens := EstimateContextTokens(stripped, ModelInfo{})
+	sourceTokens := EstimateContextTokens(stripped, oasis.ModelInfo{})
 	summaryTokens := resp.Usage.OutputTokens
 	if summaryTokens == 0 {
 		summaryTokens = EstimateContextTokens(
-			[]ChatMessage{{Content: summary}}, ModelInfo{})
+			[]oasis.ChatMessage{{Content: summary}}, oasis.ModelInfo{})
 	}
 	ratio := 0.0
 	if sourceTokens > 0 {
@@ -102,7 +104,7 @@ func (s *StructuredCompactor) Compact(ctx context.Context, req CompactRequest) (
 		warnings = append(warnings, "partial_sections")
 	}
 
-	return CompactResult{
+	return oasis.CompactResult{
 		SummaryText:      summary,
 		Sections:         sections,
 		SourceTokens:     sourceTokens,
