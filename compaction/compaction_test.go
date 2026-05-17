@@ -1,9 +1,11 @@
-package oasis
+package compaction
 
 import (
 	"errors"
 	"strings"
 	"testing"
+
+	oasis "github.com/nevindra/oasis"
 )
 
 func TestCompactionErrors_Distinct(t *testing.T) {
@@ -16,7 +18,7 @@ func TestCompactionErrors_Distinct(t *testing.T) {
 }
 
 func TestCompactResult_Zero(t *testing.T) {
-	var r CompactResult
+	var r oasis.CompactResult
 	if r.SummaryText != "" {
 		t.Errorf("zero SummaryText = %q, want empty", r.SummaryText)
 	}
@@ -29,8 +31,8 @@ func TestCompactResult_Zero(t *testing.T) {
 }
 
 func TestCompactRequest_ExtraSectionsAppendable(t *testing.T) {
-	req := CompactRequest{}
-	req.ExtraSections = append(req.ExtraSections, CompactSection{
+	req := oasis.CompactRequest{}
+	req.ExtraSections = append(req.ExtraSections, oasis.CompactSection{
 		Title:        "Active Skills",
 		Instructions: "List all skills activated",
 	})
@@ -43,45 +45,45 @@ func TestCompactRequest_ExtraSectionsAppendable(t *testing.T) {
 }
 
 func TestEstimateContextTokens_EmptyMessages(t *testing.T) {
-	got := EstimateContextTokens(nil, ModelInfo{})
+	got := EstimateContextTokens(nil, oasis.ModelInfo{})
 	if got != 0 {
 		t.Errorf("empty messages: got %d, want 0", got)
 	}
 }
 
 func TestEstimateContextTokens_TextMessages(t *testing.T) {
-	msgs := []ChatMessage{
+	msgs := []oasis.ChatMessage{
 		{Role: "user", Content: "Hello, world!"},
 		{Role: "assistant", Content: "Hi there."},
 	}
-	got := EstimateContextTokens(msgs, ModelInfo{Provider: "openaicompat"})
+	got := EstimateContextTokens(msgs, oasis.ModelInfo{Provider: "openaicompat"})
 	if got < 5 || got > 15 {
 		t.Errorf("got %d, want in [5,15]", got)
 	}
 }
 
 func TestEstimateContextTokens_KnownProvider_Gemini(t *testing.T) {
-	msgs := []ChatMessage{{Role: "user", Content: "The quick brown fox jumps over the lazy dog."}}
-	got := EstimateContextTokens(msgs, ModelInfo{Provider: "gemini"})
+	msgs := []oasis.ChatMessage{{Role: "user", Content: "The quick brown fox jumps over the lazy dog."}}
+	got := EstimateContextTokens(msgs, oasis.ModelInfo{Provider: "gemini"})
 	if got <= 0 || got > 50 {
 		t.Errorf("got %d, want in (0,50]", got)
 	}
 }
 
 func TestEstimateContextTokens_ImageBlock_CountsFixed(t *testing.T) {
-	msgs := []ChatMessage{
-		{Role: "user", Content: "", Attachments: []Attachment{
+	msgs := []oasis.ChatMessage{
+		{Role: "user", Content: "", Attachments: []oasis.Attachment{
 			{MimeType: "image/png", Data: make([]byte, 1024)},
 		}},
 	}
-	got := EstimateContextTokens(msgs, ModelInfo{Provider: "gemini"})
+	got := EstimateContextTokens(msgs, oasis.ModelInfo{Provider: "gemini"})
 	if got < 1500 || got > 2500 {
 		t.Errorf("image-only msg: got %d, want in [1500,2500]", got)
 	}
 }
 
 func TestStripMediaBlocks_NoMedia_Unchanged(t *testing.T) {
-	msgs := []ChatMessage{{Role: "user", Content: "hello"}}
+	msgs := []oasis.ChatMessage{{Role: "user", Content: "hello"}}
 	stripped := StripMediaBlocks(msgs)
 	if len(stripped) != 1 {
 		t.Fatalf("len = %d, want 1", len(stripped))
@@ -92,8 +94,8 @@ func TestStripMediaBlocks_NoMedia_Unchanged(t *testing.T) {
 }
 
 func TestStripMediaBlocks_ImageReplacedWithMarker(t *testing.T) {
-	msgs := []ChatMessage{
-		{Role: "user", Content: "see this", Attachments: []Attachment{
+	msgs := []oasis.ChatMessage{
+		{Role: "user", Content: "see this", Attachments: []oasis.Attachment{
 			{MimeType: "image/png", Data: []byte{0xff, 0xd8}},
 		}},
 	}
@@ -107,8 +109,8 @@ func TestStripMediaBlocks_ImageReplacedWithMarker(t *testing.T) {
 }
 
 func TestStripMediaBlocks_DoesNotMutateOriginal(t *testing.T) {
-	msgs := []ChatMessage{
-		{Role: "user", Content: "x", Attachments: []Attachment{
+	msgs := []oasis.ChatMessage{
+		{Role: "user", Content: "x", Attachments: []oasis.Attachment{
 			{MimeType: "image/jpeg", Data: []byte{1, 2, 3}},
 		}},
 	}
@@ -119,8 +121,8 @@ func TestStripMediaBlocks_DoesNotMutateOriginal(t *testing.T) {
 }
 
 func TestStripMediaBlocks_MultipleMediaTypes(t *testing.T) {
-	msgs := []ChatMessage{
-		{Role: "user", Content: "mixed", Attachments: []Attachment{
+	msgs := []oasis.ChatMessage{
+		{Role: "user", Content: "mixed", Attachments: []oasis.Attachment{
 			{MimeType: "image/png"},
 			{MimeType: "application/pdf"},
 			{MimeType: "text/plain"}, // not media, kept
@@ -243,7 +245,7 @@ func TestCompactPrompt_RecompactNote(t *testing.T) {
 }
 
 func TestCompactPrompt_ExtraSectionsAppended(t *testing.T) {
-	extras := []CompactSection{
+	extras := []oasis.CompactSection{
 		{Title: "Active Skills", Instructions: "List skills loaded"},
 	}
 	got := BuildCompactPrompt(extras, "", false)
@@ -255,27 +257,5 @@ func TestCompactPrompt_ExtraSectionsAppended(t *testing.T) {
 	}
 	if !strings.Contains(got, "Primary Request and Intent") {
 		t.Error("extras should not replace core sections")
-	}
-}
-
-func TestWithCompaction_StoresOnConfig(t *testing.T) {
-	cfg := buildConfig([]AgentOption{
-		WithConversationMemory(nil, WithCompaction(
-			NewStructuredCompactor(nil), 0.75)),
-	})
-	if cfg.compactor == nil {
-		t.Fatal("compactor not stored on config")
-	}
-	if cfg.compactThreshold != 0.75 {
-		t.Errorf("threshold = %f, want 0.75", cfg.compactThreshold)
-	}
-}
-
-func TestWithCompaction_OmittedLeavesNilCompactor(t *testing.T) {
-	cfg := buildConfig([]AgentOption{
-		WithConversationMemory(nil, MaxHistory(10)),
-	})
-	if cfg.compactor != nil {
-		t.Error("compactor should be nil when WithCompaction not used")
 	}
 }
