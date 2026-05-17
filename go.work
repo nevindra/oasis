@@ -4,5 +4,6 @@ use (
 	.
 	./compaction
 	./guardrail
+	./mcp
 	./ratelimit
 )
