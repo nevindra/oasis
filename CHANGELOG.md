@@ -6,6 +6,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING — `Tool` interface reshaped from bundle to atomic.** One
+  implementation now describes exactly one operation. New types:
+  - `AnyTool`: type-erased atomic interface (`Name() / Definition() /
+    ExecuteRaw(ctx, args)`). Consumed by the loop and the registry.
+  - `Tool[In, Out any]`: type-safe generic authoring interface.
+  - `Erase[In, Out](Tool[In, Out]) AnyTool`: adapter for registration.
+  - `StreamingAnyTool`: optional streaming capability replacing the old
+    `StreamingTool`.
+
+  `WithTools` now takes `...AnyTool`. `ToolRegistry.Add` now takes `AnyTool`.
+  Bundle-style tools (one impl exposing N definitions) must be split into N
+  atomic implementations. Built-in tools migrated: `tools/http` (now
+  `oasis.Tool[FetchInput, string]`), `tools/data` (split into 4 atomic
+  tools), skill tools (split into 4), sandbox tools, MCP wrappers.
+
+### Removed
+- **Reference app `cmd/bot_example/`** — no longer the integration gate.
+- **Out-of-scope tool packages** — `tools/knowledge`, `tools/remember`,
+  `tools/skill`, `tools/shell`, `tools/file`, `tools/search`,
+  `tools/schedule`, `tools/todo`. Will be re-implemented inside their
+  owner modules during Phase 2 / harness layer.
+
 ### Added
 - **Deferred MCP tool schemas** (opt-in via `WithDeferredSchemas`): advertise
   MCP tool names + descriptions without their input schemas; load schemas on
