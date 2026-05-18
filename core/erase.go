@@ -36,3 +36,54 @@ func (e *erasedTool[In, Out]) ExecuteRaw(ctx context.Context, args json.RawMessa
 	}
 	return ToolResult{Content: string(body)}, nil
 }
+
+// EraseStreaming converts a StreamingTool[In, Out] into a StreamingAnyTool.
+// Argument unmarshal errors and result marshal errors land in ToolResult.Error
+// (business-error channel) per the contract that Go errors from ExecuteStream
+// are reserved for infrastructure failures.
+func EraseStreaming[In, Out any](t StreamingTool[In, Out]) StreamingAnyTool {
+	return &erasedStreamingTool[In, Out]{tool: t}
+}
+
+type erasedStreamingTool[In, Out any] struct {
+	tool StreamingTool[In, Out]
+}
+
+func (e *erasedStreamingTool[In, Out]) Name() string               { return e.tool.Name() }
+func (e *erasedStreamingTool[In, Out]) Definition() ToolDefinition { return e.tool.Definition() }
+
+func (e *erasedStreamingTool[In, Out]) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
+	var in In
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &in); err != nil {
+			return ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+	}
+	out, err := e.tool.Execute(ctx, in)
+	if err != nil {
+		return ToolResult{Error: err.Error()}, nil
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		return ToolResult{Error: "marshal result: " + err.Error()}, nil
+	}
+	return ToolResult{Content: string(body)}, nil
+}
+
+func (e *erasedStreamingTool[In, Out]) ExecuteStream(ctx context.Context, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+	var in In
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &in); err != nil {
+			return ToolResult{Error: "invalid args: " + err.Error()}, nil
+		}
+	}
+	out, err := e.tool.ExecuteStream(ctx, in, ch)
+	if err != nil {
+		return ToolResult{Error: err.Error()}, nil
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		return ToolResult{Error: "marshal result: " + err.Error()}, nil
+	}
+	return ToolResult{Content: string(body)}, nil
+}

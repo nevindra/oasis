@@ -153,3 +153,61 @@ func TestErase_EmptyArgs(t *testing.T) {
 		t.Errorf("expected no error for empty args, got %q", res.Error)
 	}
 }
+
+// streamingFooIn is a test input.
+type streamingFooIn struct {
+	Query string `json:"query"`
+}
+
+// streamingFooOut is a test output.
+type streamingFooOut struct {
+	Hits int `json:"hits"`
+}
+
+// streamingFooTool implements StreamingTool[streamingFooIn, streamingFooOut].
+type streamingFooTool struct{}
+
+func (streamingFooTool) Name() string               { return "foo" }
+func (streamingFooTool) Definition() ToolDefinition { return ToolDefinition{Name: "foo"} }
+func (streamingFooTool) Execute(ctx context.Context, in streamingFooIn) (streamingFooOut, error) {
+	return streamingFooOut{Hits: len(in.Query)}, nil
+}
+func (streamingFooTool) ExecuteStream(ctx context.Context, in streamingFooIn, ch chan<- StreamEvent) (streamingFooOut, error) {
+	ch <- StreamEvent{Type: EventToolProgress, Content: "searching"}
+	return streamingFooOut{Hits: len(in.Query)}, nil
+}
+
+func TestEraseStreaming(t *testing.T) {
+	tool := streamingFooTool{}
+	any := EraseStreaming[streamingFooIn, streamingFooOut](tool)
+
+	// AnyTool contract.
+	if any.Name() != "foo" {
+		t.Fatalf("Name() = %q, want foo", any.Name())
+	}
+
+	// StreamingAnyTool contract.
+	st, ok := any.(StreamingAnyTool)
+	if !ok {
+		t.Fatal("EraseStreaming result does not satisfy StreamingAnyTool")
+	}
+
+	ch := make(chan StreamEvent, 4)
+	res, err := st.ExecuteStream(context.Background(), json.RawMessage(`{"query":"hi"}`), ch)
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("ToolResult.Error = %q, want empty", res.Error)
+	}
+	close(ch)
+	got := 0
+	for ev := range ch {
+		if ev.Type == EventToolProgress {
+			got++
+		}
+	}
+	if got != 1 {
+		t.Errorf("EventToolProgress count = %d, want 1", got)
+	}
+}

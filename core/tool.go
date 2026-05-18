@@ -41,3 +41,18 @@ type Tool[In, Out any] interface {
 	Definition() ToolDefinition
 	Execute(ctx context.Context, in In) (Out, error)
 }
+
+// StreamingTool is the type-safe streaming-capable tool interface. A tool that
+// satisfies StreamingTool[In, Out] also satisfies Tool[In, Out] — non-streaming
+// callers can still invoke Execute. Use EraseStreaming to register with the loop.
+//
+// Why this shape: mirrors the Tool[In, Out] / AnyTool / StreamingAnyTool
+// triangle. EraseStreaming is a separate function rather than overloading
+// Erase because Go generics on interfaces cannot easily branch on whether T
+// also satisfies streaming.
+type StreamingTool[In, Out any] interface {
+	Tool[In, Out]
+	// ExecuteStream runs the tool while emitting StreamEvents into ch.
+	// The caller owns ch and closes it; ExecuteStream must not close ch.
+	ExecuteStream(ctx context.Context, in In, ch chan<- StreamEvent) (Out, error)
+}
