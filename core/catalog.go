@@ -1,4 +1,4 @@
-package oasis
+package core
 
 // --- Model Catalog vocabulary types ---
 //

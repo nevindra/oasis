@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	oasis "github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 )
 
 const compactNoToolsPreamble = `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
@@ -100,7 +100,7 @@ Please provide your summary now.
 // numbering. FocusHint (if non-empty) is injected as a preservation directive.
 // isRecompact adds a note instructing the model to treat the input as
 // already-partially-summarized.
-func BuildCompactPrompt(extras []oasis.CompactSection, focusHint string, isRecompact bool) string {
+func BuildCompactPrompt(extras []core.CompactSection, focusHint string, isRecompact bool) string {
 	var b strings.Builder
 	b.WriteString(compactNoToolsPreamble)
 	b.WriteString(compactSummaryIntro)

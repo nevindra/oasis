@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 )
 
 // compactMockProvider is a canned-response provider for compaction tests.
@@ -14,21 +14,21 @@ import (
 type compactMockProvider struct {
 	response string
 	err      error
-	lastReq  oasis.ChatRequest
+	lastReq  core.ChatRequest
 }
 
-func (m *compactMockProvider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
+func (m *compactMockProvider) Chat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
 	m.lastReq = req
 	if m.err != nil {
-		return oasis.ChatResponse{}, m.err
+		return core.ChatResponse{}, m.err
 	}
-	return oasis.ChatResponse{
+	return core.ChatResponse{
 		Content: m.response,
-		Usage:   oasis.Usage{InputTokens: 100, OutputTokens: 50},
+		Usage:   core.Usage{InputTokens: 100, OutputTokens: 50},
 	}, nil
 }
 
-func (m *compactMockProvider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+func (m *compactMockProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	close(ch)
 	return m.Chat(ctx, req)
 }
@@ -77,8 +77,8 @@ chronological walkthrough
 func TestStructuredCompactor_Happy(t *testing.T) {
 	mock := &compactMockProvider{response: canonicalSummary()}
 	c := NewStructuredCompactor(mock)
-	res, err := c.Compact(context.Background(), oasis.CompactRequest{
-		Messages: []oasis.ChatMessage{
+	res, err := c.Compact(context.Background(), core.CompactRequest{
+		Messages: []core.ChatMessage{
 			{Role: "user", Content: "make me a deck"},
 			{Role: "assistant", Content: "sure"},
 		},
@@ -114,7 +114,7 @@ func TestStructuredCompactor_Happy(t *testing.T) {
 
 func TestStructuredCompactor_EmptyMessages_ReturnsErr(t *testing.T) {
 	c := NewStructuredCompactor(&compactMockProvider{})
-	_, err := c.Compact(context.Background(), oasis.CompactRequest{})
+	_, err := c.Compact(context.Background(), core.CompactRequest{})
 	if !errors.Is(err, ErrEmptyMessages) {
 		t.Errorf("err = %v, want ErrEmptyMessages", err)
 	}
@@ -122,8 +122,8 @@ func TestStructuredCompactor_EmptyMessages_ReturnsErr(t *testing.T) {
 
 func TestStructuredCompactor_NilProvider_ReturnsErr(t *testing.T) {
 	c := NewStructuredCompactor(nil)
-	_, err := c.Compact(context.Background(), oasis.CompactRequest{
-		Messages: []oasis.ChatMessage{{Role: "user", Content: "x"}},
+	_, err := c.Compact(context.Background(), core.CompactRequest{
+		Messages: []core.ChatMessage{{Role: "user", Content: "x"}},
 	})
 	if !errors.Is(err, ErrNoProvider) {
 		t.Errorf("err = %v, want ErrNoProvider", err)
@@ -133,8 +133,8 @@ func TestStructuredCompactor_NilProvider_ReturnsErr(t *testing.T) {
 func TestStructuredCompactor_ProviderError_Wrapped(t *testing.T) {
 	boom := errors.New("provider boom")
 	c := NewStructuredCompactor(&compactMockProvider{err: boom})
-	_, err := c.Compact(context.Background(), oasis.CompactRequest{
-		Messages: []oasis.ChatMessage{{Role: "user", Content: "x"}},
+	_, err := c.Compact(context.Background(), core.CompactRequest{
+		Messages: []core.ChatMessage{{Role: "user", Content: "x"}},
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -147,8 +147,8 @@ func TestStructuredCompactor_ProviderError_Wrapped(t *testing.T) {
 func TestStructuredCompactor_MissingSummaryTag_ReturnsParseErr(t *testing.T) {
 	mock := &compactMockProvider{response: "just some prose with no tags"}
 	c := NewStructuredCompactor(mock)
-	_, err := c.Compact(context.Background(), oasis.CompactRequest{
-		Messages: []oasis.ChatMessage{{Role: "user", Content: "x"}},
+	_, err := c.Compact(context.Background(), core.CompactRequest{
+		Messages: []core.ChatMessage{{Role: "user", Content: "x"}},
 	})
 	if !errors.Is(err, ErrSummaryParseFailed) {
 		t.Errorf("err = %v, want ErrSummaryParseFailed", err)
@@ -158,8 +158,8 @@ func TestStructuredCompactor_MissingSummaryTag_ReturnsParseErr(t *testing.T) {
 func TestStructuredCompactor_FocusHint_InPrompt(t *testing.T) {
 	mock := &compactMockProvider{response: canonicalSummary()}
 	c := NewStructuredCompactor(mock)
-	_, err := c.Compact(context.Background(), oasis.CompactRequest{
-		Messages:  []oasis.ChatMessage{{Role: "user", Content: "x"}},
+	_, err := c.Compact(context.Background(), core.CompactRequest{
+		Messages:  []core.ChatMessage{{Role: "user", Content: "x"}},
 		FocusHint: "focus pada layout",
 	})
 	if err != nil {
@@ -177,12 +177,12 @@ func TestStructuredCompactor_FocusHint_InPrompt(t *testing.T) {
 func TestStructuredCompactor_StripsMediaBeforeCall(t *testing.T) {
 	mock := &compactMockProvider{response: canonicalSummary()}
 	c := NewStructuredCompactor(mock)
-	msgs := []oasis.ChatMessage{
-		{Role: "user", Content: "see", Attachments: []oasis.Attachment{
+	msgs := []core.ChatMessage{
+		{Role: "user", Content: "see", Attachments: []core.Attachment{
 			{MimeType: "image/png", Data: make([]byte, 10000)},
 		}},
 	}
-	_, err := c.Compact(context.Background(), oasis.CompactRequest{Messages: msgs})
+	_, err := c.Compact(context.Background(), core.CompactRequest{Messages: msgs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,8 +199,8 @@ func TestStructuredCompactor_RequestProviderOverridesDefault(t *testing.T) {
 	def := &compactMockProvider{response: "DEFAULT"}
 	override := &compactMockProvider{response: canonicalSummary()}
 	c := NewStructuredCompactor(def)
-	_, err := c.Compact(context.Background(), oasis.CompactRequest{
-		Messages:           []oasis.ChatMessage{{Role: "user", Content: "x"}},
+	_, err := c.Compact(context.Background(), core.CompactRequest{
+		Messages:           []core.ChatMessage{{Role: "user", Content: "x"}},
 		SummarizerProvider: override,
 	})
 	if err != nil {

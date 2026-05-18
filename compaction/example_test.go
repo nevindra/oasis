@@ -4,18 +4,18 @@ import (
 	"context"
 	"fmt"
 
-	oasis "github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/compaction"
 )
 
 // canonProvider returns a fixed canonical compaction response.
-// Real apps pass a configured oasis.Provider here.
+// Real apps pass a configured core.Provider here.
 type canonProvider struct{}
 
 func (canonProvider) Name() string { return "example" }
 
-func (canonProvider) Chat(ctx context.Context, _ oasis.ChatRequest) (oasis.ChatResponse, error) {
-	return oasis.ChatResponse{
+func (canonProvider) Chat(ctx context.Context, _ core.ChatRequest) (core.ChatResponse, error) {
+	return core.ChatResponse{
 		Content: `<analysis>chronological</analysis>
 <summary>
 1. Primary Request and Intent:
@@ -48,9 +48,9 @@ func (canonProvider) Chat(ctx context.Context, _ oasis.ChatRequest) (oasis.ChatR
 	}, nil
 }
 
-func (canonProvider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+func (canonProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	// Not used in this example, but required by the Provider interface.
-	return oasis.ChatResponse{}, nil
+	return core.ChatResponse{}, nil
 }
 
 // ExampleNewStructuredCompactor shows the typical 3-line wiring for
@@ -58,8 +58,8 @@ func (canonProvider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch c
 func ExampleNewStructuredCompactor() {
 	c := compaction.NewStructuredCompactor(canonProvider{})
 
-	result, _ := c.Compact(context.Background(), oasis.CompactRequest{
-		Messages: []oasis.ChatMessage{
+	result, _ := c.Compact(context.Background(), core.CompactRequest{
+		Messages: []core.ChatMessage{
 			{Role: "user", Content: "make me a deck"},
 		},
 	})

@@ -1,8 +1,6 @@
-package oasis
+package core
 
-import (
-	"context"
-)
+import "context"
 
 // Compactor turns a message list into a structured summary via an LLM call.
 // Implementations MUST be safe to call concurrently.

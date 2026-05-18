@@ -1,0 +1,42 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        # core is a leaf: nothing under oasis/* may import back into it.
+        core:
+          files:
+            - "core/**/*.go"
+          deny:
+            - pkg: "github.com/nevindra/oasis"
+              desc: "core is a leaf package; it must not import from oasis or its subpackages"
+            - pkg: "github.com/nevindra/oasis/"
+              desc: "core is a leaf package; it must not import from oasis subpackages"
+
+        # ratelimit only depends on core — must not import root oasis (circular).
+        ratelimit:
+          files:
+            - "ratelimit/**/*.go"
+          deny:
+            - pkg: "github.com/nevindra/oasis$"
+              desc: "ratelimit must not import the root oasis package (would cause circular import with re-exports)"
+
+        # guardrail only depends on core — must not import root oasis (circular).
+        guardrail:
+          files:
+            - "guardrail/**/*.go"
+          deny:
+            - pkg: "github.com/nevindra/oasis$"
+              desc: "guardrail must not import the root oasis package"
+
+        # compaction only depends on core — must not import root oasis (circular).
+        compaction:
+          files:
+            - "compaction/**/*.go"
+          deny:
+            - pkg: "github.com/nevindra/oasis$"
+              desc: "compaction must not import the root oasis package"

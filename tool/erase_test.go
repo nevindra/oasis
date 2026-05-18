@@ -1,4 +1,4 @@
-package oasis
+package tool
 
 import (
 	"context"
@@ -6,23 +6,25 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // --- AnyTool interface compliance ---
 
-// stubAnyTool is a minimal AnyTool implementation for interface compliance testing.
+// stubAnyTool is a minimal core.AnyTool implementation for interface compliance testing.
 type stubAnyTool struct {
 	name string
 }
 
-func (s *stubAnyTool) Name() string               { return s.name }
-func (s *stubAnyTool) Definition() ToolDefinition { return ToolDefinition{Name: s.name} }
-func (s *stubAnyTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "ok"}, nil
+func (s *stubAnyTool) Name() string                    { return s.name }
+func (s *stubAnyTool) Definition() core.ToolDefinition { return core.ToolDefinition{Name: s.name} }
+func (s *stubAnyTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
+	return core.ToolResult{Content: "ok"}, nil
 }
 
 func TestAnyTool_InterfaceCompliance(t *testing.T) {
-	var _ AnyTool = (*stubAnyTool)(nil) // compile-time check
+	var _ core.AnyTool = (*stubAnyTool)(nil) // compile-time check
 	tool := &stubAnyTool{name: "stub"}
 	if tool.Name() != "stub" {
 		t.Errorf("Name() = %q, want %q", tool.Name(), "stub")
@@ -47,15 +49,15 @@ type echoOutput struct {
 	Echoed string `json:"echoed"`
 }
 
-// echoTool is a minimal Tool[In, Out] implementation used to exercise Erase.
+// echoTool is a minimal core.Tool[In, Out] implementation used to exercise Erase.
 type echoTool struct {
 	failOnExecute bool
 }
 
 func (e *echoTool) Name() string { return "echo" }
 
-func (e *echoTool) Definition() ToolDefinition {
-	return ToolDefinition{
+func (e *echoTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{
 		Name:        "echo",
 		Description: "echoes its input",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"message":{"type":"string"}}}`),
@@ -70,7 +72,7 @@ func (e *echoTool) Execute(_ context.Context, in echoInput) (echoOutput, error) 
 }
 
 func TestTool_InterfaceCompliance(t *testing.T) {
-	var _ Tool[echoInput, echoOutput] = (*echoTool)(nil) // compile-time check
+	var _ core.Tool[echoInput, echoOutput] = (*echoTool)(nil) // compile-time check
 	tool := &echoTool{}
 	out, err := tool.Execute(context.Background(), echoInput{Message: "hi"})
 	if err != nil {

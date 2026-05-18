@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 )
 
 func TestCompactionErrors_Distinct(t *testing.T) {
@@ -18,7 +18,7 @@ func TestCompactionErrors_Distinct(t *testing.T) {
 }
 
 func TestCompactResult_Zero(t *testing.T) {
-	var r oasis.CompactResult
+	var r core.CompactResult
 	if r.SummaryText != "" {
 		t.Errorf("zero SummaryText = %q, want empty", r.SummaryText)
 	}
@@ -31,8 +31,8 @@ func TestCompactResult_Zero(t *testing.T) {
 }
 
 func TestCompactRequest_ExtraSectionsAppendable(t *testing.T) {
-	req := oasis.CompactRequest{}
-	req.ExtraSections = append(req.ExtraSections, oasis.CompactSection{
+	req := core.CompactRequest{}
+	req.ExtraSections = append(req.ExtraSections, core.CompactSection{
 		Title:        "Active Skills",
 		Instructions: "List all skills activated",
 	})
@@ -45,45 +45,45 @@ func TestCompactRequest_ExtraSectionsAppendable(t *testing.T) {
 }
 
 func TestEstimateContextTokens_EmptyMessages(t *testing.T) {
-	got := EstimateContextTokens(nil, oasis.ModelInfo{})
+	got := EstimateContextTokens(nil, core.ModelInfo{})
 	if got != 0 {
 		t.Errorf("empty messages: got %d, want 0", got)
 	}
 }
 
 func TestEstimateContextTokens_TextMessages(t *testing.T) {
-	msgs := []oasis.ChatMessage{
+	msgs := []core.ChatMessage{
 		{Role: "user", Content: "Hello, world!"},
 		{Role: "assistant", Content: "Hi there."},
 	}
-	got := EstimateContextTokens(msgs, oasis.ModelInfo{Provider: "openaicompat"})
+	got := EstimateContextTokens(msgs, core.ModelInfo{Provider: "openaicompat"})
 	if got < 5 || got > 15 {
 		t.Errorf("got %d, want in [5,15]", got)
 	}
 }
 
 func TestEstimateContextTokens_KnownProvider_Gemini(t *testing.T) {
-	msgs := []oasis.ChatMessage{{Role: "user", Content: "The quick brown fox jumps over the lazy dog."}}
-	got := EstimateContextTokens(msgs, oasis.ModelInfo{Provider: "gemini"})
+	msgs := []core.ChatMessage{{Role: "user", Content: "The quick brown fox jumps over the lazy dog."}}
+	got := EstimateContextTokens(msgs, core.ModelInfo{Provider: "gemini"})
 	if got <= 0 || got > 50 {
 		t.Errorf("got %d, want in (0,50]", got)
 	}
 }
 
 func TestEstimateContextTokens_ImageBlock_CountsFixed(t *testing.T) {
-	msgs := []oasis.ChatMessage{
-		{Role: "user", Content: "", Attachments: []oasis.Attachment{
+	msgs := []core.ChatMessage{
+		{Role: "user", Content: "", Attachments: []core.Attachment{
 			{MimeType: "image/png", Data: make([]byte, 1024)},
 		}},
 	}
-	got := EstimateContextTokens(msgs, oasis.ModelInfo{Provider: "gemini"})
+	got := EstimateContextTokens(msgs, core.ModelInfo{Provider: "gemini"})
 	if got < 1500 || got > 2500 {
 		t.Errorf("image-only msg: got %d, want in [1500,2500]", got)
 	}
 }
 
 func TestStripMediaBlocks_NoMedia_Unchanged(t *testing.T) {
-	msgs := []oasis.ChatMessage{{Role: "user", Content: "hello"}}
+	msgs := []core.ChatMessage{{Role: "user", Content: "hello"}}
 	stripped := StripMediaBlocks(msgs)
 	if len(stripped) != 1 {
 		t.Fatalf("len = %d, want 1", len(stripped))
@@ -94,8 +94,8 @@ func TestStripMediaBlocks_NoMedia_Unchanged(t *testing.T) {
 }
 
 func TestStripMediaBlocks_ImageReplacedWithMarker(t *testing.T) {
-	msgs := []oasis.ChatMessage{
-		{Role: "user", Content: "see this", Attachments: []oasis.Attachment{
+	msgs := []core.ChatMessage{
+		{Role: "user", Content: "see this", Attachments: []core.Attachment{
 			{MimeType: "image/png", Data: []byte{0xff, 0xd8}},
 		}},
 	}
@@ -109,8 +109,8 @@ func TestStripMediaBlocks_ImageReplacedWithMarker(t *testing.T) {
 }
 
 func TestStripMediaBlocks_DoesNotMutateOriginal(t *testing.T) {
-	msgs := []oasis.ChatMessage{
-		{Role: "user", Content: "x", Attachments: []oasis.Attachment{
+	msgs := []core.ChatMessage{
+		{Role: "user", Content: "x", Attachments: []core.Attachment{
 			{MimeType: "image/jpeg", Data: []byte{1, 2, 3}},
 		}},
 	}
@@ -121,8 +121,8 @@ func TestStripMediaBlocks_DoesNotMutateOriginal(t *testing.T) {
 }
 
 func TestStripMediaBlocks_MultipleMediaTypes(t *testing.T) {
-	msgs := []oasis.ChatMessage{
-		{Role: "user", Content: "mixed", Attachments: []oasis.Attachment{
+	msgs := []core.ChatMessage{
+		{Role: "user", Content: "mixed", Attachments: []core.Attachment{
 			{MimeType: "image/png"},
 			{MimeType: "application/pdf"},
 			{MimeType: "text/plain"}, // not media, kept
@@ -245,7 +245,7 @@ func TestCompactPrompt_RecompactNote(t *testing.T) {
 }
 
 func TestCompactPrompt_ExtraSectionsAppended(t *testing.T) {
-	extras := []oasis.CompactSection{
+	extras := []core.CompactSection{
 		{Title: "Active Skills", Instructions: "List skills loaded"},
 	}
 	got := BuildCompactPrompt(extras, "", false)
