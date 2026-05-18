@@ -47,7 +47,7 @@ oasis/                              # FRAMEWORK
 |-- doc.go                          # Top-level package documentation
 |-- batch.go                        # Batch primitives (BatchJob, BatchStats)
 |
-|-- core/                           # Protocol types + interfaces (leaf package — depends on nothing in oasis)
+|-- core/                           # Protocol types + interfaces + Erase helper (leaf package — depends on nothing in oasis)
 |-- agent/                          # LLMAgent + Spawn + functional options
 |-- workflow/                       # DAG-based orchestration
 |-- network/                        # Multi-agent peer networks
@@ -57,7 +57,6 @@ oasis/                              # FRAMEWORK
 |-- memory/                         # Memory orchestration
 |-- skills/                         # Skill loader + asset embedding
 |-- processor/                      # ProcessorChain helper
-|-- tool/                           # Erase helper for type-safe tools
 |-- provider/{catalog,resolve}/     # Stdlib-only model registry helpers
 |
 |-- tools/{data,http,...}/          # Tool implementations

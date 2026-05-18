@@ -11,8 +11,7 @@ import (
 //
 // AnyTool exists because the loop iterates a heterogeneous []AnyTool whose
 // elements have different concrete In/Out types. Use Tool[In, Out] for
-// type-safe authoring and the tool subpackage's Erase to convert to AnyTool
-// for registration.
+// type-safe authoring and Erase to convert to AnyTool for registration.
 type AnyTool interface {
 	// Name returns the unique tool name as advertised to the LLM.
 	Name() string
@@ -36,7 +35,7 @@ type StreamingAnyTool interface {
 }
 
 // Tool is the type-safe atomic tool interface. One Tool = one operation.
-// Use the tool subpackage's Erase to register with the loop.
+// Use Erase to register with the loop.
 type Tool[In, Out any] interface {
 	Name() string
 	Definition() ToolDefinition

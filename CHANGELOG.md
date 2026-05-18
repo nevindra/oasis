@@ -7,6 +7,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ## [Unreleased]
 
 ### Changed
+- `Erase` (the `core.Tool[In, Out]` → `core.AnyTool` adapter) moved from the
+  one-function `github.com/nevindra/oasis/tool` package into `core/` next to
+  the `Tool` and `AnyTool` types it bridges. The `tool/` subpackage has been
+  deleted. The umbrella API `oasis.Erase` is unchanged — anyone using the
+  curated surface sees no break. Only direct importers of `oasis/tool` (a
+  niche subpackage import for a one-function package) need to switch to
+  `oasis/core` or `oasis.Erase`.
 - **BREAKING**: Restructured the repository into a hybrid architecture per
   `docs/superpowers/specs/2026-05-18-hybrid-architecture-design.md`. Highlights:
   - Protocol types and core interfaces moved to a new leaf package
@@ -14,7 +21,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
     inside `oasis` (enforced via depguard) and is safe to import everywhere.
   - Primitives reorganised into focused public subpackages: `agent`, `workflow`,
     `network`, `compaction`, `guardrail`, `ratelimit`, `memory`, `skills`,
-    `processor`, `tool`.
+    `processor`.
   - Heavy or optional-dep code extracted as satellites with their own
     `go.mod`: `store/sqlite`, `store/postgres`, `provider/gemini`,
     `provider/openaicompat`, `observer`, `ingest`, `sandbox`, `rag` — joining

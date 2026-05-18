@@ -24,7 +24,6 @@ import (
 	"github.com/nevindra/oasis/processor"
 	"github.com/nevindra/oasis/ratelimit"
 	"github.com/nevindra/oasis/skills"
-	"github.com/nevindra/oasis/tool"
 	"github.com/nevindra/oasis/workflow"
 )
 
@@ -307,9 +306,9 @@ type SchemaEnsurer = core.SchemaEnsurer
 // NewToolRegistry creates an empty registry. See core.NewToolRegistry.
 func NewToolRegistry() *ToolRegistry { return core.NewToolRegistry() }
 
-// Erase converts a Tool[In, Out] into AnyTool. Forwards to tool.Erase.
+// Erase converts a Tool[In, Out] into AnyTool. Forwards to core.Erase.
 func Erase[In, Out any](t core.Tool[In, Out]) core.AnyTool {
-	return tool.Erase(t)
+	return core.Erase(t)
 }
 
 // --- LLM protocol types ---
