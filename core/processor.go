@@ -30,9 +30,14 @@ type PostToolProcessor interface {
 	PostTool(ctx context.Context, call ToolCall, result *ToolResult) error
 }
 
-// ErrHalt signals that a processor wants to stop agent execution
-// and return a specific response to the caller. The agent loop catches
-// ErrHalt and returns AgentResult{Output: Response} with a nil error.
+// ErrHalt signals that a processor wants to stop agent execution and return
+// a specific response to the caller.
+//
+// To halt, return a pointer: `return &core.ErrHalt{Response: "..."}`. The
+// `Error()` method has a pointer receiver, so only *ErrHalt satisfies the
+// error interface; a value `ErrHalt{...}` would not match. The agent loop
+// catches *ErrHalt via errors.As and returns AgentResult{Output: Response}
+// with a nil error.
 type ErrHalt struct {
 	Response string
 }

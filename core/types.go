@@ -31,8 +31,11 @@ func NowUnix() int64 {
 //     response may contain ToolCalls that the caller must dispatch.
 //   - ChatStream: like Chat but emits StreamEvent values into ch as content
 //     is generated. When req.Tools is non-empty, emits EventToolCallDelta
-//     events as tool call arguments are generated incrementally. The channel
-//     is NOT closed by the provider — the caller owns its lifecycle.
+//     events as tool call arguments are generated incrementally.
+//     Implementations MUST close ch before returning. Callers (including
+//     the agent loop and ServeSSE) range over ch until close, so a provider
+//     that fails to close the channel deadlocks the caller. This matches
+//     the StreamingAgent.ExecuteStream contract.
 //     Returns the final assembled ChatResponse with complete ToolCalls and Usage.
 type Provider interface {
 	Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
