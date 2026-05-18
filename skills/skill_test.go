@@ -1,4 +1,4 @@
-package oasis
+package skills
 
 import (
 	"context"
@@ -31,6 +31,100 @@ func TestDefaultSkillDirs(t *testing.T) {
 	for _, d := range dirs {
 		if !filepath.IsAbs(d) {
 			t.Errorf("expected absolute path, got %q", d)
+		}
+	}
+}
+
+// --- Task 3: parseFrontmatter ---
+
+func TestParseFrontmatter(t *testing.T) {
+	input := `---
+name: my-skill
+description: "A test skill"
+tags: [go, testing, ai]
+tools: [search, shell]
+model: gpt-4o
+references: [https://example.com]
+---
+This is the body.
+It has multiple lines.
+`
+	fm, body, err := parseFrontmatter(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cases := map[string]string{
+		"name":        "my-skill",
+		"description": "A test skill",
+		"tags":        "go, testing, ai",
+		"tools":       "search, shell",
+		"model":       "gpt-4o",
+		"references":  "https://example.com",
+	}
+	for k, want := range cases {
+		if got := fm[k]; got != want {
+			t.Errorf("fm[%q] = %q, want %q", k, got, want)
+		}
+	}
+
+	wantBody := "This is the body.\nIt has multiple lines."
+	if got := strings.TrimSpace(body); got != wantBody {
+		t.Errorf("body = %q, want %q", got, wantBody)
+	}
+}
+
+func TestParseFrontmatterNoFrontmatter(t *testing.T) {
+	input := `This is just plain text.
+No frontmatter here.
+`
+	_, _, err := parseFrontmatter(strings.NewReader(input))
+	if err == nil {
+		t.Fatal("expected error for missing ---, got nil")
+	}
+}
+
+func TestParseFrontmatterEmpty(t *testing.T) {
+	input := `---
+---
+This is the body only.
+`
+	fm, body, err := parseFrontmatter(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fm) != 0 {
+		t.Errorf("expected empty frontmatter, got %v", fm)
+	}
+	if want := "This is the body only."; !strings.Contains(strings.TrimSpace(body), want) {
+		t.Errorf("body %q does not contain %q", body, want)
+	}
+}
+
+func TestParseFrontmatterComment(t *testing.T) {
+	input := `---
+# This is a comment
+name: skill-with-comment
+
+# Another comment
+description: has comments
+---
+body
+`
+	fm, _, err := parseFrontmatter(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fm["name"] != "skill-with-comment" {
+		t.Errorf("name = %q, want %q", fm["name"], "skill-with-comment")
+	}
+	if fm["description"] != "has comments" {
+		t.Errorf("description = %q, want %q", fm["description"], "has comments")
+	}
+	// Comments should not appear as keys.
+	for k := range fm {
+		if strings.HasPrefix(k, "#") {
+			t.Errorf("comment line parsed as key: %q", k)
 		}
 	}
 }
@@ -450,6 +544,42 @@ Do full things.
 	}
 	if skill.Metadata["category"] != "productivity" {
 		t.Errorf("Metadata[category] = %q, want %q", skill.Metadata["category"], "productivity")
+	}
+}
+
+func TestParseFrontmatterMetadata(t *testing.T) {
+	input := `---
+name: meta-skill
+metadata:
+  author: alice
+  version: 1.0
+  repo: https://github.com/example
+---
+body
+`
+	fm, body, err := parseFrontmatter(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if fm["name"] != "meta-skill" {
+		t.Errorf("name = %q, want %q", fm["name"], "meta-skill")
+	}
+	if fm["metadata.author"] != "alice" {
+		t.Errorf("metadata.author = %q, want %q", fm["metadata.author"], "alice")
+	}
+	if fm["metadata.version"] != "1.0" {
+		t.Errorf("metadata.version = %q, want %q", fm["metadata.version"], "1.0")
+	}
+	if fm["metadata.repo"] != "https://github.com/example" {
+		t.Errorf("metadata.repo = %q, want %q", fm["metadata.repo"], "https://github.com/example")
+	}
+	// Parent key "metadata" should NOT appear as a standalone entry.
+	if _, ok := fm["metadata"]; ok {
+		t.Errorf("metadata should not be a standalone key, got %q", fm["metadata"])
+	}
+	if got := strings.TrimSpace(body); got != "body" {
+		t.Errorf("body = %q, want %q", got, "body")
 	}
 }
 

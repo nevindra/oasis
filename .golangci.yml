@@ -40,3 +40,33 @@ linters:
           deny:
             - pkg: "github.com/nevindra/oasis$"
               desc: "compaction must not import the root oasis package"
+
+        # network depends on root oasis but root non-test files must not import it (to avoid circular init order issues during Phase 2).
+        # Once agent/ subpackage is created in Phase 2.5, this rule can be relaxed.
+        rootNoNetwork:
+          files:
+            - "!**/*_test.go"
+            - "*.go"
+            - "internal/**/*.go"
+          deny:
+            - pkg: "github.com/nevindra/oasis/network"
+              desc: "root package must not import network subpackage during Phase 2 migration"
+
+        # memory may import root oasis (types.Store, etc.) but must not create circular dependencies.
+        memory:
+          files:
+            - "memory/**/*.go"
+          deny:
+            - pkg: "github.com/nevindra/oasis/network"
+              desc: "memory must not import network subpackage (no circular deps)"
+            - pkg: "github.com/nevindra/oasis/workflow"
+              desc: "memory must not import workflow subpackage (no circular deps)"
+
+        # skills may import core directly (for AnyTool, ToolDefinition, ToolResult, etc.)
+        # and must not import root oasis (would be circular since root re-exports skills types).
+        skills:
+          files:
+            - "skills/**/*.go"
+          deny:
+            - pkg: "github.com/nevindra/oasis$"
+              desc: "skills must not import the root oasis package (circular: root re-exports from skills)"

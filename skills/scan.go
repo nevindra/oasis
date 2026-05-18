@@ -1,6 +1,9 @@
-package oasis
+package skills
 
-import "github.com/nevindra/oasis/skills"
+import (
+	"os"
+	"path/filepath"
+)
 
 // DefaultSkillDirs returns the standard AgentSkills-compatible scan paths:
 //   - <cwd>/.agents/skills/ (project-level)
@@ -9,5 +12,12 @@ import "github.com/nevindra/oasis/skills"
 // Directories that do not exist are included — FileSkillProvider handles
 // missing directories gracefully.
 func DefaultSkillDirs() []string {
-	return skills.DefaultSkillDirs()
+	var dirs []string
+	if cwd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, filepath.Join(cwd, ".agents", "skills"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".agents", "skills"))
+	}
+	return dirs
 }

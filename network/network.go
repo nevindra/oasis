@@ -1,0 +1,232 @@
+package network
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/nevindra/oasis/agent"
+	"github.com/nevindra/oasis/core"
+)
+
+// Network is an Agent that coordinates subagents and tools via an LLM router.
+// The router sees subagents as callable tools ("agent_<name>") and decides
+// which primitives to invoke, in what order, and with what data.
+// Optionally supports conversation memory, user memory, and cross-thread search
+// when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
+type Network struct {
+	agent.AgentCore
+	agents           map[string]agent.Agent // keyed by name
+	sortedAgentNames []string               // pre-sorted for deterministic tool ordering
+}
+
+// NewNetwork creates a Network with the given router provider and options.
+func NewNetwork(name, description string, router core.Provider, opts ...agent.AgentOption) *Network {
+	cfg := agent.BuildConfig(opts)
+	n := &Network{
+		agents: make(map[string]agent.Agent),
+	}
+	agent.InitCore(&n.AgentCore, name, description, router, cfg)
+
+	if cfg.Sandbox != nil {
+		for _, t := range cfg.SandboxTools {
+			n.Tools.Add(t)
+		}
+	}
+
+	// Register skill tools if a provider is configured.
+	// TODO: Re-enable after skills migration in Phase 2.4
+	// if cfg.skillProvider != nil {
+	// 	for _, t := range newSkillTools(cfg.skillProvider) {
+	// 		n.Tools.Add(t)
+	// 	}
+	// }
+
+	for _, a := range cfg.Agents {
+		n.agents[a.Name()] = a
+		n.sortedAgentNames = append(n.sortedAgentNames, a.Name())
+	}
+	sort.Strings(n.sortedAgentNames)
+
+	// Pre-compute tool definitions for the non-dynamic path.
+	// Includes agent tools + direct tools + built-in tools.
+	if n.DynamicTools == nil {
+		n.CachedToolDefs = n.CacheBuiltinToolDefs(n.buildToolDefs(n.Tools.AllDefinitions()))
+	}
+
+	return n
+}
+
+// Execute runs the network's routing loop.
+func (n *Network) Execute(ctx context.Context, task agent.AgentTask) (agent.AgentResult, error) {
+	ctx = agent.WithTaskContext(ctx, task)
+	return n.ExecuteWithSpan(ctx, task, nil, "Network", "network", n.buildLoopConfig)
+}
+
+// ExecuteStream runs the network's routing loop like Execute, but emits
+// StreamEvent values into ch throughout execution. Events include text deltas,
+// tool call start/result, and agent start/finish for subagent delegation.
+// The channel is closed when streaming completes.
+func (n *Network) ExecuteStream(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) (agent.AgentResult, error) {
+	ctx = agent.WithTaskContext(ctx, task)
+	return n.ExecuteWithSpan(ctx, task, ch, "Network", "network", n.buildLoopConfig)
+}
+
+// buildLoopConfig wires Network fields into a LoopConfig for runLoop.
+// Resolves dynamic prompt, model, and tools when configured.
+// ch is passed through so makeDispatch can emit agent-start/finish events.
+func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
+	prompt, provider := n.ResolvePromptAndProvider(ctx, task)
+	if n.ActiveSkillInstructions != "" {
+		prompt = prompt + "\n\n# Active Skills\n\n" + n.ActiveSkillInstructions
+	}
+
+	// Resolve tools: dynamic replaces static.
+	var toolDefs []core.ToolDefinition
+	var executeTool agent.ToolExecFunc
+	var executeToolStream agent.ToolExecStreamFunc
+	if dynDefs, dynExec := n.ResolveDynamicTools(ctx, task); dynDefs != nil {
+		n.Logger.Debug("using dynamic tools", "network", n.Name(), "tool_count", len(dynDefs))
+		toolDefs = n.CacheBuiltinToolDefs(n.buildToolDefs(dynDefs))
+		executeTool = dynExec
+	} else {
+		toolDefs = n.CachedToolDefs
+		executeTool = n.Tools.Execute
+		executeToolStream = n.Tools.ExecuteStream
+	}
+
+	return n.BaseLoopConfig("network:"+n.Name(), prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs))
+}
+
+// makeDispatch returns a DispatchFunc that routes tool calls to subagents,
+// the shared built-in tools, or direct tools. When ch is non-nil, agent-start
+// and agent-finish events are emitted for subagent delegation. Tools
+// implementing StreamingAnyTool emit progress events via executeToolStream.
+func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.StreamEvent, executeTool agent.ToolExecFunc, executeToolStream agent.ToolExecStreamFunc, resolvedToolDefs []core.ToolDefinition) agent.DispatchFunc {
+	var dispatch agent.DispatchFunc
+	dispatch = func(ctx context.Context, tc core.ToolCall) agent.DispatchResult {
+		// Built-in tools: ask_user, execute_plan.
+		if r, ok := agent.DispatchBuiltins(ctx, tc, dispatch, n.Handler, n.Name(), n.PlanExecution); ok {
+			return r
+		}
+
+		// spawn_agent: dynamic sub-agent creation.
+		if tc.Name == "spawn_agent" && n.SpawnEnabled {
+			return agent.ExecuteSpawnAgent(ctx, tc.Args, agent.SubAgentConfig{
+				Provider:       n.LLMProvider,
+				ToolDefs:       resolvedToolDefs,
+				ExecuteTool:    executeTool,
+				MaxIter:        n.MaxIter,
+				MaxSpawnDepth:  n.SpawnDepthLimit,
+				DenySpawnTools: n.DeniedSpawnTools,
+				PlanExecution:  n.PlanExecution,
+				Logger:         n.Logger,
+				GenParams:      n.GenParams,
+			})
+		}
+
+		// Check if it's an agent call (prefixed with "agent_")
+		const agentPrefix = "agent_"
+		if strings.HasPrefix(tc.Name, agentPrefix) {
+			return n.dispatchAgent(ctx, tc, agentPrefix, parentTask, ch)
+		}
+
+		// Regular tool call.
+		return agent.DispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
+	}
+	return dispatch
+}
+
+// dispatchAgent handles delegation to a subagent. Emits agent-start/finish
+// streaming events when ch is non-nil.
+func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPrefix string, parentTask agent.AgentTask, ch chan<- core.StreamEvent) agent.DispatchResult {
+	agentName := tc.Name[len(agentPrefix):]
+	sub, ok := n.agents[agentName]
+	if !ok {
+		return agent.DispatchResult{Content: fmt.Sprintf("error: unknown agent %q", agentName), IsError: true}
+	}
+
+	var params struct {
+		Task string `json:"task"`
+	}
+	if err := json.Unmarshal(tc.Args, &params); err != nil {
+		return agent.DispatchResult{Content: "error: invalid agent call args: " + err.Error(), IsError: true}
+	}
+
+	n.Logger.Info("delegating to subagent", "network", n.Name(), "agent", agentName, "task", agent.TruncateStr(params.Task, 80))
+
+	if ch != nil {
+		select {
+		case ch <- core.StreamEvent{Type: agent.EventAgentStart, Name: agentName, Content: params.Task}:
+		case <-ctx.Done():
+			return agent.DispatchResult{Content: ctx.Err().Error(), IsError: true}
+		}
+	}
+
+	subTask := agent.AgentTask{
+		Input:       params.Task,
+		Attachments: parentTask.Attachments,
+		Context:     parentTask.Context,
+	}
+
+	start := time.Now()
+	result, err := agent.ExecuteAgent(ctx, sub, agentName, subTask, ch, n.Logger)
+	elapsed := time.Since(start)
+
+	if ch != nil {
+		output := ""
+		if err == nil {
+			output = result.Output
+		}
+		select {
+		case ch <- core.StreamEvent{
+			Type:     agent.EventAgentFinish,
+			Name:     agentName,
+			Content:  output,
+			Usage:    result.Usage,
+			Duration: elapsed,
+		}:
+		case <-ctx.Done():
+		}
+	}
+
+	if err != nil {
+		n.Logger.Error("subagent failed", "network", n.Name(), "agent", agentName, "error", err, "duration", elapsed)
+		return agent.DispatchResult{Content: "error: " + err.Error(), IsError: true}
+	}
+	n.Logger.Info("subagent completed", "network", n.Name(), "agent", agentName,
+		"duration", elapsed,
+		"input_tokens", result.Usage.InputTokens,
+		"output_tokens", result.Usage.OutputTokens)
+	return agent.DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
+}
+
+// buildToolDefs builds tool definitions from subagents and the given tool definitions.
+// Agent tools use pre-sorted names for deterministic ordering across calls.
+func (n *Network) buildToolDefs(toolDefs []core.ToolDefinition) []core.ToolDefinition {
+	var defs []core.ToolDefinition
+
+	// Agent tool definitions (order fixed at construction time).
+	for _, name := range n.sortedAgentNames {
+		defs = append(defs, core.ToolDefinition{
+			Name:        "agent_" + name,
+			Description: n.agents[name].Description(),
+			Parameters: json.RawMessage(
+				`{"type":"object","properties":{"task":{"type":"string","description":"The user's original message, copied verbatim. Do not paraphrase, translate, or summarize."}},"required":["task"]}`,
+			),
+		})
+	}
+
+	// Direct tool definitions
+	defs = append(defs, toolDefs...)
+	return defs
+}
+
+// compile-time checks
+var (
+	_ agent.Agent          = (*Network)(nil)
+	_ agent.StreamingAgent = (*Network)(nil)
+)

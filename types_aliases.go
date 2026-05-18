@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/skills"
 )
 
 // Temporary aliases during Phase 0 migration. These keep existing root-package
@@ -137,3 +138,80 @@ type ErrHTTP = core.ErrHTTP
 
 // ParseRetryAfter parses a Retry-After header value into a duration.
 func ParseRetryAfter(value string) time.Duration { return core.ParseRetryAfter(value) }
+
+// --- Agent types (moved to core/) ---
+
+type Agent = core.Agent
+type StreamingAgent = core.StreamingAgent
+type AgentTask = core.AgentTask
+type AgentResult = core.AgentResult
+type StepTrace = core.StepTrace
+
+// Context key constants for AgentTask.Context (exported for subpackage access).
+const (
+	ContextThreadID = core.ContextThreadID
+	ContextUserID   = core.ContextUserID
+	ContextChatID   = core.ContextChatID
+)
+
+// --- Tracer types (moved to core/) ---
+
+type Tracer = core.Tracer
+type Span = core.Span
+type SpanAttr = core.SpanAttr
+
+func StringAttr(k, v string) SpanAttr    { return core.StringAttr(k, v) }
+func IntAttr(k string, v int) SpanAttr   { return core.IntAttr(k, v) }
+func BoolAttr(k string, v bool) SpanAttr { return core.BoolAttr(k, v) }
+func Float64Attr(k string, v float64) SpanAttr { return core.Float64Attr(k, v) }
+
+// --- Persistence types (moved to core/) ---
+
+type Store = core.Store
+type Thread = core.Thread
+type Message = core.Message
+type Fact = core.Fact
+type Document = core.Document
+type Chunk = core.Chunk
+type ChunkMeta = core.ChunkMeta
+type Image = core.Image
+type RelationType = core.RelationType
+type ChunkEdge = core.ChunkEdge
+type ChunkFilter = core.ChunkFilter
+type FilterOp = core.FilterOp
+type ScoredMessage = core.ScoredMessage
+type ScoredChunk = core.ScoredChunk
+type ScoredFact = core.ScoredFact
+type ScheduledAction = core.ScheduledAction
+type ScheduledToolCall = core.ScheduledToolCall
+
+const (
+	RelReferences  = core.RelReferences
+	RelElaborates  = core.RelElaborates
+	RelDependsOn   = core.RelDependsOn
+	RelContradicts = core.RelContradicts
+	RelPartOf      = core.RelPartOf
+	RelSimilarTo   = core.RelSimilarTo
+	RelSequence    = core.RelSequence
+	RelCausedBy    = core.RelCausedBy
+
+	OpEq  = core.OpEq
+	OpIn  = core.OpIn
+	OpGt  = core.OpGt
+	OpLt  = core.OpLt
+	OpNeq = core.OpNeq
+)
+
+func ByDocument(ids ...string) ChunkFilter      { return core.ByDocument(ids...) }
+func BySource(s string) ChunkFilter             { return core.BySource(s) }
+func ByMeta(k, v string) ChunkFilter            { return core.ByMeta(k, v) }
+func ByExcludeDocument(id string) ChunkFilter   { return core.ByExcludeDocument(id) }
+func CreatedAfter(u int64) ChunkFilter          { return core.CreatedAfter(u) }
+func CreatedBefore(u int64) ChunkFilter         { return core.CreatedBefore(u) }
+
+// --- Skill types (moved to skills/) ---
+
+type SkillProvider = skills.SkillProvider
+type SkillWriter = skills.SkillWriter
+type SkillSummary = skills.SkillSummary
+type Skill = skills.Skill
