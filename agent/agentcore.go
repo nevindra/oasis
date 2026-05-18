@@ -413,7 +413,6 @@ func onceClose[T any](ch chan<- T) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			defer func() { recover() }()
 			close(ch)
 		})
 	}

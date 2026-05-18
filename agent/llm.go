@@ -364,9 +364,6 @@ type SubAgentConfig struct {
 	GenParams      *GenerationParams
 }
 
-// subAgentConfig is an alias for SubAgentConfig for backward compatibility.
-type subAgentConfig = SubAgentConfig
-
 // ExecuteSpawnAgent handles the spawn_agent tool call. Constructs an ephemeral
 // LLMAgent with inherited tools (minus denied ones), executes it, returns result.
 // Exported for network subpackage access.
