@@ -37,7 +37,7 @@ func TestNetworkPassesImagesToSubAgent(t *testing.T) {
 	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
 
 	images := []core.Attachment{
-		{MimeType: "image/jpeg", Base64: "abc123"},
+		mustAttachmentBase64(t, "image/jpeg", "YWJjMTIz"),
 	}
 	task := agent.AgentTask{
 		Input:       "analyze this image",
@@ -52,7 +52,7 @@ func TestNetworkPassesImagesToSubAgent(t *testing.T) {
 	if len(receivedTask.Attachments) != 1 {
 		t.Fatalf("sub-agent received %d images, want 1", len(receivedTask.Attachments))
 	}
-	if receivedTask.Attachments[0].MimeType != "image/jpeg" || receivedTask.Attachments[0].Base64 != "abc123" {
+	if receivedTask.Attachments[0].MimeType != "image/jpeg" || string(receivedTask.Attachments[0].Data) != "abc123" {
 		t.Errorf("sub-agent image = %+v, want {image/jpeg, abc123}", receivedTask.Attachments[0])
 	}
 }
@@ -237,6 +237,17 @@ func TestNetworkWithSkillsRegistersSkillTools(t *testing.T) {
 
 // stubSkillProvider is a minimal skills.SkillProvider that satisfies the
 // interface without any backing store. Used only to verify tool registration.
+// mustAttachmentBase64 fails the test if base64 decode fails. Used to keep
+// test data readable while still routing through the validating constructor.
+func mustAttachmentBase64(t *testing.T, mime, encoded string) core.Attachment {
+	t.Helper()
+	att, err := core.NewAttachmentFromBase64(mime, encoded)
+	if err != nil {
+		t.Fatalf("decode test attachment: %v", err)
+	}
+	return att
+}
+
 type stubSkillProvider struct{}
 
 func (s *stubSkillProvider) Discover(_ context.Context) ([]skills.SkillSummary, error) {

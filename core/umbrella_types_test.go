@@ -152,27 +152,6 @@ func TestAttachment_InlineData_FromData(t *testing.T) {
 	}
 }
 
-func TestAttachment_InlineData_FromBase64(t *testing.T) {
-	encoded := base64.StdEncoding.EncodeToString([]byte("legacy-data"))
-	att := Attachment{MimeType: "image/png", Base64: encoded}
-	got := att.InlineData()
-	if string(got) != "legacy-data" {
-		t.Errorf("InlineData() = %q, want %q", got, "legacy-data")
-	}
-}
-
-func TestAttachment_InlineData_DataTakesPriority(t *testing.T) {
-	att := Attachment{
-		MimeType: "image/png",
-		Data:     []byte("preferred"),
-		Base64:   base64.StdEncoding.EncodeToString([]byte("ignored")),
-	}
-	got := att.InlineData()
-	if string(got) != "preferred" {
-		t.Errorf("InlineData() = %q, want %q (Data should take priority)", got, "preferred")
-	}
-}
-
 func TestAttachment_InlineData_URLOnly(t *testing.T) {
 	att := Attachment{MimeType: "video/mp4", URL: "https://example.com/video.mp4"}
 	if got := att.InlineData(); got != nil {
@@ -187,7 +166,6 @@ func TestAttachment_HasInlineData(t *testing.T) {
 		want bool
 	}{
 		{"Data set", Attachment{Data: []byte("x")}, true},
-		{"Base64 set", Attachment{Base64: "abc"}, true},
 		{"URL only", Attachment{URL: "https://example.com"}, false},
 		{"empty", Attachment{}, false},
 	}
@@ -197,6 +175,50 @@ func TestAttachment_HasInlineData(t *testing.T) {
 				t.Errorf("HasInlineData() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNewAttachment(t *testing.T) {
+	att := NewAttachment("image/png", []byte("raw"))
+	if att.MimeType != "image/png" {
+		t.Errorf("MimeType = %q, want %q", att.MimeType, "image/png")
+	}
+	if string(att.Data) != "raw" {
+		t.Errorf("Data = %q, want %q", att.Data, "raw")
+	}
+	if att.URL != "" {
+		t.Errorf("URL = %q, want empty", att.URL)
+	}
+}
+
+func TestNewAttachmentFromURL(t *testing.T) {
+	att := NewAttachmentFromURL("video/mp4", "https://example.com/v.mp4")
+	if att.URL != "https://example.com/v.mp4" {
+		t.Errorf("URL = %q, want %q", att.URL, "https://example.com/v.mp4")
+	}
+	if len(att.Data) != 0 {
+		t.Errorf("Data = %v, want empty", att.Data)
+	}
+}
+
+func TestNewAttachmentFromBase64_OK(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte("hello"))
+	att, err := NewAttachmentFromBase64("text/plain", encoded)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(att.Data) != "hello" {
+		t.Errorf("Data = %q, want %q", att.Data, "hello")
+	}
+	if att.MimeType != "text/plain" {
+		t.Errorf("MimeType = %q, want %q", att.MimeType, "text/plain")
+	}
+}
+
+func TestNewAttachmentFromBase64_Error(t *testing.T) {
+	_, err := NewAttachmentFromBase64("text/plain", "!!!not-base64!!!")
+	if err == nil {
+		t.Fatal("expected decode error, got nil")
 	}
 }
 

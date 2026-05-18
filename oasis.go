@@ -357,6 +357,22 @@ type ChatMessage = core.ChatMessage
 type ChatRequest = core.ChatRequest
 type ChatResponse = core.ChatResponse
 type Attachment = core.Attachment
+
+// NewAttachment constructs an Attachment from raw inline bytes.
+func NewAttachment(mime string, data []byte) Attachment {
+	return core.NewAttachment(mime, data)
+}
+
+// NewAttachmentFromURL constructs an Attachment from a remote URL.
+func NewAttachmentFromURL(mime, url string) Attachment {
+	return core.NewAttachmentFromURL(mime, url)
+}
+
+// NewAttachmentFromBase64 decodes a base64-encoded payload into an Attachment.
+// Returns an error if the encoded string is not valid base64.
+func NewAttachmentFromBase64(mime, encoded string) (Attachment, error) {
+	return core.NewAttachmentFromBase64(mime, encoded)
+}
 type ResponseSchema = core.ResponseSchema
 type SchemaObject = core.SchemaObject
 type GenerationParams = core.GenerationParams

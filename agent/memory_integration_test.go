@@ -512,8 +512,8 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 
 func TestBuildMessagesImagesFromTask(t *testing.T) {
 	images := []Attachment{
-		{MimeType: "image/jpeg", Base64: "abc123"},
-		{MimeType: "application/pdf", Base64: "pdfdata"},
+		mustAttachmentBase64(t, "image/jpeg", "YWJjMTIz"),
+		mustAttachmentBase64(t, "application/pdf", "cGRmZGF0YQ=="),
 	}
 
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
@@ -539,10 +539,10 @@ func TestBuildMessagesImagesFromTask(t *testing.T) {
 	if len(last.Attachments) != 2 {
 		t.Fatalf("user message images count = %d, want 2", len(last.Attachments))
 	}
-	if last.Attachments[0].MimeType != "image/jpeg" || last.Attachments[0].Base64 != "abc123" {
+	if last.Attachments[0].MimeType != "image/jpeg" || string(last.Attachments[0].Data) != "abc123" {
 		t.Errorf("first image = %+v, want {image/jpeg, abc123}", last.Attachments[0])
 	}
-	if last.Attachments[1].MimeType != "application/pdf" || last.Attachments[1].Base64 != "pdfdata" {
+	if last.Attachments[1].MimeType != "application/pdf" || string(last.Attachments[1].Data) != "pdfdata" {
 		t.Errorf("second image = %+v, want {application/pdf, pdfdata}", last.Attachments[1])
 	}
 }

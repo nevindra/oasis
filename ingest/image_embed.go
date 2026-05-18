@@ -41,11 +41,15 @@ func (ing *Ingestor) embedImageChunks(ctx context.Context, docID string, pageMet
 	// Build multimodal inputs.
 	inputs := make([]oasis.MultimodalInput, len(images))
 	for i, entry := range images {
-		att := oasis.Attachment{
-			MimeType: entry.image.MimeType,
-		}
+		var att oasis.Attachment
 		if entry.image.Base64 != "" {
-			att.Base64 = entry.image.Base64
+			a, err := oasis.NewAttachmentFromBase64(entry.image.MimeType, entry.image.Base64)
+			if err != nil {
+				return nil, fmt.Errorf("decode image %d base64: %w", i, err)
+			}
+			att = a
+		} else {
+			att = oasis.NewAttachment(entry.image.MimeType, nil)
 		}
 		inputs[i] = oasis.MultimodalInput{
 			Attachments: []oasis.Attachment{att},

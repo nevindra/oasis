@@ -234,33 +234,49 @@ type ChatMessage struct {
 // The MimeType determines how the provider interprets the data.
 //
 // Populate URL for remote references (pre-uploaded to storage/CDN) or Data for
-// transient inline bytes. Providers resolve the best transport: URL > Data > Base64.
+// transient inline bytes. Providers resolve the best transport: URL > Data.
+//
+// Construct via NewAttachment, NewAttachmentFromURL, or NewAttachmentFromBase64
+// to surface decode errors at construction time rather than at provider call time.
 type Attachment struct {
 	MimeType string `json:"mime_type"`
 	URL      string `json:"url,omitempty"`
-	Data     []byte `json:"-"`
-
-	// Deprecated: use Data for inline bytes or URL for remote references.
-	Base64 string `json:"base64,omitempty"`
+	// Data carries raw inline bytes. encoding/json marshals []byte as a
+	// base64 string on the wire, so JSON round-trips preserve binary content.
+	Data []byte `json:"data,omitempty"`
 }
 
-// InlineData returns raw bytes from whichever inline source is populated.
-// Priority: Data > Base64 (decoded). Returns nil if only URL is set.
-func (a Attachment) InlineData() []byte {
-	if len(a.Data) > 0 {
-		return a.Data
+// NewAttachment constructs an Attachment from raw inline bytes.
+func NewAttachment(mime string, data []byte) Attachment {
+	return Attachment{MimeType: mime, Data: data}
+}
+
+// NewAttachmentFromURL constructs an Attachment from a remote URL.
+// Providers fetch the resource at request time.
+func NewAttachmentFromURL(mime, url string) Attachment {
+	return Attachment{MimeType: mime, URL: url}
+}
+
+// NewAttachmentFromBase64 decodes a base64-encoded payload into an Attachment.
+// Returns an error if the encoded string is not valid base64.
+//
+// Use this when integrating with a source that hands you base64 (some legacy
+// APIs, document extractors). For raw bytes, use NewAttachment directly.
+func NewAttachmentFromBase64(mime, encoded string) (Attachment, error) {
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return Attachment{}, fmt.Errorf("decode base64 attachment: %w", err)
 	}
-	if a.Base64 != "" {
-		data, _ := base64.StdEncoding.DecodeString(a.Base64)
-		return data
-	}
-	return nil
+	return Attachment{MimeType: mime, Data: data}, nil
 }
 
-// HasInlineData reports whether inline bytes are available (Data or Base64).
-func (a Attachment) HasInlineData() bool {
-	return len(a.Data) > 0 || a.Base64 != ""
-}
+// InlineData returns the raw inline bytes, or nil if the attachment only carries a URL.
+// Why: callers historically branched on Data vs Base64; constructors now decode
+// at construction so this read path is infallible.
+func (a Attachment) InlineData() []byte { return a.Data }
+
+// HasInlineData reports whether inline bytes are available.
+func (a Attachment) HasInlineData() bool { return len(a.Data) > 0 }
 
 type ToolCall struct {
 	ID       string          `json:"id"`

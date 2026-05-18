@@ -4,7 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
+
+// mustAttachmentBase64 fails the test if base64 decode fails. Used to keep
+// test data readable while still routing through the validating constructor.
+func mustAttachmentBase64(t *testing.T, mime, encoded string) Attachment {
+	t.Helper()
+	att, err := core.NewAttachmentFromBase64(mime, encoded)
+	if err != nil {
+		t.Fatalf("decode test attachment: %v", err)
+	}
+	return att
+}
 
 // nopStore satisfies the Store interface with no-ops.
 // Embed this in test-specific store structs to avoid implementing every method.

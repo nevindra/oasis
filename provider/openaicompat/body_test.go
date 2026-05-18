@@ -225,13 +225,13 @@ func TestBuildBody_VideoFile(t *testing.T) {
 	}
 }
 
-func TestBuildBody_DeprecatedBase64(t *testing.T) {
+func TestBuildBody_InlineBase64Attachment(t *testing.T) {
 	messages := []oasis.ChatMessage{
 		{
 			Role:    "user",
 			Content: "What is this?",
 			Attachments: []oasis.Attachment{
-				{MimeType: "image/png", Base64: "iVBOR..."},
+				mustAttachmentBase64(t, "image/png", "aGVsbG8="),
 			},
 		},
 	}
@@ -240,11 +240,22 @@ func TestBuildBody_DeprecatedBase64(t *testing.T) {
 	blocks := req.Messages[0].Content.([]ContentBlock)
 
 	if blocks[1].Type != "image_url" {
-		t.Errorf("expected 'image_url' for deprecated Base64, got %q", blocks[1].Type)
+		t.Errorf("expected 'image_url' for base64 attachment, got %q", blocks[1].Type)
 	}
 	if blocks[1].ImageURL == nil {
 		t.Fatal("expected image_url to be non-nil")
 	}
+}
+
+// mustAttachmentBase64 fails the test if base64 decode fails. Used to keep
+// test data readable while still routing through the validating constructor.
+func mustAttachmentBase64(t *testing.T, mime, encoded string) oasis.Attachment {
+	t.Helper()
+	att, err := oasis.NewAttachmentFromBase64(mime, encoded)
+	if err != nil {
+		t.Fatalf("decode test attachment: %v", err)
+	}
+	return att
 }
 
 func TestBuildBody_WithTools(t *testing.T) {
