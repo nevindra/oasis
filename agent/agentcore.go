@@ -409,10 +409,18 @@ func startDrainTimeout(subCh <-chan StreamEvent, safeClose func(), logger *slog.
 // onceClose returns a function that closes the given channel exactly once.
 // Safe to call multiple times; subsequent calls are no-ops.
 // Accepts send-only channels (close is valid on chan<- T per Go spec).
+//
+// Why the recover: sync.Once protects this helper from double-closing the
+// channel, but the same channel can also be closed by an external path
+// (e.g. ExecuteStream's own deferred close in forwardSubagentStream).
+// If the external close fires first and onceClose runs second, close()
+// panics with "close of closed channel". The recover absorbs that race.
+// Removing this defer caused TestLLMAgentExecuteStreamNoTools to panic.
 func onceClose[T any](ch chan<- T) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			defer func() { recover() }()
 			close(ch)
 		})
 	}
