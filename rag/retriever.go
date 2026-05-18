@@ -1,4 +1,4 @@
-package oasis
+package rag
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // RetrievalResult is a scored piece of content from a knowledge base search.
@@ -28,7 +30,7 @@ type RetrievalResult struct {
 // Populated by GraphRetriever for graph-discovered (non-seed) chunks.
 type EdgeContext struct {
 	FromChunkID string       `json:"from_chunk_id"`
-	Relation    RelationType `json:"relation"`
+	Relation    core.RelationType `json:"relation"`
 	Description string       `json:"description"`
 }
 
@@ -46,31 +48,6 @@ type Reranker interface {
 	Rerank(ctx context.Context, query string, results []RetrievalResult, topK int) ([]RetrievalResult, error)
 }
 
-// KeywordSearcher is an optional Store capability for full-text keyword search.
-// Store implementations that support FTS can implement this interface;
-// callers discover it via type assertion.
-type KeywordSearcher interface {
-	SearchChunksKeyword(ctx context.Context, query string, topK int, filters ...ChunkFilter) ([]ScoredChunk, error)
-}
-
-// GraphStore is an optional Store capability for chunk relationship graphs.
-// Store implementations that maintain a knowledge graph can implement this
-// interface; callers discover it via type assertion.
-type GraphStore interface {
-	StoreEdges(ctx context.Context, edges []ChunkEdge) error
-	GetEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
-	GetIncomingEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
-	PruneOrphanEdges(ctx context.Context) (int, error)
-}
-
-// BidirectionalGraphStore is an optional GraphStore capability that fetches
-// both outgoing and incoming edges in a single query. When the Store implements
-// this interface, GraphRetriever uses it to reduce the number of database
-// round-trips per hop from 2 to 1 when bidirectional traversal is enabled.
-type BidirectionalGraphStore interface {
-	GetBothEdges(ctx context.Context, chunkIDs []string) ([]ChunkEdge, error)
-}
-
 // RetrieverOption configures a HybridRetriever.
 type RetrieverOption func(*retrieverConfig)
 
@@ -79,8 +56,8 @@ type retrieverConfig struct {
 	minScore            float32
 	keywordWeight       float32
 	overfetchMultiplier int
-	filters             []ChunkFilter
-	tracer              Tracer
+	filters             []core.ChunkFilter
+	tracer              core.Tracer
 	logger              *slog.Logger
 }
 
@@ -109,12 +86,12 @@ func WithOverfetchMultiplier(n int) RetrieverOption {
 }
 
 // WithFilters sets metadata filters passed to SearchChunks and SearchChunksKeyword.
-func WithFilters(filters ...ChunkFilter) RetrieverOption {
+func WithFilters(filters ...core.ChunkFilter) RetrieverOption {
 	return func(c *retrieverConfig) { c.filters = filters }
 }
 
-// WithRetrieverTracer sets the Tracer for a HybridRetriever.
-func WithRetrieverTracer(t Tracer) RetrieverOption {
+// WithRetrieverTracer sets the core.Tracer for a HybridRetriever.
+func WithRetrieverTracer(t core.Tracer) RetrieverOption {
 	return func(c *retrieverConfig) { c.tracer = t }
 }
 
@@ -166,7 +143,7 @@ const rrfK = 60
 // Scores are normalized to [0, 1] so that WithMinRetrievalScore and ScoreReranker
 // thresholds work correctly.
 // Returns results sorted by fused score descending.
-func reciprocalRankFusion(vector, keyword []ScoredChunk, keywordWeight float32) []RetrievalResult {
+func reciprocalRankFusion(vector, keyword []core.ScoredChunk, keywordWeight float32) []RetrievalResult {
 	vectorWeight := 1 - keywordWeight
 
 	// The maximum possible RRF contribution from a single list is 1/(rrfK+1)
@@ -175,7 +152,7 @@ func reciprocalRankFusion(vector, keyword []ScoredChunk, keywordWeight float32) 
 	normalizer := float32(rrfK + 1)
 
 	type entry struct {
-		chunk Chunk
+		chunk core.Chunk
 		score float32
 	}
 	merged := make(map[string]*entry)
@@ -219,8 +196,8 @@ func reciprocalRankFusion(vector, keyword []ScoredChunk, keywordWeight float32) 
 // HybridRetriever composes vector search, keyword search (FTS), parent-child
 // resolution, and optional re-ranking into a single Retrieve call.
 type HybridRetriever struct {
-	store     Store
-	embedding EmbeddingProvider
+	store     core.Store
+	embedding core.EmbeddingProvider
 	cfg       retrieverConfig
 }
 
@@ -228,9 +205,9 @@ var _ Retriever = (*HybridRetriever)(nil)
 
 // NewHybridRetriever creates a Retriever that combines vector and keyword search
 // using Reciprocal Rank Fusion, resolves parent-child chunks, and optionally
-// re-ranks results. If the Store implements KeywordSearcher, keyword search is
+// re-ranks results. If the core.Store implements core.KeywordSearcher, keyword search is
 // used automatically.
-func NewHybridRetriever(store Store, embedding EmbeddingProvider, opts ...RetrieverOption) *HybridRetriever {
+func NewHybridRetriever(store core.Store, embedding core.EmbeddingProvider, opts ...RetrieverOption) *HybridRetriever {
 	cfg := retrieverConfig{
 		keywordWeight:       0.3,
 		overfetchMultiplier: 3,
@@ -245,17 +222,17 @@ func NewHybridRetriever(store Store, embedding EmbeddingProvider, opts ...Retrie
 // resolves parent-child chunks, optionally re-ranks, and returns the top results.
 func (h *HybridRetriever) Retrieve(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
 	if h.cfg.tracer != nil {
-		var span Span
+		var span core.Span
 		ctx, span = h.cfg.tracer.Start(ctx, "retriever.retrieve",
-			StringAttr("retriever.type", "hybrid"),
-			IntAttr("topK", topK))
+			core.StringAttr("retriever.type", "hybrid"),
+			core.IntAttr("topK", topK))
 		defer func() { span.End() }()
 
 		results, err := h.retrieveInner(ctx, query, topK)
 		if err != nil {
 			span.Error(err)
 		} else {
-			span.SetAttr(IntAttr("result_count", len(results)))
+			span.SetAttr(core.IntAttr("result_count", len(results)))
 		}
 		return results, err
 	}
@@ -278,17 +255,17 @@ func (h *HybridRetriever) retrieveInner(ctx context.Context, query string, topK 
 // already embedded the query for other purposes (e.g., message search).
 func (h *HybridRetriever) RetrieveWithEmbedding(ctx context.Context, queryEmbedding []float32, query string, topK int) ([]RetrievalResult, error) {
 	if h.cfg.tracer != nil {
-		var span Span
+		var span core.Span
 		ctx, span = h.cfg.tracer.Start(ctx, "retriever.retrieve",
-			StringAttr("retriever.type", "hybrid"),
-			IntAttr("topK", topK))
+			core.StringAttr("retriever.type", "hybrid"),
+			core.IntAttr("topK", topK))
 		defer func() { span.End() }()
 
 		results, err := h.retrieveWithEmbedding(ctx, queryEmbedding, query, topK)
 		if err != nil {
 			span.Error(err)
 		} else {
-			span.SetAttr(IntAttr("result_count", len(results)))
+			span.SetAttr(core.IntAttr("result_count", len(results)))
 		}
 		return results, err
 	}
@@ -299,11 +276,11 @@ func (h *HybridRetriever) retrieveWithEmbedding(ctx context.Context, queryEmbedd
 	fetchK := max(topK*h.cfg.overfetchMultiplier, topK)
 
 	var (
-		vectorResults  []ScoredChunk
-		keywordResults []ScoredChunk
+		vectorResults  []core.ScoredChunk
+		keywordResults []core.ScoredChunk
 		vectorErr      error
 	)
-	ks, hasKeyword := h.store.(KeywordSearcher)
+	ks, hasKeyword := h.store.(core.KeywordSearcher)
 
 	if hasKeyword {
 		var wg sync.WaitGroup
@@ -365,27 +342,12 @@ func (h *HybridRetriever) retrieveWithEmbedding(ctx context.Context, queryEmbedd
 
 // --- Shared retrieval helpers ---
 
-// DocumentGetter is an optional Store capability for batch document lookup by ID.
-// Store implementations that support it can implement this interface; callers
-// discover it via type assertion. If not implemented, title/source fields stay empty.
-type DocumentGetter interface {
-	GetDocumentsByIDs(ctx context.Context, ids []string) ([]Document, error)
-}
-
-// DocumentMetaLister is an optional Store capability that returns documents
-// without loading the Content field. Callers that only need ID, Title, Source,
-// and CreatedAt should prefer this over ListDocuments to avoid loading
-// potentially large document bodies into memory.
-type DocumentMetaLister interface {
-	ListDocumentMeta(ctx context.Context, limit int) ([]Document, error)
-}
-
 // resolveParentChunks replaces child chunks with their parent's richer content.
 // If multiple children map to the same parent, the highest-scored child wins.
 // Uses ParentID already present on RetrievalResult (populated by SearchChunks),
 // avoiding an extra GetChunksByIDs round-trip.
 // Errors are non-fatal — on failure, results pass through unmodified.
-func resolveParentChunks(ctx context.Context, store Store, results []RetrievalResult) []RetrievalResult {
+func resolveParentChunks(ctx context.Context, store core.Store, results []RetrievalResult) []RetrievalResult {
 	if len(results) == 0 {
 		return results
 	}
@@ -409,7 +371,7 @@ func resolveParentChunks(ctx context.Context, store Store, results []RetrievalRe
 		return results // degrade gracefully
 	}
 
-	parentMap := make(map[string]Chunk, len(parents))
+	parentMap := make(map[string]core.Chunk, len(parents))
 	for _, p := range parents {
 		parentMap[p.ID] = p
 	}
@@ -454,10 +416,10 @@ func resolveParentChunks(ctx context.Context, store Store, results []RetrievalRe
 }
 
 // populateDocumentMeta fills DocumentTitle and DocumentSource on results
-// by batch-fetching document metadata. If the Store does not implement
-// DocumentGetter, fields stay empty (same behavior as before).
-func populateDocumentMeta(ctx context.Context, store Store, results []RetrievalResult) {
-	dg, ok := store.(DocumentGetter)
+// by batch-fetching document metadata. If the core.Store does not implement
+// core.DocumentGetter, fields stay empty (same behavior as before).
+func populateDocumentMeta(ctx context.Context, store core.Store, results []RetrievalResult) {
+	dg, ok := store.(core.DocumentGetter)
 	if !ok || len(results) == 0 {
 		return
 	}
@@ -479,7 +441,7 @@ func populateDocumentMeta(ctx context.Context, store Store, results []RetrievalR
 		return // degrade gracefully
 	}
 
-	docMap := make(map[string]Document, len(docs))
+	docMap := make(map[string]core.Document, len(docs))
 	for _, d := range docs {
 		docMap[d.ID] = d
 	}
@@ -522,7 +484,7 @@ func extractJSON(s string) string {
 // then normalizes and re-sorts. On LLM failure, results pass through
 // unmodified (graceful degradation).
 type LLMReranker struct {
-	provider Provider
+	provider core.Provider
 	timeout  time.Duration
 }
 
@@ -530,7 +492,7 @@ var _ Reranker = (*LLMReranker)(nil)
 
 // NewLLMReranker creates a Reranker that uses the given LLM provider to
 // score relevance. Default timeout is 2 minutes per LLM call.
-func NewLLMReranker(provider Provider) *LLMReranker {
+func NewLLMReranker(provider core.Provider) *LLMReranker {
 	return &LLMReranker{provider: provider, timeout: 2 * time.Minute}
 }
 
@@ -547,7 +509,7 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Retrie
 
 	var docs strings.Builder
 	for i, res := range results {
-		fmt.Fprintf(&docs, "Document %d:\n%s\n\n", i, res.Content)
+		fmt.Fprintf(&docs, "core.Document %d:\n%s\n\n", i, res.Content)
 	}
 
 	prompt := fmt.Sprintf(
@@ -561,8 +523,8 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Retrie
 		callCtx, cancel = context.WithTimeout(ctx, r.timeout)
 		defer cancel()
 	}
-	resp, err := r.provider.Chat(callCtx, ChatRequest{
-		Messages: []ChatMessage{
+	resp, err := r.provider.Chat(callCtx, core.ChatRequest{
+		Messages: []core.ChatMessage{
 			{Role: "user", Content: prompt},
 		},
 	})
@@ -608,15 +570,15 @@ type graphRetrieverConfig struct {
 	vectorWeight      float32
 	hopDecay          []float32
 	bidirectional     bool
-	relationFilter    map[RelationType]bool
+	relationFilter    map[core.RelationType]bool
 	minTraversalScore float32
 	seedTopK          int
 	seedKeywordWeight float32
 	graphTopK         int
 	maxFrontierSize   int
 	reranker          Reranker
-	filters           []ChunkFilter
-	tracer            Tracer
+	filters           []core.ChunkFilter
+	tracer            core.Tracer
 	logger            *slog.Logger
 }
 
@@ -647,9 +609,9 @@ func WithBidirectional(b bool) GraphRetrieverOption {
 }
 
 // WithRelationFilter restricts graph traversal to the specified relationship types.
-func WithRelationFilter(types ...RelationType) GraphRetrieverOption {
+func WithRelationFilter(types ...core.RelationType) GraphRetrieverOption {
 	return func(c *graphRetrieverConfig) {
-		c.relationFilter = make(map[RelationType]bool, len(types))
+		c.relationFilter = make(map[core.RelationType]bool, len(types))
 		for _, t := range types {
 			c.relationFilter[t] = true
 		}
@@ -667,7 +629,7 @@ func WithSeedTopK(k int) GraphRetrieverOption {
 }
 
 // WithSeedKeywordWeight sets the keyword search weight in the seed RRF merge (default 0, disabled).
-// When > 0 and the Store implements KeywordSearcher, keyword results are merged with vector
+// When > 0 and the core.Store implements core.KeywordSearcher, keyword results are merged with vector
 // results to produce a more diverse seed set for graph traversal.
 func WithSeedKeywordWeight(w float32) GraphRetrieverOption {
 	return func(c *graphRetrieverConfig) { c.seedKeywordWeight = w }
@@ -695,12 +657,12 @@ func WithGraphReranker(r Reranker) GraphRetrieverOption {
 }
 
 // WithGraphFilters sets metadata filters passed to the initial vector search.
-func WithGraphFilters(filters ...ChunkFilter) GraphRetrieverOption {
+func WithGraphFilters(filters ...core.ChunkFilter) GraphRetrieverOption {
 	return func(c *graphRetrieverConfig) { c.filters = filters }
 }
 
-// WithGraphRetrieverTracer sets the Tracer for a GraphRetriever.
-func WithGraphRetrieverTracer(t Tracer) GraphRetrieverOption {
+// WithGraphRetrieverTracer sets the core.Tracer for a GraphRetriever.
+func WithGraphRetrieverTracer(t core.Tracer) GraphRetrieverOption {
 	return func(c *graphRetrieverConfig) { c.tracer = t }
 }
 
@@ -712,10 +674,10 @@ func WithGraphRetrieverLogger(l *slog.Logger) GraphRetrieverOption {
 // GraphRetriever combines vector search with knowledge graph traversal.
 // It performs an initial vector search to find seed chunks, then traverses
 // stored chunk edges to discover contextually related content.
-// If the Store does not implement GraphStore, it falls back to vector-only retrieval.
+// If the core.Store does not implement core.GraphStore, it falls back to vector-only retrieval.
 type GraphRetriever struct {
-	store     Store
-	embedding EmbeddingProvider
+	store     core.Store
+	embedding core.EmbeddingProvider
 	cfg       graphRetrieverConfig
 }
 
@@ -723,7 +685,7 @@ var _ Retriever = (*GraphRetriever)(nil)
 
 // NewGraphRetriever creates a Retriever that combines vector search with
 // graph traversal for multi-hop contextual retrieval.
-func NewGraphRetriever(store Store, embedding EmbeddingProvider, opts ...GraphRetrieverOption) *GraphRetriever {
+func NewGraphRetriever(store core.Store, embedding core.EmbeddingProvider, opts ...GraphRetrieverOption) *GraphRetriever {
 	cfg := graphRetrieverConfig{
 		maxHops:      2,
 		graphWeight:  0.3,
@@ -740,17 +702,17 @@ func NewGraphRetriever(store Store, embedding EmbeddingProvider, opts ...GraphRe
 // Retrieve searches the knowledge base using vector search + graph traversal.
 func (g *GraphRetriever) Retrieve(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
 	if g.cfg.tracer != nil {
-		var span Span
+		var span core.Span
 		ctx, span = g.cfg.tracer.Start(ctx, "retriever.retrieve",
-			StringAttr("retriever.type", "graph"),
-			IntAttr("topK", topK))
+			core.StringAttr("retriever.type", "graph"),
+			core.IntAttr("topK", topK))
 		defer func() { span.End() }()
 
 		results, err := g.retrieveInner(ctx, query, topK)
 		if err != nil {
 			span.Error(err)
 		} else {
-			span.SetAttr(IntAttr("result_count", len(results)))
+			span.SetAttr(core.IntAttr("result_count", len(results)))
 		}
 		return results, err
 	}
@@ -774,15 +736,15 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 
 	// Keyword search for seed diversity (if store supports it and weight > 0).
 	if g.cfg.seedKeywordWeight > 0 {
-		if ks, ok := g.store.(KeywordSearcher); ok {
+		if ks, ok := g.store.(core.KeywordSearcher); ok {
 			kwResults, kwErr := ks.SearchChunksKeyword(ctx, query, g.cfg.seedTopK, g.cfg.filters...)
 			if kwErr != nil && g.cfg.logger != nil {
 				g.cfg.logger.Warn("seed keyword search failed, using vector-only seeds", "err", kwErr)
 			}
 			if len(kwResults) > 0 {
 				rrfResults := reciprocalRankFusion(seeds, kwResults, g.cfg.seedKeywordWeight)
-				mergedSeeds := make([]ScoredChunk, 0, len(rrfResults))
-				chunkLookup := make(map[string]Chunk)
+				mergedSeeds := make([]core.ScoredChunk, 0, len(rrfResults))
+				chunkLookup := make(map[string]core.Chunk)
 				for _, sc := range seeds {
 					chunkLookup[sc.ID] = sc.Chunk
 				}
@@ -791,7 +753,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 				}
 				for _, rr := range rrfResults {
 					if c, ok := chunkLookup[rr.ChunkID]; ok {
-						mergedSeeds = append(mergedSeeds, ScoredChunk{Chunk: c, Score: rr.Score})
+						mergedSeeds = append(mergedSeeds, core.ScoredChunk{Chunk: c, Score: rr.Score})
 					}
 				}
 				seeds = mergedSeeds
@@ -815,7 +777,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 	}
 
 	// 2. Graph traversal (if store supports it).
-	gs, ok := g.store.(GraphStore)
+	gs, ok := g.store.(core.GraphStore)
 	if ok && len(seeds) > 0 {
 		currentIDs := make([]string, len(seeds))
 		for i, sc := range seeds {
@@ -833,10 +795,10 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 				decay = g.cfg.hopDecay[hop]
 			}
 
-			var edges []ChunkEdge
+			var edges []core.ChunkEdge
 			if g.cfg.bidirectional {
-				// Use single-query BidirectionalGraphStore when available.
-				if bgs, ok := gs.(BidirectionalGraphStore); ok {
+				// Use single-query core.BidirectionalGraphStore when available.
+				if bgs, ok := gs.(core.BidirectionalGraphStore); ok {
 					edges, err = bgs.GetBothEdges(ctx, currentIDs)
 				} else {
 					edges, err = gs.GetEdges(ctx, currentIDs)
@@ -925,7 +887,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 		}
 	}
 
-	chunkContent := make(map[string]Chunk)
+	chunkContent := make(map[string]core.Chunk)
 	for _, sc := range seeds {
 		chunkContent[sc.ID] = sc.Chunk
 	}

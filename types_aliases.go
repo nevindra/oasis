@@ -209,6 +209,19 @@ func ByExcludeDocument(id string) ChunkFilter   { return core.ByExcludeDocument(
 func CreatedAfter(u int64) ChunkFilter          { return core.CreatedAfter(u) }
 func CreatedBefore(u int64) ChunkFilter         { return core.CreatedBefore(u) }
 
+// CosineSimilarity computes the cosine similarity between two float32 vectors.
+// Re-exported from core for backward compatibility; new code may use
+// core.CosineSimilarity directly.
+func CosineSimilarity(a, b []float32) float32 { return core.CosineSimilarity(a, b) }
+
+// --- Store capability interfaces (moved to core/) ---
+
+type KeywordSearcher = core.KeywordSearcher
+type GraphStore = core.GraphStore
+type BidirectionalGraphStore = core.BidirectionalGraphStore
+type DocumentGetter = core.DocumentGetter
+type DocumentMetaLister = core.DocumentMetaLister
+
 // --- Ingest checkpoint types (moved to core/) ---
 
 type IngestCheckpoint = core.IngestCheckpoint

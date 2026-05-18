@@ -1,4 +1,4 @@
-package oasis
+package rag
 
 import "github.com/nevindra/oasis/core"
 

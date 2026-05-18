@@ -7,6 +7,7 @@ use (
 	./observer
 	./provider/gemini
 	./provider/openaicompat
+	./rag
 	./sandbox
 	./store/postgres
 	./store/sqlite
