@@ -73,13 +73,15 @@ func TestInitCoreMemoryFieldsWired(t *testing.T) {
 	var c AgentCore
 	// Should not panic.
 	InitCore(&c, "a", "d", &mockProvider{name: "p"}, cfg)
-	// Drain should be safe after Init (even without any executions).
-	c.mem.Drain()
+	// Close should be safe after Init (even without any executions).
+	if err := c.mem.Close(); err != nil {
+		t.Errorf("mem.Close error: %v", err)
+	}
 }
 
 // --- Shared method tests ---
 
-func TestAgentCoreNameDescriptionDrain(t *testing.T) {
+func TestAgentCoreNameDescriptionClose(t *testing.T) {
 	var c AgentCore
 	InitCore(&c, "core", "core desc", &mockProvider{name: "p"}, BuildConfig(nil))
 
@@ -89,8 +91,10 @@ func TestAgentCoreNameDescriptionDrain(t *testing.T) {
 	if c.Description() != "core desc" {
 		t.Errorf("Description() = %q, want %q", c.Description(), "core desc")
 	}
-	// Drain should not panic on zero-state memory.
-	c.Drain()
+	// Close should not panic on zero-state memory.
+	if err := c.Close(); err != nil {
+		t.Errorf("Close error: %v", err)
+	}
 }
 
 func TestCacheBuiltinToolDefs(t *testing.T) {
@@ -409,7 +413,9 @@ func TestLLMAgentEmbedsAgentCore(t *testing.T) {
 	if a.Description() != "desc" {
 		t.Errorf("Description() = %q, want %q", a.Description(), "desc")
 	}
-	a.Drain() // Should not panic.
+	if err := a.Close(); err != nil { // Should not return error or panic.
+		t.Errorf("Close error: %v", err)
+	}
 }
 
 // --- test helpers (local to this file) ---

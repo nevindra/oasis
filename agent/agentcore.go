@@ -132,9 +132,13 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 func (c *AgentCore) Name() string        { return c.name }
 func (c *AgentCore) Description() string { return c.description }
 
-// Drain waits for all in-flight background persist goroutines to finish.
-// Call during shutdown to ensure the last messages are written to the store.
-func (c *AgentCore) Drain() { c.mem.Drain() }
+// Close waits for all in-flight background persist goroutines to finish and
+// releases any memory orchestrator resources. Call during shutdown to ensure
+// the last messages are written to the store.
+//
+// Returns nil today; reserved for future flush errors. Embedders that wrap
+// AgentCore inherit this signature.
+func (c *AgentCore) Close() error { return c.mem.Close() }
 
 // --- Spawn depth tracking ---
 

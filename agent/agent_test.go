@@ -877,12 +877,12 @@ func (s *sequentialCallbackProvider) ChatStream(_ context.Context, req ChatReque
 	return s.next(req), nil
 }
 
-// --- Drain tests ---
+// --- Close tests ---
 
-func TestLLMAgentDrainCompletes(t *testing.T) {
-	// Drain() should complete without blocking indefinitely, even after
+func TestLLMAgentCloseCompletes(t *testing.T) {
+	// Close() should complete without blocking indefinitely, even after
 	// multiple Execute calls. Without a Store, there are no background
-	// persist goroutines, so Drain should be a fast no-op.
+	// persist goroutines, so Close should be a fast no-op.
 	provider := &mockProvider{
 		name:      "test",
 		responses: []ChatResponse{{Content: "hello"}},
@@ -897,7 +897,9 @@ func TestLLMAgentDrainCompletes(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		agent.Drain()
+		if err := agent.Close(); err != nil {
+			t.Errorf("Close error: %v", err)
+		}
 		close(done)
 	}()
 
@@ -905,7 +907,7 @@ func TestLLMAgentDrainCompletes(t *testing.T) {
 	case <-done:
 		// ok
 	case <-time.After(time.Second):
-		t.Fatal("Drain() did not complete within 1 second")
+		t.Fatal("Close() did not complete within 1 second")
 	}
 }
 

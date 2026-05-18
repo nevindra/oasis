@@ -147,10 +147,16 @@ func (m *AgentMemory) initSem() {
 	})
 }
 
-// drain waits for all in-flight persist goroutines to finish.
-// Called during agent/network shutdown to prevent data loss.
-func (m *AgentMemory) Drain() {
+// Close waits for all in-flight persist goroutines to finish and releases
+// any resources held by the orchestrator. Called during agent/network
+// shutdown to prevent data loss.
+//
+// Returns nil today. The error return is reserved for future flush errors
+// (remote stores, network drains). Locking in the io.Closer-shaped signature
+// now avoids a second breaking change later.
+func (m *AgentMemory) Close() error {
 	m.wg.Wait()
+	return nil
 }
 
 // buildMessages constructs the message list: system prompt + user memory + conversation history + user input.

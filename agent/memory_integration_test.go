@@ -1245,8 +1245,8 @@ func TestCrossThreadRecallChatIDScoping(t *testing.T) {
 	t.Error("expected cross-thread recall system message")
 }
 
-// M1+M2: drain waits for in-flight persist goroutines.
-func TestDrainWaitsForPersist(t *testing.T) {
+// M1+M2: Close waits for in-flight persist goroutines.
+func TestCloseWaitsForPersist(t *testing.T) {
 	store := &recordingStore{}
 	provider := &mockProvider{
 		name:      "test",
@@ -1266,12 +1266,14 @@ func TestDrainWaitsForPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Drain instead of time.Sleep — should block until persist completes.
-	agent.Drain()
+	// Close instead of time.Sleep — should block until persist completes.
+	if err := agent.Close(); err != nil {
+		t.Fatalf("Close error: %v", err)
+	}
 
 	stored := store.storedMessages()
 	if len(stored) < 2 {
-		t.Fatalf("expected at least 2 stored messages after Drain, got %d", len(stored))
+		t.Fatalf("expected at least 2 stored messages after Close, got %d", len(stored))
 	}
 }
 
@@ -1301,7 +1303,9 @@ func TestPersistTruncatesLargeContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	agent.Drain()
+	if err := agent.Close(); err != nil {
+		t.Fatalf("Close error: %v", err)
+	}
 
 	stored := store.storedMessages()
 	if len(stored) < 2 {
