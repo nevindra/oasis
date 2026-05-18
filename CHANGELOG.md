@@ -7,6 +7,52 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ## [Unreleased]
 
 ### Changed
+- **BREAKING**: Restructured the repository into a hybrid architecture per
+  `docs/superpowers/specs/2026-05-18-hybrid-architecture-design.md`. Highlights:
+  - Protocol types and core interfaces moved to a new leaf package
+    `github.com/nevindra/oasis/core`. The `core` package depends on nothing
+    inside `oasis` (enforced via depguard) and is safe to import everywhere.
+  - Primitives reorganised into focused public subpackages: `agent`, `workflow`,
+    `network`, `compaction`, `guardrail`, `ratelimit`, `memory`, `skills`,
+    `processor`, `tool`.
+  - Heavy or optional-dep code extracted as satellites with their own
+    `go.mod`: `store/sqlite`, `store/postgres`, `provider/gemini`,
+    `provider/openaicompat`, `observer`, `ingest`, `sandbox`, `rag` — joining
+    the existing `mcp` satellite. Each is opt-in: pulling in the SQLite
+    driver, the Docker SDK, the OTEL stack, etc. requires explicitly importing
+    the relevant satellite.
+  - Store-capability interfaces (`KeywordSearcher`, `GraphStore`,
+    `BidirectionalGraphStore`, `DocumentGetter`, `DocumentMetaLister`) and
+    `CheckpointStore` / `IngestCheckpoint` moved to `core/` so satellites can
+    implement them without cross-satellite dependencies.
+  - `oasis.go` is now a curated re-export umbrella. The 80% case stays
+    `import "github.com/nevindra/oasis"` — common types and constructors are
+    available as type aliases and `var`-bound functions. The transitional
+    `types_aliases.go`, `processor_aliases.go`, `tool_aliases.go`, `types.go`,
+    and the `skill*.go` re-export shims have been deleted; their content is
+    now in `oasis.go`.
+  - `scheduler.go` was removed from the root (no external callers).
+
+### Migration notes
+- The root `go.mod` no longer requires `modernc.org/sqlite`,
+  `github.com/jackc/pgx/v5`, the OTEL stack, the Docker SDK, or
+  `github.com/ledongthuc/pdf` directly. Apps that previously got those
+  transitively must now explicitly import the matching satellite (e.g.
+  `import _ "github.com/nevindra/oasis/store/sqlite"`).
+- All re-exported types and functions from `oasis.*` retain their names. If
+  your code uses `oasis.Provider`, `oasis.LLMAgent`, `oasis.WithCompaction`,
+  `oasis.CosineSimilarity`, etc., no source change is needed.
+- Direct imports of the satellites (`oasis/store/sqlite`,
+  `oasis/provider/gemini`, etc.) are unchanged.
+
+### Removed
+- Root-package `scheduler.go` (`Scheduler`, `NewScheduler`, `ComputeNextRun`,
+  `FormatLocalTime`, `RunHook`, `WithSchedulerInterval`,
+  `WithSchedulerTZOffset`, `WithOnRun`). Re-add separately if needed.
+- Transitional alias files (`types_aliases.go`, `processor_aliases.go`,
+  `tool_aliases.go`, `types.go`, `skill.go`, `skill_builtin.go`,
+  `skill_scan.go`, `skill_tool.go`). The aliases now live in `oasis.go`.
+
 - **BREAKING**: Compaction *implementation* moved to a separate Go module
   `github.com/nevindra/oasis/compaction`. The `Compactor` interface and
   `CompactRequest`/`CompactSection`/`CompactResult` types remain in the

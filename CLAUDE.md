@@ -27,39 +27,55 @@ Oasis is a high-performance Go framework for AI agent systems — fast, reliable
 ## Build & Test
 
 ```bash
-go build ./cmd/bot_example/              # build reference app
-go test ./...                            # all tests
-go test ./tools/schedule/ -run TestName  # single test
-docker build -f cmd/bot_example/Dockerfile -t oasis .  # docker
+go build ./...                                # build root module
+go test ./...                                 # run root tests
+cd <satellite> && go test ./...               # run a satellite's tests
+golangci-lint run ./...                       # enforce depguard rules
 ```
 
 ## Project Structure
 
+The repo is a hybrid architecture: a single curated root package
+(`github.com/nevindra/oasis`) re-exports protocol types and the most common
+APIs from focused subpackages. Heavy or optional-dep code lives in
+satellite modules with their own `go.mod` — users opt in by importing
+the satellite directly.
+
 ```
-oasis/                              # FRAMEWORK (root package)
-|-- types.go, provider.go, tool.go  # Protocol types + core interfaces
-|-- store.go, memory.go
-|-- processor.go                    # Processor interfaces + ProcessorChain
-|-- agent.go, llmagent.go, network.go  # Agent primitives (composable)
-|-- loop.go, suspend.go            # Execution engine, suspend/resume
-|-- batch.go, stream.go            # Batch primitives, SSE streaming
-|-- agentmemory.go                 # Shared memory wiring
-|-- workflow.go, workflow_exec.go    # DAG-based orchestration
-|-- workflow_steps.go, workflow_definition.go
-|-- input.go                       # InputHandler (human-in-the-loop)
-|-- handle.go                      # Spawn() + AgentHandle
+oasis/                              # FRAMEWORK
+|-- oasis.go                        # Re-export umbrella (curated public surface)
+|-- doc.go                          # Top-level package documentation
+|-- batch.go                        # Batch primitives (BatchJob, BatchStats)
 |
-|-- provider/{gemini,openaicompat}/ # LLM providers (raw HTTP, no SDKs)
-|-- store/{sqlite,postgres}/        # Storage implementations
-|-- memory/                        # Storage-agnostic memory helpers
-|-- observer/                       # OTEL observability wrappers
-|-- retriever.go                    # Retrieval pipeline (Retriever, Reranker, HybridRetriever)
-|-- ingest/                         # Document chunking pipeline
-|-- tools/{knowledge,remember,search,schedule,shell,file,http,data}/
+|-- core/                           # Protocol types + interfaces (leaf package — depends on nothing in oasis)
+|-- agent/                          # LLMAgent + Spawn + functional options
+|-- workflow/                       # DAG-based orchestration
+|-- network/                        # Multi-agent peer networks
+|-- compaction/                     # Compaction processors
+|-- guardrail/                      # Guardrail processors
+|-- ratelimit/                      # Rate limiter wrapper
+|-- memory/                         # Memory orchestration
+|-- skills/                         # Skill loader + asset embedding
+|-- processor/                      # ProcessorChain helper
+|-- tool/                           # Erase helper for type-safe tools
+|-- provider/{catalog,resolve}/     # Stdlib-only model registry helpers
 |
-|-- cmd/bot_example/               # REFERENCE APP (demo, not the product)
-|-- internal/{config,bot}/         # App config + orchestration
+|-- tools/{data,http,...}/          # Tool implementations
+|-- cmd/{ix,mcp-docs,modelgen}/     # CLI utilities
+|
+|-- (satellites — each its own go.mod, opt-in via direct import)
+|   |-- mcp/                        # MCP client integration
+|   |-- store/{sqlite,postgres}/    # Storage backends (sqlite driver / pgx)
+|   |-- provider/{gemini,openaicompat}/  # LLM providers (own evolution cadence)
+|   |-- observer/                   # OTEL observability (full OTEL SDK)
+|   |-- ingest/                     # Document ingestion (PDF, DOCX, embeddings)
+|   |-- sandbox/                    # Docker-based code sandbox
+|   |-- rag/                        # Retrieval-augmented generation
 ```
+
+Adding a re-export to `oasis.go` is a deliberate decision — do not auto-mirror
+every new export from a subpackage. Niche or power-user APIs stay in their
+subpackage and callers import that subpackage directly.
 
 ## Releasing
 
