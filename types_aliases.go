@@ -209,6 +209,21 @@ func ByExcludeDocument(id string) ChunkFilter   { return core.ByExcludeDocument(
 func CreatedAfter(u int64) ChunkFilter          { return core.CreatedAfter(u) }
 func CreatedBefore(u int64) ChunkFilter         { return core.CreatedBefore(u) }
 
+// --- Ingest checkpoint types (moved to core/) ---
+
+type IngestCheckpoint = core.IngestCheckpoint
+type CheckpointStatus = core.CheckpointStatus
+type CheckpointStore = core.CheckpointStore
+
+const (
+	CheckpointExtracting = core.CheckpointExtracting
+	CheckpointChunking   = core.CheckpointChunking
+	CheckpointEnriching  = core.CheckpointEnriching
+	CheckpointEmbedding  = core.CheckpointEmbedding
+	CheckpointStoring    = core.CheckpointStoring
+	CheckpointGraphing   = core.CheckpointGraphing
+)
+
 // --- Skill types (moved to skills/) ---
 
 type SkillProvider = skills.SkillProvider

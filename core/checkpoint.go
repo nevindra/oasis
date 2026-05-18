@@ -1,4 +1,6 @@
-package oasis
+package core
+
+import "context"
 
 // IngestCheckpoint persists the state of an in-progress document ingestion so
 // it can be resumed after a crash or context cancellation.
@@ -50,3 +52,15 @@ const (
 	CheckpointStoring    CheckpointStatus = "storing"
 	CheckpointGraphing   CheckpointStatus = "graphing"
 )
+
+// CheckpointStore is an optional Store capability for ingest pipeline checkpoints.
+// Store implementations that support checkpoint persistence can implement this
+// interface; callers discover it via type assertion. If the Store does not
+// implement CheckpointStore, checkpointing is silently disabled — retry still
+// works, but crashed ingestions cannot be resumed.
+type CheckpointStore interface {
+	SaveCheckpoint(ctx context.Context, cp IngestCheckpoint) error
+	LoadCheckpoint(ctx context.Context, id string) (IngestCheckpoint, error)
+	DeleteCheckpoint(ctx context.Context, id string) error
+	ListCheckpoints(ctx context.Context) ([]IngestCheckpoint, error)
+}

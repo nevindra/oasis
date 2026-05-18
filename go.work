@@ -2,5 +2,12 @@ go 1.26.1
 
 use (
 	.
+	./ingest
 	./mcp
+	./observer
+	./provider/gemini
+	./provider/openaicompat
+	./sandbox
+	./store/postgres
+	./store/sqlite
 )
