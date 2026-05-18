@@ -58,7 +58,10 @@ func agentStepFunc(agent Agent, cfg *stepConfig) StepFunc {
 		result, err := agent.Execute(ctx, AgentTask{
 			Input:       input,
 			Attachments: wCtx.task.Attachments,
-			Context:     wCtx.task.Context,
+			ThreadID:    wCtx.task.ThreadID,
+			UserID:      wCtx.task.UserID,
+			ChatID:      wCtx.task.ChatID,
+			Extra:       wCtx.task.Extra,
 		})
 		if err != nil {
 			return err

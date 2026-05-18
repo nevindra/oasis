@@ -123,14 +123,6 @@ var CosineSimilarity = core.CosineSimilarity
 type CompactRequest = core.CompactRequest
 type CompactResult = core.CompactResult
 
-// --- Agent context keys (re-exported from core for subpackage access) ---
-
-const (
-	ContextThreadID = core.ContextThreadID
-	ContextUserID   = core.ContextUserID
-	ContextChatID   = core.ContextChatID
-)
-
 // --- Errors ---
 
 type ErrLLM = core.ErrLLM

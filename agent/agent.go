@@ -16,13 +16,6 @@ type AgentTask = core.AgentTask
 type AgentResult = core.AgentResult
 type StepTrace = core.StepTrace
 
-// Context key constants for AgentTask.Context (internal — kept for backward compat with tests).
-const (
-	contextThreadID = core.ContextThreadID
-	contextUserID   = core.ContextUserID
-	contextChatID   = core.ContextChatID
-)
-
 // agentConfig holds shared configuration for LLMAgent and Network.
 type agentConfig struct {
 	tools            []AnyTool

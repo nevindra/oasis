@@ -43,68 +43,29 @@ type AgentTask struct {
 	// Providers that support multimodal input will attach these to the user message as inline data.
 	// Providers that don't support it will ignore this field.
 	Attachments []Attachment
-	// Context carries optional metadata (thread ID, user ID, etc.).
-	// Use the With*ID builder methods to set values and the Task*ID accessors to read them.
-	Context map[string]any
+	// ThreadID identifies the conversation thread. Empty when no thread is set.
+	// Memory uses this to scope history loading and persistence.
+	ThreadID string
+	// UserID identifies the end user. Empty when no user is set.
+	// Dynamic prompts/models/tools may inspect this for per-user behavior.
+	UserID string
+	// ChatID identifies the chat/channel for messaging integrations (Telegram, Slack, etc.).
+	// Empty when no chat is set.
+	ChatID string
+	// Extra carries arbitrary app-defined metadata. The framework never reads
+	// this map; it is opaque pass-through for dynamic resolvers and processors.
+	// Use ThreadID/UserID/ChatID for framework-recognized identifiers.
+	Extra map[string]any
 }
-
-// Context key constants for AgentTask.Context (internal).
-const (
-	ContextThreadID = "thread_id"
-	ContextUserID   = "user_id"
-	ContextChatID   = "chat_id"
-)
 
 // WithThreadID sets the conversation thread ID on the task and returns it.
-func (t AgentTask) WithThreadID(id string) AgentTask {
-	if t.Context == nil {
-		t.Context = map[string]any{}
-	}
-	t.Context[ContextThreadID] = id
-	return t
-}
+func (t AgentTask) WithThreadID(id string) AgentTask { t.ThreadID = id; return t }
 
 // WithUserID sets the user ID on the task and returns it.
-func (t AgentTask) WithUserID(id string) AgentTask {
-	if t.Context == nil {
-		t.Context = map[string]any{}
-	}
-	t.Context[ContextUserID] = id
-	return t
-}
+func (t AgentTask) WithUserID(id string) AgentTask { t.UserID = id; return t }
 
 // WithChatID sets the chat/channel ID on the task and returns it.
-func (t AgentTask) WithChatID(id string) AgentTask {
-	if t.Context == nil {
-		t.Context = map[string]any{}
-	}
-	t.Context[ContextChatID] = id
-	return t
-}
-
-// TaskThreadID returns the thread ID from task context, or "" if absent.
-func (t AgentTask) TaskThreadID() string {
-	if v, ok := t.Context[ContextThreadID].(string); ok {
-		return v
-	}
-	return ""
-}
-
-// TaskUserID returns the user ID from task context, or "" if absent.
-func (t AgentTask) TaskUserID() string {
-	if v, ok := t.Context[ContextUserID].(string); ok {
-		return v
-	}
-	return ""
-}
-
-// TaskChatID returns the chat ID from task context, or "" if absent.
-func (t AgentTask) TaskChatID() string {
-	if v, ok := t.Context[ContextChatID].(string); ok {
-		return v
-	}
-	return ""
-}
+func (t AgentTask) WithChatID(id string) AgentTask { t.ChatID = id; return t }
 
 // AgentResult is the output of an Agent.
 type AgentResult struct {

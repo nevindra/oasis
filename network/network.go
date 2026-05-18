@@ -169,7 +169,10 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPref
 	subTask := agent.AgentTask{
 		Input:       params.Task,
 		Attachments: parentTask.Attachments,
-		Context:     parentTask.Context,
+		ThreadID:    parentTask.ThreadID,
+		UserID:      parentTask.UserID,
+		ChatID:      parentTask.ChatID,
+		Extra:       parentTask.Extra,
 	}
 
 	start := time.Now()

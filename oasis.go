@@ -456,13 +456,6 @@ type AgentTask = core.AgentTask
 type AgentResult = core.AgentResult
 type StepTrace = core.StepTrace
 
-// Context key constants for AgentTask.Context (exported for subpackage access).
-const (
-	ContextThreadID = core.ContextThreadID
-	ContextUserID   = core.ContextUserID
-	ContextChatID   = core.ContextChatID
-)
-
 // --- Tracer types ---
 
 type Tracer = core.Tracer

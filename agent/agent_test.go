@@ -47,8 +47,8 @@ func TestAgentInterface(t *testing.T) {
 	}
 
 	result, err := agent.Execute(context.Background(), AgentTask{
-		Input:   "hello",
-		Context: map[string]any{"user_id": "123"},
+		Input:  "hello",
+		UserID: "123",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -302,53 +302,38 @@ func TestLLMAgentWithSystemPrompt(t *testing.T) {
 	}
 }
 
-// --- Context accessor tests ---
+// --- Field access tests ---
 
-func TestTaskAccessors(t *testing.T) {
+func TestTaskFields(t *testing.T) {
 	task := AgentTask{
-		Input: "test",
-		Context: map[string]any{
-			contextThreadID: "thread-1",
-			contextUserID:   "user-42",
-			contextChatID:   "chat-99",
-		},
+		Input:    "test",
+		ThreadID: "thread-1",
+		UserID:   "user-42",
+		ChatID:   "chat-99",
 	}
 
-	if got := task.TaskThreadID(); got != "thread-1" {
-		t.Errorf("TaskThreadID() = %q, want %q", got, "thread-1")
+	if got := task.ThreadID; got != "thread-1" {
+		t.Errorf("ThreadID = %q, want %q", got, "thread-1")
 	}
-	if got := task.TaskUserID(); got != "user-42" {
-		t.Errorf("TaskUserID() = %q, want %q", got, "user-42")
+	if got := task.UserID; got != "user-42" {
+		t.Errorf("UserID = %q, want %q", got, "user-42")
 	}
-	if got := task.TaskChatID(); got != "chat-99" {
-		t.Errorf("TaskChatID() = %q, want %q", got, "chat-99")
+	if got := task.ChatID; got != "chat-99" {
+		t.Errorf("ChatID = %q, want %q", got, "chat-99")
 	}
 }
 
-func TestTaskAccessorsEmptyContext(t *testing.T) {
+func TestTaskFieldsZero(t *testing.T) {
 	task := AgentTask{Input: "test"}
 
-	if got := task.TaskThreadID(); got != "" {
-		t.Errorf("TaskThreadID() = %q, want empty", got)
+	if task.ThreadID != "" {
+		t.Errorf("ThreadID = %q, want empty", task.ThreadID)
 	}
-	if got := task.TaskUserID(); got != "" {
-		t.Errorf("TaskUserID() = %q, want empty", got)
+	if task.UserID != "" {
+		t.Errorf("UserID = %q, want empty", task.UserID)
 	}
-	if got := task.TaskChatID(); got != "" {
-		t.Errorf("TaskChatID() = %q, want empty", got)
-	}
-}
-
-func TestTaskAccessorsWrongType(t *testing.T) {
-	task := AgentTask{
-		Input: "test",
-		Context: map[string]any{
-			contextThreadID: 123, // int, not string
-		},
-	}
-
-	if got := task.TaskThreadID(); got != "" {
-		t.Errorf("TaskThreadID() = %q, want empty for non-string value", got)
+	if task.ChatID != "" {
+		t.Errorf("ChatID = %q, want empty", task.ChatID)
 	}
 }
 
@@ -636,13 +621,13 @@ func TestLLMAgentDynamicPrompt(t *testing.T) {
 	agent := NewLLMAgent("dynamic", "Dynamic prompt", provider,
 		WithPrompt("static fallback"),
 		WithDynamicPrompt(func(_ context.Context, task AgentTask) string {
-			return "dynamic: " + task.TaskUserID()
+			return "dynamic: " + task.UserID
 		}),
 	)
 
 	agent.Execute(context.Background(), AgentTask{
-		Input:   "hi",
-		Context: map[string]any{contextUserID: "alice"},
+		Input:  "hi",
+		UserID: "alice",
 	})
 
 	if capturedPrompt != "dynamic: alice" {
@@ -681,7 +666,7 @@ func TestLLMAgentDynamicModel(t *testing.T) {
 
 	agent := NewLLMAgent("dynamic", "Dynamic model", providerA,
 		WithDynamicModel(func(_ context.Context, task AgentTask) Provider {
-			if task.Context["tier"] == "pro" {
+			if task.Extra["tier"] == "pro" {
 				return providerB
 			}
 			return providerA
@@ -689,8 +674,8 @@ func TestLLMAgentDynamicModel(t *testing.T) {
 	)
 
 	result, _ := agent.Execute(context.Background(), AgentTask{
-		Input:   "hi",
-		Context: map[string]any{"tier": "pro"},
+		Input: "hi",
+		Extra: map[string]any{"tier": "pro"},
 	})
 	if result.Output != "from B" {
 		t.Errorf("Output = %q, want %q", result.Output, "from B")
@@ -727,7 +712,7 @@ func TestLLMAgentTaskFromContextInTool(t *testing.T) {
 	ctxTool := &contextReadingTool{
 		onExecute: func(ctx context.Context) {
 			if task, ok := TaskFromContext(ctx); ok {
-				gotUserID = task.TaskUserID()
+				gotUserID = task.UserID
 			}
 		},
 	}
@@ -742,8 +727,8 @@ func TestLLMAgentTaskFromContextInTool(t *testing.T) {
 
 	agent := NewLLMAgent("ctx", "Context test", provider, WithTools(ctxTool))
 	agent.Execute(context.Background(), AgentTask{
-		Input:   "test",
-		Context: map[string]any{contextUserID: "user-42"},
+		Input:  "test",
+		UserID: "user-42",
 	})
 
 	if gotUserID != "user-42" {
@@ -755,8 +740,8 @@ func TestLLMAgentTaskFromContextInTool(t *testing.T) {
 
 func TestTaskFromContextPresent(t *testing.T) {
 	task := AgentTask{
-		Input:   "hello",
-		Context: map[string]any{contextUserID: "u1"},
+		Input:  "hello",
+		UserID: "u1",
 	}
 	ctx := WithTaskContext(context.Background(), task)
 
@@ -767,8 +752,8 @@ func TestTaskFromContextPresent(t *testing.T) {
 	if got.Input != "hello" {
 		t.Errorf("Input = %q, want %q", got.Input, "hello")
 	}
-	if got.TaskUserID() != "u1" {
-		t.Errorf("TaskUserID() = %q, want %q", got.TaskUserID(), "u1")
+	if got.UserID != "u1" {
+		t.Errorf("UserID = %q, want %q", got.UserID, "u1")
 	}
 }
 

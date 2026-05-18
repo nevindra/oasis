@@ -73,13 +73,13 @@ func TestNetworkDynamicPrompt(t *testing.T) {
 
 	net := NewNetwork("dynamic", "Dynamic", router,
 		agent.WithDynamicPrompt(func(_ context.Context, task agent.AgentTask) string {
-			return "router for " + task.TaskUserID()
+			return "router for " + task.UserID
 		}),
 	)
 
 	net.Execute(context.Background(), agent.AgentTask{
-		Input:   "test",
-		Context: map[string]any{agent.ContextUserID: "bob"},
+		Input:  "test",
+		UserID: "bob",
 	})
 
 	if capturedPrompt != "router for bob" {
@@ -92,7 +92,7 @@ func TestNetworkTaskFromContextInTool(t *testing.T) {
 	ctxTool := &contextReadingTool{
 		onExecute: func(ctx context.Context) {
 			if task, ok := agent.TaskFromContext(ctx); ok {
-				gotUserID = task.TaskUserID()
+				gotUserID = task.UserID
 			}
 		},
 	}
@@ -107,8 +107,8 @@ func TestNetworkTaskFromContextInTool(t *testing.T) {
 
 	net := NewNetwork("ctx", "Context test", router, agent.WithTools(ctxTool))
 	net.Execute(context.Background(), agent.AgentTask{
-		Input:   "test",
-		Context: map[string]any{agent.ContextUserID: "user-99"},
+		Input:  "test",
+		UserID: "user-99",
 	})
 
 	if gotUserID != "user-99" {
@@ -122,7 +122,7 @@ func TestNetworkDynamicModel(t *testing.T) {
 
 	net := NewNetwork("dynamic", "Dynamic model", routerA,
 		agent.WithDynamicModel(func(_ context.Context, task agent.AgentTask) core.Provider {
-			if task.Context["tier"] == "pro" {
+			if task.Extra["tier"] == "pro" {
 				return routerB
 			}
 			return routerA
@@ -130,8 +130,8 @@ func TestNetworkDynamicModel(t *testing.T) {
 	)
 
 	result, _ := net.Execute(context.Background(), agent.AgentTask{
-		Input:   "hi",
-		Context: map[string]any{"tier": "pro"},
+		Input: "hi",
+		Extra: map[string]any{"tier": "pro"},
 	})
 	if result.Output != "from B" {
 		t.Errorf("Output = %q, want %q", result.Output, "from B")
