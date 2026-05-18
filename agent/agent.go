@@ -62,7 +62,7 @@ type agentConfig struct {
 	maxSpawnDepth  int      // set by MaxSpawnDepth (default 1)
 	denySpawnTools []string // set by DenySpawnTools
 	activeSkills   []Skill        // set by WithActiveSkills
-	skillProvider  SkillProvider   // set by WithSkills
+	SkillProvider  SkillProvider   // exported for network subpackage; set by WithSkills
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -276,7 +276,7 @@ func WithActiveSkills(skills ...Skill) AgentOption {
 // runtime. If the provider also implements SkillWriter, skill_create and
 // skill_update tools are added too.
 func WithSkills(p SkillProvider) AgentOption {
-	return func(c *agentConfig) { c.skillProvider = p }
+	return func(c *agentConfig) { c.SkillProvider = p }
 }
 
 // WithResponseSchema sets the response schema for structured JSON output.

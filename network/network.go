@@ -10,6 +10,7 @@ import (
 
 	"github.com/nevindra/oasis/agent"
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/skills"
 )
 
 // Network is an Agent that coordinates subagents and tools via an LLM router.
@@ -38,12 +39,11 @@ func NewNetwork(name, description string, router core.Provider, opts ...agent.Ag
 	}
 
 	// Register skill tools if a provider is configured.
-	// TODO: Re-enable after skills migration in Phase 2.4
-	// if cfg.skillProvider != nil {
-	// 	for _, t := range newSkillTools(cfg.skillProvider) {
-	// 		n.Tools.Add(t)
-	// 	}
-	// }
+	if cfg.SkillProvider != nil {
+		for _, t := range skills.NewSkillTools(cfg.SkillProvider) {
+			n.Tools.Add(t)
+		}
+	}
 
 	for _, a := range cfg.Agents {
 		n.agents[a.Name()] = a

@@ -7,6 +7,7 @@ import (
 
 	"github.com/nevindra/oasis/agent"
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/skills"
 )
 
 // TestNetworkPassesImagesToSubAgent verifies that when a Network routes a task
@@ -206,4 +207,42 @@ func (t *contextReadingTool) ExecuteRaw(ctx context.Context, args json.RawMessag
 		t.onExecute(ctx)
 	}
 	return core.ToolResult{}, nil
+}
+
+// TestNetworkWithSkillsRegistersSkillTools verifies that a Network built with
+// agent.WithSkills registers skill_discover and skill_activate in its tool
+// registry, mirroring the same wiring that LLMAgent performs.
+func TestNetworkWithSkillsRegistersSkillTools(t *testing.T) {
+	provider := &mockProvider{
+		name:      "router",
+		responses: []core.ChatResponse{{Content: "ok"}},
+	}
+
+	net := NewNetwork("skills-net", "test", provider,
+		agent.WithSkills(&stubSkillProvider{}),
+	)
+
+	defs := net.Tools.AllDefinitions()
+	toolNames := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		toolNames[d.Name] = true
+	}
+
+	for _, want := range []string{"skill_discover", "skill_activate"} {
+		if !toolNames[want] {
+			t.Errorf("tool %q not found in Network tool registry; registered tools: %v", want, toolNames)
+		}
+	}
+}
+
+// stubSkillProvider is a minimal skills.SkillProvider that satisfies the
+// interface without any backing store. Used only to verify tool registration.
+type stubSkillProvider struct{}
+
+func (s *stubSkillProvider) Discover(_ context.Context) ([]skills.SkillSummary, error) {
+	return nil, nil
+}
+
+func (s *stubSkillProvider) Activate(_ context.Context, name string) (skills.Skill, error) {
+	return skills.Skill{}, nil
 }

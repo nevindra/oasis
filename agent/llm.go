@@ -31,8 +31,8 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	}
 
 	// Register skill tools if a provider is configured.
-	if cfg.skillProvider != nil {
-		for _, t := range skills.NewSkillTools(cfg.skillProvider) {
+	if cfg.SkillProvider != nil {
+		for _, t := range skills.NewSkillTools(cfg.SkillProvider) {
 			a.Tools.Add(t)
 		}
 	}
