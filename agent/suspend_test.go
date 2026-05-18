@@ -69,7 +69,7 @@ func TestRunLoopPostProcessorSuspend(t *testing.T) {
 	}
 
 	chain := NewProcessorChain()
-	chain.Add(&suspendingProcessor{
+	chain.AddPost(&suspendingProcessor{
 		triggerTool: "dangerous_action",
 		payload:     json.RawMessage(`{"action": "approve_dangerous_action"}`),
 	})
@@ -109,7 +109,7 @@ func TestRunLoopSuspendResume(t *testing.T) {
 	}
 
 	chain := NewProcessorChain()
-	chain.Add(&suspendingProcessor{
+	chain.AddPost(&suspendingProcessor{
 		triggerTool: "delete",
 		payload:     json.RawMessage(`{"confirm": "delete?"}`),
 	})
@@ -148,7 +148,7 @@ func TestRunLoopSuspendClosesStreamChannel(t *testing.T) {
 	}
 
 	chain := NewProcessorChain()
-	chain.Add(&suspendingProcessor{triggerTool: "danger", payload: json.RawMessage(`{}`)})
+	chain.AddPost(&suspendingProcessor{triggerTool: "danger", payload: json.RawMessage(`{}`)})
 
 	cfg := LoopConfig{
 		name:       "test",
@@ -179,7 +179,7 @@ func TestRunLoopPreProcessorSuspend(t *testing.T) {
 	}
 
 	chain := NewProcessorChain()
-	chain.Add(&suspendingPreProcessor{
+	chain.AddPre(&suspendingPreProcessor{
 		payload: json.RawMessage(`{"gate": "pre"}`),
 	})
 
@@ -215,7 +215,7 @@ func TestRunLoopPostToolProcessorSuspend(t *testing.T) {
 	}
 
 	chain := NewProcessorChain()
-	chain.Add(&suspendingPostToolProcessor{
+	chain.AddPostTool(&suspendingPostToolProcessor{
 		triggerTool: "risky_tool",
 		payload:     json.RawMessage(`{"gate": "post_tool"}`),
 	})
@@ -338,7 +338,7 @@ func TestSuspendBudgetExceeded(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("suspender", "Suspends a lot", provider,
-		WithProcessors(suspendProcessor{}),
+		WithPostProcessors(suspendProcessor{}),
 		WithSuspendBudget(2, 1<<30), // max 2 snapshots, generous byte limit
 	)
 

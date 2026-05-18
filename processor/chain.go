@@ -2,14 +2,13 @@ package processor
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/nevindra/oasis/core"
 )
 
 // Chain holds an ordered list of processors and runs them at each hook point.
-// Processors are pre-bucketed by interface at Add() time, eliminating per-call
-// type assertions in the hot path.
+// Processors are pre-bucketed by interface at registration time, eliminating
+// per-call type assertions in the hot path.
 type Chain struct {
 	processors []any
 	pre        []core.PreProcessor
@@ -22,26 +21,22 @@ func NewChain() *Chain {
 	return &Chain{}
 }
 
-// Add appends a processor to the chain. The processor must implement at least
-// one of core.PreProcessor, core.PostProcessor, or core.PostToolProcessor.
-// Panics if p implements none of the three interfaces.
-func (c *Chain) Add(p any) {
-	pre, isPre := p.(core.PreProcessor)
-	post, isPost := p.(core.PostProcessor)
-	pt, isPostTool := p.(core.PostToolProcessor)
-	if !isPre && !isPost && !isPostTool {
-		panic(fmt.Sprintf("oasis/processor: processor %T implements none of core.PreProcessor, core.PostProcessor, core.PostToolProcessor", p))
-	}
+// AddPre registers a PreProcessor. The processor runs before each LLM call.
+func (c *Chain) AddPre(p core.PreProcessor) {
 	c.processors = append(c.processors, p)
-	if isPre {
-		c.pre = append(c.pre, pre)
-	}
-	if isPost {
-		c.post = append(c.post, post)
-	}
-	if isPostTool {
-		c.postTool = append(c.postTool, pt)
-	}
+	c.pre = append(c.pre, p)
+}
+
+// AddPost registers a PostProcessor. The processor runs after each LLM response.
+func (c *Chain) AddPost(p core.PostProcessor) {
+	c.processors = append(c.processors, p)
+	c.post = append(c.post, p)
+}
+
+// AddPostTool registers a PostToolProcessor. The processor runs after each tool result.
+func (c *Chain) AddPostTool(p core.PostToolProcessor) {
+	c.processors = append(c.processors, p)
+	c.postTool = append(c.postTool, p)
 }
 
 // RunPreLLM runs all PreProcessor hooks in registration order.
@@ -77,5 +72,6 @@ func (c *Chain) RunPostTool(ctx context.Context, call core.ToolCall, result *cor
 	return nil
 }
 
-// Len returns the number of registered processors.
+// Len returns the count of registrations across all stages. A processor
+// registered to multiple stages counts once per registration.
 func (c *Chain) Len() int { return len(c.processors) }

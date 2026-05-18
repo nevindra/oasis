@@ -1,4 +1,4 @@
-package oasis
+package core
 
 import (
 	"context"

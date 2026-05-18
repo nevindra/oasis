@@ -72,7 +72,9 @@ var WithDynamicModel = agent.WithDynamicModel
 var WithDynamicTools = agent.WithDynamicTools
 var WithTracer = agent.WithTracer
 var WithLogger = agent.WithLogger
-var WithProcessors = agent.WithProcessors
+var WithPreProcessors = agent.WithPreProcessors
+var WithPostProcessors = agent.WithPostProcessors
+var WithPostToolProcessors = agent.WithPostToolProcessors
 var WithInputHandler = agent.WithInputHandler
 
 // --- Network ---

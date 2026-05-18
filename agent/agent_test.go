@@ -588,7 +588,7 @@ func TestProcessorAccessesInputHandler(t *testing.T) {
 	agent := NewLLMAgent("gated", "Gated agent", provider,
 		WithTools(mockTool{}),
 		WithInputHandler(handler),
-		WithProcessors(gate),
+		WithPostProcessors(gate),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "greet"})

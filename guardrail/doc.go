@@ -23,7 +23,7 @@
 //	)
 //
 //	agent := oasis.NewLLMAgent("agent", "...", provider,
-//	    oasis.WithProcessors(injection, length),
+//	    oasis.WithPreProcessors(injection, length),
 //	)
 //
 // All guards are safe for concurrent use. See each guard's documentation

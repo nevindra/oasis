@@ -87,8 +87,8 @@ func (p *allPhasesProcessor) PostTool(_ context.Context, _ core.ToolCall, _ *cor
 
 func TestChainRunPreLLM(t *testing.T) {
 	chain := NewChain()
-	chain.Add(&appendProcessor{text: "first"})
-	chain.Add(&appendProcessor{text: "second"})
+	chain.AddPre(&appendProcessor{text: "first"})
+	chain.AddPre(&appendProcessor{text: "second"})
 
 	req := core.ChatRequest{Messages: []core.ChatMessage{core.UserMessage("hello")}}
 	if err := chain.RunPreLLM(context.Background(), &req); err != nil {
@@ -108,7 +108,7 @@ func TestChainRunPreLLM(t *testing.T) {
 
 func TestChainRunPostLLM(t *testing.T) {
 	chain := NewChain()
-	chain.Add(&uppercaseProcessor{})
+	chain.AddPost(&uppercaseProcessor{})
 
 	resp := core.ChatResponse{Content: "hello"}
 	if err := chain.RunPostLLM(context.Background(), &resp); err != nil {
@@ -122,7 +122,7 @@ func TestChainRunPostLLM(t *testing.T) {
 
 func TestChainRunPostTool(t *testing.T) {
 	chain := NewChain()
-	chain.Add(&redactToolProcessor{})
+	chain.AddPostTool(&redactToolProcessor{})
 
 	tc := core.ToolCall{ID: "1", Name: "test", Args: json.RawMessage(`{}`)}
 	result := core.ToolResult{Content: "secret data"}
@@ -137,8 +137,8 @@ func TestChainRunPostTool(t *testing.T) {
 
 func TestChainHaltStopsChain(t *testing.T) {
 	chain := NewChain()
-	chain.Add(&haltProcessor{response: "blocked"})
-	chain.Add(&appendProcessor{text: "should not run"})
+	chain.AddPre(&haltProcessor{response: "blocked"})
+	chain.AddPre(&appendProcessor{text: "should not run"})
 
 	req := core.ChatRequest{Messages: []core.ChatMessage{core.UserMessage("hello")}}
 	err := chain.RunPreLLM(context.Background(), &req)
@@ -158,7 +158,7 @@ func TestChainHaltStopsChain(t *testing.T) {
 
 func TestChainInfraError(t *testing.T) {
 	chain := NewChain()
-	chain.Add(&errorProcessor{})
+	chain.AddPre(&errorProcessor{})
 
 	req := core.ChatRequest{Messages: []core.ChatMessage{core.UserMessage("hello")}}
 	err := chain.RunPreLLM(context.Background(), &req)
@@ -198,7 +198,7 @@ func TestChainTypeAssertion(t *testing.T) {
 	// appendProcessor only implements PreProcessor
 	// RunPostLLM and RunPostTool should skip it without error
 	chain := NewChain()
-	chain.Add(&appendProcessor{text: "pre-only"})
+	chain.AddPre(&appendProcessor{text: "pre-only"})
 
 	resp := core.ChatResponse{Content: "untouched"}
 	if err := chain.RunPostLLM(context.Background(), &resp); err != nil {
@@ -220,7 +220,9 @@ func TestChainTypeAssertion(t *testing.T) {
 func TestChainAllPhases(t *testing.T) {
 	p := &allPhasesProcessor{}
 	chain := NewChain()
-	chain.Add(p)
+	chain.AddPre(p)
+	chain.AddPost(p)
+	chain.AddPostTool(p)
 
 	req := core.ChatRequest{Messages: []core.ChatMessage{core.UserMessage("hello")}}
 	_ = chain.RunPreLLM(context.Background(), &req)
@@ -242,27 +244,14 @@ func TestChainAllPhases(t *testing.T) {
 	}
 }
 
-func TestChainAddPanicsOnInvalidType(t *testing.T) {
-	chain := NewChain()
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for invalid processor type")
-		}
-	}()
-
-	chain.Add("not a processor")
-}
-
 func TestChainLen(t *testing.T) {
 	chain := NewChain()
 	if chain.Len() != 0 {
 		t.Errorf("Len() = %d, want 0", chain.Len())
 	}
 
-	chain.Add(&appendProcessor{text: "a"})
-	chain.Add(&uppercaseProcessor{})
+	chain.AddPre(&appendProcessor{text: "a"})
+	chain.AddPost(&uppercaseProcessor{})
 	if chain.Len() != 2 {
 		t.Errorf("Len() = %d, want 2", chain.Len())
 	}

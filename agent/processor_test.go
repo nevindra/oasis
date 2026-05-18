@@ -54,7 +54,7 @@ func TestLLMAgentPreProcessorHalt(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("guarded", "Guarded agent", provider,
-		WithProcessors(&haltProcessor{response: "blocked by guardrail"}),
+		WithPreProcessors(&haltProcessor{response: "blocked by guardrail"}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "attack"})
@@ -73,7 +73,7 @@ func TestLLMAgentPostProcessorModifies(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("modified", "Modified agent", provider,
-		WithProcessors(&uppercaseProcessor{}),
+		WithPostProcessors(&uppercaseProcessor{}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "hello"})
@@ -96,7 +96,7 @@ func TestLLMAgentPostToolProcessorModifies(t *testing.T) {
 
 	agent := NewLLMAgent("redacted", "Redacted agent", provider,
 		WithTools(mockTool{}),
-		WithProcessors(&redactToolProcessor{}),
+		WithPostToolProcessors(&redactToolProcessor{}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "greet"})

@@ -27,8 +27,10 @@ type agentConfig struct {
 	tools            []AnyTool
 	Agents           []Agent // exported for network subpackage
 	prompt           string
-	maxIter          int
-	processors       []any
+	maxIter           int
+	preProcessors      []PreProcessor
+	postProcessors     []PostProcessor
+	postToolProcessors []PostToolProcessor
 	inputHandler     InputHandler
 	store            Store
 	embedding        EmbeddingProvider
@@ -326,12 +328,19 @@ func WithLogger(l *slog.Logger) AgentOption {
 	return func(c *agentConfig) { c.logger = l }
 }
 
-// WithProcessors adds processors to the agent's execution pipeline.
-// Each processor must implement at least one of PreProcessor, PostProcessor,
-// or PostToolProcessor. Processors run in registration order at their
-// respective hook points during Execute().
-func WithProcessors(processors ...any) AgentOption {
-	return func(c *agentConfig) { c.processors = append(c.processors, processors...) }
+// WithPreProcessors registers PreProcessor hooks that run before each LLM call.
+func WithPreProcessors(processors ...PreProcessor) AgentOption {
+	return func(c *agentConfig) { c.preProcessors = append(c.preProcessors, processors...) }
+}
+
+// WithPostProcessors registers PostProcessor hooks that run after each LLM response.
+func WithPostProcessors(processors ...PostProcessor) AgentOption {
+	return func(c *agentConfig) { c.postProcessors = append(c.postProcessors, processors...) }
+}
+
+// WithPostToolProcessors registers PostToolProcessor hooks that run after each tool result.
+func WithPostToolProcessors(processors ...PostToolProcessor) AgentOption {
+	return func(c *agentConfig) { c.postToolProcessors = append(c.postToolProcessors, processors...) }
 }
 
 // WithInputHandler sets the handler for human-in-the-loop interactions.

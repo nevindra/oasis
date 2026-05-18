@@ -90,8 +90,14 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 	for _, t := range cfg.tools {
 		c.Tools.Add(t)
 	}
-	for _, p := range cfg.processors {
-		c.processors.Add(p)
+	for _, p := range cfg.preProcessors {
+		c.processors.AddPre(p)
+	}
+	for _, p := range cfg.postProcessors {
+		c.processors.AddPost(p)
+	}
+	for _, p := range cfg.postToolProcessors {
+		c.processors.AddPostTool(p)
 	}
 
 	c.Handler = cfg.inputHandler
