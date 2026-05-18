@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"testing"
+
+	"github.com/nevindra/oasis/history"
 )
 
 type stubCompactor struct{}
@@ -13,7 +15,7 @@ func (stubCompactor) Compact(_ context.Context, _ CompactRequest) (CompactResult
 
 func TestWithCompaction_StoresOnConfig(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{
-		WithConversationMemory(nil, WithCompaction(stubCompactor{}, 0.75)),
+		WithHistory(history.Compaction(stubCompactor{}, 0.75)),
 	})
 	if cfg.compactor == nil {
 		t.Fatal("compactor not stored on config")
@@ -25,7 +27,7 @@ func TestWithCompaction_StoresOnConfig(t *testing.T) {
 
 func TestWithCompaction_OmittedLeavesNilCompactor(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{
-		WithConversationMemory(nil, MaxHistory(10)),
+		WithHistory(history.MaxHistory(10)),
 	})
 	if cfg.compactor != nil {
 		t.Error("compactor should be nil when WithCompaction not used")

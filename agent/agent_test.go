@@ -7,7 +7,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nevindra/oasis/history"
 )
+
+// ptr returns a pointer to v. Test helper for optional Generation fields.
+func ptr[T any](v T) *T { return &v }
 
 // stubAgent is a minimal Agent for testing.
 type stubAgent struct {
@@ -836,8 +841,7 @@ func TestContextCompression(t *testing.T) {
 	// (~2002 runes) and starts compressing old iterations from iteration 3.
 	agent := NewLLMAgent("compressor", "Tests compression", trackingProvider,
 		WithTools(bigResultTool{}),
-		WithCompressThreshold(1500),
-		WithCompressModel(func(_ context.Context, _ AgentTask) Provider { return compressProvider }),
+		WithHistory(history.Compress(func(_ context.Context, _ AgentTask) Provider { return compressProvider }, 1500)),
 		WithMaxIter(10),
 	)
 
@@ -958,7 +962,7 @@ func TestWithSuspendBudgetOption(t *testing.T) {
 }
 
 func TestWithCompressThresholdOption(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{WithCompressThreshold(100_000)})
+	cfg := BuildConfig([]AgentOption{WithHistory(history.Compress(nil, 100_000))})
 	if cfg.compressThreshold != 100_000 {
 		t.Errorf("compressThreshold = %d, want 100000", cfg.compressThreshold)
 	}
@@ -989,7 +993,7 @@ func TestWithMaxAttachmentBytesOption(t *testing.T) {
 // --- Generation parameters option tests ---
 
 func TestWithTemperatureOption(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{WithTemperature(0.7)})
+	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{Temperature: ptr(0.7)})})
 	if cfg.generationParams == nil {
 		t.Fatal("generationParams should not be nil")
 	}
@@ -1000,7 +1004,7 @@ func TestWithTemperatureOption(t *testing.T) {
 
 func TestWithTemperatureZero(t *testing.T) {
 	// 0.0 is a valid temperature — must not be conflated with "unset".
-	cfg := BuildConfig([]AgentOption{WithTemperature(0.0)})
+	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{Temperature: ptr(0.0)})})
 	if cfg.generationParams == nil || cfg.generationParams.Temperature == nil {
 		t.Fatal("Temperature should be set (pointer to 0.0)")
 	}
@@ -1010,7 +1014,7 @@ func TestWithTemperatureZero(t *testing.T) {
 }
 
 func TestWithTopPOption(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{WithTopP(0.95)})
+	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{TopP: ptr(0.95)})})
 	if cfg.generationParams == nil || cfg.generationParams.TopP == nil {
 		t.Fatal("TopP should be set")
 	}
@@ -1020,7 +1024,7 @@ func TestWithTopPOption(t *testing.T) {
 }
 
 func TestWithTopKOption(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{WithTopK(40)})
+	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{TopK: ptr(40)})})
 	if cfg.generationParams == nil || cfg.generationParams.TopK == nil {
 		t.Fatal("TopK should be set")
 	}
@@ -1030,7 +1034,7 @@ func TestWithTopKOption(t *testing.T) {
 }
 
 func TestWithMaxTokensOption(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{WithMaxTokens(2048)})
+	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{MaxTokens: ptr(2048)})})
 	if cfg.generationParams == nil || cfg.generationParams.MaxTokens == nil {
 		t.Fatal("MaxTokens should be set")
 	}
@@ -1040,12 +1044,14 @@ func TestWithMaxTokensOption(t *testing.T) {
 }
 
 func TestGenerationParamsCompose(t *testing.T) {
-	// Multiple generation param options should compose into a single struct.
+	// WithGeneration composes all parameters in one call.
 	cfg := BuildConfig([]AgentOption{
-		WithTemperature(0.5),
-		WithTopP(0.9),
-		WithTopK(50),
-		WithMaxTokens(1024),
+		WithGeneration(Generation{
+			Temperature: ptr(0.5),
+			TopP:        ptr(0.9),
+			TopK:        ptr(50),
+			MaxTokens:   ptr(1024),
+		}),
 	})
 	if cfg.generationParams == nil {
 		t.Fatal("generationParams should not be nil")
@@ -1083,8 +1089,7 @@ func TestGenerationParamsInjectedIntoRequest(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("gp-test", "Tests gen params", provider,
-		WithTemperature(0.3),
-		WithTopP(0.85),
+		WithGeneration(Generation{Temperature: ptr(0.3), TopP: ptr(0.85)}),
 	)
 
 	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
@@ -1140,7 +1145,7 @@ func TestGenerationParamsWithTools(t *testing.T) {
 
 	agent := NewLLMAgent("gp-tools", "Tests gen params with tools", provider,
 		WithTools(mockTool{}),
-		WithTemperature(0.1),
+		WithGeneration(Generation{Temperature: ptr(0.1)}),
 	)
 
 	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})

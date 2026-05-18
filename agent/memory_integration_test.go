@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nevindra/oasis/history"
 	"github.com/nevindra/oasis/memory"
 )
 
@@ -193,7 +194,7 @@ func TestLLMAgentConversationMemory(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 		WithPrompt("You are helpful"),
 	)
 
@@ -248,11 +249,11 @@ func (s *limitCapturingStore) GetMessages(_ context.Context, _ string, limit int
 func TestMaxHistoryOption(t *testing.T) {
 	tests := []struct {
 		name      string
-		opts      []ConversationOption
+		opts      []history.Option
 		wantLimit int
 	}{
 		{"default", nil, 10},
-		{"custom", []ConversationOption{MaxHistory(50)}, 50},
+		{"custom", []history.Option{history.MaxHistory(50)}, 50},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -262,8 +263,8 @@ func TestMaxHistoryOption(t *testing.T) {
 				responses: []ChatResponse{{Content: "ok"}},
 			}
 
-			opts := []AgentOption{WithConversationMemory(store, tt.opts...)}
-			agent := NewLLMAgent("test", "test", provider, opts...)
+			histOpts := append([]history.Option{history.Store(store)}, tt.opts...)
+			agent := NewLLMAgent("test", "test", provider, WithHistory(histOpts...))
 
 			_, err := agent.Execute(context.Background(), AgentTask{
 				Input:   "hi",
@@ -290,7 +291,7 @@ func TestLLMAgentNoThreadIDSkipsHistory(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 	)
 
 	// No thread_id in Context — should skip history load and persist
@@ -357,7 +358,7 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "combined answer"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, CrossThreadSearch(emb)),
+		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
 	)
 
 	task := AgentTask{
@@ -396,7 +397,7 @@ func TestLLMAgentAllMemoryTypes(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "full memory response"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, CrossThreadSearch(emb)),
+		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
 		WithUserMemory(mem, emb),
 		WithPrompt("base"),
 	)
@@ -448,7 +449,7 @@ func TestAgentConversationMemoryPersists(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("net", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 	)
 
 	task := AgentTask{
@@ -481,7 +482,7 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, CrossThreadSearch(emb)),
+		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
 	)
 
 	task := AgentTask{
@@ -612,7 +613,7 @@ func TestExtractionPipelineExtractsFacts(t *testing.T) {
 	provider.extractionResp = &ChatResponse{Content: extractionResp}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 		WithUserMemory(mem, emb),
 	)
 
@@ -645,7 +646,7 @@ func TestExtractionSkipsTrivialInput(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 		WithUserMemory(mem, emb),
 	)
 
@@ -688,7 +689,7 @@ func TestExtractionHandlesSupersedes(t *testing.T) {
 	provider.extractionResp = &ChatResponse{Content: extractionResp}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 		WithUserMemory(mem, emb),
 	)
 
@@ -725,7 +726,7 @@ func TestPersistMessagesCreatesThread(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 	)
 
 	task := AgentTask{
@@ -771,7 +772,7 @@ func TestPersistMessagesUpdatesExistingThread(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 	)
 
 	task := AgentTask{
@@ -814,7 +815,7 @@ func TestPersistMessagesThreadFallbackChatID(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 	)
 
 	task := AgentTask{
@@ -852,7 +853,7 @@ func TestGenerateTitleOnFirstMessage(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, AutoTitle()),
+		WithHistory(history.Store(store), history.AutoTitle()),
 	)
 
 	task := AgentTask{
@@ -896,7 +897,7 @@ func TestGenerateTitleSkipsExistingTitle(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, AutoTitle()),
+		WithHistory(history.Store(store), history.AutoTitle()),
 	)
 
 	task := AgentTask{
@@ -935,7 +936,7 @@ func TestAutoTitleSurvivesSecondMessage(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, AutoTitle()),
+		WithHistory(history.Store(store), history.AutoTitle()),
 	)
 
 	// Message 1 — creates thread and generates title.
@@ -988,7 +989,7 @@ func TestMaxTokensOption(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, MaxTokens(30)),
+		WithHistory(history.Store(store), history.MaxTokens(30)),
 		WithPrompt("system"),
 	)
 
@@ -1032,7 +1033,7 @@ func TestMaxTokensComposesWithMaxHistory(t *testing.T) {
 	}
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, MaxHistory(2), MaxTokens(10000)),
+		WithHistory(history.Store(store), history.MaxHistory(2), history.MaxTokens(10000)),
 	)
 
 	_, err := agent.Execute(context.Background(), AgentTask{
@@ -1068,7 +1069,7 @@ func TestMaxTokensZeroDisabled(t *testing.T) {
 	}
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 	)
 
 	_, err := agent.Execute(context.Background(), AgentTask{
@@ -1104,7 +1105,7 @@ func TestAgentMaxTokensTrimsHistory(t *testing.T) {
 
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 	agent := NewLLMAgent("net", "test", provider,
-		WithConversationMemory(store, MaxTokens(20)),
+		WithHistory(history.Store(store), history.MaxTokens(20)),
 	)
 
 	_, err := agent.Execute(context.Background(), AgentTask{
@@ -1144,7 +1145,7 @@ func TestCrossThreadRecallTrustFraming(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "answer"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, CrossThreadSearch(emb)),
+		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
 	)
 
 	task := AgentTask{
@@ -1182,7 +1183,7 @@ func TestCrossThreadRecallTruncatesContent(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, CrossThreadSearch(emb)),
+		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
 	)
 
 	task := AgentTask{
@@ -1222,7 +1223,7 @@ func TestCrossThreadRecallChatIDScoping(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store, CrossThreadSearch(emb)),
+		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
 	)
 
 	task := AgentTask{
@@ -1257,7 +1258,7 @@ func TestDrainWaitsForPersist(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 	)
 
 	task := AgentTask{
@@ -1290,7 +1291,7 @@ func TestPersistTruncatesLargeContent(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithConversationMemory(store),
+		WithHistory(history.Store(store)),
 	)
 
 	// Use a large input.
@@ -1448,7 +1449,7 @@ func (v *vectorEmbedding) Name() string    { return "vector-test" }
 func TestWithSemanticTrimmingOption(t *testing.T) {
 	emb := &stubEmbedding{}
 	cfg := BuildConfig([]AgentOption{
-		WithConversationMemory(&recordingStore{}, WithSemanticTrimming(emb, KeepRecent(5))),
+		WithHistory(history.Store(&recordingStore{}), history.SemanticTrim(emb), history.KeepRecent(5)),
 	})
 
 	if !cfg.semanticTrimming {
@@ -1465,7 +1466,7 @@ func TestWithSemanticTrimmingOption(t *testing.T) {
 func TestKeepRecentDefault(t *testing.T) {
 	emb := &stubEmbedding{}
 	cfg := BuildConfig([]AgentOption{
-		WithConversationMemory(&recordingStore{}, WithSemanticTrimming(emb)),
+		WithHistory(history.Store(&recordingStore{}), history.SemanticTrim(emb)),
 	})
 
 	// keepRecent should be 0 in config (defaults applied at trimHistory time).
@@ -1497,9 +1498,11 @@ func TestSemanticTrimmingIntegrationWithAgent(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("semantic", "Semantic trimming agent", provider,
-		WithConversationMemory(store,
-			MaxTokens(5), // very low budget to trigger trimming
-			WithSemanticTrimming(emb, KeepRecent(1)),
+		WithHistory(
+			history.Store(store),
+			history.MaxTokens(5), // very low budget to trigger trimming
+			history.SemanticTrim(emb),
+			history.KeepRecent(1),
 		),
 	)
 

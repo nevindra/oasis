@@ -19,6 +19,7 @@ import (
 	"github.com/nevindra/oasis/compaction"
 	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/guardrail"
+	"github.com/nevindra/oasis/history"
 	"github.com/nevindra/oasis/memory"
 	"github.com/nevindra/oasis/network"
 	"github.com/nevindra/oasis/processor"
@@ -52,12 +53,6 @@ var WithPrompt = agent.WithPrompt
 var WithMaxIter = agent.WithMaxIter
 var WithMaxAttachmentBytes = agent.WithMaxAttachmentBytes
 var WithSuspendBudget = agent.WithSuspendBudget
-var WithCompressModel = agent.WithCompressModel
-var WithCompressThreshold = agent.WithCompressThreshold
-var WithTemperature = agent.WithTemperature
-var WithTopP = agent.WithTopP
-var WithTopK = agent.WithTopK
-var WithMaxTokens = agent.WithMaxTokens
 var WithAgents = agent.WithAgents
 var WithPlanExecution = agent.WithPlanExecution
 var WithSandbox = agent.WithSandbox
@@ -76,6 +71,49 @@ var WithPreProcessors = agent.WithPreProcessors
 var WithPostProcessors = agent.WithPostProcessors
 var WithPostToolProcessors = agent.WithPostToolProcessors
 var WithInputHandler = agent.WithInputHandler
+
+// --- History ---
+
+// WithHistory enables conversation history and related context-window management.
+// Pass history.Option values from github.com/nevindra/oasis/history:
+//
+//	oasis.WithHistory(
+//	    history.Store(store),
+//	    history.MaxHistory(30),
+//	    history.CrossThreadSearch(embedding),
+//	    history.Compaction(compactor, 0.8),
+//	    history.Compress(model, 200_000),
+//	)
+var WithHistory = agent.WithHistory
+
+// HistoryOption is an option for WithHistory. Import from github.com/nevindra/oasis/history.
+type HistoryOption = history.Option
+
+// --- Generation ---
+
+// Generation groups LLM sampling and output parameters. Pass to WithGeneration.
+// Pointer fields are optional — nil means "use provider default".
+//
+//	oasis.WithGeneration(oasis.Generation{
+//	    Temperature: oasis.Ptr(0.5),
+//	    TopP:        oasis.Ptr(0.9),
+//	    TopK:        oasis.Ptr(40),
+//	    MaxTokens:   oasis.Ptr(1024),
+//	})
+type Generation = agent.Generation
+
+// WithGeneration sets LLM sampling and output parameters in one call.
+var WithGeneration = agent.WithGeneration
+
+// --- Helpers ---
+
+// Ptr returns a pointer to v. Convenience for optional fields in Generation:
+//
+//	oasis.WithGeneration(oasis.Generation{Temperature: oasis.Ptr(0.5)})
+func Ptr[T any](v T) *T { return &v }
+
+// ModelFunc resolves the LLM provider per-request. Re-exported from core.
+type ModelFunc = core.ModelFunc
 
 // --- Network ---
 

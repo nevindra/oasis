@@ -10,12 +10,18 @@
 //
 // Configure memory when setting up an agent:
 //
-//	import "github.com/nevindra/oasis/memory"
+//	import (
+//	    "github.com/nevindra/oasis"
+//	    "github.com/nevindra/oasis/history"
+//	)
 //
-//	agent := oasis.NewLLMAgent(
-//		oasis.WithConversationMemory(store, 10),  // last 10 messages
-//		oasis.WithUserMemory(memStore, provider), // facts + extraction
-//		oasis.WithCrossThreadSearch(),            // semantic recall
+//	agent := oasis.NewLLMAgent(name, desc, provider,
+//		oasis.WithHistory(
+//			history.Store(store),
+//			history.MaxHistory(10),      // last 10 messages
+//			history.CrossThreadSearch(embedding), // semantic recall
+//		),
+//		oasis.WithUserMemory(memStore, embedding), // facts + extraction
 //	)
 //
 // # Architecture

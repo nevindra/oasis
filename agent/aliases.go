@@ -144,3 +144,8 @@ type MemoryStore = memory.MemoryStore
 
 type Skill = skills.Skill
 type SkillProvider = skills.SkillProvider
+
+// --- Per-request resolution functions ---
+
+// ModelFunc resolves the LLM provider per-request. Re-exported from core.
+type ModelFunc = core.ModelFunc

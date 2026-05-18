@@ -125,6 +125,13 @@ type AgentResult struct {
 	Steps []StepTrace
 }
 
+// ModelFunc resolves the LLM provider per-request.
+// When set via WithDynamicModel or history.Compress, it is called at the start
+// of every Execute/ExecuteStream call (or compression event). The returned
+// Provider replaces the construction-time provider for that execution.
+// A nil return falls back to the agent's main provider.
+type ModelFunc func(ctx context.Context, task AgentTask) Provider
+
 // StepTrace records the execution of a single tool call or agent delegation.
 // Collected automatically during the agent's tool-calling loop.
 type StepTrace struct {

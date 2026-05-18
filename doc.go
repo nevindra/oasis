@@ -21,7 +21,7 @@
 //			knowledge.New(store, embedding),
 //			search.New(),
 //		),
-//		oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding)),
+//		oasis.WithHistory(history.Store(store), history.CrossThreadSearch(embedding)),
 //		oasis.WithUserMemory(memoryStore, embedding),
 //	)
 //

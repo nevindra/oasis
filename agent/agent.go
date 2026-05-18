@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/history"
 )
 
 // Agent, StreamingAgent, AgentTask, AgentResult, StepTrace are defined in core/
@@ -35,11 +36,11 @@ type agentConfig struct {
 	store            Store
 	embedding        EmbeddingProvider
 	memory           MemoryStore
-	crossThreadSearch bool    // enabled by CrossThreadSearch option
-	semanticMinScore  float32 // set by MinScore inside CrossThreadSearch
-	maxHistory        int     // set by MaxHistory inside WithConversationMemory
-	maxTokens         int     // set by MaxTokens inside WithConversationMemory
-	autoTitle         bool    // set by AutoTitle inside WithConversationMemory
+	crossThreadSearch bool    // enabled by history.CrossThreadSearch
+	semanticMinScore  float32 // set by history.MinScore
+	maxHistory        int     // set by history.MaxHistory
+	maxTokens         int     // set by history.MaxTokens (history budget)
+	autoTitle         bool    // set by history.AutoTitle
 	planExecution     bool            // enabled by WithPlanExecution option
 	Sandbox           any             // set by WithSandbox option; holds a sandbox.Sandbox (exported for network subpackage)
 	SandboxTools      []AnyTool       // tools auto-registered by WithSandbox (exported for network subpackage)
@@ -52,14 +53,14 @@ type agentConfig struct {
 	maxAttachmentBytes  int64          // set by WithMaxAttachmentBytes option
 	maxSuspendSnapshots int            // set by WithSuspendBudget
 	maxSuspendBytes     int64          // set by WithSuspendBudget
-	compressModel       ModelFunc          // set by WithCompressModel
-	compressThreshold   int                // set by WithCompressThreshold
-	compactor           Compactor          // set by WithCompaction (per-thread compaction)
-	compactThreshold    float64            // set by WithCompaction (0 = disabled)
-	generationParams    *GenerationParams  // set by WithTemperature, WithTopP, etc.
-	semanticTrimming    bool               // enabled by WithSemanticTrimming
-	trimmingEmbedding   EmbeddingProvider  // set by WithSemanticTrimming
-	keepRecent          int                // set by KeepRecent inside WithSemanticTrimming
+	compressModel       ModelFunc          // set by history.Compress
+	compressThreshold   int                // set by history.Compress
+	compactor           Compactor          // set by history.Compaction (per-thread compaction)
+	compactThreshold    float64            // set by history.Compaction (0 = disabled)
+	generationParams    *GenerationParams  // set by WithGeneration
+	semanticTrimming    bool               // enabled by history.SemanticTrim
+	trimmingEmbedding   EmbeddingProvider  // set by history.SemanticTrim
+	keepRecent          int                // set by history.KeepRecent
 	spawnEnabled   bool     // set by WithSubAgentSpawning
 	maxSpawnDepth  int      // set by MaxSpawnDepth (default 1)
 	denySpawnTools []string // set by DenySpawnTools
@@ -70,7 +71,7 @@ type agentConfig struct {
 // AgentOption configures an LLMAgent or Network.
 type AgentOption func(*agentConfig)
 
-// PromptFunc, ModelFunc, and ToolsFunc share the same func(ctx, task) T shape.
+// PromptFunc, ToolsFunc, and ModelFunc share the same func(ctx, task) T shape.
 // A generic ResolveFunc[T] was considered and rejected: the named types provide
 // domain clarity at call sites (PromptFunc vs ResolveFunc[string]) and better
 // Godoc discoverability. Three stable, self-documenting types beat one generic.
@@ -80,12 +81,6 @@ type AgentOption func(*agentConfig)
 // Execute/ExecuteStream call. The returned string replaces the static
 // WithPrompt value for that execution.
 type PromptFunc func(ctx context.Context, task AgentTask) string
-
-// ModelFunc resolves the LLM provider per-request.
-// When set via WithDynamicModel, it is called at the start of every
-// Execute/ExecuteStream call. The returned Provider replaces the
-// construction-time provider for that execution.
-type ModelFunc func(ctx context.Context, task AgentTask) Provider
 
 // ToolsFunc resolves the tool set per-request.
 // When set via WithDynamicTools, it is called at the start of every
@@ -127,69 +122,75 @@ func WithSuspendBudget(maxSnapshots int, maxBytes int64) AgentOption {
 	}
 }
 
-// WithCompressModel sets a per-request provider for context compression.
-// When the message history exceeds the compress threshold, older tool results
-// are summarized using this provider. Falls back to the agent's main provider
-// when nil.
-func WithCompressModel(fn ModelFunc) AgentOption {
-	return func(c *agentConfig) { c.compressModel = fn }
-}
+// --- History ---
 
-// WithCompressThreshold sets the rune count at which per-turn tool-result
-// LLM summarization is triggered. DISABLED BY DEFAULT (zero or negative).
-// Enable explicitly by passing a positive value (e.g., 200_000).
+// WithHistory enables conversation history and related context-window
+// management strategies. Pass a combination of history.Option values:
 //
-// NOTE: For per-thread (across-turn) compaction, see WithCompaction and
-// the Compactor interface — that's the preferred pattern for long chat
-// threads. Per-turn compression is narrow in scope and unsafe for
-// skill-heavy agents (skill_activate results can be summarized away).
-func WithCompressThreshold(n int) AgentOption {
-	return func(c *agentConfig) { c.compressThreshold = n }
-}
-
-// --- Generation parameters ---
-
-// ensureGenParams lazily initializes the GenerationParams on agentConfig.
-func (c *agentConfig) ensureGenParams() {
-	if c.generationParams == nil {
-		c.generationParams = &GenerationParams{}
+//	oasis.WithHistory(
+//	    history.Store(store),
+//	    history.MaxHistory(30),
+//	    history.CrossThreadSearch(embedding),
+//	    history.Compaction(c, 0.8),
+//	    history.Compress(model, 200_000),
+//	)
+//
+// Without history.Store, only per-turn options (Compress) take effect;
+// per-thread mechanisms (Compaction, SemanticTrim, AutoTitle,
+// CrossThreadSearch) silently no-op.
+func WithHistory(opts ...history.Option) AgentOption {
+	return func(c *agentConfig) {
+		cfg := history.Build(opts)
+		c.store = cfg.Store
+		c.maxHistory = cfg.MaxHistory
+		c.maxTokens = cfg.MaxTokens
+		c.autoTitle = cfg.AutoTitle
+		c.crossThreadSearch = cfg.CrossThreadSearch
+		if cfg.Embedding != nil {
+			c.embedding = cfg.Embedding
+		}
+		c.semanticMinScore = cfg.MinScore
+		c.compactor = cfg.Compactor
+		c.compactThreshold = cfg.CompactThreshold
+		c.semanticTrimming = cfg.SemanticTrimming
+		if cfg.TrimmingEmbedding != nil {
+			c.trimmingEmbedding = cfg.TrimmingEmbedding
+		}
+		c.keepRecent = cfg.KeepRecent
+		c.compressModel = cfg.CompressModel
+		c.compressThreshold = cfg.CompressThreshold
 	}
 }
 
-// WithTemperature sets the LLM sampling temperature for this agent.
-// Passed to the provider on every LLM call via ChatRequest.GenerationParams.
-// Nil (omitting this option) means "use provider default".
-func WithTemperature(t float64) AgentOption {
-	return func(c *agentConfig) {
-		c.ensureGenParams()
-		c.generationParams.Temperature = &t
-	}
+// --- Generation ---
+
+// Generation groups the LLM sampling and output parameters. Pass to
+// WithGeneration. Pointer fields are optional — nil means "use provider default".
+type Generation struct {
+	Temperature *float64
+	TopP        *float64
+	TopK        *int
+	MaxTokens   *int
 }
 
-// WithTopP sets the nucleus sampling probability for this agent.
-// Passed to the provider on every LLM call via ChatRequest.GenerationParams.
-func WithTopP(p float64) AgentOption {
+// WithGeneration sets LLM sampling and output parameters in one call,
+// replacing the previous per-knob options.
+//
+//	oasis.WithGeneration(oasis.Generation{
+//	    Temperature: oasis.Ptr(0.5),
+//	    TopP:        oasis.Ptr(0.9),
+//	    TopK:        oasis.Ptr(40),
+//	    MaxTokens:   oasis.Ptr(1024),
+//	})
+func WithGeneration(g Generation) AgentOption {
 	return func(c *agentConfig) {
-		c.ensureGenParams()
-		c.generationParams.TopP = &p
-	}
-}
-
-// WithTopK sets the top-K sampling parameter for this agent.
-// Passed to the provider on every LLM call via ChatRequest.GenerationParams.
-func WithTopK(k int) AgentOption {
-	return func(c *agentConfig) {
-		c.ensureGenParams()
-		c.generationParams.TopK = &k
-	}
-}
-
-// WithMaxTokens sets the maximum output tokens for this agent.
-// Passed to the provider on every LLM call via ChatRequest.GenerationParams.
-func WithMaxTokens(n int) AgentOption {
-	return func(c *agentConfig) {
-		c.ensureGenParams()
-		c.generationParams.MaxTokens = &n
+		if c.generationParams == nil {
+			c.generationParams = &GenerationParams{}
+		}
+		c.generationParams.Temperature = g.Temperature
+		c.generationParams.TopP = g.TopP
+		c.generationParams.TopK = g.TopK
+		c.generationParams.MaxTokens = g.MaxTokens
 	}
 }
 
@@ -350,151 +351,6 @@ func WithInputHandler(h InputHandler) AgentOption {
 	return func(c *agentConfig) { c.inputHandler = h }
 }
 
-// ConversationOption configures conversation memory behavior.
-// Pass to WithConversationMemory to enable optional features like cross-thread search.
-//
-// This is a separate type from AgentOption and SemanticOption to provide
-// compile-time scoping: ConversationOption values are only accepted by
-// WithConversationMemory, preventing accidental misuse in other contexts.
-// The same pattern applies to SemanticOption (scoped to CrossThreadSearch)
-// and SemanticTrimmingOption (scoped to WithSemanticTrimming).
-type ConversationOption func(*agentConfig)
-
-// CrossThreadSearch enables semantic recall across all conversation threads.
-// When the agent receives a message, it embeds the input and searches all
-// stored messages for semantically similar content from other threads.
-// The embedding provider is required (compile-time enforced) and is also used
-// to embed messages before storing them for future recall.
-//
-// Optional SemanticOption values tune recall behavior:
-//
-//	oasis.CrossThreadSearch(embedding)                    // default threshold (0.60)
-//	oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7)) // custom threshold
-func CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption) ConversationOption {
-	return func(c *agentConfig) {
-		c.crossThreadSearch = true
-		c.embedding = e
-		for _, o := range opts {
-			o(c)
-		}
-	}
-}
-
-// SemanticOption tunes semantic search parameters within CrossThreadSearch.
-// Scoped type — only accepted by CrossThreadSearch, not by other option functions.
-type SemanticOption func(*agentConfig)
-
-// MinScore sets the minimum cosine similarity score for cross-thread semantic
-// recall. Messages with a score below this threshold are silently dropped
-// before being injected into the LLM context. The zero value (or omitting this
-// option) uses a built-in default of 0.60.
-func MinScore(score float32) SemanticOption {
-	return func(c *agentConfig) { c.semanticMinScore = score }
-}
-
-// MaxHistory sets the maximum number of recent messages loaded from conversation
-// history before the LLM call. The zero value (or omitting this option) uses
-// a built-in default of 10.
-func MaxHistory(n int) ConversationOption {
-	return func(c *agentConfig) { c.maxHistory = n }
-}
-
-// MaxTokens sets a token budget for conversation history loaded before the LLM call.
-// Messages are trimmed oldest-first until the total estimated tokens fit within n.
-// Composes with MaxHistory — both limits apply, whichever triggers first.
-// The zero value (or omitting this option) disables token-based trimming.
-func MaxTokens(n int) ConversationOption {
-	return func(c *agentConfig) { c.maxTokens = n }
-}
-
-// WithCompaction wires a Compactor to run automatically when conversation
-// memory is loaded and token count exceeds threshold × effectiveWindow.
-// This is an opt-in convenience for consumers that don't want to
-// orchestrate compaction at the application layer.
-//
-// threshold is a fraction (0.0–1.0) of the effective context window.
-// Recommended default: 0.80.
-//
-// Passing nil compactor or threshold <= 0 disables this option (noop).
-//
-// Example:
-//
-//	oasis.WithConversationMemory(store,
-//	    oasis.MaxTokens(100_000),
-//	    oasis.WithCompaction(
-//	        compaction.NewStructuredCompactor(summarizer),
-//	        0.80))
-//
-// NOTE: Consumers that orchestrate compaction themselves (e.g., Athena)
-// should NOT use this option — they build pre-compacted message lists
-// before invoking the agent.
-func WithCompaction(c Compactor, threshold float64) ConversationOption {
-	return func(cfg *agentConfig) {
-		if c == nil || threshold <= 0 {
-			return
-		}
-		cfg.compactor = c
-		cfg.compactThreshold = threshold
-	}
-}
-
-// AutoTitle enables automatic thread title generation. When set, the agent
-// generates a short title from the first user message and stores it on the
-// thread. Titles are only generated once per thread (skipped if the thread
-// already has a title). Runs in the background alongside message persistence.
-func AutoTitle() ConversationOption {
-	return func(c *agentConfig) { c.autoTitle = true }
-}
-
-// SemanticTrimmingOption tunes semantic trimming behavior.
-// Scoped type — only accepted by WithSemanticTrimming, not by other option functions.
-type SemanticTrimmingOption func(*agentConfig)
-
-// KeepRecent sets how many recent messages are always preserved during
-// semantic trimming, regardless of their relevance score. Default: 3.
-func KeepRecent(n int) SemanticTrimmingOption {
-	return func(c *agentConfig) { c.keepRecent = n }
-}
-
-// WithSemanticTrimming enables relevance-based history trimming.
-// When the conversation exceeds MaxHistory or MaxTokens, instead of dropping
-// oldest messages first, older messages are scored by cosine similarity to
-// the current query. Lowest-scoring messages are dropped first. The most
-// recent N messages (default 3) are always preserved regardless of score.
-//
-// Requires an EmbeddingProvider. Falls back to oldest-first trimming if
-// embedding fails (degrade, don't crash).
-//
-// If CrossThreadSearch is also enabled, the query embedding is reused —
-// no extra API call.
-func WithSemanticTrimming(e EmbeddingProvider, opts ...SemanticTrimmingOption) ConversationOption {
-	return func(c *agentConfig) {
-		c.semanticTrimming = true
-		c.trimmingEmbedding = e
-		for _, o := range opts {
-			o(c)
-		}
-	}
-}
-
-// WithConversationMemory enables conversation history on the agent.
-// When set and task.Context["thread_id"] is present, the agent loads
-// recent messages before the LLM call and persists the exchange afterward.
-//
-// Optional ConversationOption values enable additional features:
-//
-//	oasis.WithConversationMemory(store)                                                  // history only
-//	oasis.WithConversationMemory(store, oasis.MaxHistory(30))                            // custom history limit
-//	oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding))              // + cross-thread recall
-//	oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7))) // + custom threshold
-func WithConversationMemory(s Store, opts ...ConversationOption) AgentOption {
-	return func(c *agentConfig) {
-		c.store = s
-		for _, o := range opts {
-			o(c)
-		}
-	}
-}
 
 // WithUserMemory enables the full user memory pipeline: read + write.
 //
@@ -503,8 +359,8 @@ func WithConversationMemory(s Store, opts ...ConversationOption) AgentOption {
 //
 // Write (after each turn, background): uses the agent's own LLM to extract
 // durable user facts from the conversation exchange and persists them via
-// UpsertFact. Write requires WithConversationMemory — without it, extraction
-// is silently skipped (logged as a warning at construction time).
+// UpsertFact. Write requires WithHistory(history.Store(...)) — without it,
+// extraction is silently skipped (logged as a warning at construction time).
 func WithUserMemory(m MemoryStore, e EmbeddingProvider) AgentOption {
 	return func(c *agentConfig) {
 		c.memory = m
@@ -532,7 +388,7 @@ func BuildConfig(opts []AgentOption) agentConfig {
 	}
 	// Warn about misconfigurations that can't be caught at compile time.
 	if c.memory != nil && c.store == nil {
-		c.logger.Warn("WithUserMemory without WithConversationMemory — fact extraction (write) will be silently skipped")
+		c.logger.Warn("WithUserMemory without history.Store — fact extraction (write) will be silently skipped")
 	}
 	return c
 }

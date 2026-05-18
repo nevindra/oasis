@@ -425,18 +425,12 @@ func ExecuteSpawnAgent(ctx context.Context, args json.RawMessage, cfg SubAgentCo
 		WithLogger(cfg.Logger),
 	}
 	if cfg.GenParams != nil {
-		if cfg.GenParams.Temperature != nil {
-			opts = append(opts, WithTemperature(*cfg.GenParams.Temperature))
-		}
-		if cfg.GenParams.TopP != nil {
-			opts = append(opts, WithTopP(*cfg.GenParams.TopP))
-		}
-		if cfg.GenParams.TopK != nil {
-			opts = append(opts, WithTopK(*cfg.GenParams.TopK))
-		}
-		if cfg.GenParams.MaxTokens != nil {
-			opts = append(opts, WithMaxTokens(*cfg.GenParams.MaxTokens))
-		}
+		opts = append(opts, WithGeneration(Generation{
+			Temperature: cfg.GenParams.Temperature,
+			TopP:        cfg.GenParams.TopP,
+			TopK:        cfg.GenParams.TopK,
+			MaxTokens:   cfg.GenParams.MaxTokens,
+		}))
 	}
 	// Enable spawning on child if it won't be at max depth.
 	if !childAtMaxDepth {
