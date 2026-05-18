@@ -6,7 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
-### Changed
+### Changed (breaking)
+- `AgentTask.Context map[string]any` removed. Use the typed `ThreadID`/`UserID`/`ChatID` fields. App-defined metadata moves to `AgentTask.Extra`. The `ContextThreadID`/`ContextUserID`/`ContextChatID` constants and `TaskThreadID()`/`TaskUserID()`/`TaskChatID()` accessors are deleted.
+- `Attachment.Base64` field removed. Construct via `NewAttachment` / `NewAttachmentFromURL` / `NewAttachmentFromBase64`. `InlineData()` is now infallible and returns `Data` directly.
+- `ChatMessage.Role` switches from `string` to typed `Role`. String literals still compile for comparisons; direct assignments of `msg.Role` to a `string` variable need an explicit `string()` conversion. New code should use `RoleSystem` / `RoleUser` / `RoleAssistant` / `RoleTool`.
+- `AgentCore.Drain()` and `AgentMemory.Drain()` renamed to `Close() error`. Returns nil today; the error return is reserved for future flush failures.
 - `Erase` (the `core.Tool[In, Out]` → `core.AnyTool` adapter) moved from the
   one-function `github.com/nevindra/oasis/tool` package into `core/` next to
   the `Tool` and `AnyTool` types it bridges. The `tool/` subpackage has been
@@ -39,6 +43,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
     and the `skill*.go` re-export shims have been deleted; their content is
     now in `oasis.go`.
   - `scheduler.go` was removed from the root (no external callers).
+
+### Added
+- `StreamingTool[In, Out]` generic interface for type-safe streaming tool authoring. Bridge via `EraseStreaming[In, Out]` to register as a `StreamingAnyTool`.
+- `NewAttachment`, `NewAttachmentFromURL`, `NewAttachmentFromBase64` constructors.
+- `Role` type with `RoleSystem`, `RoleUser`, `RoleAssistant`, `RoleTool` constants.
+
+### Removed
+- Dead `subAgentConfig` alias in `agent/llm.go`.
+
+### Fixed
+- `Provider.ChatStream` doc no longer claims providers leave the channel open — every implementation closes it, matching the actual contract used by the agent loop.
+- `ErrHalt` doc now clarifies that processors must return `&ErrHalt{...}` (pointer), not a value, to satisfy the `error` interface.
+- Silent base64-decode swallow in `Attachment.InlineData()` — moved to construction time via `NewAttachmentFromBase64`.
 
 ### Migration notes
 - The root `go.mod` no longer requires `modernc.org/sqlite`,
