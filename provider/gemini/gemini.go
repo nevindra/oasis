@@ -504,7 +504,7 @@ func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefin
 			}
 
 			entry := map[string]any{
-				"role":  mapRole(m.Role),
+				"role":  mapRole(string(m.Role)),
 				"parts": parts,
 			}
 

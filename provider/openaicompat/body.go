@@ -84,12 +84,12 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 					}
 				}
 				msgs = append(msgs, Message{
-					Role:    m.Role,
+					Role:    string(m.Role),
 					Content: blocks,
 				})
 			} else {
 				msgs = append(msgs, Message{
-					Role:    m.Role,
+					Role:    string(m.Role),
 					Content: m.Content,
 				})
 			}

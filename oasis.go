@@ -351,9 +351,28 @@ func Erase[In, Out any](t core.Tool[In, Out]) core.AnyTool {
 	return core.Erase(t)
 }
 
+// StreamingTool re-exports core.StreamingTool for type-safe streaming tools.
+type StreamingTool[In, Out any] = core.StreamingTool[In, Out]
+
+// EraseStreaming converts a StreamingTool[In, Out] into a StreamingAnyTool.
+// Forwards to core.EraseStreaming.
+func EraseStreaming[In, Out any](t core.StreamingTool[In, Out]) core.StreamingAnyTool {
+	return core.EraseStreaming(t)
+}
+
 // --- LLM protocol types ---
 
 type ChatMessage = core.ChatMessage
+
+// Role is the originator of a chat message. See core.Role.
+type Role = core.Role
+
+const (
+	RoleSystem    = core.RoleSystem
+	RoleUser      = core.RoleUser
+	RoleAssistant = core.RoleAssistant
+	RoleTool      = core.RoleTool
+)
 type ChatRequest = core.ChatRequest
 type ChatResponse = core.ChatResponse
 type Attachment = core.Attachment

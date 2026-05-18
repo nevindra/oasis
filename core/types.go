@@ -221,8 +221,22 @@ func (r *ToolRegistry) ExecuteStream(ctx context.Context, name string, args json
 
 // --- LLM protocol types ---
 
+// Role is the originator of a chat message.
+//
+// Defined as a typed string so `msg.Role == "user"` continues to compile (Go
+// allows comparing a defined string type to an untyped string literal). JSON
+// round-trips are preserved without a custom marshaler.
+type Role string
+
+const (
+	RoleSystem    Role = "system"
+	RoleUser      Role = "user"
+	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
+)
+
 type ChatMessage struct {
-	Role        string          `json:"role"` // "system", "user", "assistant", "tool"
+	Role        Role            `json:"role"` // see Role* constants
 	Content     string          `json:"content"`
 	Attachments []Attachment    `json:"attachments,omitempty"`
 	ToolCalls   []ToolCall      `json:"tool_calls,omitempty"`
@@ -362,19 +376,19 @@ type ToolDefinition struct {
 // --- ChatMessage constructors ---
 
 func UserMessage(text string) ChatMessage {
-	return ChatMessage{Role: "user", Content: text}
+	return ChatMessage{Role: RoleUser, Content: text}
 }
 
 func SystemMessage(text string) ChatMessage {
-	return ChatMessage{Role: "system", Content: text}
+	return ChatMessage{Role: RoleSystem, Content: text}
 }
 
 func AssistantMessage(text string) ChatMessage {
-	return ChatMessage{Role: "assistant", Content: text}
+	return ChatMessage{Role: RoleAssistant, Content: text}
 }
 
 func ToolResultMessage(callID, content string) ChatMessage {
-	return ChatMessage{Role: "tool", Content: content, ToolCallID: callID}
+	return ChatMessage{Role: RoleTool, Content: content, ToolCallID: callID}
 }
 
 // --- Error types ---

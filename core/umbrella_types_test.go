@@ -126,12 +126,12 @@ func TestMessageConstructorsEmpty(t *testing.T) {
 	tests := []struct {
 		name string
 		msg  ChatMessage
-		role string
+		role Role
 	}{
-		{"UserMessage", UserMessage(""), "user"},
-		{"SystemMessage", SystemMessage(""), "system"},
-		{"AssistantMessage", AssistantMessage(""), "assistant"},
-		{"ToolResultMessage", ToolResultMessage("", ""), "tool"},
+		{"UserMessage", UserMessage(""), RoleUser},
+		{"SystemMessage", SystemMessage(""), RoleSystem},
+		{"AssistantMessage", AssistantMessage(""), RoleAssistant},
+		{"ToolResultMessage", ToolResultMessage("", ""), RoleTool},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

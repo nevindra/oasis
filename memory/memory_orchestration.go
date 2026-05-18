@@ -227,7 +227,7 @@ func (m *AgentMemory) BuildMessages(ctx context.Context, agentName, systemPrompt
 			m.logger.Error("load history failed", "agent", agentName, "error", historyErr)
 		}
 		for _, msg := range history {
-			messages = append(messages, core.ChatMessage{Role: msg.Role, Content: msg.Content})
+			messages = append(messages, core.ChatMessage{Role: core.Role(msg.Role), Content: msg.Content})
 		}
 
 		// Token-based trimming: drop messages until budget is met.
@@ -295,7 +295,7 @@ func (m *AgentMemory) BuildMessages(ctx context.Context, agentName, systemPrompt
 	}
 
 	// Current user message, with optional multimodal attachments.
-	userMsg := core.ChatMessage{Role: "user", Content: task.Input, Attachments: task.Attachments}
+	userMsg := core.ChatMessage{Role: core.RoleUser, Content: task.Input, Attachments: task.Attachments}
 	messages = append(messages, userMsg)
 	return messages
 }
