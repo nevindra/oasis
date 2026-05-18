@@ -1,7 +1,7 @@
 # `core/` + `agent/` Framework Review
 
 **Date:** 2026-05-18
-**Status:** Findings report — verified against codebase 2026-05-18 (see "Verification corrections" below)
+**Status:** Findings report — verified against codebase 2026-05-18 (see "Verification corrections" below). **Phase 1 (type-safety release) shipped 2026-05-18** — see [Phase 1 shipped status](#phase-1-shipped-status-2026-05-18) at the bottom of this doc and per-finding ✅/⏳ markers throughout.
 **Scope:** All source files (no tests) in `core/` (~1,500 LOC, 11 files) and `agent/` (~2,800 LOC, 8 files).
 
 **Review axes (user-requested):**
@@ -12,13 +12,17 @@
 
 **Filter:** Real issues only — citations with file:line. No nitpicks about formatting or comment style.
 
+**Legend:** ✅ shipped in Phase 1 · ⏳ deferred to a later phase · 🔁 reopened after partial fix
+
 ---
 
 ## 1. Weird or incomplete design
 
 ### 1.1 Bugs (real, not stylistic)
 
-#### 1.1.a `AgentTask.WithThreadID/WithUserID/WithChatID` mutate a shared map
+#### 1.1.a ✅ `AgentTask.WithThreadID/WithUserID/WithChatID` mutate a shared map
+
+**Shipped:** Commit `85defbd`. `AgentTask.Context` map replaced with typed `ThreadID`/`UserID`/`ChatID`/`Extra` fields. With\*ID methods now do trivial field assignment — bug structurally impossible.
 
 `core/agent.go:59-83`
 
@@ -40,7 +44,9 @@ Bug triggers when a caller does `derived := orig.WithThreadID("x")` expecting `o
 
 ---
 
-#### 1.1.b `Provider.ChatStream` contract contradicts the framework's own assumptions
+#### 1.1.b ✅ `Provider.ChatStream` contract contradicts the framework's own assumptions
+
+**Shipped:** Commit `2da6291`. Doc rewritten to say "Implementations MUST close ch before returning." Aligns with reality.
 
 `core/types.go:33-36`
 
@@ -57,7 +63,9 @@ Compare to `StreamingAgent.ExecuteStream` (`core/agent.go:32-34`) which correctl
 
 ---
 
-#### 1.1.c `Attachment.InlineData()` silently swallows base64 errors
+#### 1.1.c ✅ `Attachment.InlineData()` silently swallows base64 errors
+
+**Shipped:** Commit `fadc396`. `Base64` field removed entirely. `InlineData()` is now infallible (returns `a.Data` directly). Decode errors surface at construction via `NewAttachmentFromBase64`.
 
 `core/types.go:246-255`
 
@@ -74,7 +82,9 @@ Bad base64 returns `nil`. Caller can't distinguish "no inline data" from "corrup
 
 ### 1.2 Design smells (not bugs, but real noise)
 
-#### 1.2.a `Store` interface is a kitchen sink
+#### 1.2.a ⏳ `Store` interface is a kitchen sink
+
+**Deferred:** Phase 3 (structural breaking work). Spec to be written.
 
 `core/store.go` — 49 LOC defining 25 methods across 6 unrelated concerns:
 - Threads (5 methods)
@@ -90,7 +100,9 @@ Bad base64 returns `nil`. Caller can't distinguish "no inline data" from "corrup
 
 ---
 
-#### 1.2.b `Attachment` has three byte-source fields with `Base64` half-deprecated
+#### 1.2.b ✅ `Attachment` has three byte-source fields with `Base64` half-deprecated
+
+**Shipped:** Commit `fadc396`. `Base64` field removed. Three constructors (`NewAttachment`, `NewAttachmentFromURL`, `NewAttachmentFromBase64`) replace the ambiguity. Two byte sources only: `URL` for remote, `Data` for inline.
 
 `core/types.go:235-242`
 
@@ -100,7 +112,9 @@ Bad base64 returns `nil`. Caller can't distinguish "no inline data" from "corrup
 
 ---
 
-#### 1.2.c `ChatMessage.Role` is `string` with magic values
+#### 1.2.c ✅ `ChatMessage.Role` is `string` with magic values
+
+**Shipped:** Commit `8f9bd20`. `type Role string` with `RoleSystem`/`RoleUser`/`RoleAssistant`/`RoleTool` constants. JSON wire format preserved. Existing string-literal comparisons still compile (Go permits comparing a defined string type to untyped string literals).
 
 `core/types.go:222` — `"system" | "user" | "assistant" | "tool"`.
 
@@ -110,7 +124,9 @@ The pattern of `type X string` + typed constants already exists in the codebase 
 
 ---
 
-#### 1.2.d `Provider` forces every implementer to write streaming code
+#### 1.2.d ⏳ `Provider` forces every implementer to write streaming code
+
+**Deferred:** candidate for Phase 3 (Provider capability split, alongside 1.2.a). Worth bundling because both follow the same "split into base + optional capability" pattern.
 
 `core/types.go:37-41`
 
@@ -120,7 +136,9 @@ Compare to `Agent`/`StreamingAgent` split where streaming is optional and discov
 
 ---
 
-#### 1.2.e `AgentCore` exports fields under awkward renames to dodge name clashes
+#### 1.2.e ⏳ `AgentCore` exports fields under awkward renames to dodge name clashes
+
+**Deferred:** Phase 5 (AgentCore + network package unification). Architectural decision — needs its own design doc.
 
 `agent/agentcore.go:23-55`
 
@@ -140,7 +158,9 @@ There's also a large set of "exported for network subpackage access" helpers in 
 
 ---
 
-#### 1.2.f Three different mechanisms to shrink history with overlapping semantics
+#### 1.2.f ⏳ Three different mechanisms to shrink history with overlapping semantics
+
+**Deferred:** still open. The option-surface portion was already shipped (`WithHistory`); the runtime-mechanism overlap remains and is candidate for Phase 2.
 
 Already flagged by `2026-05-18-dx-improvements-audit.md` #1.
 
@@ -153,7 +173,9 @@ Semantic overlap remains; the option surface is cleaner than first reported, but
 
 ---
 
-#### 1.2.g `agentConfig.embedding` is set by both `WithUserMemory` and `CrossThreadSearch`
+#### 1.2.g ⏳ `agentConfig.embedding` is set by both `WithUserMemory` and `CrossThreadSearch`
+
+**Deferred:** small surgical fix, slot into Phase 2 alongside 1.2.f (both touch memory/history wiring).
 
 `agent/agent.go:367` (WithUserMemory) and `agent/agent.go:150` (WithHistory → `history.CrossThreadSearch`)
 
@@ -169,7 +191,9 @@ Originally flagged as a speculative export. Verification found `network/network.
 
 ---
 
-#### 1.2.i `Tool[In, Out]` has no streaming counterpart
+#### 1.2.i ✅ `Tool[In, Out]` has no streaming counterpart
+
+**Shipped:** Commit `5f556fb`. `StreamingTool[In, Out]` interface and `EraseStreaming[In, Out]` function added. Re-exported from oasis umbrella in commit `8f9bd20`.
 
 `core/tool.go:38-44`
 
@@ -179,7 +203,9 @@ Originally flagged as a speculative export. Verification found `network/network.
 
 ---
 
-#### 1.2.j `ErrHalt` inconsistent value/pointer usage
+#### 1.2.j ✅ `ErrHalt` inconsistent value/pointer usage
+
+**Shipped:** Commit `2da6291`. Doc rewritten to specify `return &core.ErrHalt{...}` (pointer) and explain that only `*ErrHalt` satisfies the `error` interface because `Error()` has a pointer receiver.
 
 `core/processor.go:36-40`
 
@@ -191,7 +217,9 @@ Pointer receiver, so `errors.As(err, &halt)` matches `*ErrHalt` but `errors.As(e
 
 ---
 
-#### 1.2.k `Sandbox any` typed field
+#### 1.2.k ⏳ `Sandbox any` typed field
+
+**Deferred:** needs a small `core.Sandbox` interface design — slot into Phase 2.
 
 `agent/agent.go:42`
 
@@ -224,7 +252,9 @@ Four scoped option types (`ConversationOption`, `SemanticOption`, `SemanticTrimm
 
 ---
 
-#### 2.2.c Replace magic-string `AgentTask.Context` keys with `TaskMeta` struct
+#### 2.2.c ✅ Replace magic-string `AgentTask.Context` keys with `TaskMeta` struct
+
+**Shipped:** Commit `85defbd`. Chosen approach: flat typed fields on `AgentTask` (not a `TaskMeta` sub-type) plus an `Extra map[string]any` for app-defined keys — matches the codebase's preference for flat structs (e.g. `ChatMessage`). Migration also propagated to `network/network.go` and `workflow/steps.go` (sub-task construction).
 
 `core/agent.go:51-107`
 
@@ -251,13 +281,17 @@ Mixes AgentCore + subagent dispatch helpers + `onceClose` generic + `safeAgentEr
 
 ---
 
-#### 2.2.f Remove `subAgentConfig = SubAgentConfig` alias
+#### 2.2.f ✅ Remove `subAgentConfig = SubAgentConfig` alias
+
+**Shipped:** Commit `5a0992b`. Two-line deletion. No callers remained.
 
 `agent/llm.go:368` — explicitly labeled "for backward compatibility." Internal refactor; delete the alias.
 
 ---
 
-#### 2.2.g Remove dead `recover()` in `onceClose`
+#### 2.2.g 🔁 Remove dead `recover()` in `onceClose`
+
+**Reopened.** Initial removal in commit `5a0992b` immediately caused `TestLLMAgentExecuteStreamNoTools` to panic with `close of closed channel`. The recover was masking a real race — `forwardSubagentStream` has another close path that bypasses `onceClose`'s `sync.Once`. The recover was restored in commit `ba3b912` with a comment explaining why; the underlying double-close ownership bug remains visible (but not fixed) and is a candidate for Phase 2. The right fix is to identify the external close path and route it through the same `onceClose` instance, not to keep the recover.
 
 `agent/agentcore.go:410`
 
@@ -274,7 +308,9 @@ once.Do(func() {
 
 ## 3. DX improvements
 
-### 3.1 Biggest single DX win: typed tool schemas
+### 3.1 ⏳ Biggest single DX win: typed tool schemas
+
+**Deferred:** Phase 1.5 (its own dedicated spec). Design-heavy (reflection rules, supported Go types, escape hatches for raw JSON Schema). The Phase 1 design doc explicitly carved this out because it deserves dedicated brainstorming. **This is the next phase to design.**
 
 `core/types.go:340`
 
@@ -346,7 +382,9 @@ Documented as "blocks until Done() is closed (nanoseconds)" — but "nanoseconds
 
 ---
 
-### 3.5 `AgentCore.Drain()` is required at shutdown but easy to forget
+### 3.5 ✅ `AgentCore.Drain()` is required at shutdown but easy to forget
+
+**Shipped:** Commit `57ce18f`. Renamed to `Close() error` on both `AgentMemory` and `AgentCore`. Matches the stdlib `io.Closer` convention. Returns nil today; the error return reserves the slot for future flush failures (remote stores, network drains) so a second breaking rename isn't needed later. Finalizer / synchronous-persist alternatives were considered and rejected in the Phase 1 design.
 
 `agent/agentcore.go:137`
 
@@ -410,7 +448,9 @@ Critical operation, generic prompt, no localization, no per-agent customization.
 
 ---
 
-### 3.10 No `core.NewAttachment(mime, data)` constructor
+### 3.10 ✅ No `core.NewAttachment(mime, data)` constructor
+
+**Shipped:** Commit `fadc396`. Three constructors: `NewAttachment(mime, data)`, `NewAttachmentFromURL(mime, url)`, `NewAttachmentFromBase64(mime, encoded) (Attachment, error)`. Re-exported from `oasis` umbrella.
 
 Users must remember which of `Data`/`URL`/`Base64` to populate. A constructor enforces correct usage.
 
@@ -519,6 +559,60 @@ Items #5 and #6 are the structural wins but each is a small project.
 - **Audit doc #3** (example app) — out of scope for this review.
 - **Audit doc #4** (split NetworkOption/AgentOption) — already invalidated in the audit doc itself. This review reinforces: the structural fix is "move Network closer to Agent" (1.2.e), not "split the option type."
 - **Audit doc #5** (move `cmd/ix`) — out of scope.
+
+---
+
+## Phase 1 shipped status (2026-05-18)
+
+Phase 1 type-safety release shipped on 2026-05-18 as a single breaking minor bump. Source: [docs/superpowers/specs/2026-05-18-phase-1-type-safety-design.md](../specs/2026-05-18-phase-1-type-safety-design.md). Plan: [docs/superpowers/plans/2026-05-18-phase-1-type-safety.md](2026-05-18-phase-1-type-safety.md).
+
+### Shipped (✅)
+
+| Finding | Commit |
+|---|---|
+| 1.1.a — AgentTask map-sharing bug | `85defbd` |
+| 1.1.b — Provider.ChatStream doc | `2da6291` |
+| 1.1.c — Attachment.InlineData silent decode | `fadc396` |
+| 1.2.b — Attachment Base64 half-deprecated | `fadc396` |
+| 1.2.c — ChatMessage.Role magic strings | `8f9bd20` |
+| 1.2.i — Missing StreamingTool[In, Out] | `5f556fb`, umbrella in `8f9bd20` |
+| 1.2.j — ErrHalt doc | `2da6291` |
+| 2.2.c — Magic-string AgentTask.Context keys | `85defbd` |
+| 2.2.f — subAgentConfig alias removal | `5a0992b` |
+| 3.5 — Drain → Close(error) | `57ce18f` |
+| 3.10 — NewAttachment constructor | `fadc396` |
+
+Also shipped in Phase 1 but not from this review: the `WithProcessors(...any)` → typed processors refactor (audit #2, commit `ba9cbd7` on 2026-05-18).
+
+Repo-wide verification at end of Phase 1: **658 root tests pass with `-race`**, all 9 satellites green, six grep checks for stale references clean, CHANGELOG updated (commit `cab29cd`).
+
+### Reopened (🔁)
+
+- **2.2.g** — Dead `recover()` in `onceClose`. Removal in `5a0992b` panicked `TestLLMAgentExecuteStreamNoTools`; restored in `ba3b912`. The double-close ownership bug is real and visible; fix slated for Phase 2.
+
+### Phase 1 sequencing in retrospect
+
+3 waves of parallel subagents:
+- **Wave 1** (3 parallel): Track A (AgentTask), C-Doc (Provider + ErrHalt), D1 (StreamingTool)
+- **Wave 2** (2 parallel): Track B (Attachment), D-Cleanup (alias + recover)
+- **Wave 3** (sequential — shared `memory_orchestration.go`): C-Role (Role + umbrella), D-Close (Drain → Close)
+- **Wave 4** (single): final verification + CHANGELOG
+
+Parallelism worked because oasis.go re-exports were deferred to Wave 3 and breaking type changes were grouped into atomic per-track tasks. The one misstep (D5 recover removal) was caught by an existing test, not in production.
+
+### Next phase candidates
+
+Items still open after Phase 1, grouped by candidate phase per the Phase 1 design doc:
+
+| Candidate phase | Theme | Findings |
+|---|---|---|
+| **Phase 1.5** | Typed tool schemas | 3.1 (highest-impact remaining single DX item; explicitly carved out of Phase 1 for its own spec) |
+| **Phase 2** | Memory/history coherence + small fixes | 1.2.f, 1.2.g, 1.2.k, 2.2.g, 3.4, 3.6, 3.7, 3.8, 3.9 |
+| **Phase 3** | Capability splits | 1.2.a (Store), 1.2.d (Provider), 4.1.d (Embedding load opt-out), 4.1.e (Remove ToolRegistry) |
+| **Phase 4** | Mechanical file splits + perf | 2.2.d (loop.go), 2.2.e (agentcore.go), 4.1.a–c, 4.1.f, 4.1.g |
+| **Phase 5** | Architectural unification | 1.2.e (AgentCore + network packaging), 3.2 (core/ "don't import" gate), 3.3 (Provider.Capabilities) |
+
+The natural next step is **Phase 1.5 — typed tool schemas** per the design doc's explicit handoff. Brainstorming for that phase begins next.
 
 ---
 
