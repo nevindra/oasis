@@ -112,6 +112,44 @@ type executeCodeArgs struct {
 	Language string `json:"language,omitempty" describe:"Language runtime (default: python)"`
 }
 
+type fileReadArgs struct {
+	Path   string `json:"path" describe:"File path to read"`
+	Offset int    `json:"offset,omitempty" describe:"Line offset to start reading from (0-based, default 0)"`
+	Limit  int    `json:"limit,omitempty" describe:"Maximum number of lines to read (default 2000)"`
+}
+
+type fileWriteArgs struct {
+	Path    string `json:"path" describe:"File path to write"`
+	Content string `json:"content" describe:"File content"`
+}
+
+type fileEditArgs struct {
+	Path      string `json:"path" describe:"Absolute path to the file to edit"`
+	OldString string `json:"old_string" describe:"The exact text to find and replace (must be unique in the file)"`
+	NewString string `json:"new_string" describe:"The replacement text"`
+}
+
+type fileGlobArgs struct {
+	Pattern string   `json:"pattern" describe:"Glob pattern to match (e.g., '**/*.py', 'src/**/*.ts')"`
+	Path    string   `json:"path,omitempty" describe:"Base directory to search in (default: working directory)"`
+	Exclude []string `json:"exclude,omitempty" describe:"Directories to skip (default: ['.git'])"`
+	Limit   int      `json:"limit,omitempty" describe:"Maximum results to return (default: 1000)"`
+}
+
+type fileGrepArgs struct {
+	Pattern string `json:"pattern" describe:"Regex pattern to search for"`
+	Path    string `json:"path,omitempty" describe:"Directory or file to search in (default: working directory)"`
+	Glob    string `json:"glob,omitempty" describe:"File pattern filter (e.g., '*.py' to only search Python files)"`
+	Context int    `json:"context,omitempty" describe:"Number of context lines before and after each match (default: 0)"`
+	Limit   int    `json:"limit,omitempty" describe:"Maximum matches to return (default: 100)"`
+}
+
+type fileTreeArgs struct {
+	Path    string   `json:"path,omitempty" describe:"Root directory (default: working directory)"`
+	Depth   int      `json:"depth,omitempty" describe:"Maximum depth to traverse (default: 3)"`
+	Exclude []string `json:"exclude,omitempty" describe:"Directories to skip (default: ['.git', 'node_modules', '__pycache__', '.venv', 'vendor'])"`
+}
+
 // Tools returns Oasis tool implementations backed by the given Sandbox.
 func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 	cfg := &toolsConfig{}
@@ -212,55 +250,39 @@ func executeCodeTool(sb Sandbox) toolImpl {
 }
 
 func fileReadTool(sb Sandbox) toolImpl {
-	return newTool("file_read", "Read file content with line numbers. Supports offset and limit for reading specific line ranges. Use this instead of running cat, head, tail, or sed via shell. Returns content in cat -n format with line numbers for precise editing.", `{
-		"type": "object",
-		"properties": {
-			"path":   {"type": "string", "description": "File path to read"},
-			"offset": {"type": "integer", "description": "Line offset to start reading from (0-based, default 0)"},
-			"limit":  {"type": "integer", "description": "Maximum number of lines to read (default 2000)"}
-		},
-		"required": ["path"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Path   string `json:"path"`
-			Offset int    `json:"offset"`
-			Limit  int    `json:"limit"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		fc, err := sb.ReadFile(ctx, ReadFileRequest{Path: p.Path, Offset: p.Offset, Limit: p.Limit})
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		return oasis.ToolResult{Content: fc.Content}, nil
-	})
+	return newTool("file_read",
+		"Read file content with line numbers. Supports offset and limit for reading specific line ranges. Use this instead of running cat, head, tail, or sed via shell. Returns content in cat -n format with line numbers for precise editing.",
+		string(core.DeriveSchema[fileReadArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p fileReadArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+			}
+			fc, err := sb.ReadFile(ctx, ReadFileRequest{Path: p.Path, Offset: p.Offset, Limit: p.Limit})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			return oasis.ToolResult{Content: fc.Content}, nil
+		})
 }
 
 func fileWriteTool(sb Sandbox, cfg *toolsConfig) toolImpl {
-	return newTool("file_write", "Write content to a file in the sandbox. Creates parent directories if needed. Use this instead of echo/cat redirection via shell.", `{
-		"type": "object",
-		"properties": {
-			"path":    {"type": "string", "description": "File path to write"},
-			"content": {"type": "string", "description": "File content"}
-		},
-		"required": ["path", "content"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		if err := sb.WriteFile(ctx, WriteFileRequest{Path: p.Path, Content: p.Content}); err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		if err := publishToMount(ctx, cfg, p.Path, []byte(p.Content)); err != nil {
-			return oasis.ToolResult{Error: "wrote locally but publish failed: " + err.Error()}, nil
-		}
-		return oasis.ToolResult{Content: "wrote to " + p.Path}, nil
-	})
+	return newTool("file_write",
+		"Write content to a file in the sandbox. Creates parent directories if needed. Use this instead of echo/cat redirection via shell.",
+		string(core.DeriveSchema[fileWriteArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p fileWriteArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+			}
+			if err := sb.WriteFile(ctx, WriteFileRequest{Path: p.Path, Content: p.Content}); err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			if err := publishToMount(ctx, cfg, p.Path, []byte(p.Content)); err != nil {
+				return oasis.ToolResult{Error: "wrote locally but publish failed: " + err.Error()}, nil
+			}
+			return oasis.ToolResult{Content: "wrote to " + p.Path}, nil
+		})
 }
 
 // publishToMount writes content to whichever mount covers path, if any.
@@ -299,156 +321,115 @@ func publishToMount(ctx context.Context, cfg *toolsConfig, p string, content []b
 }
 
 func fileEditTool(sb Sandbox, cfg *toolsConfig) toolImpl {
-	return newTool("file_edit", "Edit a file by replacing an exact string match with new content. The old string must appear exactly once in the file. More efficient than reading and rewriting the entire file. Use this instead of sed or awk via shell.", `{
-		"type": "object",
-		"properties": {
-			"path":       {"type": "string", "description": "Absolute path to the file to edit"},
-			"old_string": {"type": "string", "description": "The exact text to find and replace (must be unique in the file)"},
-			"new_string": {"type": "string", "description": "The replacement text"}
-		},
-		"required": ["path", "old_string", "new_string"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Path      string `json:"path"`
-			OldString string `json:"old_string"`
-			NewString string `json:"new_string"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		if err := sb.EditFile(ctx, EditFileRequest{Path: p.Path, Old: p.OldString, New: p.NewString}); err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		// After edit, fetch the new content from the sandbox so we publish
-		// the actual on-disk state (handles edge cases like trailing
-		// whitespace and line ending normalization).
-		if cfg != nil && len(cfg.mounts) > 0 {
-			rc, err := sb.DownloadFile(ctx, p.Path)
-			if err == nil {
-				body, _ := io.ReadAll(rc)
-				rc.Close()
-				if err := publishToMount(ctx, cfg, p.Path, body); err != nil {
-					return oasis.ToolResult{Error: "edited locally but publish failed: " + err.Error()}, nil
+	return newTool("file_edit",
+		"Edit a file by replacing an exact string match with new content. The old string must appear exactly once in the file. More efficient than reading and rewriting the entire file. Use this instead of sed or awk via shell.",
+		string(core.DeriveSchema[fileEditArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p fileEditArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+			}
+			if err := sb.EditFile(ctx, EditFileRequest{Path: p.Path, Old: p.OldString, New: p.NewString}); err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			// After edit, fetch the new content from the sandbox so we publish
+			// the actual on-disk state (handles edge cases like trailing
+			// whitespace and line ending normalization).
+			if cfg != nil && len(cfg.mounts) > 0 {
+				rc, err := sb.DownloadFile(ctx, p.Path)
+				if err == nil {
+					body, _ := io.ReadAll(rc)
+					rc.Close()
+					if err := publishToMount(ctx, cfg, p.Path, body); err != nil {
+						return oasis.ToolResult{Error: "edited locally but publish failed: " + err.Error()}, nil
+					}
 				}
 			}
-		}
-		return oasis.ToolResult{Content: "edited " + p.Path}, nil
-	})
+			return oasis.ToolResult{Content: "edited " + p.Path}, nil
+		})
 }
 
 func fileGlobTool(sb Sandbox) toolImpl {
-	return newTool("file_glob", "Find files matching a glob pattern. Supports ** for recursive matching. Use this instead of running find or ls via shell — results are structured and fast.", `{
-		"type": "object",
-		"properties": {
-			"pattern": {"type": "string", "description": "Glob pattern to match (e.g., '**/*.py', 'src/**/*.ts')"},
-			"path":    {"type": "string", "description": "Base directory to search in (default: working directory)"},
-			"exclude": {"type": "array", "items": {"type": "string"}, "description": "Directories to skip (default: [\".git\"])"},
-			"limit":   {"type": "integer", "description": "Maximum results to return (default: 1000)"}
-		},
-		"required": ["pattern"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Pattern string   `json:"pattern"`
-			Path    string   `json:"path"`
-			Exclude []string `json:"exclude"`
-			Limit   int      `json:"limit"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		res, err := sb.GlobFiles(ctx, GlobRequest{Pattern: p.Pattern, Path: p.Path, Exclude: p.Exclude, Limit: p.Limit})
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		if len(res.Files) == 0 {
-			return oasis.ToolResult{Content: "no files matched"}, nil
-		}
-		var result string
-		for i, f := range res.Files {
-			if i > 0 {
-				result += "\n"
+	return newTool("file_glob",
+		"Find files matching a glob pattern. Supports ** for recursive matching. Use this instead of running find or ls via shell — results are structured and fast.",
+		string(core.DeriveSchema[fileGlobArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p fileGlobArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 			}
-			result += f
-		}
-		if res.Truncated {
-			result += "\n... (truncated)"
-		}
-		return oasis.ToolResult{Content: result}, nil
-	})
+			res, err := sb.GlobFiles(ctx, GlobRequest{Pattern: p.Pattern, Path: p.Path, Exclude: p.Exclude, Limit: p.Limit})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			if len(res.Files) == 0 {
+				return oasis.ToolResult{Content: "no files matched"}, nil
+			}
+			var result string
+			for i, f := range res.Files {
+				if i > 0 {
+					result += "\n"
+				}
+				result += f
+			}
+			if res.Truncated {
+				result += "\n... (truncated)"
+			}
+			return oasis.ToolResult{Content: result}, nil
+		})
 }
 
 func fileGrepTool(sb Sandbox) toolImpl {
-	return newTool("file_grep", "Search file contents for a regex pattern. Returns matching lines with file paths, line numbers, and optional context lines. Use this instead of running grep or rg via shell — results are structured and token-efficient.", `{
-		"type": "object",
-		"properties": {
-			"pattern": {"type": "string", "description": "Regex pattern to search for"},
-			"path":    {"type": "string", "description": "Directory or file to search in (default: working directory)"},
-			"glob":    {"type": "string", "description": "File pattern filter (e.g., '*.py' to only search Python files)"},
-			"context": {"type": "integer", "description": "Number of context lines before and after each match (default: 0)"},
-			"limit":   {"type": "integer", "description": "Maximum matches to return (default: 100)"}
-		},
-		"required": ["pattern"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Pattern string `json:"pattern"`
-			Path    string `json:"path"`
-			Glob    string `json:"glob"`
-			Context int    `json:"context"`
-			Limit   int    `json:"limit"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		res, err := sb.GrepFiles(ctx, GrepRequest{Pattern: p.Pattern, Path: p.Path, Glob: p.Glob, Context: p.Context, Limit: p.Limit})
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		if len(res.Matches) == 0 {
-			return oasis.ToolResult{Content: "no matches found"}, nil
-		}
-		var b strings.Builder
-		for i, m := range res.Matches {
-			if i > 0 {
-				b.WriteString("\n")
+	return newTool("file_grep",
+		"Search file contents for a regex pattern. Returns matching lines with file paths, line numbers, and optional context lines. Use this instead of running grep or rg via shell — results are structured and token-efficient.",
+		string(core.DeriveSchema[fileGrepArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p fileGrepArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 			}
-			for _, cl := range m.ContextBefore {
-				fmt.Fprintf(&b, "%s:%d- %s\n", m.Path, m.Line-len(m.ContextBefore)+i, cl)
+			res, err := sb.GrepFiles(ctx, GrepRequest{Pattern: p.Pattern, Path: p.Path, Glob: p.Glob, Context: p.Context, Limit: p.Limit})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			fmt.Fprintf(&b, "%s:%d: %s", m.Path, m.Line, m.Content)
-			for j, cl := range m.ContextAfter {
-				fmt.Fprintf(&b, "\n%s:%d- %s", m.Path, m.Line+j+1, cl)
+			if len(res.Matches) == 0 {
+				return oasis.ToolResult{Content: "no matches found"}, nil
 			}
-		}
-		if res.Truncated {
-			b.WriteString("\n... (truncated)")
-		}
-		return oasis.ToolResult{Content: b.String()}, nil
-	})
+			var b strings.Builder
+			for i, m := range res.Matches {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				for _, cl := range m.ContextBefore {
+					fmt.Fprintf(&b, "%s:%d- %s\n", m.Path, m.Line-len(m.ContextBefore)+i, cl)
+				}
+				fmt.Fprintf(&b, "%s:%d: %s", m.Path, m.Line, m.Content)
+				for j, cl := range m.ContextAfter {
+					fmt.Fprintf(&b, "\n%s:%d- %s", m.Path, m.Line+j+1, cl)
+				}
+			}
+			if res.Truncated {
+				b.WriteString("\n... (truncated)")
+			}
+			return oasis.ToolResult{Content: b.String()}, nil
+		})
 }
 
 func fileTreeTool(sb Sandbox) toolImpl {
-	return newTool("file_tree", "Get a recursive directory listing as an indented tree. Use this to understand project structure instead of running tree, find, or ls -R via shell.", `{
-		"type": "object",
-		"properties": {
-			"path":    {"type": "string", "description": "Root directory (default: working directory)"},
-			"depth":   {"type": "integer", "description": "Maximum depth to traverse (default: 3)"},
-			"exclude": {"type": "array", "items": {"type": "string"}, "description": "Directories to skip (default: [\".git\", \"node_modules\", \"__pycache__\", \".venv\", \"vendor\"])"}
-		}
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Path    string   `json:"path"`
-			Depth   int      `json:"depth"`
-			Exclude []string `json:"exclude"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		res, err := sb.Tree(ctx, TreeRequest{Path: p.Path, Depth: p.Depth, Exclude: p.Exclude})
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		return oasis.ToolResult{Content: fmt.Sprintf("%s\n\n%d files, %d directories", res.Tree, res.Files, res.Dirs)}, nil
-	})
+	return newTool("file_tree",
+		"Get a recursive directory listing as an indented tree. Use this to understand project structure instead of running tree, find, or ls -R via shell.",
+		string(core.DeriveSchema[fileTreeArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p fileTreeArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+			}
+			res, err := sb.Tree(ctx, TreeRequest{Path: p.Path, Depth: p.Depth, Exclude: p.Exclude})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			return oasis.ToolResult{Content: fmt.Sprintf("%s\n\n%d files, %d directories", res.Tree, res.Files, res.Dirs)}, nil
+		})
 }
 
 func httpFetchTool(sb Sandbox) toolImpl {
