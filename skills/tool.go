@@ -20,8 +20,8 @@ func NewSkillTools(provider SkillProvider) []core.AnyTool {
 	}
 	if w, ok := provider.(SkillWriter); ok {
 		tools = append(tools,
-			&skillCreateTool{writer: w},
-			&skillUpdateTool{provider: provider, writer: w},
+			core.Erase[skillCreateIn, string](&skillCreateTool{writer: w}),
+			&skillUpdateTool{provider: provider, writer: w}, // not yet migrated
 		)
 	}
 	return tools
@@ -112,58 +112,44 @@ func (t *skillActivateTool) Execute(ctx context.Context, in skillActivateIn) (st
 
 // --- skill_create ---
 
+type skillCreateIn struct {
+	Name         string   `json:"name" describe:"Short identifier for the skill (e.g. code-reviewer, data-analyst)"`
+	Description  string   `json:"description" describe:"What this skill does, used for discovery matching"`
+	Instructions string   `json:"instructions" describe:"Detailed instructions injected into the agent system prompt when this skill is active"`
+	Tags         []string `json:"tags,omitempty" describe:"Optional categorization labels"`
+	Tools        []string `json:"tools,omitempty" describe:"Optional list of tool names this skill should use (empty = all)"`
+	Model        string   `json:"model,omitempty" describe:"Optional model override"`
+	References   []string `json:"references,omitempty" describe:"Optional skill names this skill builds on"`
+}
+
 type skillCreateTool struct {
 	writer SkillWriter
 }
 
-func (t *skillCreateTool) Name() string { return "skill_create" }
-
-func (t *skillCreateTool) Definition() core.ToolDefinition {
-	return core.ToolDefinition{
+func (t *skillCreateTool) Definition() core.ToolMeta {
+	return core.ToolMeta{
 		Name:        "skill_create",
 		Description: "Create a new skill from experience. A skill is a stored instruction package that can specialize agent behavior for specific tasks.",
-		Parameters: json.RawMessage(`{"type":"object","properties":{
-			"name":{"type":"string","description":"Short identifier for the skill (e.g. code-reviewer, data-analyst)"},
-			"description":{"type":"string","description":"What this skill does, used for discovery matching"},
-			"instructions":{"type":"string","description":"Detailed instructions injected into the agent system prompt when this skill is active"},
-			"tags":{"type":"array","items":{"type":"string"},"description":"Optional categorization labels"},
-			"tools":{"type":"array","items":{"type":"string"},"description":"Optional list of tool names this skill should use (empty = all)"},
-			"model":{"type":"string","description":"Optional model override"},
-			"references":{"type":"array","items":{"type":"string"},"description":"Optional skill names this skill builds on"}
-		},"required":["name","description","instructions"]}`),
 	}
 }
 
-func (t *skillCreateTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
-	var p struct {
-		Name         string   `json:"name"`
-		Description  string   `json:"description"`
-		Instructions string   `json:"instructions"`
-		Tags         []string `json:"tags"`
-		Tools        []string `json:"tools"`
-		Model        string   `json:"model"`
-		References   []string `json:"references"`
+func (t *skillCreateTool) Execute(ctx context.Context, in skillCreateIn) (string, error) {
+	if in.Name == "" || in.Description == "" || in.Instructions == "" {
+		return "", fmt.Errorf("name, description, and instructions are required")
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return core.ToolResult{Error: "invalid args: " + err.Error()}, nil
-	}
-	if p.Name == "" || p.Description == "" || p.Instructions == "" {
-		return core.ToolResult{Error: "name, description, and instructions are required"}, nil
-	}
-
 	sk := Skill{
-		Name:         p.Name,
-		Description:  p.Description,
-		Instructions: p.Instructions,
-		Tags:         p.Tags,
-		Tools:        p.Tools,
-		Model:        p.Model,
-		References:   p.References,
+		Name:         in.Name,
+		Description:  in.Description,
+		Instructions: in.Instructions,
+		Tags:         in.Tags,
+		Tools:        in.Tools,
+		Model:        in.Model,
+		References:   in.References,
 	}
 	if err := t.writer.CreateSkill(ctx, sk); err != nil {
-		return core.ToolResult{Error: err.Error()}, nil
+		return "", err
 	}
-	return core.ToolResult{Content: fmt.Sprintf("created skill %q", sk.Name)}, nil
+	return fmt.Sprintf("created skill %q", sk.Name), nil
 }
 
 // --- skill_update ---
@@ -250,8 +236,8 @@ func (t *skillUpdateTool) ExecuteRaw(ctx context.Context, args json.RawMessage) 
 
 // Compile-time interface checks.
 var (
-	_ core.Tool[skillDiscoverIn, string]  = (*skillDiscoverTool)(nil)
-	_ core.Tool[skillActivateIn, string]  = (*skillActivateTool)(nil)
-	_ core.AnyTool                        = (*skillCreateTool)(nil)
-	_ core.AnyTool                        = (*skillUpdateTool)(nil)
+	_ core.Tool[skillDiscoverIn, string] = (*skillDiscoverTool)(nil)
+	_ core.Tool[skillActivateIn, string] = (*skillActivateTool)(nil)
+	_ core.Tool[skillCreateIn, string]   = (*skillCreateTool)(nil)
+	_ core.AnyTool                       = (*skillUpdateTool)(nil)
 )
