@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"reflect"
+	"time"
 )
 
 // SchemaProvider is the opt-out for the reflection-based schema derivation
@@ -62,6 +63,17 @@ func buildSchema(t reflect.Type, fieldPath string, visited map[reflect.Type]bool
 	// that own the struct field. Top-level *T just means "treat as T".
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
+	}
+
+	// Special-type fast path.
+	switch {
+	case t == reflect.TypeOf(time.Time{}):
+		return map[string]any{"type": "string", "format": "date-time"}
+	case t == reflect.TypeOf(json.RawMessage(nil)):
+		return map[string]any{}
+	case t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8:
+		// []byte (json.RawMessage handled above before falling here).
+		return map[string]any{"type": "string"}
 	}
 
 	switch t.Kind() {

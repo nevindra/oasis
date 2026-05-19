@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // schemaJSON marshals a derived schema into a normalized map for comparison.
@@ -96,5 +97,29 @@ func TestDeriveSchema_StructWithPointerOptional(t *testing.T) {
 	}
 	if hasNote {
 		t.Errorf("pointer field 'note' should NOT be required")
+	}
+}
+
+func TestDeriveSchema_TimeTime(t *testing.T) {
+	got := schemaJSON[time.Time](t)
+	if got["type"] != "string" {
+		t.Errorf("type = %v, want string", got["type"])
+	}
+	if got["format"] != "date-time" {
+		t.Errorf("format = %v, want date-time", got["format"])
+	}
+}
+
+func TestDeriveSchema_ByteSlice(t *testing.T) {
+	got := schemaJSON[[]byte](t)
+	if got["type"] != "string" {
+		t.Errorf("type = %v, want string", got["type"])
+	}
+}
+
+func TestDeriveSchema_RawMessage(t *testing.T) {
+	got := schemaJSON[json.RawMessage](t)
+	if len(got) != 0 {
+		t.Errorf("expected empty schema {}, got %v", got)
 	}
 }
