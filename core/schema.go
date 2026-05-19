@@ -58,6 +58,35 @@ func DeriveSchema[T any]() json.RawMessage {
 // field path for use in panic messages (e.g. "Where[].Op"). visited tracks
 // struct types currently on the recursion stack and panics on revisits.
 func buildSchema(t reflect.Type, fieldPath string, visited map[reflect.Type]bool) map[string]any {
-	// Stub — populated in subsequent tasks.
-	panic("oasis.DeriveSchema: not yet implemented")
+	// Unwrap pointer at this level; pointer-optionality is handled by callers
+	// that own the struct field. Top-level *T just means "treat as T".
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	switch t.Kind() {
+	case reflect.Bool:
+		return map[string]any{"type": "boolean"}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return map[string]any{"type": "integer"}
+	case reflect.Float32, reflect.Float64:
+		return map[string]any{"type": "number"}
+	case reflect.String:
+		return map[string]any{"type": "string"}
+	}
+
+	panic(rejectMessage(fieldPath, t, "scalar"))
+}
+
+// rejectMessage builds a panic string per the spec's error-message contract:
+// includes the field path (or "(root)"), the Go type, and the family that was
+// being attempted.
+func rejectMessage(fieldPath string, t reflect.Type, family string) string {
+	where := fieldPath
+	if where == "" {
+		where = "(root)"
+	}
+	return "oasis.DeriveSchema: field " + where + " has unsupported type " + t.String() +
+		" (family=" + family + ")"
 }
