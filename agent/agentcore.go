@@ -166,7 +166,7 @@ func (c *AgentCore) CacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition
 		defs = append(defs, askUserToolDef)
 	}
 	if c.PlanExecution {
-		defs = append(defs, executePlanToolDef)
+		defs = append(defs, executePlanToolDef())
 	}
 	if c.SpawnEnabled {
 		defs = append(defs, spawnAgentToolDef)

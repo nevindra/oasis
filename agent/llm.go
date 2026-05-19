@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/skills"
 )
 
@@ -123,39 +124,26 @@ var (
 
 // --- execute_plan tool ---
 
-// executePlanToolDef is the tool definition for the built-in execute_plan tool.
-var executePlanToolDef = ToolDefinition{
-	Name:        "execute_plan",
-	Description: "Execute multiple tool calls in a single batch without intermediate reasoning. Use when you need to call tools multiple times with known inputs upfront. All steps run in parallel. Returns structured results per step.",
-	Parameters: json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"steps": {
-				"type": "array",
-				"items": {
-					"type": "object",
-					"properties": {
-						"tool": {"type": "string", "description": "Name of the tool to call"},
-						"args": {"type": "object", "description": "Arguments for the tool"}
-					},
-					"required": ["tool", "args"]
-				},
-				"description": "Array of tool calls to execute in parallel"
-			}
-		},
-		"required": ["steps"]
-	}`),
+// executePlanToolDef returns the tool definition for the built-in
+// execute_plan tool. The schema is derived from planArgs/planStep via
+// reflection — keeps the LLM-facing schema in sync with the Go types.
+func executePlanToolDef() ToolDefinition {
+	return ToolDefinition{
+		Name:        "execute_plan",
+		Description: "Execute multiple tool calls in a single batch without intermediate reasoning. Use when you need to call tools multiple times with known inputs upfront. All steps run in parallel. Returns structured results per step.",
+		Parameters:  core.DeriveSchema[planArgs](),
+	}
 }
 
 // planArgs is the parsed arguments for the execute_plan tool call.
 type planArgs struct {
-	Steps []planStep `json:"steps"`
+	Steps []planStep `json:"steps" describe:"Array of tool calls to execute in parallel"`
 }
 
 // planStep is a single step in an execute_plan call.
 type planStep struct {
-	Tool string          `json:"tool"`
-	Args json.RawMessage `json:"args"`
+	Tool string          `json:"tool" describe:"Name of the tool to call"`
+	Args json.RawMessage `json:"args" describe:"Arguments for the tool"`
 }
 
 // planStepResult is one entry in the execute_plan result array.
