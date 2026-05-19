@@ -222,3 +222,23 @@ func TestDeriveSchema_EmbeddedConflict_Panics(t *testing.T) {
 	}()
 	_ = DeriveSchema[embedConflictOuter]()
 }
+
+type recursiveNode struct {
+	Name string         `json:"name"`
+	Next *recursiveNode `json:"next"`
+}
+
+func TestDeriveSchema_Recursive_Panics(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("expected panic on recursive type")
+			return
+		}
+		msg, _ := r.(string)
+		if msg == "" {
+			t.Errorf("panic value not a string: %T %v", r, r)
+		}
+	}()
+	_ = DeriveSchema[recursiveNode]()
+}

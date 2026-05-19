@@ -130,6 +130,14 @@ func fieldOrRoot(p string) string {
 // {type, properties, required}. Pointer fields and json:omitempty are
 // excluded from required.
 func buildStructSchema(t reflect.Type, fieldPath string, visited map[reflect.Type]bool) map[string]any {
+	if visited[t] {
+		panic("oasis.DeriveSchema: field " + fieldOrRoot(fieldPath) +
+			" recurses through type " + t.String() +
+			" — recursive types are not supported by reflection; use SchemaProvider on the input type for a hand-written schema")
+	}
+	visited[t] = true
+	defer delete(visited, t)
+
 	props := make(map[string]any)
 	var required []string
 
