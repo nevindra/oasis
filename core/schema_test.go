@@ -169,3 +169,56 @@ func TestDeriveSchema_EnumOnNonString_Panics(t *testing.T) {
 	}()
 	_ = DeriveSchema[intEnumStruct]()
 }
+
+type embedBase struct {
+	BaseField string `json:"base_field"`
+}
+
+type embedOuter struct {
+	embedBase
+	OuterField int `json:"outer_field"`
+}
+
+func TestDeriveSchema_AnonymousEmbeddingFlattens(t *testing.T) {
+	got := schemaJSON[embedOuter](t)
+	props, _ := got["properties"].(map[string]any)
+	if _, ok := props["base_field"]; !ok {
+		t.Errorf("embedded field 'base_field' not flattened into outer schema")
+	}
+	if _, ok := props["outer_field"]; !ok {
+		t.Errorf("missing 'outer_field'")
+	}
+	required, _ := got["required"].([]any)
+	if !containsAny(required, "base_field") || !containsAny(required, "outer_field") {
+		t.Errorf("both fields should be required, got %v", required)
+	}
+}
+
+func containsAny(haystack []any, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+type embedConflictA struct {
+	Field string `json:"field"`
+}
+type embedConflictB struct {
+	Field string `json:"field"`
+}
+type embedConflictOuter struct {
+	embedConflictA
+	embedConflictB
+}
+
+func TestDeriveSchema_EmbeddedConflict_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic on duplicate JSON name from embedded structs")
+		}
+	}()
+	_ = DeriveSchema[embedConflictOuter]()
+}

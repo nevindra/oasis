@@ -135,9 +135,43 @@ func buildStructSchema(t reflect.Type, fieldPath string, visited map[reflect.Typ
 
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
+
+		// Anonymous struct field with no json tag override → flatten.
+		// Anonymous field WITH a json:"name" tag promotes the field under
+		// that name (matches encoding/json behavior).
+		// NOTE: Must be checked BEFORE the IsExported guard because embedded
+		// unexported types (e.g. `type embedBase struct`) have unexported field
+		// names but their exported fields are still accessible via promotion,
+		// matching encoding/json behavior.
+		if f.Anonymous && f.Tag.Get("json") == "" {
+			embedded := f.Type
+			if embedded.Kind() == reflect.Ptr {
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() == reflect.Struct {
+				sub := buildStructSchema(embedded, fieldPath, visited)
+				subProps, _ := sub["properties"].(map[string]any)
+				for k, v := range subProps {
+					if _, exists := props[k]; exists {
+						panic("oasis.DeriveSchema: field " + fieldOrRoot(fieldPath) +
+							" has duplicate JSON name " + k +
+							" from embedded struct (encoding/json's same-rule conflict)")
+					}
+					props[k] = v
+				}
+				if subReq, ok := sub["required"].([]any); ok {
+					for _, r := range subReq {
+						required = append(required, r.(string))
+					}
+				}
+				continue
+			}
+		}
+
 		if !f.IsExported() {
 			continue
 		}
+
 		name, omitempty, skip := parseJSONTag(f)
 		if skip {
 			continue
