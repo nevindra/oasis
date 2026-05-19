@@ -2,7 +2,6 @@ package skills
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -21,7 +20,7 @@ func NewSkillTools(provider SkillProvider) []core.AnyTool {
 	if w, ok := provider.(SkillWriter); ok {
 		tools = append(tools,
 			core.Erase[skillCreateIn, string](&skillCreateTool{writer: w}),
-			&skillUpdateTool{provider: provider, writer: w}, // not yet migrated
+			core.Erase[skillUpdateIn, string](&skillUpdateTool{provider: provider, writer: w}),
 		)
 	}
 	return tools
@@ -154,84 +153,69 @@ func (t *skillCreateTool) Execute(ctx context.Context, in skillCreateIn) (string
 
 // --- skill_update ---
 
+type skillUpdateIn struct {
+	Name         string   `json:"name" describe:"Name of the skill to update"`
+	Description  *string  `json:"description,omitempty" describe:"New description"`
+	Instructions *string  `json:"instructions,omitempty" describe:"New instructions"`
+	Tags         []string `json:"tags,omitempty" describe:"New tags (replaces existing)"`
+	Tools        []string `json:"tools,omitempty" describe:"New tool list (replaces existing)"`
+	Model        *string  `json:"model,omitempty" describe:"New model override"`
+	References   []string `json:"references,omitempty" describe:"New skill references (replaces existing)"`
+}
+
 type skillUpdateTool struct {
 	provider SkillProvider
 	writer   SkillWriter
 }
 
-func (t *skillUpdateTool) Name() string { return "skill_update" }
-
-func (t *skillUpdateTool) Definition() core.ToolDefinition {
-	return core.ToolDefinition{
+func (t *skillUpdateTool) Definition() core.ToolMeta {
+	return core.ToolMeta{
 		Name:        "skill_update",
 		Description: "Update an existing skill. Only provided fields are changed; omitted fields keep their current values.",
-		Parameters: json.RawMessage(`{"type":"object","properties":{
-			"name":{"type":"string","description":"Name of the skill to update"},
-			"description":{"type":"string","description":"New description"},
-			"instructions":{"type":"string","description":"New instructions"},
-			"tags":{"type":"array","items":{"type":"string"},"description":"New tags (replaces existing)"},
-			"tools":{"type":"array","items":{"type":"string"},"description":"New tool list (replaces existing)"},
-			"model":{"type":"string","description":"New model override"},
-			"references":{"type":"array","items":{"type":"string"},"description":"New skill references (replaces existing)"}
-		},"required":["name"]}`),
 	}
 }
 
-func (t *skillUpdateTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
-	var p struct {
-		Name         string   `json:"name"`
-		Description  *string  `json:"description"`
-		Instructions *string  `json:"instructions"`
-		Tags         []string `json:"tags"`
-		Tools        []string `json:"tools"`
-		Model        *string  `json:"model"`
-		References   []string `json:"references"`
+func (t *skillUpdateTool) Execute(ctx context.Context, in skillUpdateIn) (string, error) {
+	if in.Name == "" {
+		return "", fmt.Errorf("name is required")
 	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return core.ToolResult{Error: "invalid args: " + err.Error()}, nil
-	}
-	if p.Name == "" {
-		return core.ToolResult{Error: "name is required"}, nil
-	}
-
-	// Load existing skill to merge with.
-	existing, err := t.provider.Activate(ctx, p.Name)
+	existing, err := t.provider.Activate(ctx, in.Name)
 	if err != nil {
-		return core.ToolResult{Error: "cannot update: " + err.Error()}, nil
+		return "", fmt.Errorf("cannot update: %w", err)
 	}
 
 	var changes []string
-	if p.Description != nil {
-		existing.Description = *p.Description
+	if in.Description != nil {
+		existing.Description = *in.Description
 		changes = append(changes, "description")
 	}
-	if p.Instructions != nil {
-		existing.Instructions = *p.Instructions
+	if in.Instructions != nil {
+		existing.Instructions = *in.Instructions
 		changes = append(changes, "instructions")
 	}
-	if p.Tags != nil {
-		existing.Tags = p.Tags
+	if in.Tags != nil {
+		existing.Tags = in.Tags
 		changes = append(changes, "tags")
 	}
-	if p.Tools != nil {
-		existing.Tools = p.Tools
+	if in.Tools != nil {
+		existing.Tools = in.Tools
 		changes = append(changes, "tools")
 	}
-	if p.Model != nil {
-		existing.Model = *p.Model
+	if in.Model != nil {
+		existing.Model = *in.Model
 		changes = append(changes, "model")
 	}
-	if p.References != nil {
-		existing.References = p.References
+	if in.References != nil {
+		existing.References = in.References
 		changes = append(changes, "references")
 	}
 	if len(changes) == 0 {
-		return core.ToolResult{Content: "no changes specified"}, nil
+		return "no changes specified", nil
 	}
-	if err := t.writer.UpdateSkill(ctx, p.Name, existing); err != nil {
-		return core.ToolResult{Error: err.Error()}, nil
+	if err := t.writer.UpdateSkill(ctx, in.Name, existing); err != nil {
+		return "", err
 	}
-	return core.ToolResult{Content: fmt.Sprintf("updated skill %q: %s", existing.Name, strings.Join(changes, ", "))}, nil
+	return fmt.Sprintf("updated skill %q: %s", existing.Name, strings.Join(changes, ", ")), nil
 }
 
 // Compile-time interface checks.
@@ -239,5 +223,5 @@ var (
 	_ core.Tool[skillDiscoverIn, string] = (*skillDiscoverTool)(nil)
 	_ core.Tool[skillActivateIn, string] = (*skillActivateTool)(nil)
 	_ core.Tool[skillCreateIn, string]   = (*skillCreateTool)(nil)
-	_ core.AnyTool                       = (*skillUpdateTool)(nil)
+	_ core.Tool[skillUpdateIn, string]   = (*skillUpdateTool)(nil)
 )
