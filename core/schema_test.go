@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -264,4 +265,47 @@ func TestDeriveSchema_SchemaProviderOverride(t *testing.T) {
 	if _, hasType := got["type"]; hasType {
 		t.Errorf("expected reflector to be bypassed, got 'type' field: %v", got)
 	}
+}
+
+type complexField struct {
+	C complex64 `json:"c"`
+}
+type chanField struct {
+	Ch chan int `json:"ch"`
+}
+type funcField struct {
+	F func() `json:"f"`
+}
+
+func TestDeriveSchema_RejectsComplex(t *testing.T) {
+	defer func() {
+		r, _ := recover().(string)
+		if r == "" || !strings.Contains(r, "complex64") {
+			t.Errorf("panic message must name the offending type, got %q", r)
+		}
+		if !strings.Contains(r, "C") {
+			t.Errorf("panic message must name the field, got %q", r)
+		}
+	}()
+	_ = DeriveSchema[complexField]()
+}
+
+func TestDeriveSchema_RejectsChan(t *testing.T) {
+	defer func() {
+		r, _ := recover().(string)
+		if r == "" || !strings.Contains(r, "chan") {
+			t.Errorf("panic message must mention chan, got %q", r)
+		}
+	}()
+	_ = DeriveSchema[chanField]()
+}
+
+func TestDeriveSchema_RejectsFunc(t *testing.T) {
+	defer func() {
+		r, _ := recover().(string)
+		if r == "" || !strings.Contains(r, "func") {
+			t.Errorf("panic message must mention func, got %q", r)
+		}
+	}()
+	_ = DeriveSchema[funcField]()
 }

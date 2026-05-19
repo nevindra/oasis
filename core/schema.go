@@ -125,7 +125,10 @@ func buildSchema(t reflect.Type, fieldPath string, visited map[reflect.Type]bool
 		panic(rejectMessage(fieldPath, t, "interface-with-methods"))
 	}
 
-	panic(rejectMessage(fieldPath, t, t.Kind().String()))
+	panic("oasis.DeriveSchema: field " + fieldOrRoot(fieldPath) +
+		" has unsupported type " + t.String() + " (kind=" + t.Kind().String() + ")" +
+		". Supported kinds: bool, int*, uint*, float*, string, []T, map[string]T, struct, *T, any, time.Time, json.RawMessage." +
+		" For unsupported shapes (oneOf, conditional required, recursion, provider-specific features), implement SchemaProvider on the input type.")
 }
 
 func fieldOrRoot(p string) string {
@@ -194,11 +197,13 @@ func buildStructSchema(t reflect.Type, fieldPath string, visited map[reflect.Typ
 			continue
 		}
 
+		// childPath uses the Go field name so that panic messages identify the
+		// field unambiguously (e.g. "C" not "c" when json:"c" is set).
 		childPath := fieldPath
 		if childPath == "" {
-			childPath = name
+			childPath = f.Name
 		} else {
-			childPath = childPath + "." + name
+			childPath = childPath + "." + f.Name
 		}
 
 		fieldSchema := buildSchema(f.Type, childPath, visited)
