@@ -42,6 +42,15 @@ type SchemaProvider interface {
 //   - enum:"a,b,c" — comma-separated string enumeration (string fields only)
 func DeriveSchema[T any]() json.RawMessage {
 	var zero T
+
+	// SchemaProvider escape hatch — check both value and pointer receivers.
+	if sp, ok := any(zero).(SchemaProvider); ok {
+		return sp.JSONSchema()
+	}
+	if sp, ok := any(&zero).(SchemaProvider); ok {
+		return sp.JSONSchema()
+	}
+
 	t := reflect.TypeOf(&zero).Elem()
 	visited := make(map[reflect.Type]bool)
 	m := buildSchema(t, "", visited)

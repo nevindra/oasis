@@ -242,3 +242,26 @@ func TestDeriveSchema_Recursive_Panics(t *testing.T) {
 	}()
 	_ = DeriveSchema[recursiveNode]()
 }
+
+type exoticIn struct {
+	Mode string          `json:"mode"`
+	Args json.RawMessage `json:"args"`
+}
+
+func (exoticIn) JSONSchema() json.RawMessage {
+	return json.RawMessage(`{"custom":true}`)
+}
+
+func TestDeriveSchema_SchemaProviderOverride(t *testing.T) {
+	raw := DeriveSchema[exoticIn]()
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got["custom"] != true {
+		t.Errorf("expected schema from JSONSchema(), got %v", got)
+	}
+	if _, hasType := got["type"]; hasType {
+		t.Errorf("expected reflector to be bypassed, got 'type' field: %v", got)
+	}
+}
