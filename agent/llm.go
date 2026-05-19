@@ -266,24 +266,13 @@ func executeAskUser(ctx context.Context, handler InputHandler, agentName string,
 
 // --- spawn_agent tool ---
 
-// spawnAgentToolDef is the tool definition for the built-in spawn_agent tool.
-var spawnAgentToolDef = ToolDefinition{
-	Name:        "spawn_agent",
-	Description: "Spawn a sub-agent to handle a specific task autonomously. The sub-agent has access to the same tools as you. Use when a task is independent and can be delegated. Call spawn_agent multiple times in one response to run sub-agents in parallel.",
-	Parameters: json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"task": {
-				"type": "string",
-				"description": "Clear instruction for what the sub-agent should accomplish"
-			},
-			"name": {
-				"type": "string",
-				"description": "Short label for this sub-agent (for logging). Auto-generated if omitted."
-			}
-		},
-		"required": ["task"]
-	}`),
+// spawnAgentToolDef returns the tool definition for the built-in spawn_agent tool.
+func spawnAgentToolDef() ToolDefinition {
+	return ToolDefinition{
+		Name:        "spawn_agent",
+		Description: "Spawn a sub-agent to handle a specific task autonomously. The sub-agent has access to the same tools as you. Use when a task is independent and can be delegated. Call spawn_agent multiple times in one response to run sub-agents in parallel.",
+		Parameters:  core.DeriveSchema[spawnAgentArgs](),
+	}
 }
 
 // funcTool adapts a single ToolDefinition + executor into AnyTool.
@@ -303,8 +292,8 @@ func (f *funcTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolRe
 
 // spawnAgentArgs is the parsed arguments for the spawn_agent tool call.
 type spawnAgentArgs struct {
-	Task string `json:"task"`
-	Name string `json:"name,omitempty"`
+	Task string `json:"task" describe:"Clear instruction for what the sub-agent should accomplish"`
+	Name string `json:"name,omitempty" describe:"Short label for this sub-agent (for logging). Auto-generated if omitted."`
 }
 
 // spawnAgentName returns a short name for a sub-agent, derived from the

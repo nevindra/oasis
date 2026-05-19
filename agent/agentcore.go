@@ -169,7 +169,7 @@ func (c *AgentCore) CacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition
 		defs = append(defs, executePlanToolDef())
 	}
 	if c.SpawnEnabled {
-		defs = append(defs, spawnAgentToolDef)
+		defs = append(defs, spawnAgentToolDef())
 	}
 	return defs
 }
