@@ -123,3 +123,49 @@ func TestDeriveSchema_RawMessage(t *testing.T) {
 		t.Errorf("expected empty schema {}, got %v", got)
 	}
 }
+
+type describedStruct struct {
+	Limit int `json:"limit" describe:"maximum number of records to return"`
+}
+
+func TestDeriveSchema_DescribeTag(t *testing.T) {
+	got := schemaJSON[describedStruct](t)
+	props, _ := got["properties"].(map[string]any)
+	limit, _ := props["limit"].(map[string]any)
+	if limit["description"] != "maximum number of records to return" {
+		t.Errorf("description = %v", limit["description"])
+	}
+	if limit["type"] != "integer" {
+		t.Errorf("type = %v, want integer", limit["type"])
+	}
+}
+
+type enumStruct struct {
+	Format string `json:"format" enum:"csv,json,jsonl" describe:"data format"`
+}
+
+func TestDeriveSchema_EnumTag(t *testing.T) {
+	got := schemaJSON[enumStruct](t)
+	props, _ := got["properties"].(map[string]any)
+	format, _ := props["format"].(map[string]any)
+	enum, _ := format["enum"].([]any)
+	if len(enum) != 3 || enum[0] != "csv" || enum[1] != "json" || enum[2] != "jsonl" {
+		t.Errorf("enum = %v, want [csv json jsonl]", enum)
+	}
+	if format["description"] != "data format" {
+		t.Errorf("description = %v", format["description"])
+	}
+}
+
+type intEnumStruct struct {
+	N int `json:"n" enum:"1,2,3"`
+}
+
+func TestDeriveSchema_EnumOnNonString_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic on enum tag attached to non-string field")
+		}
+	}()
+	_ = DeriveSchema[intEnumStruct]()
+}

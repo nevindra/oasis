@@ -150,7 +150,25 @@ func buildStructSchema(t reflect.Type, fieldPath string, visited map[reflect.Typ
 			childPath = childPath + "." + name
 		}
 
-		props[name] = buildSchema(f.Type, childPath, visited)
+		fieldSchema := buildSchema(f.Type, childPath, visited)
+
+		// Apply describe tag.
+		if desc := f.Tag.Get("describe"); desc != "" {
+			fieldSchema["description"] = desc
+		}
+
+		// Apply enum tag. String fields only.
+		if enumTag := f.Tag.Get("enum"); enumTag != "" {
+			if f.Type.Kind() != reflect.String {
+				panic("oasis.DeriveSchema: field " + childPath +
+					" has enum tag but type " + f.Type.String() +
+					" is not string (only string fields support enum tags; use SchemaProvider for non-string enums)")
+			}
+			values := splitComma(enumTag)
+			fieldSchema["enum"] = anySlice(values)
+		}
+
+		props[name] = fieldSchema
 
 		if !omitempty && f.Type.Kind() != reflect.Ptr {
 			required = append(required, name)
