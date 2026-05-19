@@ -237,6 +237,49 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 ### Notes
 - Deferred MCP tool schemas + `ToolSearch` follow in next release (Plan α-2).
 
+### Changed (breaking) — Phase 1.5: typed tool schemas
+- `Tool[In, Out]` interface shrunk from three methods to two:
+  - Removed `Name() string`. The tool's name now lives in the `ToolMeta`
+    returned by `Definition()`.
+  - `Definition() ToolDefinition` → `Definition() ToolMeta`. Authors
+    return name + description only; the JSON Schema for `In` is derived
+    from the Go type by reflection inside `Erase`.
+- `StreamingTool[In, Out]` inherits the shrunken `Tool` interface
+  automatically.
+- Schema-shape errors now **panic** at `Erase[In, Out]()` registration time
+  with a descriptive message (field path, offending Go type, supported
+  alternatives). They previously failed silently at LLM-call time.
+
+### Added — Phase 1.5
+- `core.ToolMeta` struct — `Name` + `Description` fields, returned by
+  `Tool.Definition()`.
+- `core.SchemaProvider` interface — implement `JSONSchema()
+  json.RawMessage` on an input type to bypass reflection (recursive
+  shapes, `oneOf`, provider-specific schemas).
+- `core.DeriveSchema[T any]() json.RawMessage` — exported helper that
+  builds a JSON Schema from any Go type by reflection. Used internally
+  by `Erase`/`EraseStreaming`; also callable by built-in tool defs that
+  don't go through `Erase`.
+- Struct-tag vocabulary recognised by the reflector:
+  - `json:"name,omitempty"` (stdlib; honored for naming and optionality)
+  - `describe:"..."` — free-text description shown to the LLM
+  - `enum:"a,b,c"` — comma-separated string enumeration (string fields only)
+- Three umbrella re-exports: `oasis.ToolMeta`, `oasis.SchemaProvider`,
+  `oasis.DeriveSchema`.
+
+### Migration notes (Phase 1.5)
+- Every external `Tool[In, Out]` implementation must:
+  1. Delete the `Name()` method.
+  2. Change `Definition() ToolDefinition` to `Definition() ToolMeta` and
+     return only `{Name, Description}` (no `Parameters` field).
+  3. Add `describe:"..."` and (where applicable) `enum:"..."` tags to the
+     `In` struct fields.
+  4. Delete the hand-written `Parameters: json.RawMessage(...)` block.
+- For schemas reflection cannot express, implement
+  `SchemaProvider.JSONSchema() json.RawMessage` on the input type.
+- See `docs/guides/typed-tool-schemas.md` for a worked side-by-side
+  example.
+
 ## [0.15.0] - 2026-04-16
 
 ### Added
