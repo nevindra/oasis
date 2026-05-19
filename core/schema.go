@@ -74,9 +74,131 @@ func buildSchema(t reflect.Type, fieldPath string, visited map[reflect.Type]bool
 		return map[string]any{"type": "number"}
 	case reflect.String:
 		return map[string]any{"type": "string"}
+	case reflect.Slice:
+		// []byte is special-cased in Task A4.
+		return map[string]any{
+			"type":  "array",
+			"items": buildSchema(t.Elem(), fieldPath+"[]", visited),
+		}
+	case reflect.Array:
+		return map[string]any{
+			"type":  "array",
+			"items": buildSchema(t.Elem(), fieldPath+"[]", visited),
+		}
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			panic("oasis.DeriveSchema: field " + fieldOrRoot(fieldPath) +
+				" map key must be string, got " + t.Key().String())
+		}
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": buildSchema(t.Elem(), fieldPath+"{}", visited),
+		}
+	case reflect.Struct:
+		return buildStructSchema(t, fieldPath, visited)
+	case reflect.Interface:
+		// any / interface{} → {}.
+		if t.NumMethod() == 0 {
+			return map[string]any{}
+		}
+		panic(rejectMessage(fieldPath, t, "interface-with-methods"))
 	}
 
-	panic(rejectMessage(fieldPath, t, "scalar"))
+	panic(rejectMessage(fieldPath, t, t.Kind().String()))
+}
+
+func fieldOrRoot(p string) string {
+	if p == "" {
+		return "(root)"
+	}
+	return p
+}
+
+// buildStructSchema walks a struct, honoring json tags, and produces
+// {type, properties, required}. Pointer fields and json:omitempty are
+// excluded from required.
+func buildStructSchema(t reflect.Type, fieldPath string, visited map[reflect.Type]bool) map[string]any {
+	props := make(map[string]any)
+	var required []string
+
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		name, omitempty, skip := parseJSONTag(f)
+		if skip {
+			continue
+		}
+
+		childPath := fieldPath
+		if childPath == "" {
+			childPath = name
+		} else {
+			childPath = childPath + "." + name
+		}
+
+		props[name] = buildSchema(f.Type, childPath, visited)
+
+		if !omitempty && f.Type.Kind() != reflect.Ptr {
+			required = append(required, name)
+		}
+	}
+
+	out := map[string]any{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		out["required"] = anySlice(required)
+	}
+	return out
+}
+
+func anySlice(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
+}
+
+// parseJSONTag returns the effective field name, whether omitempty is set,
+// and whether the field should be skipped entirely (json:"-").
+func parseJSONTag(f reflect.StructField) (name string, omitempty, skip bool) {
+	tag := f.Tag.Get("json")
+	if tag == "-" {
+		return "", false, true
+	}
+	name = f.Name
+	if tag == "" {
+		return name, false, false
+	}
+	parts := splitComma(tag)
+	if parts[0] != "" {
+		name = parts[0]
+	}
+	for _, p := range parts[1:] {
+		if p == "omitempty" {
+			omitempty = true
+		}
+	}
+	return name, omitempty, false
+}
+
+// splitComma is a tiny helper to avoid pulling strings.Split into the same
+// list of imports just for one call (keeps the dependency surface minimal).
+func splitComma(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
 }
 
 // rejectMessage builds a panic string per the spec's error-message contract:

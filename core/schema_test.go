@@ -40,3 +40,61 @@ func TestDeriveSchema_Scalars(t *testing.T) {
 		})
 	}
 }
+
+func TestDeriveSchema_Slice(t *testing.T) {
+	got := schemaJSON[[]string](t)
+	if got["type"] != "array" {
+		t.Errorf("type = %v, want array", got["type"])
+	}
+	items, _ := got["items"].(map[string]any)
+	if items["type"] != "string" {
+		t.Errorf("items.type = %v, want string", items["type"])
+	}
+}
+
+func TestDeriveSchema_MapStringScalar(t *testing.T) {
+	got := schemaJSON[map[string]int](t)
+	if got["type"] != "object" {
+		t.Errorf("type = %v, want object", got["type"])
+	}
+	ap, _ := got["additionalProperties"].(map[string]any)
+	if ap["type"] != "integer" {
+		t.Errorf("additionalProperties.type = %v, want integer", ap["type"])
+	}
+}
+
+type fooStruct struct {
+	Name  string  `json:"name"`
+	Count int     `json:"count"`
+	Note  *string `json:"note"`
+}
+
+func TestDeriveSchema_StructWithPointerOptional(t *testing.T) {
+	got := schemaJSON[fooStruct](t)
+	if got["type"] != "object" {
+		t.Errorf("type = %v, want object", got["type"])
+	}
+	props, _ := got["properties"].(map[string]any)
+	if _, ok := props["name"]; !ok {
+		t.Errorf("missing properties.name")
+	}
+	if _, ok := props["note"]; !ok {
+		t.Errorf("missing properties.note")
+	}
+	required, _ := got["required"].([]any)
+	hasName, hasNote := false, false
+	for _, r := range required {
+		if r == "name" {
+			hasName = true
+		}
+		if r == "note" {
+			hasNote = true
+		}
+	}
+	if !hasName {
+		t.Errorf("expected 'name' in required")
+	}
+	if hasNote {
+		t.Errorf("pointer field 'note' should NOT be required")
+	}
+}
