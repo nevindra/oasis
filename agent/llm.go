@@ -227,31 +227,19 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 
 // --- ask_user tool ---
 
-// askUserToolDef is the tool definition for the built-in ask_user tool.
-var askUserToolDef = ToolDefinition{
-	Name:        "ask_user",
-	Description: "Ask the user a question when you need clarification, confirmation, or additional information to proceed.",
-	Parameters: json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"question": {
-				"type": "string",
-				"description": "The question to ask the user"
-			},
-			"options": {
-				"type": "array",
-				"items": {"type": "string"},
-				"description": "Optional suggested answers for the user to choose from"
-			}
-		},
-		"required": ["question"]
-	}`),
+// askUserToolDef returns the tool definition for the built-in ask_user tool.
+func askUserToolDef() ToolDefinition {
+	return ToolDefinition{
+		Name:        "ask_user",
+		Description: "Ask the user a question when you need clarification, confirmation, or additional information to proceed.",
+		Parameters:  core.DeriveSchema[askUserArgs](),
+	}
 }
 
 // askUserArgs is the parsed arguments for the ask_user tool call.
 type askUserArgs struct {
-	Question string   `json:"question"`
-	Options  []string `json:"options,omitempty"`
+	Question string   `json:"question" describe:"The question to ask the user"`
+	Options  []string `json:"options,omitempty" describe:"Optional suggested answers for the user to choose from"`
 }
 
 // executeAskUser handles the ask_user special-case tool call.

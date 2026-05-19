@@ -163,7 +163,7 @@ func withSpawnDepth(ctx context.Context, depth int) context.Context {
 // based on the agent's configuration. Exported for network subpackage access.
 func (c *AgentCore) CacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition {
 	if c.Handler != nil {
-		defs = append(defs, askUserToolDef)
+		defs = append(defs, askUserToolDef())
 	}
 	if c.PlanExecution {
 		defs = append(defs, executePlanToolDef())
