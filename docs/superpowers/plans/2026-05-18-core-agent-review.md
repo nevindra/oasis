@@ -12,7 +12,7 @@
 
 **Filter:** Real issues only — citations with file:line. No nitpicks about formatting or comment style.
 
-**Legend:** ✅ shipped in Phase 1 · ⏳ deferred to a later phase · 🔁 reopened after partial fix
+**Legend:** ✅ shipped in Phase 1 · ✅ shipped in Phase 1.5 · ⏳ deferred to a later phase · 🔁 reopened after partial fix
 
 ---
 
@@ -606,7 +606,7 @@ Items still open after Phase 1, grouped by candidate phase per the Phase 1 desig
 
 | Candidate phase | Theme | Findings |
 |---|---|---|
-| **Phase 1.5** | Typed tool schemas | 3.1 (highest-impact remaining single DX item; explicitly carved out of Phase 1 for its own spec) |
+| **Phase 1.5** | Typed tool schemas | ✅ 3.1 (highest-impact remaining single DX item; explicitly carved out of Phase 1 for its own spec) |
 | **Phase 2** | Memory/history coherence + small fixes | 1.2.f, 1.2.g, 1.2.k, 2.2.g, 3.4, 3.6, 3.7, 3.8, 3.9 |
 | **Phase 3** | Capability splits | 1.2.a (Store), 1.2.d (Provider), 4.1.d (Embedding load opt-out), 4.1.e (Remove ToolRegistry) |
 | **Phase 4** | Mechanical file splits + perf | 2.2.d (loop.go), 2.2.e (agentcore.go), 4.1.a–c, 4.1.f, 4.1.g |
