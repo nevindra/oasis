@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	oasis "github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 )
 
 // toolImpl wraps a single tool definition and its execute function.
@@ -99,6 +100,18 @@ func findMountForPath(mounts []MountSpec, p string) (*MountSpec, string) {
 	return best, bestKey
 }
 
+// --- file-scope arg types for tool schema derivation ---
+
+type shellArgs struct {
+	Command string `json:"command" describe:"Shell command to execute"`
+	Cwd     string `json:"cwd,omitempty" describe:"Working directory"`
+}
+
+type executeCodeArgs struct {
+	Code     string `json:"code" describe:"Code to execute"`
+	Language string `json:"language,omitempty" describe:"Language runtime (default: python)"`
+}
+
 // Tools returns Oasis tool implementations backed by the given Sandbox.
 func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 	cfg := &toolsConfig{}
@@ -147,69 +160,55 @@ func hasWriteableMount(mounts []MountSpec) bool {
 }
 
 func shellTool(sb Sandbox) toolImpl {
-	return newTool("shell", "Execute a shell command in the sandbox. Use for system tasks, running builds, git operations, installing packages, and commands that don't have a dedicated tool. Do NOT use shell for: reading files (use file_read), searching file contents (use file_grep), finding files (use file_glob), writing files (use file_write), editing files (use file_edit), listing directory trees (use file_tree), or fetching URLs (use http_fetch).", `{
-		"type": "object",
-		"properties": {
-			"command": {"type": "string", "description": "Shell command to execute"},
-			"cwd":     {"type": "string", "description": "Working directory"}
-		},
-		"required": ["command"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Command string `json:"command"`
-			Cwd     string `json:"cwd"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		res, err := sb.Shell(ctx, ShellRequest{Command: p.Command, Cwd: p.Cwd})
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		output := res.Output
-		if res.ExitCode != 0 {
-			output = fmt.Sprintf("exit code %d\n%s", res.ExitCode, output)
-		}
-		return oasis.ToolResult{Content: output}, nil
-	})
+	return newTool("shell",
+		"Execute a shell command in the sandbox. Use for system tasks, running builds, git operations, installing packages, and commands that don't have a dedicated tool. Do NOT use shell for: reading files (use file_read), searching file contents (use file_grep), finding files (use file_glob), writing files (use file_write), editing files (use file_edit), listing directory trees (use file_tree), or fetching URLs (use http_fetch).",
+		string(core.DeriveSchema[shellArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p shellArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+			}
+			res, err := sb.Shell(ctx, ShellRequest{Command: p.Command, Cwd: p.Cwd})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			output := res.Output
+			if res.ExitCode != 0 {
+				output = fmt.Sprintf("exit code %d\n%s", res.ExitCode, output)
+			}
+			return oasis.ToolResult{Content: output}, nil
+		})
 }
 
 func executeCodeTool(sb Sandbox) toolImpl {
-	return newTool("execute_code", "Execute code in a language runtime", `{
-		"type": "object",
-		"properties": {
-			"code":     {"type": "string", "description": "Code to execute"},
-			"language": {"type": "string", "description": "Language runtime (default: python)"}
-		},
-		"required": ["code"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Code     string `json:"code"`
-			Language string `json:"language"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		if p.Language == "" {
-			p.Language = "python"
-		}
-		res, err := sb.ExecCode(ctx, CodeRequest{Code: p.Code, Language: p.Language})
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		if res.Status != "ok" {
-			errMsg := res.Stderr
-			if errMsg == "" {
-				errMsg = res.Stdout
+	return newTool("execute_code",
+		"Execute code in a language runtime",
+		string(core.DeriveSchema[executeCodeArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p executeCodeArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 			}
-			return oasis.ToolResult{Error: errMsg}, nil
-		}
-		output := res.Stdout
-		if res.Stderr != "" {
-			output += "\nstderr: " + res.Stderr
-		}
-		return oasis.ToolResult{Content: output}, nil
-	})
+			if p.Language == "" {
+				p.Language = "python"
+			}
+			res, err := sb.ExecCode(ctx, CodeRequest{Code: p.Code, Language: p.Language})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			if res.Status != "ok" {
+				errMsg := res.Stderr
+				if errMsg == "" {
+					errMsg = res.Stdout
+				}
+				return oasis.ToolResult{Error: errMsg}, nil
+			}
+			output := res.Stdout
+			if res.Stderr != "" {
+				output += "\nstderr: " + res.Stderr
+			}
+			return oasis.ToolResult{Content: output}, nil
+		})
 }
 
 func fileReadTool(sb Sandbox) toolImpl {
