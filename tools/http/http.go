@@ -2,7 +2,6 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,7 +17,7 @@ import (
 
 // FetchInput is the input payload for the http_fetch tool.
 type FetchInput struct {
-	URL string `json:"url"`
+	URL string `json:"url" describe:"URL to fetch"`
 }
 
 // Tool fetches URLs and extracts readable content. It implements
@@ -36,15 +35,11 @@ func New() *Tool {
 	}
 }
 
-// Name implements oasis.Tool.
-func (t *Tool) Name() string { return "http_fetch" }
-
 // Definition implements oasis.Tool.
-func (t *Tool) Definition() oasis.ToolDefinition {
-	return oasis.ToolDefinition{
+func (t *Tool) Definition() oasis.ToolMeta {
+	return oasis.ToolMeta{
 		Name:        "http_fetch",
 		Description: "Fetch a URL and extract its readable text content. Use for reading web pages, articles, documentation.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","description":"URL to fetch"}},"required":["url"]}`),
 	}
 }
 

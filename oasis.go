@@ -13,6 +13,7 @@ package oasis
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/nevindra/oasis/agent"
@@ -342,6 +343,22 @@ type ToolCall = core.ToolCall
 type ToolDefinition = core.ToolDefinition
 type ToolRegistry = core.ToolRegistry
 type SchemaEnsurer = core.SchemaEnsurer
+
+// ToolMeta is the metadata an author writes for a Tool[In, Out] (name +
+// description). The input schema is derived from In by reflection inside
+// Erase — authors don't write JSON Schema by hand.
+type ToolMeta = core.ToolMeta
+
+// SchemaProvider is the opt-out for the reflection-based schema derivation
+// performed by Erase. Input types may implement SchemaProvider to supply
+// their own JSON Schema when reflection cannot express what the tool needs.
+type SchemaProvider = core.SchemaProvider
+
+// DeriveSchema returns the JSON Schema for T computed by reflection. Use
+// this when you build a ToolDefinition by hand (built-in tools that don't
+// go through Erase). Authors of normal Tool[In, Out] implementations do not
+// need to call this — Erase does it.
+func DeriveSchema[T any]() json.RawMessage { return core.DeriveSchema[T]() }
 
 // NewToolRegistry creates an empty registry. See core.NewToolRegistry.
 func NewToolRegistry() *ToolRegistry { return core.NewToolRegistry() }

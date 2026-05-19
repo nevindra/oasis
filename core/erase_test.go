@@ -39,7 +39,7 @@ func TestAnyTool_InterfaceCompliance(t *testing.T) {
 // --- Tool[In, Out] + Erase ---
 
 type echoInput struct {
-	Message string `json:"message"`
+	Message string `json:"message" describe:"text to echo back"`
 }
 
 type echoOutput struct {
@@ -50,13 +50,10 @@ type echoTool struct {
 	failOnExecute bool
 }
 
-func (e *echoTool) Name() string { return "echo" }
-
-func (e *echoTool) Definition() ToolDefinition {
-	return ToolDefinition{
+func (e *echoTool) Definition() ToolMeta {
+	return ToolMeta{
 		Name:        "echo",
 		Description: "echoes its input",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{"message":{"type":"string"}}}`),
 	}
 }
 
@@ -82,16 +79,30 @@ func TestTool_InterfaceCompliance(t *testing.T) {
 // TestErase_RoundTrip verifies that erasing a Tool[In, Out] preserves Name,
 // Definition, and ExecuteRaw round-trips through JSON.
 func TestErase_RoundTrip(t *testing.T) {
-	any := Erase[echoInput, echoOutput](&echoTool{})
-	if any.Name() != "echo" {
-		t.Errorf("Name() = %q", any.Name())
+	erased := Erase[echoInput, echoOutput](&echoTool{})
+	if erased.Name() != "echo" {
+		t.Errorf("Name() = %q", erased.Name())
 	}
-	if any.Definition().Name != "echo" {
-		t.Errorf("Definition.Name = %q", any.Definition().Name)
+	if erased.Definition().Name != "echo" {
+		t.Errorf("Definition.Name = %q", erased.Definition().Name)
+	}
+
+	// Phase 1.5: Erase derives the input schema; verify it's wired through.
+	def := erased.Definition()
+	if len(def.Parameters) == 0 {
+		t.Errorf("Definition().Parameters is empty — DeriveSchema should populate it")
+	}
+	var schema map[string]interface{}
+	if err := json.Unmarshal(def.Parameters, &schema); err != nil {
+		t.Fatalf("derived schema not valid JSON: %v", err)
+	}
+	props, _ := schema["properties"].(map[string]interface{})
+	if _, ok := props["message"]; !ok {
+		t.Errorf("derived schema missing properties.message")
 	}
 
 	args, _ := json.Marshal(echoInput{Message: "hello"})
-	res, err := any.ExecuteRaw(context.Background(), args)
+	res, err := erased.ExecuteRaw(context.Background(), args)
 	if err != nil {
 		t.Fatalf("ExecuteRaw Go error: %v", err)
 	}
@@ -111,8 +122,8 @@ func TestErase_RoundTrip(t *testing.T) {
 // surfaced via ToolResult.Error rather than as Go errors — preserving the
 // AnyTool contract that Go errors signal infrastructure failures only.
 func TestErase_BadArgsLandInToolResult(t *testing.T) {
-	any := Erase[echoInput, echoOutput](&echoTool{})
-	res, err := any.ExecuteRaw(context.Background(), json.RawMessage(`{not json}`))
+	erased := Erase[echoInput, echoOutput](&echoTool{})
+	res, err := erased.ExecuteRaw(context.Background(), json.RawMessage(`{not json}`))
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
@@ -127,9 +138,9 @@ func TestErase_BadArgsLandInToolResult(t *testing.T) {
 // TestErase_ExecuteErrorLandsInToolResult verifies that an error returned
 // from the typed Execute method lands in ToolResult.Error, not as a Go error.
 func TestErase_ExecuteErrorLandsInToolResult(t *testing.T) {
-	any := Erase[echoInput, echoOutput](&echoTool{failOnExecute: true})
+	erased := Erase[echoInput, echoOutput](&echoTool{failOnExecute: true})
 	args, _ := json.Marshal(echoInput{Message: "boom"})
-	res, err := any.ExecuteRaw(context.Background(), args)
+	res, err := erased.ExecuteRaw(context.Background(), args)
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
@@ -144,8 +155,8 @@ func TestErase_ExecuteErrorLandsInToolResult(t *testing.T) {
 // TestErase_EmptyArgs verifies that an empty args payload is accepted (input
 // gets zero value) instead of erroring.
 func TestErase_EmptyArgs(t *testing.T) {
-	any := Erase[echoInput, echoOutput](&echoTool{})
-	res, err := any.ExecuteRaw(context.Background(), nil)
+	erased := Erase[echoInput, echoOutput](&echoTool{})
+	res, err := erased.ExecuteRaw(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("ExecuteRaw Go error: %v", err)
 	}
@@ -156,7 +167,7 @@ func TestErase_EmptyArgs(t *testing.T) {
 
 // streamingFooIn is a test input.
 type streamingFooIn struct {
-	Query string `json:"query"`
+	Query string `json:"query" describe:"search query"`
 }
 
 // streamingFooOut is a test output.
@@ -167,8 +178,9 @@ type streamingFooOut struct {
 // streamingFooTool implements StreamingTool[streamingFooIn, streamingFooOut].
 type streamingFooTool struct{}
 
-func (streamingFooTool) Name() string               { return "foo" }
-func (streamingFooTool) Definition() ToolDefinition { return ToolDefinition{Name: "foo"} }
+func (streamingFooTool) Definition() ToolMeta {
+	return ToolMeta{Name: "foo", Description: "streaming search"}
+}
 func (streamingFooTool) Execute(ctx context.Context, in streamingFooIn) (streamingFooOut, error) {
 	return streamingFooOut{Hits: len(in.Query)}, nil
 }
@@ -179,15 +191,20 @@ func (streamingFooTool) ExecuteStream(ctx context.Context, in streamingFooIn, ch
 
 func TestEraseStreaming(t *testing.T) {
 	tool := streamingFooTool{}
-	any := EraseStreaming[streamingFooIn, streamingFooOut](tool)
+	erased := EraseStreaming[streamingFooIn, streamingFooOut](tool)
 
 	// AnyTool contract.
-	if any.Name() != "foo" {
-		t.Fatalf("Name() = %q, want foo", any.Name())
+	if erased.Name() != "foo" {
+		t.Fatalf("Name() = %q, want foo", erased.Name())
+	}
+
+	// Phase 1.5: schema is derived.
+	if len(erased.Definition().Parameters) == 0 {
+		t.Errorf("Definition().Parameters is empty — DeriveSchema should populate it")
 	}
 
 	// StreamingAnyTool contract.
-	st, ok := any.(StreamingAnyTool)
+	st, ok := erased.(StreamingAnyTool)
 	if !ok {
 		t.Fatal("EraseStreaming result does not satisfy StreamingAnyTool")
 	}

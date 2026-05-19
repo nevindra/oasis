@@ -39,9 +39,9 @@ func New() []oasis.AnyTool {
 
 // ParseInput is the input payload for data_parse.
 type ParseInput struct {
-	Content string `json:"content"`
-	Format  string `json:"format"`
-	Limit   int    `json:"limit"`
+	Content string `json:"content" describe:"Raw text content to parse (CSV, JSON array, or JSONL)"`
+	Format  string `json:"format,omitempty" enum:"csv,json,jsonl" describe:"Data format. Auto-detected if omitted."`
+	Limit   int    `json:"limit,omitempty" describe:"Max records to return (default 1000)"`
 }
 
 // ParseOutput is the output of data_parse.
@@ -54,31 +54,10 @@ type ParseOutput struct {
 // ParseTool implements data_parse.
 type ParseTool struct{}
 
-func (t *ParseTool) Name() string { return "data_parse" }
-
-func (t *ParseTool) Definition() oasis.ToolDefinition {
-	return oasis.ToolDefinition{
+func (t *ParseTool) Definition() oasis.ToolMeta {
+	return oasis.ToolMeta{
 		Name:        "data_parse",
 		Description: "Parse raw CSV, JSON, or JSONL text into structured records. Returns an array of objects with column names as keys. Use this to convert raw file content into a format that data_filter, data_aggregate, and data_transform can process.",
-		Parameters: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"content": {
-					"type": "string",
-					"description": "Raw text content to parse (CSV, JSON array, or JSONL)"
-				},
-				"format": {
-					"type": "string",
-					"enum": ["csv", "json", "jsonl"],
-					"description": "Data format. Auto-detected if omitted."
-				},
-				"limit": {
-					"type": "integer",
-					"description": "Max records to return (default 1000)"
-				}
-			},
-			"required": ["content"]
-		}`),
 	}
 }
 
@@ -245,15 +224,15 @@ func extractColumns(records []map[string]any) []string {
 
 // Condition is one row of the filter where-clause.
 type Condition struct {
-	Column string `json:"column"`
-	Op     string `json:"op"`
-	Value  any    `json:"value"`
+	Column string `json:"column" describe:"column name to test"`
+	Op     string `json:"op" enum:"==,!=,>,<,>=,<=,contains,in" describe:"comparison operator"`
+	Value  any    `json:"value" describe:"value to compare against (any JSON-marshalable value, or array for 'in')"`
 }
 
 // FilterInput is the input payload for data_filter.
 type FilterInput struct {
-	Records []map[string]any `json:"records"`
-	Where   []Condition      `json:"where"`
+	Records []map[string]any `json:"records" describe:"Array of record objects to filter"`
+	Where   []Condition      `json:"where" describe:"Array of AND-ed conditions"`
 }
 
 // FilterOutput is the output of data_filter.
@@ -265,35 +244,10 @@ type FilterOutput struct {
 // FilterTool implements data_filter.
 type FilterTool struct{}
 
-func (t *FilterTool) Name() string { return "data_filter" }
-
-func (t *FilterTool) Definition() oasis.ToolDefinition {
-	return oasis.ToolDefinition{
+func (t *FilterTool) Definition() oasis.ToolMeta {
+	return oasis.ToolMeta{
 		Name:        "data_filter",
 		Description: "Filter records by conditions. All conditions are AND-ed. Operators: ==, !=, >, <, >=, <=, contains (case-insensitive substring), in (value in array). Numeric strings are auto-coerced for comparisons.",
-		Parameters: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"records": {
-					"type": "array",
-					"description": "Array of record objects to filter"
-				},
-				"where": {
-					"type": "array",
-					"description": "Array of conditions: [{column, op, value}, ...]",
-					"items": {
-						"type": "object",
-						"properties": {
-							"column": {"type": "string"},
-							"op": {"type": "string", "enum": ["==", "!=", ">", "<", ">=", "<=", "contains", "in"]},
-							"value": {}
-						},
-						"required": ["column", "op", "value"]
-					}
-				}
-			},
-			"required": ["records", "where"]
-		}`),
 	}
 }
 
@@ -420,15 +374,15 @@ func toFloat(v any) (float64, bool) {
 
 // Metric describes a single aggregation operation.
 type Metric struct {
-	Column string `json:"column"`
-	Op     string `json:"op"`
+	Column string `json:"column" describe:"column to aggregate"`
+	Op     string `json:"op" enum:"sum,count,avg,min,max" describe:"aggregation operator"`
 }
 
 // AggregateInput is the input payload for data_aggregate.
 type AggregateInput struct {
-	Records []map[string]any `json:"records"`
-	GroupBy []string         `json:"group_by"`
-	Metrics []Metric         `json:"metrics"`
+	Records []map[string]any `json:"records" describe:"Array of record objects to aggregate"`
+	GroupBy []string         `json:"group_by,omitempty" describe:"Columns to group by (optional — omit to aggregate all records)"`
+	Metrics []Metric         `json:"metrics" describe:"Aggregation metrics"`
 }
 
 // AggregateOutput is the output of data_aggregate.
@@ -440,39 +394,10 @@ type AggregateOutput struct {
 // AggregateTool implements data_aggregate.
 type AggregateTool struct{}
 
-func (t *AggregateTool) Name() string { return "data_aggregate" }
-
-func (t *AggregateTool) Definition() oasis.ToolDefinition {
-	return oasis.ToolDefinition{
+func (t *AggregateTool) Definition() oasis.ToolMeta {
+	return oasis.ToolMeta{
 		Name:        "data_aggregate",
 		Description: "Group records and compute aggregate metrics. Operations: sum, count, avg, min, max. Without group_by, aggregates over all records. Non-numeric values are skipped for sum/avg/min/max.",
-		Parameters: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"records": {
-					"type": "array",
-					"description": "Array of record objects to aggregate"
-				},
-				"group_by": {
-					"type": "array",
-					"items": {"type": "string"},
-					"description": "Columns to group by (optional — omit to aggregate all records)"
-				},
-				"metrics": {
-					"type": "array",
-					"description": "Aggregation metrics: [{column, op}, ...]",
-					"items": {
-						"type": "object",
-						"properties": {
-							"column": {"type": "string"},
-							"op": {"type": "string", "enum": ["sum", "count", "avg", "min", "max"]}
-						},
-						"required": ["column", "op"]
-					}
-				}
-			},
-			"required": ["records", "metrics"]
-		}`),
 	}
 }
 
@@ -608,12 +533,12 @@ func computeMetric(records []map[string]any, m Metric) any {
 
 // TransformInput is the input payload for data_transform.
 type TransformInput struct {
-	Records  []map[string]any  `json:"records"`
-	Select   []string          `json:"select"`
-	Rename   map[string]string `json:"rename"`
-	SortBy   string            `json:"sort_by"`
-	SortDesc bool              `json:"sort_desc"`
-	Limit    int               `json:"limit"`
+	Records  []map[string]any  `json:"records" describe:"Array of record objects to transform"`
+	Select   []string          `json:"select,omitempty" describe:"Columns to keep (omit to keep all)"`
+	Rename   map[string]string `json:"rename,omitempty" describe:"Column rename map: {old_name: new_name}"`
+	SortBy   string            `json:"sort_by,omitempty" describe:"Column to sort by (numeric-aware)"`
+	SortDesc bool              `json:"sort_desc,omitempty" describe:"Sort descending (default false)"`
+	Limit    int               `json:"limit,omitempty" describe:"Max records to return"`
 }
 
 // TransformOutput is the output of data_transform.
@@ -625,43 +550,10 @@ type TransformOutput struct {
 // TransformTool implements data_transform.
 type TransformTool struct{}
 
-func (t *TransformTool) Name() string { return "data_transform" }
-
-func (t *TransformTool) Definition() oasis.ToolDefinition {
-	return oasis.ToolDefinition{
+func (t *TransformTool) Definition() oasis.ToolMeta {
+	return oasis.ToolMeta{
 		Name:        "data_transform",
 		Description: "Select, rename, sort, and limit records. Use to pick specific columns, rename them, sort by a column (numeric-aware), and limit output size.",
-		Parameters: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"records": {
-					"type": "array",
-					"description": "Array of record objects to transform"
-				},
-				"select": {
-					"type": "array",
-					"items": {"type": "string"},
-					"description": "Columns to keep (omit to keep all)"
-				},
-				"rename": {
-					"type": "object",
-					"description": "Column rename map: {old_name: new_name, ...}"
-				},
-				"sort_by": {
-					"type": "string",
-					"description": "Column to sort by (numeric-aware)"
-				},
-				"sort_desc": {
-					"type": "boolean",
-					"description": "Sort descending (default false)"
-				},
-				"limit": {
-					"type": "integer",
-					"description": "Max records to return"
-				}
-			},
-			"required": ["records"]
-		}`),
 	}
 }
 

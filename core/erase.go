@@ -5,20 +5,31 @@ import (
 	"encoding/json"
 )
 
-// Erase converts a Tool[In, Out] into an AnyTool. Argument unmarshal errors
-// and result marshal errors land in ToolResult.Error (business-error channel)
-// per the contract that Go errors from ExecuteRaw are reserved for
-// infrastructure failures.
+// Erase converts a Tool[In, Out] into an AnyTool. The JSON Schema for In is
+// derived by reflection at this call (see DeriveSchema). Panics on
+// unsupported types — schema-shape errors surface at registration time
+// rather than at LLM-call time.
 func Erase[In, Out any](t Tool[In, Out]) AnyTool {
-	return &erasedTool[In, Out]{tool: t}
+	meta := t.Definition()
+	schema := DeriveSchema[In]()
+	return &erasedTool[In, Out]{
+		tool: t,
+		def: ToolDefinition{
+			Name:        meta.Name,
+			Description: meta.Description,
+			Parameters:  schema,
+		},
+	}
 }
 
 type erasedTool[In, Out any] struct {
 	tool Tool[In, Out]
+	def  ToolDefinition
 }
 
-func (e *erasedTool[In, Out]) Name() string                 { return e.tool.Name() }
-func (e *erasedTool[In, Out]) Definition() ToolDefinition   { return e.tool.Definition() }
+func (e *erasedTool[In, Out]) Name() string               { return e.def.Name }
+func (e *erasedTool[In, Out]) Definition() ToolDefinition { return e.def }
+
 func (e *erasedTool[In, Out]) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var in In
 	if len(args) > 0 {
@@ -38,19 +49,27 @@ func (e *erasedTool[In, Out]) ExecuteRaw(ctx context.Context, args json.RawMessa
 }
 
 // EraseStreaming converts a StreamingTool[In, Out] into a StreamingAnyTool.
-// Argument unmarshal errors and result marshal errors land in ToolResult.Error
-// (business-error channel) per the contract that Go errors from ExecuteStream
-// are reserved for infrastructure failures.
+// Same schema-derivation behavior as Erase.
 func EraseStreaming[In, Out any](t StreamingTool[In, Out]) StreamingAnyTool {
-	return &erasedStreamingTool[In, Out]{tool: t}
+	meta := t.Definition()
+	schema := DeriveSchema[In]()
+	return &erasedStreamingTool[In, Out]{
+		tool: t,
+		def: ToolDefinition{
+			Name:        meta.Name,
+			Description: meta.Description,
+			Parameters:  schema,
+		},
+	}
 }
 
 type erasedStreamingTool[In, Out any] struct {
 	tool StreamingTool[In, Out]
+	def  ToolDefinition
 }
 
-func (e *erasedStreamingTool[In, Out]) Name() string               { return e.tool.Name() }
-func (e *erasedStreamingTool[In, Out]) Definition() ToolDefinition { return e.tool.Definition() }
+func (e *erasedStreamingTool[In, Out]) Name() string               { return e.def.Name }
+func (e *erasedStreamingTool[In, Out]) Definition() ToolDefinition { return e.def }
 
 func (e *erasedStreamingTool[In, Out]) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	var in In
