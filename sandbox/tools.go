@@ -183,6 +183,28 @@ type browserFindArgs struct {
 	Query string `json:"query" describe:"Natural-language description of the element (e.g., 'submit button', 'email input', 'search box')"`
 }
 
+type httpFetchArgs struct {
+	URL      string `json:"url" describe:"URL to fetch"`
+	Raw      bool   `json:"raw,omitempty" describe:"true = raw HTML, false = readability extraction (default)"`
+	MaxChars int    `json:"max_chars,omitempty" describe:"Truncation limit in characters (default: 8000)"`
+}
+
+type webSearchArgs struct {
+	Query      string `json:"query" describe:"Search query"`
+	MaxResults int    `json:"max_results,omitempty" describe:"Maximum number of results (default: 10)"`
+}
+
+type mcpCallArgs struct {
+	Server string         `json:"server" describe:"MCP server name"`
+	Tool   string         `json:"tool" describe:"Tool name"`
+	Args   map[string]any `json:"args,omitempty" describe:"Tool arguments"`
+}
+
+type deliverFileArgs struct {
+	Path string `json:"path" describe:"Absolute path to the file in the sandbox"`
+	Name string `json:"name,omitempty" describe:"Display name for the download. Defaults to the filename."`
+}
+
 // Tools returns Oasis tool implementations backed by the given Sandbox.
 func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 	cfg := &toolsConfig{}
@@ -466,52 +488,43 @@ func fileTreeTool(sb Sandbox) toolImpl {
 }
 
 func httpFetchTool(sb Sandbox) toolImpl {
-	return newTool("http_fetch", "Fetch a URL and extract readable text content. Returns clean text by default with HTML noise removed. Use raw=true to get unprocessed HTML. NOTE: This is a simple HTTP GET — sites with bot protection (Cloudflare, WAF) will block it. If this tool returns 403/502 errors, use the browser tool to navigate to the URL instead, then use page_text to extract content.", `{
-		"type": "object",
-		"properties": {
-			"url":       {"type": "string", "description": "URL to fetch"},
-			"raw":       {"type": "boolean", "description": "true = raw HTML, false = readability extraction (default)"},
-			"max_chars": {"type": "integer", "description": "Truncation limit in characters (default: 8000)"}
-		},
-		"required": ["url"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			URL      string `json:"url"`
-			Raw      bool   `json:"raw"`
-			MaxChars int    `json:"max_chars"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		res, err := sb.HTTPFetch(ctx, HTTPFetchRequest{URL: p.URL, Raw: p.Raw, MaxChars: p.MaxChars})
-		if err != nil {
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "502") || strings.Contains(errMsg, "503") ||
-				strings.Contains(errMsg, "stream error") || strings.Contains(errMsg, "connection reset") {
-				errMsg += ". This site likely has bot protection. Use browser(action='navigate', url='...') + page_text() instead."
+	return newTool("http_fetch",
+		"Fetch a URL and extract readable text content. Returns clean text by default with HTML noise removed. Use raw=true to get unprocessed HTML. NOTE: This is a simple HTTP GET — sites with bot protection (Cloudflare, WAF) will block it. If this tool returns 403/502 errors, use the browser tool to navigate to the URL instead, then use page_text to extract content.",
+		string(core.DeriveSchema[httpFetchArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p httpFetchArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 			}
-			return oasis.ToolResult{Error: errMsg}, nil
-		}
-		content := res.Content
-		if res.Title != "" {
-			content = "Title: " + res.Title + "\n\n" + content
-		}
-		return oasis.ToolResult{Content: content}, nil
-	})
+			res, err := sb.HTTPFetch(ctx, HTTPFetchRequest{URL: p.URL, Raw: p.Raw, MaxChars: p.MaxChars})
+			if err != nil {
+				errMsg := err.Error()
+				if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "502") || strings.Contains(errMsg, "503") ||
+					strings.Contains(errMsg, "stream error") || strings.Contains(errMsg, "connection reset") {
+					errMsg += ". This site likely has bot protection. Use browser(action='navigate', url='...') + page_text() instead."
+				}
+				return oasis.ToolResult{Error: errMsg}, nil
+			}
+			content := res.Content
+			if res.Title != "" {
+				content = "Title: " + res.Title + "\n\n" + content
+			}
+			return oasis.ToolResult{Content: content}, nil
+		})
 }
 
 func workspaceInfoTool(sb Sandbox) toolImpl {
-	return newTool("workspace_info", "Get information about the sandbox environment: OS, architecture, working directory, installed tools (rg, fd, git, python3, node, etc), and browser availability. Call this once at the start of a session to understand your environment.", `{
-		"type": "object",
-		"properties": {}
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		res, err := sb.WorkspaceInfo(ctx)
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		data, _ := json.Marshal(res)
-		return oasis.ToolResult{Content: string(data)}, nil
-	})
+	return newTool("workspace_info",
+		"Get information about the sandbox environment: OS, architecture, working directory, installed tools (rg, fd, git, python3, node, etc), and browser availability. Call this once at the start of a session to understand your environment.",
+		string(core.DeriveSchema[emptyArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			res, err := sb.WorkspaceInfo(ctx)
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			data, _ := json.Marshal(res)
+			return oasis.ToolResult{Content: string(data)}, nil
+		})
 }
 
 func browserTool(sb Sandbox) toolImpl {
@@ -636,39 +649,32 @@ func exportPDFTool(sb Sandbox) toolImpl {
 }
 
 func webSearchTool(sb Sandbox) toolImpl {
-	return newTool("web_search", "Search the web and return structured results (titles, URLs, snippets). Use this to find relevant pages before fetching or browsing them. Returns up to 10 results by default.", `{
-		"type": "object",
-		"properties": {
-			"query":       {"type": "string", "description": "Search query"},
-			"max_results": {"type": "integer", "description": "Maximum number of results (default: 10)"}
-		},
-		"required": ["query"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Query      string `json:"query"`
-			MaxResults int    `json:"max_results"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		res, err := sb.WebSearch(ctx, WebSearchRequest{Query: p.Query, MaxResults: p.MaxResults})
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		if len(res.Results) == 0 {
-			return oasis.ToolResult{Content: "No results found for: " + p.Query}, nil
-		}
-		var out strings.Builder
-		fmt.Fprintf(&out, "Found %d results for: %s\n\n", len(res.Results), res.Query)
-		for i, r := range res.Results {
-			fmt.Fprintf(&out, "%d. %s\n   %s\n", i+1, r.Title, r.URL)
-			if r.Snippet != "" {
-				fmt.Fprintf(&out, "   %s\n", r.Snippet)
+	return newTool("web_search",
+		"Search the web and return structured results (titles, URLs, snippets). Use this to find relevant pages before fetching or browsing them. Returns up to 10 results by default.",
+		string(core.DeriveSchema[webSearchArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p webSearchArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 			}
-			out.WriteString("\n")
-		}
-		return oasis.ToolResult{Content: out.String()}, nil
-	})
+			res, err := sb.WebSearch(ctx, WebSearchRequest{Query: p.Query, MaxResults: p.MaxResults})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			if len(res.Results) == 0 {
+				return oasis.ToolResult{Content: "No results found for: " + p.Query}, nil
+			}
+			var out strings.Builder
+			fmt.Fprintf(&out, "Found %d results for: %s\n\n", len(res.Results), res.Query)
+			for i, r := range res.Results {
+				fmt.Fprintf(&out, "%d. %s\n   %s\n", i+1, r.Title, r.URL)
+				if r.Snippet != "" {
+					fmt.Fprintf(&out, "   %s\n", r.Snippet)
+				}
+				out.WriteString("\n")
+			}
+			return oasis.ToolResult{Content: out.String()}, nil
+		})
 }
 
 func browserEvalTool(sb Sandbox) toolImpl {
@@ -706,32 +712,23 @@ func browserFindTool(sb Sandbox) toolImpl {
 }
 
 func mcpCallTool(sb Sandbox) toolImpl {
-	return newTool("mcp_call", "Invoke an MCP tool on a server in the sandbox", `{
-		"type": "object",
-		"properties": {
-			"server": {"type": "string", "description": "MCP server name"},
-			"tool":   {"type": "string", "description": "Tool name"},
-			"args":   {"type": "object", "description": "Tool arguments"}
-		},
-		"required": ["server", "tool"]
-	}`, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-		var p struct {
-			Server string         `json:"server"`
-			Tool   string         `json:"tool"`
-			Args   map[string]any `json:"args"`
-		}
-		if err := json.Unmarshal(args, &p); err != nil {
-			return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-		}
-		res, err := sb.MCPCall(ctx, MCPRequest{Server: p.Server, Tool: p.Tool, Args: p.Args})
-		if err != nil {
-			return oasis.ToolResult{Error: err.Error()}, nil
-		}
-		if res.IsError {
-			return oasis.ToolResult{Error: res.Content}, nil
-		}
-		return oasis.ToolResult{Content: res.Content}, nil
-	})
+	return newTool("mcp_call",
+		"Invoke an MCP tool on a server in the sandbox",
+		string(core.DeriveSchema[mcpCallArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p mcpCallArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+			}
+			res, err := sb.MCPCall(ctx, MCPRequest{Server: p.Server, Tool: p.Tool, Args: p.Args})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			if res.IsError {
+				return oasis.ToolResult{Error: res.Content}, nil
+			}
+			return oasis.ToolResult{Content: res.Content}, nil
+		})
 }
 
 // maxDeliverFileBytes caps the file size for deliver_file to prevent
@@ -753,14 +750,7 @@ func deliverFileTool(sb Sandbox, cfg *toolsConfig) *deliverFile {
 			Description: "Deliver a file from the sandbox to the user. The file will appear as a downloadable " +
 				"attachment in the conversation. Use this after creating a file the user needs (reports, charts, " +
 				"converted documents, generated code, etc).",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"path": {"type": "string", "description": "Absolute path to the file in the sandbox"},
-					"name": {"type": "string", "description": "Display name for the download. Defaults to the filename."}
-				},
-				"required": ["path"]
-			}`),
+			Parameters: core.DeriveSchema[deliverFileArgs](),
 		},
 		sandbox: sb,
 		cfg:     cfg,
@@ -779,10 +769,7 @@ func (t *deliverFile) ExecuteStream(ctx context.Context, args json.RawMessage, c
 }
 
 func (t *deliverFile) executeDelivery(ctx context.Context, args json.RawMessage, ch chan<- oasis.StreamEvent) (oasis.ToolResult, error) {
-	var p struct {
-		Path string `json:"path"`
-		Name string `json:"name"`
-	}
+	var p deliverFileArgs
 	if err := json.Unmarshal(args, &p); err != nil {
 		return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
