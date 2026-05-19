@@ -1,5 +1,27 @@
 package core
 
+// This file derives JSON Schema from Go types via reflection for use with
+// LLM tool definitions. The emitted schema uses only the JSON Schema
+// features accepted by all current Oasis providers (Gemini, OpenAI,
+// Anthropic):
+//
+//   - type
+//   - properties / required
+//   - items
+//   - additionalProperties
+//   - enum
+//   - description
+//   - format (only for time.Time → "date-time")
+//
+// Deliberately NOT emitted: oneOf, anyOf, allOf, $ref, not,
+// if/then/else, min/max/pattern/format (general), default, minItems,
+// maxItems. A tool needing any of these uses the SchemaProvider escape
+// hatch and accepts that its schema may not work with every provider.
+//
+// The supported Go-type → JSON Schema mapping is the permanent contract
+// for v1.0+. New tags can be added in non-breaking releases; existing
+// tags will not change semantics.
+
 import (
 	"encoding/json"
 	"reflect"
