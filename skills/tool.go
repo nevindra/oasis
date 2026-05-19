@@ -15,8 +15,8 @@ import (
 // implements SkillWriter.
 func NewSkillTools(provider SkillProvider) []core.AnyTool {
 	tools := []core.AnyTool{
-		&skillDiscoverTool{provider: provider},
-		&skillActivateTool{provider: provider},
+		core.Erase[skillDiscoverIn, string](&skillDiscoverTool{provider: provider}),
+		&skillActivateTool{provider: provider}, // not yet migrated
 	}
 	if w, ok := provider.(SkillWriter); ok {
 		tools = append(tools,
@@ -29,27 +29,28 @@ func NewSkillTools(provider SkillProvider) []core.AnyTool {
 
 // --- skill_discover ---
 
+// skillDiscoverIn has no fields; an empty In schema reflects to
+// {"type":"object","properties":{}}.
+type skillDiscoverIn struct{}
+
 type skillDiscoverTool struct {
 	provider SkillProvider
 }
 
-func (t *skillDiscoverTool) Name() string { return "skill_discover" }
-
-func (t *skillDiscoverTool) Definition() core.ToolDefinition {
-	return core.ToolDefinition{
+func (t *skillDiscoverTool) Definition() core.ToolMeta {
+	return core.ToolMeta{
 		Name:        "skill_discover",
 		Description: "List all available skills with their names, descriptions, and tags. Use this to browse what skills exist before activating one.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
 	}
 }
 
-func (t *skillDiscoverTool) ExecuteRaw(ctx context.Context, _ json.RawMessage) (core.ToolResult, error) {
+func (t *skillDiscoverTool) Execute(ctx context.Context, _ skillDiscoverIn) (string, error) {
 	summaries, err := t.provider.Discover(ctx)
 	if err != nil {
-		return core.ToolResult{Error: "discover failed: " + err.Error()}, nil
+		return "", fmt.Errorf("discover failed: %w", err)
 	}
 	if len(summaries) == 0 {
-		return core.ToolResult{Content: "no skills available"}, nil
+		return "no skills available", nil
 	}
 
 	var out strings.Builder
@@ -61,7 +62,7 @@ func (t *skillDiscoverTool) ExecuteRaw(ctx context.Context, _ json.RawMessage) (
 		}
 		fmt.Fprintln(&out)
 	}
-	return core.ToolResult{Content: out.String()}, nil
+	return out.String(), nil
 }
 
 // --- skill_activate ---
@@ -257,7 +258,8 @@ func (t *skillUpdateTool) ExecuteRaw(ctx context.Context, args json.RawMessage) 
 
 // Compile-time interface checks.
 var (
-	_ core.AnyTool = (*skillDiscoverTool)(nil)
+	_ core.Tool[skillDiscoverIn, string] = (*skillDiscoverTool)(nil)
+	// remaining AnyTool checks stay until their migration tasks
 	_ core.AnyTool = (*skillActivateTool)(nil)
 	_ core.AnyTool = (*skillCreateTool)(nil)
 	_ core.AnyTool = (*skillUpdateTool)(nil)
