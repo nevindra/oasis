@@ -102,6 +102,20 @@ Messages below the minimum score are silently dropped.
 
 Recalled messages are labeled as user-generated context with explicit trust framing to reduce prompt injection risk. When a `chat_id` is present in the task context, recall is scoped to threads belonging to the same chat, preventing cross-user contamination in multi-tenant deployments.
 
+## History Shrinking Strategies
+
+Oasis offers three independent mechanisms for keeping conversation history under control. They cascade — each runs when its own threshold is exceeded, in increasing order of cost:
+
+| Stage | Mechanism | Trigger | Effect |
+|---|---|---|---|
+| 1 | Semantic trimming (`WithSemanticTrimming`) | `MaxTokens` exceeded | Drops semantically distant messages first (cosine similarity to current query) |
+| 2 | Tool-result compression (`WithCompressThreshold` + `compressModel`) | Per-turn rune count > threshold | Summarizes old tool-result messages via the configured Compactor with `ScopeToolResultsOnly` |
+| 3 | Full-thread compaction (`WithCompactor` + `compactThreshold`) | Thread-level rune count > threshold | Summarizes the whole conversation via the configured Compactor with `ScopeFull` |
+
+You can enable any combination. They are layered, not alternatives — Stage 1 culls before Stage 2 summarizes; Stage 3 is the heaviest fallback.
+
+Internally, Stages 2 and 3 both dispatch to the `Compactor` interface (`core.Compactor`). The default `inlineCompactor` handles both `ScopeFull` and `ScopeToolResultsOnly`. Custom Compactors can implement domain-specific summarization, localization, or per-agent customization by switching on `req.Scope`.
+
 ### Auto-Title Generation
 
 When enabled, the agent generates a thread title from the first conversation turn using the agent's own LLM:
