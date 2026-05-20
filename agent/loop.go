@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/nevindra/oasis/core"
@@ -29,9 +28,9 @@ type LoopConfig struct {
 	tracer              Tracer           // nil = no tracing
 	logger              *slog.Logger     // never nil (nopLogger fallback)
 	maxAttachmentBytes  int64            // attachment size budget (0 = default 50MB)
-	suspendCount        *atomic.Int64    // nil = no budget tracking
-	suspendBytes        *atomic.Int64
-	suspendMu           *sync.Mutex     // guards check-then-add on suspendCount/suspendBytes
+	suspendCount        *int64           // nil = no budget tracking; guarded by suspendMu
+	suspendBytes        *int64           // guarded by suspendMu
+	suspendMu           *sync.Mutex      // guards suspendCount/suspendBytes (Phase 4 finding 4.1.g)
 	maxSuspendSnapshots int
 	maxSuspendBytes     int64
 	compressModel       ModelFunc

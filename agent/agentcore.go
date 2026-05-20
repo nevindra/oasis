@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/nevindra/oasis/core"
@@ -41,9 +40,9 @@ type AgentCore struct {
 	mem              memory.AgentMemory
 	CachedToolDefs   []ToolDefinition // computed once at construction for the non-dynamic path; exported for network subpackage
 	maxAttachmentBytes  int64
-	suspendCount        atomic.Int64
-	suspendBytes        atomic.Int64
-	suspendMu           sync.Mutex // guards check-then-add on suspendCount/suspendBytes
+	suspendCount        int64      // guarded by suspendMu
+	suspendBytes        int64      // guarded by suspendMu
+	suspendMu           sync.Mutex // guards suspendCount/suspendBytes (Phase 4 finding 4.1.g)
 	maxSuspendSnapshots int
 	maxSuspendBytes     int64
 	compressModel       ModelFunc

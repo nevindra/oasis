@@ -251,17 +251,18 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 			maxBytes = defaultMaxSuspendBytes
 		}
 		cfg.suspendMu.Lock()
-		if cfg.suspendCount.Load() >= int64(maxSnap) ||
-			cfg.suspendBytes.Load()+snapSize > maxBytes {
+		count := *cfg.suspendCount
+		bytes := *cfg.suspendBytes
+		if count >= int64(maxSnap) || bytes+snapSize > maxBytes {
 			cfg.suspendMu.Unlock()
 			cfg.logger.Warn("suspend budget exceeded, skipping suspension",
 				"agent", cfg.name,
-				"count", cfg.suspendCount.Load(),
-				"bytes", cfg.suspendBytes.Load())
+				"count", count,
+				"bytes", bytes)
 			return nil // caller propagates the original processor error
 		}
-		cfg.suspendCount.Add(1)
-		cfg.suspendBytes.Add(snapSize)
+		*cfg.suspendCount = count + 1
+		*cfg.suspendBytes = bytes + snapSize
 		cfg.suspendMu.Unlock()
 	}
 
@@ -325,8 +326,10 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 	}
 	if cfg.suspendCount != nil {
 		suspended.onRelease = func(size int64) {
-			cfg.suspendCount.Add(-1)
-			cfg.suspendBytes.Add(-size)
+			cfg.suspendMu.Lock()
+			*cfg.suspendCount--
+			*cfg.suspendBytes -= size
+			cfg.suspendMu.Unlock()
 		}
 	}
 	// Apply default TTL to prevent memory leaks from abandoned suspensions.

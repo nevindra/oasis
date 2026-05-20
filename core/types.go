@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -420,8 +421,8 @@ func ParseRetryAfter(value string) time.Duration {
 		return 0
 	}
 	// Try seconds first (most common for rate limiting).
-	var secs int
-	if _, err := fmt.Sscanf(value, "%d", &secs); err == nil && secs > 0 {
+	// strconv.Atoi is ~100× faster than fmt.Sscanf("%d", ...) — finding 4.1.f.
+	if secs, err := strconv.Atoi(value); err == nil && secs > 0 {
 		return time.Duration(secs) * time.Second
 	}
 	// Try HTTP-date format.
