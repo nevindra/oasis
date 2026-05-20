@@ -1278,6 +1278,36 @@ func TestWithActiveSkills(t *testing.T) {
 	}
 }
 
+// --- Configurable limit knob tests ---
+
+func TestWithMaxParallelDispatchSetsConfig(t *testing.T) {
+	c := BuildConfig([]AgentOption{WithMaxParallelDispatch(3)})
+	if c.maxParallelDispatch != 3 {
+		t.Errorf("expected 3, got %d", c.maxParallelDispatch)
+	}
+}
+
+func TestWithMaxPlanStepsSetsConfig(t *testing.T) {
+	c := BuildConfig([]AgentOption{WithMaxPlanSteps(7)})
+	if c.maxPlanSteps != 7 {
+		t.Errorf("expected 7, got %d", c.maxPlanSteps)
+	}
+}
+
+func TestWithMaxToolResultLenSetsConfig(t *testing.T) {
+	c := BuildConfig([]AgentOption{WithMaxToolResultLen(50_000)})
+	if c.maxToolResultLen != 50_000 {
+		t.Errorf("expected 50000, got %d", c.maxToolResultLen)
+	}
+}
+
+func TestDefaultMaxParallelDispatch(t *testing.T) {
+	c := BuildConfig(nil)
+	if c.maxParallelDispatch != 10 {
+		t.Errorf("expected default 10, got %d", c.maxParallelDispatch)
+	}
+}
+
 // --- Embedding provider conflict tests ---
 
 type fakeEmbeddingProvider struct{ name string }

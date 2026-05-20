@@ -109,7 +109,7 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 	var dispatch agent.DispatchFunc
 	dispatch = func(ctx context.Context, tc core.ToolCall) agent.DispatchResult {
 		// Built-in tools: ask_user, execute_plan.
-		if r, ok := agent.DispatchBuiltins(ctx, tc, dispatch, n.Handler, n.Name(), n.PlanExecution); ok {
+		if r, ok := agent.DispatchBuiltins(ctx, tc, dispatch, n.Handler, n.Name(), n.PlanExecution, n.MaxPlanSteps, n.MaxParallelDispatch); ok {
 			return r
 		}
 

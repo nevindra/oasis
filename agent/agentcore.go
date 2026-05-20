@@ -53,6 +53,9 @@ type AgentCore struct {
 	SpawnDepthLimit  int               // exported for network subpackage access (avoid clash with MaxSpawnDepth option func)
 	DeniedSpawnTools []string          // exported for network subpackage access (avoid clash with DenySpawnTools option func)
 	ActiveSkillInstructions string // built from WithActiveSkills during initCore; exported for network subpackage
+	MaxParallelDispatch int // exported for network subpackage access; set by WithMaxParallelDispatch
+	MaxPlanSteps        int // exported for network subpackage access; set by WithMaxPlanSteps
+	MaxToolResultLen    int // exported for network subpackage access; set by WithMaxToolResultLen
 }
 
 // initCore initializes shared fields on an AgentCore from the given config.
@@ -119,6 +122,9 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 	c.SpawnEnabled = cfg.spawnEnabled
 	c.SpawnDepthLimit = cfg.maxSpawnDepth
 	c.DeniedSpawnTools = cfg.denySpawnTools
+	c.MaxParallelDispatch = cfg.maxParallelDispatch
+	c.MaxPlanSteps = cfg.maxPlanSteps
+	c.MaxToolResultLen = cfg.maxToolResultLen
 
 	// Build active skill instructions block.
 	if len(cfg.activeSkills) > 0 {
@@ -241,6 +247,9 @@ func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools
 		compressModel:       c.compressModel,
 		compressThreshold:   c.compressThreshold,
 		generationParams:    c.GenParams,
+		maxParallelDispatch: c.MaxParallelDispatch,
+		maxToolResultLen:    c.MaxToolResultLen,
+		maxPlanSteps:        c.MaxPlanSteps,
 	}
 }
 

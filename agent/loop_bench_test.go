@@ -73,7 +73,7 @@ func BenchmarkDispatchParallel_Single(b *testing.B) {
 	calls := []ToolCall{{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}}
 	b.ResetTimer()
 	for range b.N {
-		dispatchParallel(context.Background(), calls, dispatch)
+		dispatchParallel(context.Background(), calls, dispatch, 10)
 	}
 }
 
@@ -87,6 +87,6 @@ func BenchmarkDispatchParallel_Five(b *testing.B) {
 	}
 	b.ResetTimer()
 	for range b.N {
-		dispatchParallel(context.Background(), calls, dispatch)
+		dispatchParallel(context.Background(), calls, dispatch, 10)
 	}
 }

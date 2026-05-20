@@ -62,6 +62,11 @@ type agentConfig struct {
 	denySpawnTools []string // set by DenySpawnTools
 	activeSkills   []Skill        // set by WithActiveSkills
 	SkillProvider  SkillProvider   // exported for network subpackage; set by WithSkills
+
+	// Configurable runtime limits (defaults applied in BuildConfig).
+	maxParallelDispatch int // set by WithMaxParallelDispatch; default 10
+	maxPlanSteps        int // set by WithMaxPlanSteps; default 50
+	maxToolResultLen    int // set by WithMaxToolResultLen; default 100_000
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -366,6 +371,37 @@ func WithUserMemory(m MemoryStore, e EmbeddingProvider) AgentOption {
 	}
 }
 
+// WithMaxParallelDispatch caps the number of concurrent tool call goroutines.
+// Default is 10. Set higher when tools are I/O-bound and can tolerate fan-out.
+func WithMaxParallelDispatch(n int) AgentOption {
+	return func(c *agentConfig) {
+		if n > 0 {
+			c.maxParallelDispatch = n
+		}
+	}
+}
+
+// WithMaxPlanSteps caps the number of steps in a single execute_plan call.
+// Default is 50. The LLM gets an error if it submits a plan with more steps.
+func WithMaxPlanSteps(n int) AgentOption {
+	return func(c *agentConfig) {
+		if n > 0 {
+			c.maxPlanSteps = n
+		}
+	}
+}
+
+// WithMaxToolResultLen sets the inline budget for tool results in the
+// conversation history (in runes). Results larger than this are truncated with
+// a paging marker. Default is 100_000 runes (~25K tokens).
+func WithMaxToolResultLen(n int) AgentOption {
+	return func(c *agentConfig) {
+		if n > 0 {
+			c.maxToolResultLen = n
+		}
+	}
+}
+
 // nopLogger is a logger that discards all output. Used when WithLogger is not set.
 var nopLogger = slog.New(discardHandler{})
 
@@ -387,6 +423,16 @@ func BuildConfig(opts []AgentOption) agentConfig {
 	// Warn about misconfigurations that can't be caught at compile time.
 	if c.memory != nil && c.store == nil {
 		c.logger.Warn("WithUserMemory without history.Store — fact extraction (write) will be silently skipped")
+	}
+	// Apply defaults for configurable runtime limits.
+	if c.maxParallelDispatch == 0 {
+		c.maxParallelDispatch = 10
+	}
+	if c.maxPlanSteps == 0 {
+		c.maxPlanSteps = 50
+	}
+	if c.maxToolResultLen == 0 {
+		c.maxToolResultLen = 100_000
 	}
 	// Conflict: WithUserMemory and history.CrossThreadSearch configured with
 	// different embedding provider instances. Both write to c.embedding; the

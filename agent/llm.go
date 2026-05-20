@@ -95,7 +95,7 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
-		if r, ok := DispatchBuiltins(ctx, tc, dispatch, a.Handler, a.name, a.PlanExecution); ok {
+		if r, ok := DispatchBuiltins(ctx, tc, dispatch, a.Handler, a.name, a.PlanExecution, a.MaxPlanSteps, a.MaxParallelDispatch); ok {
 			return r
 		}
 		if tc.Name == "spawn_agent" && a.SpawnEnabled {
@@ -162,7 +162,13 @@ const maxPlanSteps = 50
 // executePlan handles the execute_plan tool call by parsing steps,
 // executing them in parallel via the given dispatch function, and
 // returning aggregated results as JSON. Shared by LLMAgent and Network.
-func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFunc) DispatchResult {
+func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFunc, planStepsLimit, parallelLimit int) DispatchResult {
+	if planStepsLimit == 0 {
+		planStepsLimit = maxPlanSteps
+	}
+	if parallelLimit == 0 {
+		parallelLimit = maxParallelDispatch
+	}
 	var params planArgs
 	if err := json.Unmarshal(args, &params); err != nil {
 		return DispatchResult{Content: "error: invalid execute_plan args: " + err.Error(), IsError: true}
@@ -170,8 +176,8 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 	if len(params.Steps) == 0 {
 		return DispatchResult{Content: "error: execute_plan requires at least one step", IsError: true}
 	}
-	if len(params.Steps) > maxPlanSteps {
-		return DispatchResult{Content: fmt.Sprintf("error: execute_plan limited to %d steps, got %d", maxPlanSteps, len(params.Steps)), IsError: true}
+	if len(params.Steps) > planStepsLimit {
+		return DispatchResult{Content: fmt.Sprintf("error: execute_plan limited to %d steps, got %d", planStepsLimit, len(params.Steps)), IsError: true}
 	}
 
 	// Build tool calls, preventing recursion.
@@ -198,7 +204,7 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 	}
 
 	// Execute all steps in parallel.
-	results := dispatchParallel(ctx, calls, safeDispatch)
+	results := dispatchParallel(ctx, calls, safeDispatch, parallelLimit)
 
 	// Aggregate results.
 	var totalUsage Usage

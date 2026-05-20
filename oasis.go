@@ -72,6 +72,9 @@ var WithPreProcessors = agent.WithPreProcessors
 var WithPostProcessors = agent.WithPostProcessors
 var WithPostToolProcessors = agent.WithPostToolProcessors
 var WithInputHandler = agent.WithInputHandler
+var WithMaxParallelDispatch = agent.WithMaxParallelDispatch
+var WithMaxPlanSteps = agent.WithMaxPlanSteps
+var WithMaxToolResultLen = agent.WithMaxToolResultLen
 
 // --- History ---
 

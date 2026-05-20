@@ -168,7 +168,7 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[
 		{"tool":"greet","args":{}},
 		{"tool":"calc","args":{}}
-	]}`), dispatch)
+	]}`), dispatch, 50, 10)
 	capturedResult = dr.Content
 
 	var steps []planStepResult
@@ -202,7 +202,7 @@ func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 		{"tool":"greet","args":{}},
 		{"tool":"fail","args":{}},
 		{"tool":"calc","args":{}}
-	]}`), dispatch)
+	]}`), dispatch, 50, 10)
 
 	var steps []planStepResult
 	if err := json.Unmarshal([]byte(dr.Content), &steps); err != nil {
@@ -229,7 +229,7 @@ func TestLLMAgentPlanExecutionRecursionPrevented(t *testing.T) {
 
 	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[
 		{"tool":"execute_plan","args":{"steps":[]}}
-	]}`), dispatch)
+	]}`), dispatch, 50, 10)
 
 	if dr.Content != "error: execute_plan steps cannot call execute_plan" {
 		t.Errorf("expected recursion error, got %q", dr.Content)
@@ -241,7 +241,7 @@ func TestLLMAgentPlanExecutionEmptySteps(t *testing.T) {
 		return DispatchResult{Content: "should not reach"}
 	}
 
-	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[]}`), dispatch)
+	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[]}`), dispatch, 50, 10)
 	if dr.Content != "error: execute_plan requires at least one step" {
 		t.Errorf("expected empty steps error, got %q", dr.Content)
 	}
@@ -252,7 +252,7 @@ func TestLLMAgentPlanExecutionInvalidArgs(t *testing.T) {
 		return DispatchResult{Content: "should not reach"}
 	}
 
-	dr := executePlan(context.Background(), json.RawMessage(`not json`), dispatch)
+	dr := executePlan(context.Background(), json.RawMessage(`not json`), dispatch, 50, 10)
 	if len(dr.Content) < 7 || dr.Content[:7] != "error: " {
 		t.Errorf("expected error for invalid args, got %q", dr.Content)
 	}
@@ -302,7 +302,7 @@ func TestPlanExecutionMaxStepsCap(t *testing.T) {
 		return DispatchResult{Content: "should not reach"}
 	}
 
-	dr := executePlan(context.Background(), stepsJSON, dispatch)
+	dr := executePlan(context.Background(), stepsJSON, dispatch, 50, 10)
 	if !strings.Contains(dr.Content, fmt.Sprintf("limited to %d", maxPlanSteps)) {
 		t.Errorf("error = %q, want mention of step limit", dr.Content)
 	}
@@ -319,7 +319,7 @@ func TestPlanExecutionBlocksAskUser(t *testing.T) {
 
 	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[
 		{"tool":"ask_user","args":{"question":"really?"}}
-	]}`), dispatch)
+	]}`), dispatch, 50, 10)
 
 	var steps []planStepResult
 	if err := json.Unmarshal([]byte(dr.Content), &steps); err != nil {
@@ -360,7 +360,7 @@ func TestDispatchParallelContextCancellation(t *testing.T) {
 		{ID: "2", Name: "slow", Args: json.RawMessage(`{}`)},
 	}
 
-	results := dispatchParallel(ctx, calls, dispatch)
+	results := dispatchParallel(ctx, calls, dispatch, 10)
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -384,7 +384,7 @@ func TestDispatchParallelSingleCallNoGoroutine(t *testing.T) {
 	}
 
 	calls := []ToolCall{{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}}
-	results := dispatchParallel(context.Background(), calls, dispatch)
+	results := dispatchParallel(context.Background(), calls, dispatch, 10)
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -408,7 +408,7 @@ func TestDispatchParallelToolPanicRecovery(t *testing.T) {
 		{ID: "2", Name: "panicker", Args: json.RawMessage(`{}`)},
 	}
 
-	results := dispatchParallel(context.Background(), calls, dispatch)
+	results := dispatchParallel(context.Background(), calls, dispatch, 10)
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))

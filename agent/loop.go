@@ -45,7 +45,7 @@ type ToolExecStreamFunc = func(ctx context.Context, name string, args json.RawMe
 // Returns (result, true) if the call was handled, or (zero, false)
 // if the caller should proceed with its own routing (agent delegation, direct tools).
 // Exported for network subpackage access.
-func DispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, ih InputHandler, agentName string, planExec bool) (DispatchResult, bool) {
+func DispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, ih InputHandler, agentName string, planExec bool, planStepsLimit, parallelLimit int) (DispatchResult, bool) {
 	if tc.Name == "ask_user" && ih != nil {
 		content, err := executeAskUser(ctx, ih, agentName, tc)
 		if err != nil {
@@ -54,7 +54,7 @@ func DispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, i
 		return DispatchResult{Content: content}, true
 	}
 	if tc.Name == "execute_plan" && planExec {
-		return executePlan(ctx, tc.Args, dispatch), true
+		return executePlan(ctx, tc.Args, dispatch, planStepsLimit, parallelLimit), true
 	}
 	return DispatchResult{}, false
 }
@@ -107,6 +107,9 @@ type LoopConfig struct {
 	compressModel       ModelFunc
 	compressThreshold   int // 0 = default (200K runes), negative = disabled
 	generationParams    *GenerationParams // nil = use provider defaults
+	maxParallelDispatch int               // 0 → uses package-level default
+	maxToolResultLen    int               // 0 → uses package-level default
+	maxPlanSteps        int               // 0 → uses package-level default
 }
 
 // maxToolResultMessageLen is the maximum rune length for a tool result stored
@@ -428,7 +431,7 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 		}
 		cfg.logger.Info("dispatching tool calls", "agent", cfg.name, "iteration", i, "tools", toolNames)
 		dispatchStart := time.Now()
-		results := dispatchParallel(iterCtx, resp.ToolCalls, cfg.dispatch)
+		results := dispatchParallel(iterCtx, resp.ToolCalls, cfg.dispatch, cfg.maxParallelDispatch)
 		cfg.logger.Debug("tool dispatch completed", "agent", cfg.name, "iteration", i, "duration", time.Since(dispatchStart))
 
 		// Process results sequentially (PostToolProcessor + message assembly + trace collection).
@@ -486,8 +489,12 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 			// to prevent unbounded memory growth across iterations. Stream
 			// events and step traces retain the full content (transient).
 			msgContent := result.Content
-			if utf8.RuneCountInString(msgContent) > maxToolResultMessageLen {
-				msgContent = TruncateStr(msgContent, maxToolResultMessageLen) + "\n\n[output truncated — original was longer]"
+			maxLen := cfg.maxToolResultLen
+			if maxLen == 0 {
+				maxLen = maxToolResultMessageLen
+			}
+			if utf8.RuneCountInString(msgContent) > maxLen {
+				msgContent = TruncateStr(msgContent, maxLen) + "\n\n[output truncated — original was longer]"
 			}
 			messages = append(messages, ToolResultMessage(tc.ID, msgContent))
 			messageRuneCount += utf8.RuneCountInString(msgContent)
@@ -794,7 +801,7 @@ func safeDispatch(ctx context.Context, tc ToolCall, dispatch DispatchFunc) (dr D
 // The collection loop is context-aware: if ctx is cancelled while tool calls
 // are still in-flight, the function returns immediately with context-error
 // results for incomplete calls instead of blocking indefinitely.
-func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFunc) []toolExecResult {
+func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFunc, maxWorkers int) []toolExecResult {
 	// Fast path: single call, no goroutine needed.
 	if len(calls) == 1 {
 		start := time.Now()
@@ -816,7 +823,7 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 	close(workCh)
 
 	// Spawn a fixed pool of workers — never more goroutines than needed.
-	numWorkers := min(len(calls), maxParallelDispatch)
+	numWorkers := min(len(calls), maxWorkers)
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
 	for range numWorkers {
