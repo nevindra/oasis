@@ -12,7 +12,8 @@ import (
 
 func TestReadFullResultTool(t *testing.T) {
 	store := core.NewInMemoryToolResultStore()
-	id, _ := store.Put(context.Background(), "the quick brown fox jumps over the lazy dog")
+	// Store plain text using TextContent so unquoteIfJSONString can unquote it.
+	id, _ := store.Put(context.Background(), core.TextContent("the quick brown fox jumps over the lazy dog"))
 
 	tool := agent.NewReadFullResultTool(store)
 	if tool.Name() != "read_full_result" {
@@ -29,7 +30,7 @@ func TestReadFullResultTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
-	if !strings.Contains(result.Content, "quick") {
+	if !strings.Contains(string(result.Content), "quick") {
 		t.Errorf("expected 'quick' in content, got %q", result.Content)
 	}
 }

@@ -81,6 +81,15 @@ var WithToolResultMaxBytes = core.WithToolResultMaxBytes
 var WithToolResultTTL = core.WithToolResultTTL
 var ErrToolResultNotFound = core.ErrToolResultNotFound
 
+// TextResult wraps a plain string as a ToolResult. Use for hand-rolled tools producing plain text.
+var TextResult = core.TextResult
+
+// TextContent wraps a plain string as a JSON-quoted RawMessage for ToolResult.Content.
+var TextContent = core.TextContent
+
+// JSONContent wraps already-encoded JSON bytes as a ToolResult Content value.
+var JSONContent = core.JSONContent
+
 // --- History ---
 
 // WithHistory enables conversation history and related context-window management.

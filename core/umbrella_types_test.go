@@ -408,7 +408,7 @@ func TestToolRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Content != "hello from greet" {
+	if string(res.Content) != `"hello from greet"` {
 		t.Errorf("expected 'hello from greet', got %q", res.Content)
 	}
 
@@ -446,7 +446,7 @@ func TestToolRegistryMultipleTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Content != "hello from greet" {
+	if string(res.Content) != `"hello from greet"` {
 		t.Errorf("greet: got %q", res.Content)
 	}
 
@@ -454,7 +454,7 @@ func TestToolRegistryMultipleTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Content != "result from calc" {
+	if string(res.Content) != `"result from calc"` {
 		t.Errorf("calc: got %q", res.Content)
 	}
 }
@@ -586,7 +586,7 @@ func TestToolRegistry_MultipleAtomicTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Content != "did read" {
+	if string(res.Content) != `"did read"` {
 		t.Errorf("read: got %q", res.Content)
 	}
 
@@ -594,7 +594,7 @@ func TestToolRegistry_MultipleAtomicTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Content != "did write" {
+	if string(res.Content) != `"did write"` {
 		t.Errorf("write: got %q", res.Content)
 	}
 }

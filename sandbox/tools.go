@@ -269,7 +269,7 @@ func shellTool(sb Sandbox) toolImpl {
 			if res.ExitCode != 0 {
 				output = fmt.Sprintf("exit code %d\n%s", res.ExitCode, output)
 			}
-			return oasis.ToolResult{Content: output}, nil
+			return oasis.TextResult(output), nil
 		})
 }
 
@@ -300,7 +300,7 @@ func executeCodeTool(sb Sandbox) toolImpl {
 			if res.Stderr != "" {
 				output += "\nstderr: " + res.Stderr
 			}
-			return oasis.ToolResult{Content: output}, nil
+			return oasis.TextResult(output), nil
 		})
 }
 
@@ -317,7 +317,7 @@ func fileReadTool(sb Sandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: fc.Content}, nil
+			return oasis.TextResult(fc.Content), nil
 		})
 }
 
@@ -336,7 +336,7 @@ func fileWriteTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 			if err := publishToMount(ctx, cfg, p.Path, []byte(p.Content)); err != nil {
 				return oasis.ToolResult{Error: "wrote locally but publish failed: " + err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: "wrote to " + p.Path}, nil
+			return oasis.TextResult("wrote to " + p.Path), nil
 		})
 }
 
@@ -400,7 +400,7 @@ func fileEditTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 					}
 				}
 			}
-			return oasis.ToolResult{Content: "edited " + p.Path}, nil
+			return oasis.TextResult("edited " + p.Path), nil
 		})
 }
 
@@ -418,7 +418,7 @@ func fileGlobTool(sb Sandbox) toolImpl {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
 			if len(res.Files) == 0 {
-				return oasis.ToolResult{Content: "no files matched"}, nil
+				return oasis.TextResult("no files matched"), nil
 			}
 			var result string
 			for i, f := range res.Files {
@@ -430,7 +430,7 @@ func fileGlobTool(sb Sandbox) toolImpl {
 			if res.Truncated {
 				result += "\n... (truncated)"
 			}
-			return oasis.ToolResult{Content: result}, nil
+			return oasis.TextResult(result), nil
 		})
 }
 
@@ -448,7 +448,7 @@ func fileGrepTool(sb Sandbox) toolImpl {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
 			if len(res.Matches) == 0 {
-				return oasis.ToolResult{Content: "no matches found"}, nil
+				return oasis.TextResult("no matches found"), nil
 			}
 			var b strings.Builder
 			for i, m := range res.Matches {
@@ -466,7 +466,7 @@ func fileGrepTool(sb Sandbox) toolImpl {
 			if res.Truncated {
 				b.WriteString("\n... (truncated)")
 			}
-			return oasis.ToolResult{Content: b.String()}, nil
+			return oasis.TextResult(b.String()), nil
 		})
 }
 
@@ -483,7 +483,7 @@ func fileTreeTool(sb Sandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: fmt.Sprintf("%s\n\n%d files, %d directories", res.Tree, res.Files, res.Dirs)}, nil
+			return oasis.TextResult(fmt.Sprintf("%s\n\n%d files, %d directories", res.Tree, res.Files, res.Dirs)), nil
 		})
 }
 
@@ -509,7 +509,7 @@ func httpFetchTool(sb Sandbox) toolImpl {
 			if res.Title != "" {
 				content = "Title: " + res.Title + "\n\n" + content
 			}
-			return oasis.ToolResult{Content: content}, nil
+			return oasis.TextResult(content), nil
 		})
 }
 
@@ -523,7 +523,7 @@ func workspaceInfoTool(sb Sandbox) toolImpl {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
 			data, _ := json.Marshal(res)
-			return oasis.ToolResult{Content: string(data)}, nil
+			return oasis.TextResult(string(data)), nil
 		})
 }
 
@@ -540,7 +540,7 @@ func browserTool(sb Sandbox) toolImpl {
 				if err := sb.BrowserNavigate(ctx, p.URL); err != nil {
 					return oasis.ToolResult{Error: err.Error()}, nil
 				}
-				return oasis.ToolResult{Content: "navigated to " + p.URL}, nil
+				return oasis.TextResult("navigated to " + p.URL), nil
 			}
 			// Validate that target-element actions have a ref or coordinates.
 			switch p.Action {
@@ -575,7 +575,7 @@ func browserTool(sb Sandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: res.Message}, nil
+			return oasis.TextResult(res.Message), nil
 		})
 }
 
@@ -588,7 +588,7 @@ func screenshotTool(sb Sandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: fmt.Sprintf("screenshot captured (%d bytes)", len(data))}, nil
+			return oasis.TextResult(fmt.Sprintf("screenshot captured (%d bytes)", len(data))), nil
 		})
 }
 
@@ -614,7 +614,7 @@ func snapshotTool(sb Sandbox) toolImpl {
 			for _, n := range snap.Nodes {
 				fmt.Fprintf(&out, "[%s] %s %q\n", n.Ref, n.Role, n.Name)
 			}
-			return oasis.ToolResult{Content: out.String()}, nil
+			return oasis.TextResult(out.String()), nil
 		})
 }
 
@@ -631,7 +631,7 @@ func pageTextTool(sb Sandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: result.Text}, nil
+			return oasis.TextResult(result.Text), nil
 		})
 }
 
@@ -644,7 +644,7 @@ func exportPDFTool(sb Sandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: fmt.Sprintf("pdf exported (%d bytes)", len(data))}, nil
+			return oasis.TextResult(fmt.Sprintf("pdf exported (%d bytes)", len(data))), nil
 		})
 }
 
@@ -662,7 +662,7 @@ func webSearchTool(sb Sandbox) toolImpl {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
 			if len(res.Results) == 0 {
-				return oasis.ToolResult{Content: "No results found for: " + p.Query}, nil
+				return oasis.TextResult("No results found for: " + p.Query), nil
 			}
 			var out strings.Builder
 			fmt.Fprintf(&out, "Found %d results for: %s\n\n", len(res.Results), res.Query)
@@ -673,7 +673,7 @@ func webSearchTool(sb Sandbox) toolImpl {
 				}
 				out.WriteString("\n")
 			}
-			return oasis.ToolResult{Content: out.String()}, nil
+			return oasis.TextResult(out.String()), nil
 		})
 }
 
@@ -690,7 +690,7 @@ func browserEvalTool(sb Sandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: result}, nil
+			return oasis.TextResult(result), nil
 		})
 }
 
@@ -707,7 +707,7 @@ func browserFindTool(sb Sandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.ToolResult{Content: fmt.Sprintf("ref: %s (confidence: %s, score: %.2f)", result.Ref, result.Confidence, result.Score)}, nil
+			return oasis.TextResult(fmt.Sprintf("ref: %s (confidence: %s, score: %.2f)", result.Ref, result.Confidence, result.Score)), nil
 		})
 }
 
@@ -727,7 +727,7 @@ func mcpCallTool(sb Sandbox) toolImpl {
 			if res.IsError {
 				return oasis.ToolResult{Error: res.Content}, nil
 			}
-			return oasis.ToolResult{Content: res.Content}, nil
+			return oasis.TextResult(res.Content), nil
 		})
 }
 
@@ -857,7 +857,7 @@ func (t *deliverFile) executeDelivery(ctx context.Context, args json.RawMessage,
 		}
 	}
 
-	return oasis.ToolResult{Content: fmt.Sprintf("delivered %s (%s)", displayName, humanSize(size))}, nil
+	return oasis.TextResult(fmt.Sprintf("delivered %s (%s)", displayName, humanSize(size))), nil
 }
 
 // humanSize formats a byte count as a human-readable string.

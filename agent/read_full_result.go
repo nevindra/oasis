@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 
 	"github.com/nevindra/oasis/core"
 )
@@ -45,26 +47,46 @@ func (t *readFullResultTool) Execute(ctx context.Context, in ReadFullResultIn) (
 	if in.Length <= 0 {
 		in.Length = 50_000
 	}
-	content, total, err := t.store.Get(ctx, in.ID, in.Offset, in.Length)
+	// Fetch full content as bytes; rune slicing happens client-side.
+	raw, _, err := t.store.Get(ctx, in.ID, 0, math.MaxInt32)
 	if errors.Is(err, core.ErrToolResultNotFound) {
 		return ReadFullResultOut{}, fmt.Errorf("result id %q not found or expired", in.ID)
 	}
 	if err != nil {
 		return ReadFullResultOut{}, err
 	}
-	runeCount := len([]rune(content))
-	more := in.Offset+runeCount < total
-	out := ReadFullResultOut{
-		Content: content,
-		Total:   total,
-		More:    more,
+	// Unquote JSON string literals so the LLM sees plain text.
+	text := unquoteIfJSONString(raw)
+	runes := []rune(text)
+	total := len(runes)
+	offset := in.Offset
+	if offset >= total {
+		return ReadFullResultOut{Content: "", Total: total, More: false}, nil
 	}
+	end := offset + in.Length
+	if end > total {
+		end = total
+	}
+	chunk := string(runes[offset:end])
+	more := end < total
+	out := ReadFullResultOut{Content: chunk, Total: total, More: more}
 	if more {
-		nextOffset := in.Offset + runeCount
+		nextOffset := end
 		out.Content += fmt.Sprintf(
 			"\n\n[%d of %d runes returned, more remaining — call read_full_result(id=%q, offset=%d) for the next chunk]",
 			nextOffset, total, in.ID, nextOffset,
 		)
 	}
 	return out, nil
+}
+
+// unquoteIfJSONString returns the unquoted string when raw is a JSON string
+// literal (starts with '"'). Otherwise it returns raw as-is (verbatim JSON).
+func unquoteIfJSONString(raw []byte) string {
+	if len(raw) >= 2 && raw[0] == '"' {
+		if s, err := strconv.Unquote(string(raw)); err == nil {
+			return s
+		}
+	}
+	return string(raw)
 }

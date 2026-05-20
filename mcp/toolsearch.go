@@ -157,7 +157,7 @@ func (t *toolSearchTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (
 	if err != nil {
 		return oasis.ToolResult{Error: "format result: " + err.Error()}, nil
 	}
-	return oasis.ToolResult{Content: string(content)}, nil
+	return oasis.TextResult(string(content)), nil
 }
 
 func tokenizeQuery(query string) []string {

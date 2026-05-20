@@ -18,7 +18,7 @@ type stubAnyTool struct {
 func (s *stubAnyTool) Name() string              { return s.name }
 func (s *stubAnyTool) Definition() ToolDefinition { return ToolDefinition{Name: s.name} }
 func (s *stubAnyTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "ok"}, nil
+	return TextResult("ok"), nil
 }
 
 func TestAnyTool_InterfaceCompliance(t *testing.T) {
@@ -31,8 +31,8 @@ func TestAnyTool_InterfaceCompliance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteRaw error: %v", err)
 	}
-	if res.Content != "ok" {
-		t.Errorf("Content = %q, want %q", res.Content, "ok")
+	if string(res.Content) != `"ok"` {
+		t.Errorf("Content = %q, want %q", res.Content, `"ok"`)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestErase_RoundTrip(t *testing.T) {
 		t.Fatalf("ToolResult.Error: %q", res.Error)
 	}
 	var got echoOutput
-	if err := json.Unmarshal([]byte(res.Content), &got); err != nil {
+	if err := json.Unmarshal(res.Content, &got); err != nil {
 		t.Fatalf("decode output: %v", err)
 	}
 	if got.Echoed != "hello" {

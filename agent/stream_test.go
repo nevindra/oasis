@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // --- New event type tests ---
@@ -521,7 +523,7 @@ func (t progressTool) Definition() ToolDefinition {
 }
 
 func (t progressTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "found 3 results"}, nil
+	return core.TextResult("found 3 results"), nil
 }
 
 func (t progressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
@@ -532,7 +534,7 @@ func (t progressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch cha
 			Content: fmt.Sprintf(`{"found":%d}`, i),
 		}
 	}
-	return ToolResult{Content: "found 3 results"}, nil
+	return core.TextResult("found 3 results"), nil
 }
 
 func TestStreamingToolEmitsProgress(t *testing.T) {
@@ -698,6 +700,6 @@ func (t *configuredFakeAgentTool) Definition() ToolDefinition {
 	return ToolDefinition{Name: t.name, Description: "fake tool"}
 }
 func (t *configuredFakeAgentTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: t.output}, nil
+	return core.TextResult(t.output), nil
 }
 

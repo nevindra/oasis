@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/history"
 )
 
@@ -775,7 +776,7 @@ func (bigResultTool) Definition() ToolDefinition {
 	return ToolDefinition{Name: "big", Description: "Returns big content"}
 }
 func (bigResultTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: strings.Repeat("x", 500)}, nil
+	return core.TextResult(strings.Repeat("x", 500)), nil
 }
 
 func TestContextCompression(t *testing.T) {

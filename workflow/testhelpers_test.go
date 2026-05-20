@@ -3,6 +3,8 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // stubAgent is a minimal Agent implementation for workflow tests.
@@ -26,5 +28,5 @@ func (m mockTool) Definition() ToolDefinition {
 	return ToolDefinition{Name: "greet", Description: "Say hello"}
 }
 func (m mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "hello from greet"}, nil
+	return core.TextResult("hello from greet"), nil
 }

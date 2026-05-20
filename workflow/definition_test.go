@@ -350,5 +350,5 @@ func (a *argEchoTool) Definition() ToolDefinition {
 }
 
 func (a *argEchoTool) ExecuteRaw(_ context.Context, args json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: string(args)}, nil
+	return ToolResult{Content: args}, nil
 }

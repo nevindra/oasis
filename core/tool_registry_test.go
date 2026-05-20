@@ -12,7 +12,7 @@ type stubRegistryTool struct{ name string }
 func (s stubRegistryTool) Name() string               { return s.name }
 func (s stubRegistryTool) Definition() ToolDefinition { return ToolDefinition{Name: s.name} }
 func (s stubRegistryTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "ok"}, nil
+	return TextResult("ok"), nil
 }
 
 // deferredStubTool implements AnyTool + SchemaEnsurer.
@@ -33,7 +33,7 @@ func (t *deferredStubTool) Definition() ToolDefinition {
 	return d
 }
 func (t *deferredStubTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "ok"}, nil
+	return TextResult("ok"), nil
 }
 func (t *deferredStubTool) EnsureSchema(_ context.Context) error {
 	t.loadCount++

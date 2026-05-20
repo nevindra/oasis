@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nevindra/oasis/agent"
+	"github.com/nevindra/oasis/core"
 )
 
 func TestStandardDispatchOrder(t *testing.T) {
@@ -28,7 +29,7 @@ func TestStandardDispatchOrder(t *testing.T) {
 			return agent.DispatchResult{}, false
 		},
 		ExecuteTool: func(_ context.Context, _ string, _ json.RawMessage) (agent.ToolResult, error) {
-			return agent.ToolResult{Content: "tool"}, nil
+			return core.TextResult("tool"), nil
 		},
 	}
 

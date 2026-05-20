@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // --- Parallel tool execution tests ---
@@ -28,7 +30,7 @@ func (b *barrierTool) Definition() ToolDefinition {
 func (b *barrierTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	b.started <- struct{}{} // signal: I have started
 	<-b.barrier             // wait for release
-	return ToolResult{Content: "done from " + b.name}, nil
+	return core.TextResult("done from " + b.name), nil
 }
 
 func TestLLMAgentParallelToolExecution(t *testing.T) {
@@ -522,7 +524,7 @@ func (l *largeTool) Definition() ToolDefinition {
 }
 
 func (l *largeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: l.content}, nil
+	return core.TextResult(l.content), nil
 }
 
 // --- TruncateStr unit tests ---

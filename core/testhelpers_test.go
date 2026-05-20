@@ -13,7 +13,7 @@ type mockTool struct{}
 func (mockTool) Name() string               { return "greet" }
 func (mockTool) Definition() ToolDefinition { return ToolDefinition{Name: "greet", Description: "Say hello"} }
 func (mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "hello from greet"}, nil
+	return TextResult("hello from greet"), nil
 }
 
 type mockToolCalc struct{}
@@ -21,7 +21,7 @@ type mockToolCalc struct{}
 func (mockToolCalc) Name() string               { return "calc" }
 func (mockToolCalc) Definition() ToolDefinition { return ToolDefinition{Name: "calc", Description: "Calculate"} }
 func (mockToolCalc) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "result from calc"}, nil
+	return TextResult("result from calc"), nil
 }
 
 // errTool always returns an error from ExecuteRaw.
@@ -39,7 +39,7 @@ type readTool struct{}
 func (readTool) Name() string               { return "read" }
 func (readTool) Definition() ToolDefinition { return ToolDefinition{Name: "read", Description: "Read file"} }
 func (readTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "did read"}, nil
+	return TextResult("did read"), nil
 }
 
 type writeTool struct{}
@@ -47,5 +47,5 @@ type writeTool struct{}
 func (writeTool) Name() string               { return "write" }
 func (writeTool) Definition() ToolDefinition { return ToolDefinition{Name: "write", Description: "Write file"} }
 func (writeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "did write"}, nil
+	return TextResult("did write"), nil
 }

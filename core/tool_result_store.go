@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -23,14 +24,15 @@ var ErrToolResultNotFound = errors.New("tool result not found or expired")
 type ToolResultStore interface {
 	// Put stores the full content and returns an opaque id. The id is
 	// embedded in the truncation marker handed to the LLM.
-	Put(ctx context.Context, content string) (id string, err error)
+	Put(ctx context.Context, content json.RawMessage) (id string, err error)
 
-	// Get returns a slice of the stored content starting at offset runes,
-	// up to length runes. total is the full rune count of the stored
-	// content (so the LLM can tell whether more remains).
+	// Get returns a byte slice of the stored content starting at offset bytes,
+	// up to length bytes. total is the full byte length of the stored content.
+	// offset and length are in bytes; rune-safe alignment is the caller's
+	// responsibility (read_full_result handles it for LLM-facing output).
 	// Returns ErrToolResultNotFound if the id is unknown or expired.
 	// If offset >= total, returns empty content with no error.
-	Get(ctx context.Context, id string, offset, length int) (content string, total int, err error)
+	Get(ctx context.Context, id string, offset, length int) (content json.RawMessage, total int, err error)
 }
 
 // Compile-time interface satisfaction check.
@@ -67,7 +69,7 @@ func NewInMemoryToolResultStore(opts ...InMemoryToolResultStoreOption) ToolResul
 }
 
 type storeEntry struct {
-	content    string
+	content    []byte
 	bytes      int64
 	expiresAt  time.Time
 	lastAccess time.Time
@@ -82,7 +84,7 @@ type inMemoryStore struct {
 	ttl        time.Duration
 }
 
-func (s *inMemoryStore) Put(ctx context.Context, content string) (string, error) {
+func (s *inMemoryStore) Put(ctx context.Context, content json.RawMessage) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -103,7 +105,7 @@ func (s *inMemoryStore) Put(ctx context.Context, content string) (string, error)
 	return id, nil
 }
 
-func (s *inMemoryStore) Get(ctx context.Context, id string, offset, length int) (string, int, error) {
+func (s *inMemoryStore) Get(ctx context.Context, id string, offset, length int) (json.RawMessage, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -111,20 +113,19 @@ func (s *inMemoryStore) Get(ctx context.Context, id string, offset, length int) 
 
 	entry, ok := s.entries[id]
 	if !ok {
-		return "", 0, ErrToolResultNotFound
+		return nil, 0, ErrToolResultNotFound
 	}
 	entry.lastAccess = time.Now()
 
-	runes := []rune(entry.content)
-	total := len(runes)
+	total := len(entry.content)
 	if offset >= total {
-		return "", total, nil
+		return nil, total, nil
 	}
 	end := offset + length
 	if end > total {
 		end = total
 	}
-	return string(runes[offset:end]), total, nil
+	return json.RawMessage(entry.content[offset:end]), total, nil
 }
 
 func (s *inMemoryStore) expireExpiredLocked() {

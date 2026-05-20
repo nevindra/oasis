@@ -97,10 +97,12 @@ type BlobStore interface {
 }
 
 // ToolResult is the outcome of a tool execution.
+// Content holds JSON-encoded bytes. For plain text, use TextResult or TextContent.
+// For already-encoded JSON, use JSONContent.
 type ToolResult struct {
-	Content     string       `json:"content"`
-	Error       string       `json:"error,omitempty"`
-	Attachments []Attachment `json:"attachments,omitempty"` // multimodal content (images, PDFs, etc.) passed to the LLM
+	Content     json.RawMessage `json:"content,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	Attachments []Attachment    `json:"attachments,omitempty"` // multimodal content (images, PDFs, etc.) passed to the LLM
 }
 
 // ToolRegistry holds all registered atomic tools and dispatches execution.

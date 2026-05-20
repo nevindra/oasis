@@ -21,7 +21,7 @@ func (t *configuredFakeTool) Definition() core.ToolDefinition {
 	return core.ToolDefinition{Name: t.name, Description: "test tool"}
 }
 func (t *configuredFakeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
-	return core.ToolResult{Content: t.output}, nil
+	return core.TextResult(t.output), nil
 }
 
 // newFakeTool returns an AnyTool whose Execute always returns the given output.

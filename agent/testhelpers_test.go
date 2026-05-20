@@ -63,7 +63,7 @@ type mockTool struct{}
 func (m mockTool) Name() string               { return "greet" }
 func (m mockTool) Definition() ToolDefinition { return ToolDefinition{Name: "greet", Description: "Say hello"} }
 func (m mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "hello from greet"}, nil
+	return core.TextResult("hello from greet"), nil
 }
 
 type mockToolCalc struct{}
@@ -71,7 +71,7 @@ type mockToolCalc struct{}
 func (m mockToolCalc) Name() string               { return "calc" }
 func (m mockToolCalc) Definition() ToolDefinition { return ToolDefinition{Name: "calc", Description: "Calculate"} }
 func (m mockToolCalc) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "result from calc"}, nil
+	return core.TextResult("result from calc"), nil
 }
 
 type errTool struct{}
@@ -117,7 +117,7 @@ func (t *contextReadingTool) ExecuteRaw(ctx context.Context, _ json.RawMessage) 
 	if t.onExecute != nil {
 		t.onExecute(ctx)
 	}
-	return ToolResult{Content: "ok"}, nil
+	return core.TextResult("ok"), nil
 }
 
 // readTool and writeTool replace the legacy bundle-style multiTool with two
@@ -129,7 +129,7 @@ type readTool struct{}
 func (readTool) Name() string               { return "read" }
 func (readTool) Definition() ToolDefinition { return ToolDefinition{Name: "read", Description: "Read file"} }
 func (readTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "did read"}, nil
+	return core.TextResult("did read"), nil
 }
 
 type writeTool struct{}
@@ -137,5 +137,5 @@ type writeTool struct{}
 func (writeTool) Name() string               { return "write" }
 func (writeTool) Definition() ToolDefinition { return ToolDefinition{Name: "write", Description: "Write file"} }
 func (writeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: "did write"}, nil
+	return core.TextResult("did write"), nil
 }

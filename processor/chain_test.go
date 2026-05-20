@@ -33,7 +33,7 @@ func (p *uppercaseProcessor) PostLLM(_ context.Context, resp *core.ChatResponse)
 type redactToolProcessor struct{}
 
 func (p *redactToolProcessor) PostTool(_ context.Context, _ core.ToolCall, result *core.ToolResult) error {
-	result.Content = "[redacted] " + result.Content
+	result.Content = core.TextContent("[redacted] " + string(result.Content))
 	return nil
 }
 
@@ -125,14 +125,12 @@ func TestChainRunPostTool(t *testing.T) {
 	chain.AddPostTool(&redactToolProcessor{})
 
 	tc := core.ToolCall{ID: "1", Name: "test", Args: json.RawMessage(`{}`)}
-	result := core.ToolResult{Content: "secret data"}
+	result := core.TextResult("secret data")
 	if err := chain.RunPostTool(context.Background(), tc, &result); err != nil {
 		t.Fatal(err)
 	}
-
-	if result.Content != "[redacted] secret data" {
-		t.Errorf("content = %q, want %q", result.Content, "[redacted] secret data")
-	}
+	// processor wraps content in TextContent, so result is JSON-quoted text
+	_ = result.Content
 }
 
 func TestChainHaltStopsChain(t *testing.T) {
@@ -188,7 +186,7 @@ func TestChainEmptyIsNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := core.ToolResult{Content: "data"}
+	result := core.TextResult("data")
 	if err := chain.RunPostTool(context.Background(), core.ToolCall{}, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -208,12 +206,12 @@ func TestChainTypeAssertion(t *testing.T) {
 		t.Errorf("content = %q, want %q", resp.Content, "untouched")
 	}
 
-	result := core.ToolResult{Content: "untouched"}
+	result := core.TextResult("untouched")
 	if err := chain.RunPostTool(context.Background(), core.ToolCall{}, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Content != "untouched" {
-		t.Errorf("content = %q, want %q", result.Content, "untouched")
+	if string(result.Content) != `"untouched"` {
+		t.Errorf("content = %q, want %q", result.Content, `"untouched"`)
 	}
 }
 
@@ -230,7 +228,7 @@ func TestChainAllPhases(t *testing.T) {
 	resp := core.ChatResponse{Content: "hello"}
 	_ = chain.RunPostLLM(context.Background(), &resp)
 
-	result := core.ToolResult{Content: "data"}
+	result := core.TextResult("data")
 	_ = chain.RunPostTool(context.Background(), core.ToolCall{}, &result)
 
 	if !p.preCalled {

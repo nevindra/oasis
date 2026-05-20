@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -300,7 +301,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			state.accumulatedAttachmentBytes += aSize
 		}
 
-		result := ToolResult{Content: results[j].content}
+		result := ToolResult{Content: json.RawMessage(results[j].content)}
 		if err := cfg.processors.RunPostTool(iterCtx, tc, &result); err != nil {
 			endIter()
 			state.safeCloseCh()
@@ -312,16 +313,17 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		}
 		// Truncate large tool results before appending to message history.
 		// Stream events and step traces retain full content (transient).
-		msgContent := result.Content
+		content := string(result.Content) // boundary conversion for rune ops
 		maxLen := cfg.maxToolResultLen
 		if maxLen == 0 {
 			maxLen = maxToolResultMessageLen
 		}
-		if utf8.RuneCountInString(msgContent) > maxLen {
-			inline := TruncateStr(msgContent, maxLen)
-			total := utf8.RuneCountInString(msgContent)
+		msgContent := content
+		if utf8.RuneCountInString(content) > maxLen {
+			inline := TruncateStr(content, maxLen)
+			total := utf8.RuneCountInString(content)
 			if cfg.toolResultStore != nil {
-				id, putErr := cfg.toolResultStore.Put(iterCtx, msgContent)
+				id, putErr := cfg.toolResultStore.Put(iterCtx, result.Content) // bytes in — zero copy
 				if putErr == nil {
 					msgContent = inline + fmt.Sprintf(
 						"\n\n[truncated at %d runes of %d total. Use read_full_result(id=%q, offset=%d, length=50000) for more]",
@@ -340,7 +342,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 
 		// Track the last sub-agent output for fallback.
 		if strings.HasPrefix(tc.Name, "agent_") {
-			state.lastAgentOutput = result.Content
+			state.lastAgentOutput = string(result.Content)
 		}
 	}
 	// Compress context if over budget (within the iteration span so compression

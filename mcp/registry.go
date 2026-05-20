@@ -167,7 +167,8 @@ func mapMCPResult(r *CallToolResult) *oasis.ToolResult {
 	if r.IsError {
 		return &oasis.ToolResult{Error: content}
 	}
-	return &oasis.ToolResult{Content: content}
+	result := oasis.TextResult(content)
+	return &result
 }
 
 func (r *Registry) fireOnToolCall(server, tool string, args json.RawMessage) {

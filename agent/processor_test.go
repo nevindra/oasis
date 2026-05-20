@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // These tests cover the LLMAgent integration with PreProcessor / PostProcessor /
@@ -23,7 +25,7 @@ func (p *uppercaseProcessor) PostLLM(_ context.Context, resp *ChatResponse) erro
 type redactToolProcessor struct{}
 
 func (p *redactToolProcessor) PostTool(_ context.Context, _ ToolCall, result *ToolResult) error {
-	result.Content = "[redacted] " + result.Content
+	result.Content = core.TextContent("[redacted] " + string(result.Content))
 	return nil
 }
 

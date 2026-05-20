@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -118,9 +119,22 @@ func toolStepFunc(tool core.AnyTool, toolName string, cfg *stepConfig) StepFunc 
 		if cfg.outputTo != "" {
 			outputKey = cfg.outputTo
 		}
-		wCtx.Set(outputKey, result.Content)
+		wCtx.Set(outputKey, toolContentToString(result.Content))
 		return nil
 	}
+}
+
+// toolContentToString converts ToolResult.Content (json.RawMessage) to a plain
+// string for workflow context storage. JSON string literals are unquoted so
+// tools returning plain text via TextResult produce the raw text, not a
+// JSON-quoted value.
+func toolContentToString(raw json.RawMessage) string {
+	if len(raw) >= 2 && raw[0] == '"' {
+		if s, err := strconv.Unquote(string(raw)); err == nil {
+			return s
+		}
+	}
+	return string(raw)
 }
 
 // --- Loop executors ---
