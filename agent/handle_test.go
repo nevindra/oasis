@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -271,6 +272,73 @@ func TestSpawnPanicRecovery(t *testing.T) {
 	if !strings.Contains(err.Error(), "panic") {
 		t.Errorf("err = %q, want mention of panic", err.Error())
 	}
+}
+
+func TestStateNonBlocking(t *testing.T) {
+	// Build a handle whose loop hangs indefinitely. State() should still
+	// return without blocking.
+	//
+	// We use an atomic.Pointer to share the handle between the test goroutine
+	// and the agent goroutine without a data race.
+	blockCh := make(chan struct{}) // never closed
+	var hPtr atomic.Pointer[AgentHandle]
+	// readyCh is closed once the handle pointer has been stored, so the
+	// agent goroutine only proceeds after hPtr is valid.
+	readyCh := make(chan struct{})
+	a := &funcAgent{
+		name: "blocker",
+		execute: func(ctx context.Context, _ AgentTask) (AgentResult, error) {
+			<-readyCh                                          // wait until hPtr is set
+			hPtr.Load().state.Store(int32(StateCompleted))    // simulate terminal but not done
+			<-blockCh                                         // hang
+			return AgentResult{}, nil
+		},
+	}
+	h := Spawn(context.Background(), a, AgentTask{Input: "go"})
+	hPtr.Store(h)
+	close(readyCh)
+	defer close(blockCh)
+
+	done := make(chan struct{})
+	go func() {
+		_ = h.State()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Pass — State() returned promptly.
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("State() blocked when it should not")
+	}
+}
+
+func TestSyncEstablishesBarrier(t *testing.T) {
+	a := &funcAgent{
+		name: "fast",
+		execute: func(ctx context.Context, _ AgentTask) (AgentResult, error) {
+			return AgentResult{Output: "done"}, nil
+		},
+	}
+	h := Spawn(context.Background(), a, AgentTask{Input: "go"})
+	<-h.Done()
+	h.Sync()
+	result, _ := h.Result()
+	if result.Output != "done" {
+		t.Errorf("expected 'done' after Sync, got %q", result.Output)
+	}
+}
+
+// funcAgent is a test Agent driven by a plain function.
+type funcAgent struct {
+	name    string
+	execute func(ctx context.Context, task AgentTask) (AgentResult, error)
+}
+
+func (f *funcAgent) Name() string        { return f.name }
+func (f *funcAgent) Description() string { return "func agent" }
+func (f *funcAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+	return f.execute(ctx, task)
 }
 
 // panicingAgent is an Agent that panics during Execute.

@@ -143,15 +143,33 @@ func (h *AgentHandle) ID() string { return h.id }
 // Agent returns the agent being executed.
 func (h *AgentHandle) Agent() Agent { return h.agent }
 
-// State returns the current execution state.
-// If the state is terminal, State blocks until Done() is closed (nanoseconds)
-// to guarantee that Result() returns valid data when State().IsTerminal() is true.
+// State returns the current execution state without blocking. If the state
+// is terminal, the returned value reflects the atomic snapshot but writes
+// by the agent loop may not yet be visible to this goroutine. Call Sync
+// before reading Result to establish a happens-before barrier.
 func (h *AgentHandle) State() AgentState {
-	s := AgentState(h.state.Load())
-	if s.IsTerminal() {
-		<-h.done
+	return AgentState(h.state.Load())
+}
+
+// Sync blocks until the agent loop's writes are visible. Returns immediately
+// if the agent has not yet reached a terminal state (nothing to synchronize)
+// or if Done has already been observed by this goroutine.
+//
+// Use Sync between a terminal State() check and reading Result:
+//
+//	if h.State().IsTerminal() {
+//	    h.Sync()
+//	    result, err := h.Result()
+//	    ...
+//	}
+func (h *AgentHandle) Sync() {
+	select {
+	case <-h.done:
+	default:
+		if AgentState(h.state.Load()).IsTerminal() {
+			<-h.done
+		}
 	}
-	return s
 }
 
 // Done returns a channel closed when execution finishes (any terminal state).
