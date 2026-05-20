@@ -31,7 +31,7 @@ func NewNetwork(name, description string, router core.Provider, opts ...agent.Ag
 	}
 	agent.InitCore(&n.AgentCore, name, description, router, cfg)
 
-	for _, a := range cfg.Agents {
+	for _, a := range cfg.Agents() {
 		n.agents[a.Name()] = a
 		n.sortedAgentNames = append(n.sortedAgentNames, a.Name())
 	}
@@ -39,8 +39,8 @@ func NewNetwork(name, description string, router core.Provider, opts ...agent.Ag
 
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Includes agent tools + direct tools + built-in tools.
-	if n.DynamicTools == nil {
-		n.CachedToolDefs = n.CacheBuiltinToolDefs(n.buildToolDefs(n.Tools.AllDefinitions()))
+	if !n.HasDynamicTools() {
+		n.SetCachedToolDefs(n.CacheBuiltinToolDefs(n.buildToolDefs(n.Tools().AllDefinitions())))
 	}
 
 	return n
@@ -66,8 +66,8 @@ func (n *Network) ExecuteStream(ctx context.Context, task agent.AgentTask, ch ch
 // ch is passed through so makeDispatch can emit agent-start/finish events.
 func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
 	prompt, provider := n.ResolvePromptAndProvider(ctx, task)
-	if n.ActiveSkillInstructions != "" {
-		prompt = prompt + "\n\n# Active Skills\n\n" + n.ActiveSkillInstructions
+	if n.ActiveSkillInstructions() != "" {
+		prompt = prompt + "\n\n# Active Skills\n\n" + n.ActiveSkillInstructions()
 	}
 
 	// Resolve tools: dynamic replaces static.
@@ -75,13 +75,13 @@ func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch 
 	var executeTool agent.ToolExecFunc
 	var executeToolStream agent.ToolExecStreamFunc
 	if dynDefs, dynExec := n.ResolveDynamicTools(ctx, task); dynDefs != nil {
-		n.Logger.Debug("using dynamic tools", "network", n.Name(), "tool_count", len(dynDefs))
+		n.Logger().Debug("using dynamic tools", "network", n.Name(), "tool_count", len(dynDefs))
 		toolDefs = n.CacheBuiltinToolDefs(n.buildToolDefs(dynDefs))
 		executeTool = dynExec
 	} else {
-		toolDefs = n.CachedToolDefs
-		executeTool = n.Tools.Execute
-		executeToolStream = n.Tools.ExecuteStream
+		toolDefs = n.CachedToolDefs()
+		executeTool = n.Tools().Execute
+		executeToolStream = n.Tools().ExecuteStream
 	}
 
 	return n.BaseLoopConfig("network:"+n.Name(), prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs))
@@ -100,7 +100,7 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 		}
 
 		// spawn_agent: dynamic sub-agent creation.
-		if tc.Name == "spawn_agent" && n.SpawnEnabled {
+		if tc.Name == "spawn_agent" {
 			return n.ExecuteSpawn(ctx, tc.Args, resolvedToolDefs, executeTool)
 		}
 
@@ -132,7 +132,7 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPref
 		return agent.DispatchResult{Content: "error: invalid agent call args: " + err.Error(), IsError: true}
 	}
 
-	n.Logger.Info("delegating to subagent", "network", n.Name(), "agent", agentName, "task", agent.TruncateStr(params.Task, 80))
+	n.Logger().Info("delegating to subagent", "network", n.Name(), "agent", agentName, "task", agent.TruncateStr(params.Task, 80))
 
 	if ch != nil {
 		select {
@@ -152,7 +152,7 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPref
 	}
 
 	start := time.Now()
-	result, err := agent.ExecuteAgent(ctx, sub, agentName, subTask, ch, n.Logger)
+	result, err := agent.ExecuteAgent(ctx, sub, agentName, subTask, ch, n.Logger())
 	elapsed := time.Since(start)
 
 	if ch != nil {
@@ -173,10 +173,10 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPref
 	}
 
 	if err != nil {
-		n.Logger.Error("subagent failed", "network", n.Name(), "agent", agentName, "error", err, "duration", elapsed)
+		n.Logger().Error("subagent failed", "network", n.Name(), "agent", agentName, "error", err, "duration", elapsed)
 		return agent.DispatchResult{Content: "error: " + err.Error(), IsError: true}
 	}
-	n.Logger.Info("subagent completed", "network", n.Name(), "agent", agentName,
+	n.Logger().Info("subagent completed", "network", n.Name(), "agent", agentName,
 		"duration", elapsed,
 		"input_tokens", result.Usage.InputTokens,
 		"output_tokens", result.Usage.OutputTokens)

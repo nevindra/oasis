@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 
@@ -26,13 +25,13 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 
 	// Auto-register read_full_result when a store is configured.
 	if cfg.toolResultStore != nil {
-		a.Tools.Add(NewReadFullResultTool(cfg.toolResultStore))
+		a.tools.Add(NewReadFullResultTool(cfg.toolResultStore))
 	}
 
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Avoids rebuilding the slice on every Execute call.
-	if a.DynamicTools == nil {
-		a.CachedToolDefs = a.CacheBuiltinToolDefs(a.Tools.AllDefinitions())
+	if a.dynamicTools == nil {
+		a.cachedToolDefs = a.CacheBuiltinToolDefs(a.tools.AllDefinitions())
 	}
 
 	return a
@@ -57,8 +56,8 @@ func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- 
 // Resolves dynamic prompt, model, and tools when configured.
 func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
 	prompt, provider := a.ResolvePromptAndProvider(ctx, task)
-	if a.ActiveSkillInstructions != "" {
-		prompt = prompt + "\n\n# Active Skills\n\n" + a.ActiveSkillInstructions
+	if a.activeSkillInstructions != "" {
+		prompt = prompt + "\n\n# Active Skills\n\n" + a.activeSkillInstructions
 	}
 
 	// Resolve tools: dynamic replaces static.
@@ -66,13 +65,13 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 	var executeTool ToolExecFunc
 	var executeToolStream ToolExecStreamFunc
 	if dynDefs, dynExec := a.ResolveDynamicTools(ctx, task); dynDefs != nil {
-		a.Logger.Debug("using dynamic tools", "agent", a.name, "tool_count", len(dynDefs))
+		a.logger.Debug("using dynamic tools", "agent", a.name, "tool_count", len(dynDefs))
 		toolDefs = a.CacheBuiltinToolDefs(dynDefs)
 		executeTool = dynExec
 	} else {
-		toolDefs = a.CachedToolDefs
-		executeTool = a.Tools.Execute
-		executeToolStream = a.Tools.ExecuteStream
+		toolDefs = a.cachedToolDefs
+		executeTool = a.tools.Execute
+		executeToolStream = a.tools.ExecuteStream
 	}
 
 	return a.BaseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool, executeToolStream, ch, toolDefs))
@@ -80,27 +79,17 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
 // executor function and handles the ask_user, execute_plan,
-// and spawn_agent special cases via the shared dispatchBuiltins helper.
+// and spawn_agent special cases via the shared DispatchBuiltins method.
 // When executeToolStream and ch are non-nil, tools implementing StreamingAnyTool
 // emit progress events during execution.
 func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition) DispatchFunc {
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
-		if r, ok := DispatchBuiltins(ctx, tc, dispatch, a.Handler, a.name, a.PlanExecution, a.MaxPlanSteps, a.MaxParallelDispatch); ok {
+		if r, ok := a.DispatchBuiltins(ctx, tc, dispatch); ok {
 			return r
 		}
-		if tc.Name == "spawn_agent" && a.SpawnEnabled {
-			return ExecuteSpawnAgent(ctx, tc.Args, SubAgentConfig{
-				Provider:       a.LLMProvider,
-				ToolDefs:       resolvedToolDefs,
-				ExecuteTool:    executeTool,
-				MaxIter:        a.MaxIter,
-				MaxSpawnDepth:  a.SpawnDepthLimit,
-				DenySpawnTools: a.DeniedSpawnTools,
-				PlanExecution:  a.PlanExecution,
-				Logger:         a.Logger,
-				GenParams:      a.GenParams,
-			})
+		if tc.Name == "spawn_agent" {
+			return a.ExecuteSpawn(ctx, tc.Args, resolvedToolDefs, executeTool)
 		}
 		return DispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
 	}
@@ -311,105 +300,3 @@ func spawnAgentName(args spawnAgentArgs) string {
 // subAgentPrompt is the minimal system prompt given to spawned sub-agents.
 const subAgentPrompt = "You are a sub-agent. Complete the given task thoroughly and return the result. Be concise."
 
-// SubAgentConfig carries the parent's state needed to construct a sub-agent.
-// Passed through makeDispatch closures — no context keys needed.
-// Exported for network subpackage access.
-type SubAgentConfig struct {
-	Provider       Provider
-	ToolDefs       []ToolDefinition
-	ExecuteTool    ToolExecFunc
-	MaxIter        int
-	MaxSpawnDepth  int
-	DenySpawnTools []string
-	PlanExecution  bool         // inherit parent's execute_plan capability
-	Logger         *slog.Logger
-	GenParams      *GenerationParams
-}
-
-// ExecuteSpawnAgent handles the spawn_agent tool call. Constructs an ephemeral
-// LLMAgent with inherited tools (minus denied ones), executes it, returns result.
-// Exported for network subpackage access.
-func ExecuteSpawnAgent(ctx context.Context, args json.RawMessage, cfg SubAgentConfig) DispatchResult {
-	var params spawnAgentArgs
-	if err := json.Unmarshal(args, &params); err != nil {
-		return DispatchResult{Content: "error: invalid spawn_agent args: " + err.Error(), IsError: true}
-	}
-	if params.Task == "" {
-		return DispatchResult{Content: "error: spawn_agent requires non-empty task", IsError: true}
-	}
-
-	// Check depth limit.
-	depth := spawnDepth(ctx)
-	if depth >= cfg.MaxSpawnDepth {
-		return DispatchResult{Content: fmt.Sprintf("error: max spawn depth (%d) exceeded", cfg.MaxSpawnDepth), IsError: true}
-	}
-
-	name := spawnAgentName(params)
-
-	// Filter tool definitions: remove denied tools + ask_user.
-	// When child will be at max depth, also strip spawn_agent.
-	childAtMaxDepth := depth+1 >= cfg.MaxSpawnDepth
-	var filteredDefs []ToolDefinition
-	deny := make(map[string]bool, len(cfg.DenySpawnTools)+1)
-	deny["ask_user"] = true
-	for _, n := range cfg.DenySpawnTools {
-		deny[n] = true
-	}
-	if childAtMaxDepth {
-		deny["spawn_agent"] = true
-	}
-	for _, d := range cfg.ToolDefs {
-		if !deny[d.Name] {
-			filteredDefs = append(filteredDefs, d)
-		}
-	}
-
-	// Build filtered executor that respects deny list.
-	filteredExec := func(ctx context.Context, toolName string, toolArgs json.RawMessage) (ToolResult, error) {
-		if deny[toolName] {
-			return ToolResult{Error: "tool " + toolName + " is not available to sub-agents"}, nil
-		}
-		return cfg.ExecuteTool(ctx, toolName, toolArgs)
-	}
-
-	// Build ephemeral options. Wrap each definition as its own AnyTool.
-	subTools := make([]AnyTool, len(filteredDefs))
-	for i, d := range filteredDefs {
-		subTools[i] = &funcTool{def: d, exec: filteredExec}
-	}
-	opts := []AgentOption{
-		WithPrompt(subAgentPrompt),
-		WithTools(subTools...),
-		WithMaxIter(cfg.MaxIter),
-		WithLogger(cfg.Logger),
-	}
-	if cfg.GenParams != nil {
-		opts = append(opts, WithGeneration(Generation{
-			Temperature: cfg.GenParams.Temperature,
-			TopP:        cfg.GenParams.TopP,
-			TopK:        cfg.GenParams.TopK,
-			MaxTokens:   cfg.GenParams.MaxTokens,
-		}))
-	}
-	// Enable spawning on child if it won't be at max depth.
-	if !childAtMaxDepth {
-		opts = append(opts, WithSubAgentSpawning(
-			MaxSpawnDepth(cfg.MaxSpawnDepth),
-			DenySpawnTools(cfg.DenySpawnTools...),
-		))
-	}
-	// Inherit plan execution from parent.
-	if cfg.PlanExecution {
-		opts = append(opts, WithPlanExecution())
-	}
-
-	child := NewLLMAgent("sub:"+name, "sub-agent: "+params.Task, cfg.Provider, opts...)
-
-	// Execute with incremented depth.
-	childCtx := withSpawnDepth(ctx, depth+1)
-	result, err := child.Execute(childCtx, AgentTask{Input: params.Task})
-	if err != nil {
-		return DispatchResult{Content: "error: sub-agent failed: " + err.Error(), IsError: true}
-	}
-	return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
-}

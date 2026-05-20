@@ -222,7 +222,7 @@ func TestNetworkWithSkillsRegistersSkillTools(t *testing.T) {
 		agent.WithSkills(&stubSkillProvider{}),
 	)
 
-	defs := net.Tools.AllDefinitions()
+	defs := net.Tools().AllDefinitions()
 	toolNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		toolNames[d.Name] = true

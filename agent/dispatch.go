@@ -32,24 +32,6 @@ type ToolExecFunc = func(ctx context.Context, name string, args json.RawMessage)
 // Abstracts ToolRegistry.ExecuteStream.
 type ToolExecStreamFunc = func(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error)
 
-// DispatchBuiltins handles the built-in special-case tools (ask_user, execute_plan).
-// Returns (result, true) if the call was handled, or (zero, false)
-// if the caller should proceed with its own routing (agent delegation, direct tools).
-// Exported for network subpackage access.
-func DispatchBuiltins(ctx context.Context, tc ToolCall, dispatch DispatchFunc, ih InputHandler, agentName string, planExec bool, planStepsLimit, parallelLimit int) (DispatchResult, bool) {
-	if tc.Name == "ask_user" && ih != nil {
-		content, err := executeAskUser(ctx, ih, agentName, tc)
-		if err != nil {
-			return DispatchResult{Content: "error: " + err.Error(), IsError: true}, true
-		}
-		return DispatchResult{Content: content}, true
-	}
-	if tc.Name == "execute_plan" && planExec {
-		return executePlan(ctx, tc.Args, dispatch, planStepsLimit, parallelLimit), true
-	}
-	return DispatchResult{}, false
-}
-
 // toolResultToDispatch converts a ToolResult and error into a DispatchResult.
 // Centralizes the error-prefix convention used across all tool dispatch paths.
 func toolResultToDispatch(result ToolResult, err error) DispatchResult {

@@ -19,27 +19,26 @@ const defaultMaxIter = 25
 // AgentCore holds fields shared by LLMAgent and Network.
 // Both types embed this struct to eliminate field duplication.
 // New agent-level options only need to be wired here once.
-// Exported for use by network subpackage during Phase 2 migration.
 // This is an internal type; do not depend on stability.
 type AgentCore struct {
 	name             string
 	description      string
-	LLMProvider      Provider         // exported for network subpackage access (avoid clash with Provider interface name)
-	Tools            *ToolRegistry    // exported for network subpackage access
+	provider         Provider
+	tools            *ToolRegistry
 	processors       *ProcessorChain
 	systemPrompt     string
-	MaxIter          int              // exported for network subpackage access
-	Handler          InputHandler     // exported for network subpackage access (avoid clash with InputHandler interface name)
-	PlanExecution    bool             // exported for network subpackage access
-	sandbox          core.Sandbox     // holds a sandbox.Sandbox when set
+	maxIter          int
+	handler          InputHandler
+	planExecution    bool
+	sandbox          core.Sandbox
 	responseSchema   *ResponseSchema
 	dynamicPrompt    PromptFunc
 	dynamicModel     ModelFunc
-	DynamicTools     ToolsFunc        // exported for network subpackage access
+	dynamicTools     ToolsFunc
 	tracer           Tracer
-	Logger           *slog.Logger     // exported for network subpackage access
+	logger           *slog.Logger
 	mem              memory.AgentMemory
-	CachedToolDefs   []ToolDefinition // computed once at construction for the non-dynamic path; exported for network subpackage
+	cachedToolDefs   []ToolDefinition
 	maxAttachmentBytes  int64
 	suspendCount        int64      // guarded by suspendMu
 	suspendBytes        int64      // guarded by suspendMu
@@ -48,31 +47,31 @@ type AgentCore struct {
 	maxSuspendBytes     int64
 	compressModel       ModelFunc
 	compressThreshold   int
-	compressor          Compactor // per-turn tool-result compressor; sourced from agentConfig.compactor
-	GenParams        *GenerationParams // exported for network subpackage access (avoid clash with GenerationParams type name)
-	SpawnEnabled     bool              // exported for network subpackage access
-	SpawnDepthLimit  int               // exported for network subpackage access (avoid clash with MaxSpawnDepth option func)
-	DeniedSpawnTools []string          // exported for network subpackage access (avoid clash with DenySpawnTools option func)
-	ActiveSkillInstructions string // built from WithActiveSkills during initCore; exported for network subpackage
-	MaxParallelDispatch int // exported for network subpackage access; set by WithMaxParallelDispatch
-	MaxPlanSteps        int // exported for network subpackage access; set by WithMaxPlanSteps
-	MaxToolResultLen    int // exported for network subpackage access; set by WithMaxToolResultLen
-	ToolResultStore     core.ToolResultStore // exported for network subpackage access; set by WithToolResultStore
+	compressor          Compactor
+	genParams           *GenerationParams
+	spawnEnabled        bool
+	spawnDepthLimit     int
+	deniedSpawnTools    []string
+	activeSkillInstructions string
+	maxParallelDispatch int
+	maxPlanSteps        int
+	maxToolResultLen    int
+	toolResultStore     core.ToolResultStore
 }
 
 // initCore initializes shared fields on an AgentCore from the given config.
 // Called by NewLLMAgent and NewNetwork on the already-allocated parent struct.
 // Uses field-by-field assignment to avoid copying sync primitives in agentMemory.
-func InitCore(c *AgentCore, name, description string, provider Provider, cfg agentConfig) {
+func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Config) {
 	c.name = name
 	c.description = description
-	c.LLMProvider = provider
-	c.Tools = NewToolRegistry()
+	c.provider = provider
+	c.tools = NewToolRegistry()
 	c.processors = NewProcessorChain()
 	c.systemPrompt = cfg.prompt
-	c.MaxIter = defaultMaxIter
+	c.maxIter = defaultMaxIter
 	if cfg.maxIter > 0 {
-		c.MaxIter = cfg.maxIter
+		c.maxIter = cfg.maxIter
 	}
 
 	// Wire memory fields via Init to avoid accessing unexported fields across packages.
@@ -94,20 +93,20 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 	})
 
 	for _, t := range cfg.tools {
-		c.Tools.Add(t)
+		c.tools.Add(t)
 	}
 
 	// Register sandbox tools when a sandbox is configured.
-	if cfg.Sandbox != nil {
-		for _, t := range cfg.SandboxTools {
-			c.Tools.Add(t)
+	if cfg.sandbox != nil {
+		for _, t := range cfg.sandboxTools {
+			c.tools.Add(t)
 		}
 	}
 
 	// Register skill tools when a skill provider is configured.
-	if cfg.SkillProvider != nil {
-		for _, t := range skills.NewSkillTools(cfg.SkillProvider) {
-			c.Tools.Add(t)
+	if cfg.skillProvider != nil {
+		for _, t := range skills.NewSkillTools(cfg.skillProvider) {
+			c.tools.Add(t)
 		}
 	}
 
@@ -121,29 +120,29 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 		c.processors.AddPostTool(p)
 	}
 
-	c.Handler = cfg.inputHandler
-	c.PlanExecution = cfg.planExecution
-	c.sandbox = cfg.Sandbox
+	c.handler = cfg.inputHandler
+	c.planExecution = cfg.planExecution
+	c.sandbox = cfg.sandbox
 	c.responseSchema = cfg.responseSchema
 	c.dynamicPrompt = cfg.dynamicPrompt
 	c.dynamicModel = cfg.dynamicModel
-	c.DynamicTools = cfg.dynamicTools
+	c.dynamicTools = cfg.dynamicTools
 	c.tracer = cfg.tracer
-	c.Logger = cfg.logger
+	c.logger = cfg.logger
 	c.maxAttachmentBytes = cfg.maxAttachmentBytes
 	c.maxSuspendSnapshots = cfg.maxSuspendSnapshots
 	c.maxSuspendBytes = cfg.maxSuspendBytes
 	c.compressModel = cfg.compressModel
 	c.compressThreshold = cfg.compressThreshold
 	c.compressor = cfg.compactor // reuse the per-thread compactor for per-turn tool-result compression
-	c.GenParams = cfg.generationParams
-	c.SpawnEnabled = cfg.spawnEnabled
-	c.SpawnDepthLimit = cfg.maxSpawnDepth
-	c.DeniedSpawnTools = cfg.denySpawnTools
-	c.MaxParallelDispatch = cfg.maxParallelDispatch
-	c.MaxPlanSteps = cfg.maxPlanSteps
-	c.MaxToolResultLen = cfg.maxToolResultLen
-	c.ToolResultStore = cfg.toolResultStore
+	c.genParams = cfg.generationParams
+	c.spawnEnabled = cfg.spawnEnabled
+	c.spawnDepthLimit = cfg.maxSpawnDepth
+	c.deniedSpawnTools = cfg.denySpawnTools
+	c.maxParallelDispatch = cfg.maxParallelDispatch
+	c.maxPlanSteps = cfg.maxPlanSteps
+	c.maxToolResultLen = cfg.maxToolResultLen
+	c.toolResultStore = cfg.toolResultStore
 
 	// Build active skill instructions block.
 	if len(cfg.activeSkills) > 0 {
@@ -151,12 +150,32 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 		for _, s := range cfg.activeSkills {
 			parts = append(parts, "## Skill: "+s.Name+"\n\n"+s.Instructions)
 		}
-		c.ActiveSkillInstructions = strings.Join(parts, "\n\n---\n\n")
+		c.activeSkillInstructions = strings.Join(parts, "\n\n---\n\n")
 	}
 }
 
 func (c *AgentCore) Name() string        { return c.name }
 func (c *AgentCore) Description() string { return c.description }
+
+// Tools returns the agent's tool registry.
+// Used by network/ for Execute, ExecuteStream, AllDefinitions, and Add calls.
+func (c *AgentCore) Tools() *ToolRegistry { return c.tools }
+
+// ActiveSkillInstructions returns the compiled skill instructions block.
+// Used by network/ to append skill instructions to the system prompt.
+func (c *AgentCore) ActiveSkillInstructions() string { return c.activeSkillInstructions }
+
+// Logger returns the agent's structured logger.
+// Used by network/ for delegation event logging.
+func (c *AgentCore) Logger() *slog.Logger { return c.logger }
+
+// CachedToolDefs returns the pre-computed tool definition slice for the
+// non-dynamic path. Used by network/ at construction time.
+func (c *AgentCore) CachedToolDefs() []ToolDefinition { return c.cachedToolDefs }
+
+// SetCachedToolDefs replaces the cached tool definitions.
+// Used by network/ at construction time to prime the static-path cache.
+func (c *AgentCore) SetCachedToolDefs(defs []ToolDefinition) { c.cachedToolDefs = defs }
 
 // Close waits for all in-flight background persist goroutines to finish and
 // releases any memory orchestrator resources. Call during shutdown to ensure
@@ -186,15 +205,15 @@ func withSpawnDepth(ctx context.Context, depth int) context.Context {
 }
 
 // CacheBuiltinToolDefs appends built-in tool definitions (ask_user, execute_plan)
-// based on the agent's configuration. Exported for network subpackage access.
+// based on the agent's configuration.
 func (c *AgentCore) CacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition {
-	if c.Handler != nil {
+	if c.handler != nil {
 		defs = append(defs, askUserToolDef())
 	}
-	if c.PlanExecution {
+	if c.planExecution {
 		defs = append(defs, executePlanToolDef())
 	}
-	if c.SpawnEnabled {
+	if c.spawnEnabled {
 		defs = append(defs, spawnAgentToolDef())
 	}
 	return defs
@@ -202,27 +221,25 @@ func (c *AgentCore) CacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition
 
 // ResolvePromptAndProvider returns the effective prompt and provider for this request.
 // Dynamic overrides take precedence over construction-time values.
-// Exported for network subpackage access.
 func (c *AgentCore) ResolvePromptAndProvider(ctx context.Context, task AgentTask) (string, Provider) {
 	prompt := c.systemPrompt
 	if c.dynamicPrompt != nil {
 		prompt = c.dynamicPrompt(ctx, task)
 	}
-	provider := c.LLMProvider
+	p := c.provider
 	if c.dynamicModel != nil {
-		provider = c.dynamicModel(ctx, task)
+		p = c.dynamicModel(ctx, task)
 	}
-	return prompt, provider
+	return prompt, p
 }
 
 // ResolveDynamicTools returns tool definitions and an executor for a dynamic request.
 // Returns nil, nil when dynamicTools is not configured (caller should use cached defs).
-// Exported for network subpackage access.
 func (c *AgentCore) ResolveDynamicTools(ctx context.Context, task AgentTask) ([]ToolDefinition, ToolExecFunc) {
-	if c.DynamicTools == nil {
+	if c.dynamicTools == nil {
 		return nil, nil
 	}
-	dynTools := c.DynamicTools(ctx, task)
+	dynTools := c.dynamicTools(ctx, task)
 	var toolDefs []ToolDefinition
 	index := make(map[string]AnyTool, len(dynTools))
 	for _, t := range dynTools {
@@ -238,25 +255,22 @@ func (c *AgentCore) ResolveDynamicTools(ctx context.Context, task AgentTask) ([]
 	return toolDefs, executeTool
 }
 
-// baseLoopConfig assembles a LoopConfig from resolved values.
-// Callers provide the name prefix, resolved prompt/provider/tools, and dispatch function.
 // BaseLoopConfig assembles a LoopConfig from resolved values.
 // Callers provide the name prefix, resolved prompt/provider/tools, and dispatch function.
-// Exported for network subpackage access.
 func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools []ToolDefinition, dispatch DispatchFunc) LoopConfig {
 	return LoopConfig{
 		name:                name,
 		provider:            provider,
 		tools:               tools,
 		processors:          c.processors,
-		maxIter:             c.MaxIter,
+		maxIter:             c.maxIter,
 		mem:                 &c.mem,
-		inputHandler:        c.Handler,
+		inputHandler:        c.handler,
 		dispatch:            dispatch,
 		systemPrompt:        prompt,
 		responseSchema:      c.responseSchema,
 		tracer:              c.tracer,
-		logger:              c.Logger,
+		logger:              c.logger,
 		maxAttachmentBytes:  c.maxAttachmentBytes,
 		suspendCount:        &c.suspendCount,
 		suspendBytes:        &c.suspendBytes,
@@ -266,11 +280,11 @@ func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools
 		compressModel:       c.compressModel,
 		compressThreshold:   c.compressThreshold,
 		compressor:          c.compressor,
-		generationParams:    c.GenParams,
-		maxParallelDispatch: c.MaxParallelDispatch,
-		maxToolResultLen:    c.MaxToolResultLen,
-		maxPlanSteps:        c.MaxPlanSteps,
-		toolResultStore:     c.ToolResultStore,
+		generationParams:    c.genParams,
+		maxParallelDispatch: c.maxParallelDispatch,
+		maxToolResultLen:    c.maxToolResultLen,
+		maxPlanSteps:        c.maxPlanSteps,
+		toolResultStore:     c.toolResultStore,
 	}
 }
 
@@ -278,7 +292,6 @@ func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools
 // agentType is used in span attributes ("LLMAgent" or "Network").
 // logKey is used in log messages ("agent" or "network").
 // buildCfg constructs the LoopConfig; it receives the (possibly span-wrapped) context.
-// Exported for network subpackage access.
 func (c *AgentCore) ExecuteWithSpan(
 	ctx context.Context,
 	task AgentTask,
@@ -303,7 +316,7 @@ func (c *AgentCore) ExecuteWithSpan(
 		defer span.End()
 	}
 
-	c.Logger.Info(logKey+" started", logKey, c.name)
+	c.logger.Info(logKey+" started", logKey, c.name)
 	start := time.Now()
 	result, err := runLoop(ctx, buildCfg(ctx, task, ch), task, ch)
 
@@ -320,13 +333,13 @@ func (c *AgentCore) ExecuteWithSpan(
 	}
 
 	if err != nil {
-		c.Logger.Error(logKey+" failed", logKey, c.name,
+		c.logger.Error(logKey+" failed", logKey, c.name,
 			"error", err,
 			"duration", time.Since(start),
 			"tokens.input", result.Usage.InputTokens,
 			"tokens.output", result.Usage.OutputTokens)
 	} else {
-		c.Logger.Info(logKey+" completed", logKey, c.name,
+		c.logger.Info(logKey+" completed", logKey, c.name,
 			"duration", time.Since(start),
 			"tokens.input", result.Usage.InputTokens,
 			"tokens.output", result.Usage.OutputTokens,
@@ -340,7 +353,6 @@ func (c *AgentCore) ExecuteWithSpan(
 // ExecuteAgent runs a subagent with panic recovery. When ch is non-nil and
 // the agent implements StreamingAgent, events are forwarded through the parent
 // channel in real time via forwardSubagentStream.
-// Exported for network subpackage access.
 func ExecuteAgent(ctx context.Context, agent Agent, agentName string, task AgentTask, ch chan<- StreamEvent, logger *slog.Logger) (result AgentResult, err error) {
 	if ch != nil {
 		if sa, ok := agent.(StreamingAgent); ok {
@@ -459,30 +471,115 @@ func safeAgentError(agentName string, p any) error {
 
 // HasDynamicTools reports whether the agent has a dynamic tool resolver configured.
 func (c *AgentCore) HasDynamicTools() bool {
-	return c.DynamicTools != nil
+	return c.dynamicTools != nil
 }
 
-// ExecuteSpawn handles a spawn_agent tool call by delegating to ExecuteSpawnAgent
-// with configuration drawn from the AgentCore fields, avoiding repetitive field
-// threading at each call site.
+// ExecuteSpawn handles a spawn_agent tool call. When spawn is disabled, returns
+// an error result matching the dispatch-tool fallback semantics for unknown tools.
+// Otherwise constructs an ephemeral LLMAgent with inherited tools (minus denied
+// ones), executes it, and returns the result.
 func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, toolDefs []ToolDefinition, executeTool ToolExecFunc) DispatchResult {
-	return ExecuteSpawnAgent(ctx, args, SubAgentConfig{
-		Provider:       c.LLMProvider,
-		ToolDefs:       toolDefs,
-		ExecuteTool:    executeTool,
-		MaxIter:        c.MaxIter,
-		MaxSpawnDepth:  c.SpawnDepthLimit,
-		DenySpawnTools: c.DeniedSpawnTools,
-		PlanExecution:  c.PlanExecution,
-		Logger:         c.Logger,
-		GenParams:      c.GenParams,
-	})
+	if !c.spawnEnabled {
+		return DispatchResult{Content: "error: unknown tool: spawn_agent", IsError: true}
+	}
+
+	var params spawnAgentArgs
+	if err := json.Unmarshal(args, &params); err != nil {
+		return DispatchResult{Content: "error: invalid spawn_agent args: " + err.Error(), IsError: true}
+	}
+	if params.Task == "" {
+		return DispatchResult{Content: "error: spawn_agent requires non-empty task", IsError: true}
+	}
+
+	// Check depth limit.
+	depth := spawnDepth(ctx)
+	if depth >= c.spawnDepthLimit {
+		return DispatchResult{Content: fmt.Sprintf("error: max spawn depth (%d) exceeded", c.spawnDepthLimit), IsError: true}
+	}
+
+	name := spawnAgentName(params)
+
+	// Filter tool definitions: remove denied tools + ask_user.
+	// When child will be at max depth, also strip spawn_agent.
+	childAtMaxDepth := depth+1 >= c.spawnDepthLimit
+	var filteredDefs []ToolDefinition
+	deny := make(map[string]bool, len(c.deniedSpawnTools)+1)
+	deny["ask_user"] = true
+	for _, n := range c.deniedSpawnTools {
+		deny[n] = true
+	}
+	if childAtMaxDepth {
+		deny["spawn_agent"] = true
+	}
+	for _, d := range toolDefs {
+		if !deny[d.Name] {
+			filteredDefs = append(filteredDefs, d)
+		}
+	}
+
+	// Build filtered executor that respects deny list.
+	filteredExec := func(ctx context.Context, toolName string, toolArgs json.RawMessage) (ToolResult, error) {
+		if deny[toolName] {
+			return ToolResult{Error: "tool " + toolName + " is not available to sub-agents"}, nil
+		}
+		return executeTool(ctx, toolName, toolArgs)
+	}
+
+	// Build ephemeral options. Wrap each definition as its own AnyTool.
+	subTools := make([]AnyTool, len(filteredDefs))
+	for i, d := range filteredDefs {
+		subTools[i] = &funcTool{def: d, exec: filteredExec}
+	}
+	opts := []AgentOption{
+		WithPrompt(subAgentPrompt),
+		WithTools(subTools...),
+		WithMaxIter(c.maxIter),
+		WithLogger(c.logger),
+	}
+	if c.genParams != nil {
+		opts = append(opts, WithGeneration(Generation{
+			Temperature: c.genParams.Temperature,
+			TopP:        c.genParams.TopP,
+			TopK:        c.genParams.TopK,
+			MaxTokens:   c.genParams.MaxTokens,
+		}))
+	}
+	// Enable spawning on child if it won't be at max depth.
+	if !childAtMaxDepth {
+		opts = append(opts, WithSubAgentSpawning(
+			MaxSpawnDepth(c.spawnDepthLimit),
+			DenySpawnTools(c.deniedSpawnTools...),
+		))
+	}
+	// Inherit plan execution from parent.
+	if c.planExecution {
+		opts = append(opts, WithPlanExecution())
+	}
+
+	child := NewLLMAgent("sub:"+name, "sub-agent: "+params.Task, c.provider, opts...)
+
+	// Execute with incremented depth.
+	childCtx := withSpawnDepth(ctx, depth+1)
+	result, err := child.Execute(childCtx, AgentTask{Input: params.Task})
+	if err != nil {
+		return DispatchResult{Content: "error: sub-agent failed: " + err.Error(), IsError: true}
+	}
+	return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
 }
 
 // DispatchBuiltins handles built-in tool calls (ask_user, execute_plan) using
 // configuration drawn from the AgentCore fields. Returns (result, true) when
 // the call was handled; (zero, false) otherwise.
-// Within this method, DispatchBuiltins(...) resolves to the package-level function.
 func (c *AgentCore) DispatchBuiltins(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool) {
-	return DispatchBuiltins(ctx, tc, dispatch, c.Handler, c.name, c.PlanExecution, c.MaxPlanSteps, c.MaxParallelDispatch)
+	if tc.Name == "ask_user" && c.handler != nil {
+		content, err := executeAskUser(ctx, c.handler, c.name, tc)
+		if err != nil {
+			return DispatchResult{Content: "error: " + err.Error(), IsError: true}, true
+		}
+		return DispatchResult{Content: content}, true
+	}
+	if tc.Name == "execute_plan" && c.planExecution {
+		return executePlan(ctx, tc.Args, dispatch, c.maxPlanSteps, c.maxParallelDispatch), true
+	}
+	return DispatchResult{}, false
 }

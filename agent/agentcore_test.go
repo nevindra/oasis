@@ -32,19 +32,19 @@ func TestInitCoreWiresAllFields(t *testing.T) {
 	if c.description != "does stuff" {
 		t.Errorf("description = %q, want %q", c.description, "does stuff")
 	}
-	if c.LLMProvider != p {
+	if c.provider != p {
 		t.Error("provider not wired")
 	}
 	if c.systemPrompt != "test prompt" {
 		t.Errorf("systemPrompt = %q, want %q", c.systemPrompt, "test prompt")
 	}
-	if c.MaxIter != 42 {
-		t.Errorf("maxIter = %d, want 42", c.MaxIter)
+	if c.maxIter != 42 {
+		t.Errorf("maxIter = %d, want 42", c.maxIter)
 	}
-	if c.GenParams == nil || c.GenParams.Temperature == nil || *c.GenParams.Temperature != 0.7 {
+	if c.genParams == nil || c.genParams.Temperature == nil || *c.genParams.Temperature != 0.7 {
 		t.Error("generationParams.Temperature not wired")
 	}
-	if c.Tools == nil {
+	if c.tools == nil {
 		t.Error("tools registry not initialized")
 	}
 	if c.processors == nil {
@@ -57,8 +57,8 @@ func TestInitCoreDefaultMaxIter(t *testing.T) {
 	var c AgentCore
 	InitCore(&c, "a", "d", &mockProvider{name: "p"}, cfg)
 
-	if c.MaxIter != defaultMaxIter {
-		t.Errorf("maxIter = %d, want default %d", c.MaxIter, defaultMaxIter)
+	if c.maxIter != defaultMaxIter {
+		t.Errorf("maxIter = %d, want default %d", c.maxIter, defaultMaxIter)
 	}
 }
 
@@ -66,8 +66,8 @@ func TestDefaultMaxIterIs25(t *testing.T) {
 	cfg := BuildConfig(nil)
 	var c AgentCore
 	InitCore(&c, "t", "", &mockProvider{name: "p"}, cfg)
-	if c.MaxIter != 25 {
-		t.Errorf("expected defaultMaxIter 25, got %d", c.MaxIter)
+	if c.maxIter != 25 {
+		t.Errorf("expected defaultMaxIter 25, got %d", c.maxIter)
 	}
 }
 
@@ -117,8 +117,8 @@ func TestCacheBuiltinToolDefs(t *testing.T) {
 	}
 
 	// With all builtins.
-	c.Handler = &mockInputHandler{response: InputResponse{Value: "ok"}}
-	c.PlanExecution = true
+	c.handler = &mockInputHandler{response: InputResponse{Value: "ok"}}
+	c.planExecution = true
 	defs = c.CacheBuiltinToolDefs([]ToolDefinition{{Name: "existing"}})
 	if len(defs) != 3 { // existing + ask_user + execute_plan
 		t.Errorf("got %d defs, want 3", len(defs))

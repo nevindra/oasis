@@ -17,10 +17,11 @@ type AgentTask = core.AgentTask
 type AgentResult = core.AgentResult
 type StepTrace = core.StepTrace
 
-// agentConfig holds shared configuration for LLMAgent and Network.
-type agentConfig struct {
+// Config holds shared configuration for LLMAgent and Network.
+// Fields are unexported; use accessor methods (e.g. Agents()) for out-of-package reads.
+type Config struct {
 	tools            []AnyTool
-	Agents           []Agent // exported for network subpackage
+	agents           []Agent
 	prompt           string
 	maxIter           int
 	preProcessors      []PreProcessor
@@ -38,8 +39,8 @@ type agentConfig struct {
 	memoryEmbedding      EmbeddingProvider // set only by WithUserMemory; used to detect provider conflicts
 	crossThreadEmbedding EmbeddingProvider // set only by history.CrossThreadSearch; used to detect provider conflicts
 	planExecution     bool            // enabled by WithPlanExecution option
-	Sandbox           core.Sandbox    // set by WithSandbox option (exported for network subpackage)
-	SandboxTools      []AnyTool       // tools auto-registered by WithSandbox (exported for network subpackage)
+	sandbox           core.Sandbox    // set by WithSandbox option
+	sandboxTools      []AnyTool       // tools auto-registered by WithSandbox
 	responseSchema    *ResponseSchema // set by WithResponseSchema option
 	dynamicPrompt     PromptFunc      // set by WithDynamicPrompt option
 	dynamicModel      ModelFunc       // set by WithDynamicModel option
@@ -61,7 +62,7 @@ type agentConfig struct {
 	maxSpawnDepth  int      // set by MaxSpawnDepth (default 1)
 	denySpawnTools []string // set by DenySpawnTools
 	activeSkills   []Skill        // set by WithActiveSkills
-	SkillProvider  SkillProvider   // exported for network subpackage; set by WithSkills
+	skillProvider  SkillProvider  // set by WithSkills
 
 	// Configurable runtime limits (defaults applied in BuildConfig).
 	maxParallelDispatch int // set by WithMaxParallelDispatch; default 10
@@ -73,8 +74,12 @@ type agentConfig struct {
 	toolResultStoreSet bool // distinguishes "default" from "explicitly nil"
 }
 
+// Agents returns the subagents registered via WithAgents.
+// Called by NewNetwork at construction time to populate its agent map.
+func (c *Config) Agents() []core.Agent { return c.agents }
+
 // AgentOption configures an LLMAgent or Network.
-type AgentOption func(*agentConfig)
+type AgentOption func(*Config)
 
 // PromptFunc, ToolsFunc, and ModelFunc share the same func(ctx, task) T shape.
 // A generic ResolveFunc[T] was considered and rejected: the named types provide
@@ -95,24 +100,24 @@ type ToolsFunc func(ctx context.Context, task AgentTask) []AnyTool
 
 // WithTools adds tools to the agent or network.
 func WithTools(tools ...AnyTool) AgentOption {
-	return func(c *agentConfig) { c.tools = append(c.tools, tools...) }
+	return func(c *Config) { c.tools = append(c.tools, tools...) }
 }
 
 // WithPrompt sets the system prompt for the agent or network router.
 func WithPrompt(s string) AgentOption {
-	return func(c *agentConfig) { c.prompt = s }
+	return func(c *Config) { c.prompt = s }
 }
 
 // WithMaxIter sets the maximum tool-calling iterations.
 func WithMaxIter(n int) AgentOption {
-	return func(c *agentConfig) { c.maxIter = n }
+	return func(c *Config) { c.maxIter = n }
 }
 
 // WithMaxAttachmentBytes sets the maximum total bytes of attachments
 // accumulated from tool results during the execution loop. Default is 50 MB.
 // Zero means use the default.
 func WithMaxAttachmentBytes(n int64) AgentOption {
-	return func(c *agentConfig) { c.maxAttachmentBytes = n }
+	return func(c *Config) { c.maxAttachmentBytes = n }
 }
 
 // WithSuspendBudget sets per-agent limits on concurrent suspended snapshots.
@@ -121,7 +126,7 @@ func WithMaxAttachmentBytes(n int64) AgentOption {
 // When either limit is exceeded, new suspensions are rejected (the underlying
 // processor error is returned instead of ErrSuspended).
 func WithSuspendBudget(maxSnapshots int, maxBytes int64) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		c.maxSuspendSnapshots = maxSnapshots
 		c.maxSuspendBytes = maxBytes
 	}
@@ -144,7 +149,7 @@ func WithSuspendBudget(maxSnapshots int, maxBytes int64) AgentOption {
 // per-thread mechanisms (Compaction, SemanticTrim, AutoTitle,
 // CrossThreadSearch) silently no-op.
 func WithHistory(opts ...history.Option) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		cfg := history.Build(opts)
 		c.store = cfg.Store
 		c.maxHistory = cfg.MaxHistory
@@ -189,7 +194,7 @@ type Generation struct {
 //	    MaxTokens:   oasis.Ptr(1024),
 //	})
 func WithGeneration(g Generation) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		if c.generationParams == nil {
 			c.generationParams = &GenerationParams{}
 		}
@@ -202,7 +207,7 @@ func WithGeneration(g Generation) AgentOption {
 
 // WithAgents adds subagents to a Network. Ignored by LLMAgent.
 func WithAgents(agents ...Agent) AgentOption {
-	return func(c *agentConfig) { c.Agents = append(c.Agents, agents...) }
+	return func(c *Config) { c.agents = append(c.agents, agents...) }
 }
 
 // WithPlanExecution enables the built-in "execute_plan" tool that batches
@@ -214,7 +219,7 @@ func WithAgents(agents ...Agent) AgentOption {
 // This reduces latency and token usage for fan-out patterns where the LLM
 // needs to call the same or different tools multiple times with known inputs.
 func WithPlanExecution() AgentOption {
-	return func(c *agentConfig) { c.planExecution = true }
+	return func(c *Config) { c.planExecution = true }
 }
 
 // WithSandbox attaches a sandbox environment to the agent. Pass the sandbox
@@ -227,15 +232,15 @@ func WithPlanExecution() AgentOption {
 //	sb, _ := mgr.Create(ctx, sandbox.CreateOpts{SessionID: "s1"})
 //	agent := oasis.NewLLMAgent("a", "d", provider, oasis.WithSandbox(sb, sandbox.Tools(sb)...))
 func WithSandbox(sb core.Sandbox, tools ...AnyTool) AgentOption {
-	return func(c *agentConfig) {
-		c.Sandbox = sb
-		c.SandboxTools = tools
+	return func(c *Config) {
+		c.sandbox = sb
+		c.sandboxTools = tools
 	}
 }
 
 // SubAgentOption configures spawn_agent behavior.
 // Scoped type — only accepted by WithSubAgentSpawning.
-type SubAgentOption func(*agentConfig)
+type SubAgentOption func(*Config)
 
 // WithSubAgentSpawning enables the built-in spawn_agent tool.
 // When enabled, the LLM can dynamically create ephemeral child agents
@@ -248,7 +253,7 @@ type SubAgentOption func(*agentConfig)
 //	oasis.WithSubAgentSpawning(oasis.MaxSpawnDepth(2))                 // allow recursive spawning
 //	oasis.WithSubAgentSpawning(oasis.DenySpawnTools("shell_exec"))     // restrict tools
 func WithSubAgentSpawning(opts ...SubAgentOption) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		c.spawnEnabled = true
 		c.maxSpawnDepth = 1
 		for _, o := range opts {
@@ -261,7 +266,7 @@ func WithSubAgentSpawning(opts ...SubAgentOption) AgentOption {
 // Default: 1 (parent can spawn, children cannot).
 // A depth of 2 means sub-agents can spawn their own sub-agents once.
 func MaxSpawnDepth(n int) SubAgentOption {
-	return func(c *agentConfig) { c.maxSpawnDepth = n }
+	return func(c *Config) { c.maxSpawnDepth = n }
 }
 
 // DenySpawnTools prevents specific tools from being inherited by sub-agents.
@@ -269,7 +274,7 @@ func MaxSpawnDepth(n int) SubAgentOption {
 // Multiple calls accumulate (append, not replace).
 // ask_user is always blocked in sub-agents regardless of this setting.
 func DenySpawnTools(names ...string) SubAgentOption {
-	return func(c *agentConfig) { c.denySpawnTools = append(c.denySpawnTools, names...) }
+	return func(c *Config) { c.denySpawnTools = append(c.denySpawnTools, names...) }
 }
 
 // WithActiveSkills pre-activates skills whose instructions are appended to
@@ -277,7 +282,7 @@ func DenySpawnTools(names ...string) SubAgentOption {
 // should always be available. References are NOT auto-resolved here — call
 // ActivateWithReferences before passing skills if needed.
 func WithActiveSkills(skills ...Skill) AgentOption {
-	return func(c *agentConfig) { c.activeSkills = append(c.activeSkills, skills...) }
+	return func(c *Config) { c.activeSkills = append(c.activeSkills, skills...) }
 }
 
 // WithSkills registers a SkillProvider and automatically adds skill_discover
@@ -285,7 +290,7 @@ func WithActiveSkills(skills ...Skill) AgentOption {
 // runtime. If the provider also implements SkillWriter, skill_create and
 // skill_update tools are added too.
 func WithSkills(p SkillProvider) AgentOption {
-	return func(c *agentConfig) { c.SkillProvider = p }
+	return func(c *Config) { c.skillProvider = p }
 }
 
 // WithResponseSchema sets the response schema for structured JSON output.
@@ -293,7 +298,7 @@ func WithSkills(p SkillProvider) AgentOption {
 // Providers translate this to their native mechanism (e.g. Gemini responseSchema,
 // OpenAI response_format).
 func WithResponseSchema(s *ResponseSchema) AgentOption {
-	return func(c *agentConfig) { c.responseSchema = s }
+	return func(c *Config) { c.responseSchema = s }
 }
 
 // WithDynamicPrompt sets a per-request prompt resolution function.
@@ -302,7 +307,7 @@ func WithResponseSchema(s *ResponseSchema) AgentOption {
 // Overrides WithPrompt when set. If the function returns "", no system prompt
 // is used (same as omitting WithPrompt).
 func WithDynamicPrompt(fn PromptFunc) AgentOption {
-	return func(c *agentConfig) { c.dynamicPrompt = fn }
+	return func(c *Config) { c.dynamicPrompt = fn }
 }
 
 // WithDynamicModel sets a per-request model selection function.
@@ -310,7 +315,7 @@ func WithDynamicPrompt(fn PromptFunc) AgentOption {
 // call, and its return value is used as the LLM provider for that execution.
 // Overrides the construction-time provider when set.
 func WithDynamicModel(fn ModelFunc) AgentOption {
-	return func(c *agentConfig) { c.dynamicModel = fn }
+	return func(c *Config) { c.dynamicModel = fn }
 }
 
 // WithDynamicTools sets a per-request tool selection function.
@@ -318,43 +323,43 @@ func WithDynamicModel(fn ModelFunc) AgentOption {
 // call, and its return value REPLACES the construction-time tools for that
 // execution. To remove all tools for a request, return nil or an empty slice.
 func WithDynamicTools(fn ToolsFunc) AgentOption {
-	return func(c *agentConfig) { c.dynamicTools = fn }
+	return func(c *Config) { c.dynamicTools = fn }
 }
 
 // WithTracer sets the tracer for the agent. When set, the agent emits
 // spans for execution, memory, and loop operations. Use observer.NewTracer()
 // for an OTEL-backed implementation.
 func WithTracer(t Tracer) AgentOption {
-	return func(c *agentConfig) { c.tracer = t }
+	return func(c *Config) { c.tracer = t }
 }
 
 // WithLogger sets the structured logger for the agent. When set, replaces
 // all log.Printf calls with structured slog output. If not set, a no-op
 // logger is used (no output).
 func WithLogger(l *slog.Logger) AgentOption {
-	return func(c *agentConfig) { c.logger = l }
+	return func(c *Config) { c.logger = l }
 }
 
 // WithPreProcessors registers PreProcessor hooks that run before each LLM call.
 func WithPreProcessors(processors ...PreProcessor) AgentOption {
-	return func(c *agentConfig) { c.preProcessors = append(c.preProcessors, processors...) }
+	return func(c *Config) { c.preProcessors = append(c.preProcessors, processors...) }
 }
 
 // WithPostProcessors registers PostProcessor hooks that run after each LLM response.
 func WithPostProcessors(processors ...PostProcessor) AgentOption {
-	return func(c *agentConfig) { c.postProcessors = append(c.postProcessors, processors...) }
+	return func(c *Config) { c.postProcessors = append(c.postProcessors, processors...) }
 }
 
 // WithPostToolProcessors registers PostToolProcessor hooks that run after each tool result.
 func WithPostToolProcessors(processors ...PostToolProcessor) AgentOption {
-	return func(c *agentConfig) { c.postToolProcessors = append(c.postToolProcessors, processors...) }
+	return func(c *Config) { c.postToolProcessors = append(c.postToolProcessors, processors...) }
 }
 
 // WithInputHandler sets the handler for human-in-the-loop interactions.
 // When set, the agent gains an "ask_user" tool (LLM-driven) and processors
 // can access the handler via InputHandlerFromContext(ctx).
 func WithInputHandler(h InputHandler) AgentOption {
-	return func(c *agentConfig) { c.inputHandler = h }
+	return func(c *Config) { c.inputHandler = h }
 }
 
 
@@ -368,7 +373,7 @@ func WithInputHandler(h InputHandler) AgentOption {
 // UpsertFact. Write requires WithHistory(history.Store(...)) — without it,
 // extraction is silently skipped (logged as a warning at construction time).
 func WithUserMemory(m MemoryStore, e EmbeddingProvider) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		c.memory = m
 		c.embedding = e
 		c.memoryEmbedding = e // kept separately for conflict detection in BuildConfig
@@ -378,7 +383,7 @@ func WithUserMemory(m MemoryStore, e EmbeddingProvider) AgentOption {
 // WithMaxParallelDispatch caps the number of concurrent tool call goroutines.
 // Default is 10. Set higher when tools are I/O-bound and can tolerate fan-out.
 func WithMaxParallelDispatch(n int) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		if n > 0 {
 			c.maxParallelDispatch = n
 		}
@@ -388,7 +393,7 @@ func WithMaxParallelDispatch(n int) AgentOption {
 // WithMaxPlanSteps caps the number of steps in a single execute_plan call.
 // Default is 50. The LLM gets an error if it submits a plan with more steps.
 func WithMaxPlanSteps(n int) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		if n > 0 {
 			c.maxPlanSteps = n
 		}
@@ -399,7 +404,7 @@ func WithMaxPlanSteps(n int) AgentOption {
 // conversation history (in runes). Results larger than this are truncated with
 // a paging marker. Default is 100_000 runes (~25K tokens).
 func WithMaxToolResultLen(n int) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		if n > 0 {
 			c.maxToolResultLen = n
 		}
@@ -411,7 +416,7 @@ func WithMaxToolResultLen(n int) AgentOption {
 // legacy truncation marker with no id; the read_full_result tool is not
 // registered).
 func WithToolResultStore(s core.ToolResultStore) AgentOption {
-	return func(c *agentConfig) {
+	return func(c *Config) {
 		c.toolResultStore = s
 		c.toolResultStoreSet = true
 	}
@@ -427,10 +432,10 @@ func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
 func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
 func (d discardHandler) WithGroup(string) slog.Handler            { return d }
 
-func BuildConfig(opts []AgentOption) agentConfig {
-	var c agentConfig
+func BuildConfig(opts []AgentOption) *Config {
+	c := &Config{}
 	for _, opt := range opts {
-		opt(&c)
+		opt(c)
 	}
 	if c.logger == nil {
 		c.logger = nopLogger

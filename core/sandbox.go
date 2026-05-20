@@ -7,7 +7,7 @@ package core
 //
 // The full sandbox API (shell, file I/O, browser, etc.) is defined in the
 // satellite package. The core interface exists solely to give the
-// agentConfig.Sandbox field a concrete type without importing the satellite.
+// agent.Config.sandbox field a concrete type without importing the satellite.
 //
 // Used by WithSandbox to attach a sandbox to an agent. Pass any
 // implementation that satisfies this interface.
