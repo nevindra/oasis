@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/nevindra/oasis/core"
-	"github.com/nevindra/oasis/skills"
 )
 
 // LLMAgent is an Agent that uses an LLM with tools to complete tasks.
@@ -24,19 +23,6 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 	cfg := BuildConfig(opts)
 	a := &LLMAgent{}
 	InitCore(&a.AgentCore, name, description, provider, cfg)
-
-	if cfg.Sandbox != nil {
-		for _, t := range cfg.SandboxTools {
-			a.Tools.Add(t)
-		}
-	}
-
-	// Register skill tools if a provider is configured.
-	if cfg.SkillProvider != nil {
-		for _, t := range skills.NewSkillTools(cfg.SkillProvider) {
-			a.Tools.Add(t)
-		}
-	}
 
 	// Auto-register read_full_result when a store is configured.
 	if cfg.toolResultStore != nil {

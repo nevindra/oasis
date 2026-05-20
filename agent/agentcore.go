@@ -11,6 +11,7 @@ import (
 
 	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
+	"github.com/nevindra/oasis/skills"
 )
 
 const defaultMaxIter = 25
@@ -95,6 +96,21 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 	for _, t := range cfg.tools {
 		c.Tools.Add(t)
 	}
+
+	// Register sandbox tools when a sandbox is configured.
+	if cfg.Sandbox != nil {
+		for _, t := range cfg.SandboxTools {
+			c.Tools.Add(t)
+		}
+	}
+
+	// Register skill tools when a skill provider is configured.
+	if cfg.SkillProvider != nil {
+		for _, t := range skills.NewSkillTools(cfg.SkillProvider) {
+			c.Tools.Add(t)
+		}
+	}
+
 	for _, p := range cfg.preProcessors {
 		c.processors.AddPre(p)
 	}

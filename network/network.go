@@ -10,7 +10,6 @@ import (
 
 	"github.com/nevindra/oasis/agent"
 	"github.com/nevindra/oasis/core"
-	"github.com/nevindra/oasis/skills"
 )
 
 // Network is an Agent that coordinates subagents and tools via an LLM router.
@@ -31,19 +30,6 @@ func NewNetwork(name, description string, router core.Provider, opts ...agent.Ag
 		agents: make(map[string]agent.Agent),
 	}
 	agent.InitCore(&n.AgentCore, name, description, router, cfg)
-
-	if cfg.Sandbox != nil {
-		for _, t := range cfg.SandboxTools {
-			n.Tools.Add(t)
-		}
-	}
-
-	// Register skill tools if a provider is configured.
-	if cfg.SkillProvider != nil {
-		for _, t := range skills.NewSkillTools(cfg.SkillProvider) {
-			n.Tools.Add(t)
-		}
-	}
 
 	for _, a := range cfg.Agents {
 		n.agents[a.Name()] = a
@@ -109,23 +95,13 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 	var dispatch agent.DispatchFunc
 	dispatch = func(ctx context.Context, tc core.ToolCall) agent.DispatchResult {
 		// Built-in tools: ask_user, execute_plan.
-		if r, ok := agent.DispatchBuiltins(ctx, tc, dispatch, n.Handler, n.Name(), n.PlanExecution, n.MaxPlanSteps, n.MaxParallelDispatch); ok {
+		if r, ok := n.DispatchBuiltins(ctx, tc, dispatch); ok {
 			return r
 		}
 
 		// spawn_agent: dynamic sub-agent creation.
 		if tc.Name == "spawn_agent" && n.SpawnEnabled {
-			return agent.ExecuteSpawnAgent(ctx, tc.Args, agent.SubAgentConfig{
-				Provider:       n.LLMProvider,
-				ToolDefs:       resolvedToolDefs,
-				ExecuteTool:    executeTool,
-				MaxIter:        n.MaxIter,
-				MaxSpawnDepth:  n.SpawnDepthLimit,
-				DenySpawnTools: n.DeniedSpawnTools,
-				PlanExecution:  n.PlanExecution,
-				Logger:         n.Logger,
-				GenParams:      n.GenParams,
-			})
+			return n.ExecuteSpawn(ctx, tc.Args, resolvedToolDefs, executeTool)
 		}
 
 		// Check if it's an agent call (prefixed with "agent_")
