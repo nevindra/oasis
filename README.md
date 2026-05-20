@@ -10,11 +10,12 @@ import oasis "github.com/nevindra/oasis"
 
 Most agent frameworks are wrappers around LLM SDKs with hardcoded abstractions. Oasis is different:
 
-- **Opinionated core, composable edges.** The execution loop, memory pipeline, and suspend/resume are framework-owned and optimized as a unit. Providers, tools, stores, and processors are open interfaces — swap any implementation.
-- **Agents compose recursively.** An `LLMAgent` is an `Agent`. A `Network` of agents is an `Agent`. A `Workflow` containing both is an `Agent`. Nest them arbitrarily.
+- **Opinions where they earn their keep.** The run loop, memory pipeline, and suspend/resume are framework-owned and optimized as a unit. Topology, agent count, supervision strategy, and app shape are yours. Providers, tools, stores, and processors are open interfaces — swap any implementation.
+- **Agents compose recursively.** An `LLMAgent` is an `Agent`. A `Network` of agents is an `Agent`. A `Workflow` containing both is an `Agent`. Nest them arbitrarily — the same primitives carry from today's tool-calling loop into tomorrow's sub-agent spawning and runtime delegation.
 - **No LLM SDKs.** Every provider uses raw `net/http`. You control the bytes. Zero vendor lock-in, minimal dependencies.
+- **Codegen-friendly by design.** Consistent shapes across every Tool, Provider, and Store. Predictable verbs. No `any` at the boundary. APIs built so an LLM coding assistant with zero Oasis context writes correct code on the first try.
 - **Go-native concurrency.** Parallel tool dispatch, background agents via `Spawn()`, DAG workflows with automatic wave execution — all using goroutines and channels.
-- **Production primitives, not demos.** Rate limiting, retry with backoff, batch processing, persistent Graph RAG, semantic memory with decay, suspend/resume, Docker-based sandbox with code execution, shell, file I/O, browser, and MCP.
+- **Production primitives, built in.** Rate limiting, retry with backoff, batch processing, persistent Graph RAG, semantic memory with decay, suspend/resume, Docker-based sandbox with code execution, shell, file I/O, browser, and MCP.
 
 ## Quick Start
 
@@ -237,7 +238,9 @@ oasis/
 |-- ingest/                             # Document chunking pipeline
 |-- tools/                              # Built-in tools
 |
-|-- cmd/bot_example/                    # Reference application
+|-- cmd/ix/                             # Sandbox daemon binary
+|-- cmd/mcp-docs/                       # MCP documentation server
+|-- cmd/modelgen/                       # Provider model registry generator
 ```
 
 ## Configuration
@@ -253,9 +256,8 @@ See [docs/configuration/reference.md](docs/configuration/reference.md) for the f
 - [Guides](docs/guides/) — how-to guides for building custom components
 - [API Reference](docs/api/) — complete interface definitions, types, and options
 - [Configuration](docs/configuration/reference.md) — all config options and environment variables
-- [Philosophy](docs/PHILOSOPHY.md) — design principles and framework identity
-- [Engineering](docs/ENGINEERING.md) — coding standards and production rules
-- [Deployment](cmd/bot_example/DEPLOYMENT.md) — Docker, cloud deployment for the reference bot
+- [Philosophy](docs/PHILOSOPHY.md) — the four constraints, API strategy, and framework identity
+- [Engineering](docs/ENGINEERING.md) — coding standards, codegen-friendly API rules, production rules
 
 ## MCP Docs Server
 
