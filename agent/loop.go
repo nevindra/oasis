@@ -276,9 +276,27 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 			cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(cfg.tools))
 			resp, err = cfg.provider.Chat(iterCtx, req)
 		} else if ch != nil {
-			// No tools, streaming — stream the response directly.
+			// No tools, streaming — use an intermediate channel so the
+			// provider's defer-close doesn't touch ch directly. safeCloseCh
+			// remains the sole closer of ch, preventing double-close panics.
 			cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
-			resp, err = cfg.provider.ChatStream(iterCtx, req, ch)
+			iterCh := make(chan StreamEvent, 64)
+			var fwdWg sync.WaitGroup
+			fwdWg.Add(1)
+			go func() {
+				defer fwdWg.Done()
+				for ev := range iterCh {
+					select {
+					case ch <- ev:
+					case <-ctx.Done():
+						for range iterCh {
+						}
+						return
+					}
+				}
+			}()
+			resp, err = cfg.provider.ChatStream(iterCtx, req, iterCh)
+			fwdWg.Wait()
 			if err != nil {
 				endIter()
 				safeCloseCh()
@@ -507,7 +525,25 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 	var err error
 	synthReq := ChatRequest{Messages: messages, GenerationParams: cfg.generationParams}
 	if ch != nil {
-		resp, err = cfg.provider.ChatStream(synthCtx, synthReq, ch)
+		// Use an intermediate channel so the provider's defer-close doesn't
+		// touch ch directly. safeCloseCh remains the sole closer of ch.
+		synthCh := make(chan StreamEvent, 64)
+		var fwdWg sync.WaitGroup
+		fwdWg.Add(1)
+		go func() {
+			defer fwdWg.Done()
+			for ev := range synthCh {
+				select {
+				case ch <- ev:
+				case <-ctx.Done():
+					for range synthCh {
+					}
+					return
+				}
+			}
+		}()
+		resp, err = cfg.provider.ChatStream(synthCtx, synthReq, synthCh)
+		fwdWg.Wait()
 	} else {
 		resp, err = cfg.provider.Chat(synthCtx, synthReq)
 	}

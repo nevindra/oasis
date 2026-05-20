@@ -370,6 +370,51 @@ func TestOnceCloseConcurrent(t *testing.T) {
 	}
 }
 
+// --- double-close regression test ---
+
+// TestForwardSubagentStreamDoubleCloseSafe verifies that removing the recover()
+// from onceClose does not cause a "close of closed channel" panic.
+//
+// Root cause: providers (including mockProvider) call defer close(ch) inside
+// ChatStream. When loop.go passed ch directly to ChatStream on the no-tools
+// streaming path, the provider closed ch first, then runLoop's safeCloseCh()
+// tried to close it again via its own sync.Once — triggering the panic before
+// the Once had a chance to mark itself done.
+//
+// The fix routes the no-tools and synthesis paths through an intermediate iterCh
+// (mirroring the with-tools path), so providers never touch ch directly and
+// safeCloseCh remains the sole closer.
+func TestForwardSubagentStreamDoubleCloseSafe(t *testing.T) {
+	// mockProvider.ChatStream does defer close(ch) — this is the bypass that
+	// previously triggered the double-close when ch was passed directly.
+	provider := &mockProvider{
+		name:      "test",
+		responses: []ChatResponse{{Content: "streamed hello"}},
+	}
+	a := NewLLMAgent("double-close-test", "regression", provider)
+
+	ch := make(chan StreamEvent, 64)
+	result, err := a.ExecuteStream(context.Background(), AgentTask{Input: "hi"}, ch)
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+	if result.Output != "streamed hello" {
+		t.Errorf("Output = %q, want %q", result.Output, "streamed hello")
+	}
+
+	// Drain to completion — any "close of closed channel" panic surfaces here
+	// (or inside ExecuteStream above) if the fix is absent.
+	var events []StreamEvent
+	for ev := range ch {
+		events = append(events, ev)
+	}
+
+	// Sanity: we should have at least input-received + processing-start + text-delta.
+	if len(events) < 3 {
+		t.Errorf("expected ≥3 events, got %d", len(events))
+	}
+}
+
 // --- startDrainTimeout tests ---
 
 func TestStartDrainTimeoutDrainsChannel(t *testing.T) {

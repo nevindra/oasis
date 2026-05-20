@@ -314,7 +314,7 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 			return runLoop(ctx, resumeCfg, task, nil)
 		},
 		resumeStream: func(ctx context.Context, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error) {
-			defer close(ch)
+			// runLoop closes ch via its safeCloseCh — no additional defer close here.
 			resumed := make([]ChatMessage, len(snapshot)+1)
 			copy(resumed, snapshot)
 			resumed[len(snapshot)] = UserMessage("Human input: " + string(data))
