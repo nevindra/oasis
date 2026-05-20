@@ -76,6 +76,10 @@ var WithMaxParallelDispatch = agent.WithMaxParallelDispatch
 var WithMaxPlanSteps = agent.WithMaxPlanSteps
 var WithMaxToolResultLen = agent.WithMaxToolResultLen
 var WithToolResultStore = agent.WithToolResultStore
+var NewInMemoryToolResultStore = core.NewInMemoryToolResultStore
+var WithToolResultMaxBytes = core.WithToolResultMaxBytes
+var WithToolResultTTL = core.WithToolResultTTL
+var ErrToolResultNotFound = core.ErrToolResultNotFound
 
 // --- History ---
 
@@ -371,6 +375,9 @@ func NewToolRegistry() *ToolRegistry { return core.NewToolRegistry() }
 func Erase[In, Out any](t core.Tool[In, Out]) core.AnyTool {
 	return core.Erase(t)
 }
+
+// ToolResultStore is the optional capability for paging large tool results.
+type ToolResultStore = core.ToolResultStore
 
 // StreamingTool re-exports core.StreamingTool for type-safe streaming tools.
 type StreamingTool[In, Out any] = core.StreamingTool[In, Out]
