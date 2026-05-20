@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1275,4 +1276,60 @@ func TestWithActiveSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// --- Embedding provider conflict tests ---
+
+type fakeEmbeddingProvider struct{ name string }
+
+func (f *fakeEmbeddingProvider) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = []float32{0}
+	}
+	return out, nil
+}
+func (f *fakeEmbeddingProvider) Dimensions() int { return 1 }
+func (f *fakeEmbeddingProvider) Name() string    { return f.name }
+
+type fakeMemoryStore struct{}
+
+func (fakeMemoryStore) Init(_ context.Context) error                                           { return nil }
+func (fakeMemoryStore) UpsertFact(_ context.Context, _, _ string, _ []float32) error          { return nil }
+func (fakeMemoryStore) SearchFacts(_ context.Context, _ []float32, _ int) ([]ScoredFact, error) { return nil, nil }
+func (fakeMemoryStore) DeleteFact(_ context.Context, _ string) error                           { return nil }
+func (fakeMemoryStore) DeleteMatchingFacts(_ context.Context, _ string) error                  { return nil }
+func (fakeMemoryStore) DecayOldFacts(_ context.Context) error                                  { return nil }
+func (fakeMemoryStore) BuildContext(_ context.Context, _ []float32) (string, error)            { return "", nil }
+
+func TestBuildConfigPanicsOnConflictingEmbedding(t *testing.T) {
+	em1 := &fakeEmbeddingProvider{name: "em1"}
+	em2 := &fakeEmbeddingProvider{name: "em2"}
+	mem := &fakeMemoryStore{}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for conflicting embedding providers, got nil")
+		}
+		if !strings.Contains(fmt.Sprint(r), "conflicting embedding providers") {
+			t.Errorf("expected 'conflicting embedding providers' in panic, got: %v", r)
+		}
+	}()
+
+	_ = BuildConfig([]AgentOption{
+		WithUserMemory(mem, em1),
+		WithHistory(history.CrossThreadSearch(em2)),
+	})
+}
+
+func TestBuildConfigAllowsMatchingEmbedding(t *testing.T) {
+	em := &fakeEmbeddingProvider{name: "em"}
+	mem := &fakeMemoryStore{}
+
+	// Must not panic.
+	_ = BuildConfig([]AgentOption{
+		WithUserMemory(mem, em),
+		WithHistory(history.CrossThreadSearch(em)),
+	})
 }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/nevindra/oasis/core"
@@ -29,11 +30,13 @@ type agentConfig struct {
 	store            Store
 	embedding        EmbeddingProvider
 	memory           MemoryStore
-	crossThreadSearch bool    // enabled by history.CrossThreadSearch
-	semanticMinScore  float32 // set by history.MinScore
-	maxHistory        int     // set by history.MaxHistory
-	maxTokens         int     // set by history.MaxTokens (history budget)
-	autoTitle         bool    // set by history.AutoTitle
+	crossThreadSearch    bool    // enabled by history.CrossThreadSearch
+	semanticMinScore     float32 // set by history.MinScore
+	maxHistory           int     // set by history.MaxHistory
+	maxTokens            int     // set by history.MaxTokens (history budget)
+	autoTitle            bool    // set by history.AutoTitle
+	memoryEmbedding      EmbeddingProvider // set only by WithUserMemory; used to detect provider conflicts
+	crossThreadEmbedding EmbeddingProvider // set only by history.CrossThreadSearch; used to detect provider conflicts
 	planExecution     bool            // enabled by WithPlanExecution option
 	Sandbox           any             // set by WithSandbox option; holds a sandbox.Sandbox (exported for network subpackage)
 	SandboxTools      []AnyTool       // tools auto-registered by WithSandbox (exported for network subpackage)
@@ -141,6 +144,7 @@ func WithHistory(opts ...history.Option) AgentOption {
 		c.crossThreadSearch = cfg.CrossThreadSearch
 		if cfg.Embedding != nil {
 			c.embedding = cfg.Embedding
+			c.crossThreadEmbedding = cfg.Embedding // tracked separately for conflict detection
 		}
 		c.semanticMinScore = cfg.MinScore
 		c.compactor = cfg.Compactor
@@ -358,6 +362,7 @@ func WithUserMemory(m MemoryStore, e EmbeddingProvider) AgentOption {
 	return func(c *agentConfig) {
 		c.memory = m
 		c.embedding = e
+		c.memoryEmbedding = e // kept separately for conflict detection in BuildConfig
 	}
 }
 
@@ -382,6 +387,18 @@ func BuildConfig(opts []AgentOption) agentConfig {
 	// Warn about misconfigurations that can't be caught at compile time.
 	if c.memory != nil && c.store == nil {
 		c.logger.Warn("WithUserMemory without history.Store — fact extraction (write) will be silently skipped")
+	}
+	// Conflict: WithUserMemory and history.CrossThreadSearch configured with
+	// different embedding provider instances. Both write to c.embedding; the
+	// last-writer-wins silently, which produces incorrect recall. Use panic
+	// instead of error-returning because NewLLMAgent's signature would otherwise
+	// need a breaking change beyond the scope of Phase 2. Misconfigured embedding
+	// providers are a developer-time error, not a runtime condition.
+	if c.memoryEmbedding != nil && c.crossThreadEmbedding != nil && c.memoryEmbedding != c.crossThreadEmbedding {
+		panic(fmt.Sprintf(
+			"oasis: conflicting embedding providers — WithUserMemory uses %T, "+
+				"history.CrossThreadSearch uses %T; use the same provider for both, or pick one",
+			c.memoryEmbedding, c.crossThreadEmbedding))
 	}
 	return c
 }
