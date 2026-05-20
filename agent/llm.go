@@ -38,6 +38,11 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 		}
 	}
 
+	// Auto-register read_full_result when a store is configured.
+	if cfg.toolResultStore != nil {
+		a.Tools.Add(NewReadFullResultTool(cfg.toolResultStore))
+	}
+
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Avoids rebuilding the slice on every Execute call.
 	if a.DynamicTools == nil {

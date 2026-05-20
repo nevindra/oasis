@@ -75,6 +75,7 @@ var WithInputHandler = agent.WithInputHandler
 var WithMaxParallelDispatch = agent.WithMaxParallelDispatch
 var WithMaxPlanSteps = agent.WithMaxPlanSteps
 var WithMaxToolResultLen = agent.WithMaxToolResultLen
+var WithToolResultStore = agent.WithToolResultStore
 
 // --- History ---
 

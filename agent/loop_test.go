@@ -488,12 +488,16 @@ func TestToolResultTruncationInLoop(t *testing.T) {
 	}
 
 	// The message content should be truncated.
-	if len([]rune(toolResultMsg.Content)) > maxToolResultMessageLen+100 { // +100 for the truncation marker
+	// +300 for the truncation marker (paging marker can be ~200 chars with id, legacy is shorter).
+	if len([]rune(toolResultMsg.Content)) > maxToolResultMessageLen+300 {
 		t.Errorf("tool result message len = %d runes, want <= %d (should be truncated)",
-			len([]rune(toolResultMsg.Content)), maxToolResultMessageLen+100)
+			len([]rune(toolResultMsg.Content)), maxToolResultMessageLen+300)
 	}
-	if !strings.Contains(toolResultMsg.Content, "[output truncated") {
-		t.Error("truncated message should contain truncation marker")
+	// Default behaviour (store configured) emits a paging marker; legacy emits "[output truncated".
+	hasPaging := strings.Contains(toolResultMsg.Content, "Use read_full_result(id=")
+	hasLegacy := strings.Contains(toolResultMsg.Content, "[output truncated")
+	if !hasPaging && !hasLegacy {
+		t.Error("truncated message should contain a truncation marker (paging or legacy)")
 	}
 
 	// Step trace should retain the full content.

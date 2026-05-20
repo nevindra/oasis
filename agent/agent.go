@@ -67,6 +67,10 @@ type agentConfig struct {
 	maxParallelDispatch int // set by WithMaxParallelDispatch; default 10
 	maxPlanSteps        int // set by WithMaxPlanSteps; default 50
 	maxToolResultLen    int // set by WithMaxToolResultLen; default 100_000
+
+	// Tool result paging store (set by WithToolResultStore; default in-memory).
+	toolResultStore    core.ToolResultStore
+	toolResultStoreSet bool // distinguishes "default" from "explicitly nil"
 }
 
 // AgentOption configures an LLMAgent or Network.
@@ -402,6 +406,17 @@ func WithMaxToolResultLen(n int) AgentOption {
 	}
 }
 
+// WithToolResultStore overrides the default in-memory tool-result store.
+// Pass nil to disable result paging entirely (oversize results get the
+// legacy truncation marker with no id; the read_full_result tool is not
+// registered).
+func WithToolResultStore(s core.ToolResultStore) AgentOption {
+	return func(c *agentConfig) {
+		c.toolResultStore = s
+		c.toolResultStoreSet = true
+	}
+}
+
 // nopLogger is a logger that discards all output. Used when WithLogger is not set.
 var nopLogger = slog.New(discardHandler{})
 
@@ -433,6 +448,10 @@ func BuildConfig(opts []AgentOption) agentConfig {
 	}
 	if c.maxToolResultLen == 0 {
 		c.maxToolResultLen = 100_000
+	}
+	// Default to an in-memory store unless the caller explicitly passed nil.
+	if !c.toolResultStoreSet {
+		c.toolResultStore = core.NewInMemoryToolResultStore()
 	}
 	// Conflict: WithUserMemory and history.CrossThreadSearch configured with
 	// different embedding provider instances. Both write to c.embedding; the

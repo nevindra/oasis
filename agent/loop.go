@@ -112,6 +112,7 @@ type LoopConfig struct {
 	maxParallelDispatch int               // 0 → uses package-level default
 	maxToolResultLen    int               // 0 → uses package-level default
 	maxPlanSteps        int               // 0 → uses package-level default
+	toolResultStore     core.ToolResultStore // nil = legacy truncation marker
 }
 
 // maxToolResultMessageLen is the maximum rune length for a tool result stored
@@ -496,7 +497,22 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 				maxLen = maxToolResultMessageLen
 			}
 			if utf8.RuneCountInString(msgContent) > maxLen {
-				msgContent = TruncateStr(msgContent, maxLen) + "\n\n[output truncated — original was longer]"
+				inline := TruncateStr(msgContent, maxLen)
+				total := utf8.RuneCountInString(msgContent)
+				if cfg.toolResultStore != nil {
+					id, putErr := cfg.toolResultStore.Put(iterCtx, msgContent)
+					if putErr == nil {
+						msgContent = inline + fmt.Sprintf(
+							"\n\n[truncated at %d runes of %d total. Use read_full_result(id=%q, offset=%d, length=50000) for more]",
+							maxLen, total, id, maxLen)
+					} else {
+						cfg.logger.Warn("tool result store put failed, falling back to legacy marker",
+							"agent", cfg.name, "error", putErr)
+						msgContent = inline + "\n\n[output truncated — original was longer]"
+					}
+				} else {
+					msgContent = inline + "\n\n[output truncated — original was longer]"
+				}
 			}
 			messages = append(messages, ToolResultMessage(tc.ID, msgContent))
 			messageRuneCount += utf8.RuneCountInString(msgContent)

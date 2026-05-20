@@ -57,6 +57,7 @@ type AgentCore struct {
 	MaxParallelDispatch int // exported for network subpackage access; set by WithMaxParallelDispatch
 	MaxPlanSteps        int // exported for network subpackage access; set by WithMaxPlanSteps
 	MaxToolResultLen    int // exported for network subpackage access; set by WithMaxToolResultLen
+	ToolResultStore     core.ToolResultStore // exported for network subpackage access; set by WithToolResultStore
 }
 
 // initCore initializes shared fields on an AgentCore from the given config.
@@ -127,6 +128,7 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 	c.MaxParallelDispatch = cfg.maxParallelDispatch
 	c.MaxPlanSteps = cfg.maxPlanSteps
 	c.MaxToolResultLen = cfg.maxToolResultLen
+	c.ToolResultStore = cfg.toolResultStore
 
 	// Build active skill instructions block.
 	if len(cfg.activeSkills) > 0 {
@@ -253,6 +255,7 @@ func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools
 		maxParallelDispatch: c.MaxParallelDispatch,
 		maxToolResultLen:    c.MaxToolResultLen,
 		maxPlanSteps:        c.MaxPlanSteps,
+		toolResultStore:     c.ToolResultStore,
 	}
 }
 
