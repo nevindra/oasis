@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/nevindra/oasis/agent"
@@ -246,6 +247,37 @@ func mustAttachmentBase64(t *testing.T, mime, encoded string) core.Attachment {
 		t.Fatalf("decode test attachment: %v", err)
 	}
 	return att
+}
+
+// BenchmarkNetworkBuildToolDefs measures per-call allocations in buildToolDefs
+// across varying agent counts. The package-level schema var and pre-sized slice
+// should keep allocs/op constant regardless of agent count.
+func BenchmarkNetworkBuildToolDefs(b *testing.B) {
+	for _, n := range []int{1, 5, 20} {
+		n := n
+		b.Run(fmt.Sprintf("agents=%d", n), func(b *testing.B) {
+			router := &mockProvider{name: "router", responses: []core.ChatResponse{{Content: "ok"}}}
+			agents := make([]agent.Agent, n)
+			for i := range agents {
+				agents[i] = &stubAgent{
+					name: fmt.Sprintf("worker%d", i),
+					desc: "does work",
+					fn:   func(task agent.AgentTask) (agent.AgentResult, error) { return agent.AgentResult{Output: "ok"}, nil },
+				}
+			}
+			opts := make([]agent.AgentOption, 0, 1)
+			opts = append(opts, agent.WithAgents(agents...))
+			net := NewNetwork("bench", "bench", router, opts...)
+			toolDefs := []core.ToolDefinition{
+				{Name: "extra", Description: "extra tool", Parameters: json.RawMessage(`{}`)},
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = net.buildToolDefs(toolDefs)
+			}
+		})
+	}
 }
 
 type stubSkillProvider struct{}

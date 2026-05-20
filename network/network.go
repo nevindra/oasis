@@ -12,6 +12,12 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
+// agentToolParamSchema is the shared parameter schema for all agent_* tool
+// definitions. Allocated once at init time; consumers treat it as immutable.
+var agentToolParamSchema = json.RawMessage(
+	`{"type":"object","properties":{"task":{"type":"string","description":"The user's original message, copied verbatim. Do not paraphrase, translate, or summarize."}},"required":["task"]}`,
+)
+
 // Network is an Agent that coordinates subagents and tools via an LLM router.
 // The router sees subagents as callable tools ("agent_<name>") and decides
 // which primitives to invoke, in what order, and with what data.
@@ -186,20 +192,14 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPref
 // buildToolDefs builds tool definitions from subagents and the given tool definitions.
 // Agent tools use pre-sorted names for deterministic ordering across calls.
 func (n *Network) buildToolDefs(toolDefs []core.ToolDefinition) []core.ToolDefinition {
-	var defs []core.ToolDefinition
-
-	// Agent tool definitions (order fixed at construction time).
+	defs := make([]core.ToolDefinition, 0, len(n.sortedAgentNames)+len(toolDefs))
 	for _, name := range n.sortedAgentNames {
 		defs = append(defs, core.ToolDefinition{
 			Name:        "agent_" + name,
 			Description: n.agents[name].Description(),
-			Parameters: json.RawMessage(
-				`{"type":"object","properties":{"task":{"type":"string","description":"The user's original message, copied verbatim. Do not paraphrase, translate, or summarize."}},"required":["task"]}`,
-			),
+			Parameters:  agentToolParamSchema,
 		})
 	}
-
-	// Direct tool definitions
 	defs = append(defs, toolDefs...)
 	return defs
 }
