@@ -72,15 +72,6 @@ func WithRetry(p Provider, opts ...RetryOption) Provider {
 // Name delegates to the inner provider.
 func (r *retryProvider) Name() string { return r.inner.Name() }
 
-// Chat implements Provider with retry.
-func (r *retryProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
-	ctx, cancel := r.withTimeout(ctx)
-	defer cancel()
-	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), r.logger, func() (ChatResponse, error) {
-		return r.inner.Chat(ctx, req)
-	})
-}
-
 // ChatStream implements Provider with retry. Retries are only performed if no
 // tokens have been written to ch yet — once streaming has started, errors pass
 // through immediately to avoid sending duplicate content.

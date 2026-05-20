@@ -25,21 +25,14 @@ func NowUnix() int64 {
 
 // --- Core interfaces ---
 
-// Provider abstracts the LLM backend.
-//
-// Two methods handle all interaction patterns:
-//   - Chat: blocking request/response. When req.Tools is non-empty, the
-//     response may contain ToolCalls that the caller must dispatch.
-//   - ChatStream: like Chat but emits StreamEvent values into ch as content
-//     is generated. When req.Tools is non-empty, emits EventToolCallDelta
-//     events as tool call arguments are generated incrementally.
-//     Implementations MUST close ch before returning. Callers (including
-//     the agent loop and ServeSSE) range over ch until close, so a provider
-//     that fails to close the channel deadlocks the caller. This matches
-//     the StreamingAgent.ExecuteStream contract.
-//     Returns the final assembled ChatResponse with complete ToolCalls and Usage.
+// Provider abstracts the LLM backend. ChatStream is the only entry point;
+// implementations MUST close ch before returning. For non-streaming use,
+// callers use the core.Chat helper.
 type Provider interface {
-	Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
+	// ChatStream emits StreamEvent values into ch as content is generated.
+	// Implementations MUST close ch before returning. Callers range over ch
+	// until close. Returns the final assembled ChatResponse with complete
+	// ToolCalls and Usage.
 	ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error)
 	Name() string
 }

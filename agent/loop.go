@@ -211,7 +211,7 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 		resp, err = cfg.provider.ChatStream(synthCtx, synthReq, synthCh)
 		wait()
 	} else {
-		resp, err = cfg.provider.Chat(synthCtx, synthReq)
+		resp, err = core.Chat(synthCtx, cfg.provider, synthReq)
 	}
 	if err != nil {
 		cfg.logger.Error("synthesis LLM call failed", "agent", cfg.name, "error", err)

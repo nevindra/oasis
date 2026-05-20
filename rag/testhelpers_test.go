@@ -74,17 +74,13 @@ type mockProvider struct {
 }
 
 func (m *mockProvider) Name() string { return m.name }
-func (m *mockProvider) Chat(_ context.Context, _ core.ChatRequest) (core.ChatResponse, error) {
+func (m *mockProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+	defer close(ch)
 	if m.idx >= len(m.responses) {
 		return core.ChatResponse{Content: "exhausted"}, nil
 	}
 	resp := m.responses[m.idx]
 	m.idx++
-	return resp, nil
-}
-func (m *mockProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
-	defer close(ch)
-	resp, _ := m.Chat(context.Background(), core.ChatRequest{})
 	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: resp.Content}
 	return resp, nil
 }

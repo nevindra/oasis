@@ -35,11 +35,6 @@ func (s *stubProvider) next() stubResult {
 	return stubResult{}
 }
 
-func (s *stubProvider) Chat(_ context.Context, _ core.ChatRequest) (core.ChatResponse, error) {
-	r := s.next()
-	return r.resp, r.err
-}
-
 func (s *stubProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	r := s.next()
@@ -60,7 +55,7 @@ func TestWithRateLimit_RPM_AllowsWithinLimit(t *testing.T) {
 	}}
 	p := WithRateLimit(stub, RPM(60))
 
-	resp, err := p.Chat(context.Background(), core.ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +72,7 @@ func TestWithRateLimit_RPM_BlocksWhenExceeded(t *testing.T) {
 	// RPM(1) = 1 request per minute. Second call should block.
 	p := WithRateLimit(stub, RPM(1))
 
-	_, err := p.Chat(context.Background(), core.ChatRequest{})
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +80,7 @@ func TestWithRateLimit_RPM_BlocksWhenExceeded(t *testing.T) {
 	// Second call with a short-lived context should timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err = p.Chat(ctx, core.ChatRequest{})
+	_, err = core.Chat(ctx, p, core.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected context deadline exceeded, got nil")
 	}
@@ -109,12 +104,12 @@ func TestWithRateLimit_TPM_AllowsWithinLimit(t *testing.T) {
 	p := WithRateLimit(stub, TPM(1000))
 
 	// First call: 150 tokens, well within 1000 TPM.
-	_, err := p.Chat(context.Background(), core.ChatRequest{})
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Second call: 300 total, still within 1000.
-	_, err = p.Chat(context.Background(), core.ChatRequest{})
+	_, err = core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +126,7 @@ func TestWithRateLimit_TPM_BlocksWhenExceeded(t *testing.T) {
 	// TPM(1000). First call uses 1000 tokens = at limit.
 	p := WithRateLimit(stub, TPM(1000))
 
-	_, err := p.Chat(context.Background(), core.ChatRequest{})
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +134,7 @@ func TestWithRateLimit_TPM_BlocksWhenExceeded(t *testing.T) {
 	// Second call should block (1000 tokens already used in this minute).
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err = p.Chat(ctx, core.ChatRequest{})
+	_, err = core.Chat(ctx, p, core.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected context deadline exceeded, got nil")
 	}
@@ -153,7 +148,7 @@ func TestWithRateLimit_RPMAndTPM(t *testing.T) {
 	// RPM high, TPM low — TPM should be the bottleneck after first call fills budget.
 	p := WithRateLimit(stub, RPM(100), TPM(20))
 
-	_, err := p.Chat(context.Background(), core.ChatRequest{})
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +156,7 @@ func TestWithRateLimit_RPMAndTPM(t *testing.T) {
 	// First call used 20 tokens = at TPM limit. Second should block.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err = p.Chat(ctx, core.ChatRequest{})
+	_, err = core.Chat(ctx, p, core.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected timeout due to TPM limit")
 	}
@@ -175,7 +170,7 @@ func TestWithRateLimit_ChatWithToolsOnRequest(t *testing.T) {
 	}}
 	p := WithRateLimit(stub, RPM(60))
 
-	resp, err := p.Chat(context.Background(), core.ChatRequest{
+	resp, err := core.Chat(context.Background(), p, core.ChatRequest{
 		Tools: []core.ToolDefinition{{Name: "test"}},
 	})
 	if err != nil {

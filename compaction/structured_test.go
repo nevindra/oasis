@@ -17,7 +17,8 @@ type compactMockProvider struct {
 	lastReq  core.ChatRequest
 }
 
-func (m *compactMockProvider) Chat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
+func (m *compactMockProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+	close(ch)
 	m.lastReq = req
 	if m.err != nil {
 		return core.ChatResponse{}, m.err
@@ -28,12 +29,6 @@ func (m *compactMockProvider) Chat(ctx context.Context, req core.ChatRequest) (c
 	}, nil
 }
 
-func (m *compactMockProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
-	close(ch)
-	return m.Chat(ctx, req)
-}
-
-// REQUIRED — Provider interface has 3 methods, not 2.
 func (m *compactMockProvider) Name() string { return "mock" }
 
 func canonicalSummary() string {

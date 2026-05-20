@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // stubProvider is a test Provider that returns pre-configured results in order.
@@ -30,11 +32,6 @@ func (s *stubProvider) next() stubResult {
 	return stubResult{}
 }
 
-func (s *stubProvider) Chat(_ context.Context, _ ChatRequest) (ChatResponse, error) {
-	r := s.next()
-	return r.resp, r.err
-}
-
 func (s *stubProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	r := s.next()
@@ -54,7 +51,7 @@ func TestWithRetry_Chat_SucceedsFirstAttempt(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	resp, err := p.Chat(context.Background(), ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -73,7 +70,7 @@ func TestWithRetry_Chat_RetriesOn503(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	resp, err := p.Chat(context.Background(), ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +89,7 @@ func TestWithRetry_Chat_RetriesOn429(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	_, err := p.Chat(context.Background(), ChatRequest{})
+	_, err := core.Chat(context.Background(), p, ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +104,7 @@ func TestWithRetry_Chat_DoesNotRetryNonTransient(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	_, err := p.Chat(context.Background(), ChatRequest{})
+	_, err := core.Chat(context.Background(), p, ChatRequest{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -121,7 +118,7 @@ func TestWithRetry_Chat_ExhaustsMaxAttempts(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{transient, transient, transient, transient}}
 	p := WithRetry(stub, RetryBaseDelay(0), RetryMaxAttempts(3))
 
-	_, err := p.Chat(context.Background(), ChatRequest{})
+	_, err := core.Chat(context.Background(), p, ChatRequest{})
 	if err == nil {
 		t.Fatal("expected error after max attempts, got nil")
 	}
@@ -139,7 +136,7 @@ func TestWithRetry_ChatWithToolsOnRequest_RetriesOn429(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	_, err := p.Chat(context.Background(), ChatRequest{
+	_, err := core.Chat(context.Background(), p, ChatRequest{
 		Tools: []ToolDefinition{{Name: "test"}},
 	})
 	if err != nil {
@@ -208,7 +205,7 @@ func TestWithRetry_Chat_RespectsRetryAfter(t *testing.T) {
 	p := WithRetry(stub, RetryBaseDelay(0))
 
 	start := time.Now()
-	resp, err := p.Chat(context.Background(), ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, ChatRequest{})
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -257,7 +254,7 @@ func TestWithRetry_Chat_TimeoutExceeded(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0), RetryTimeout(50*time.Millisecond))
 
-	_, err := p.Chat(context.Background(), ChatRequest{})
+	_, err := core.Chat(context.Background(), p, ChatRequest{})
 	if err == nil {
 		t.Fatal("expected error due to timeout, got nil")
 	}
@@ -275,7 +272,7 @@ func TestWithRetry_Chat_TimeoutAllowsSuccess(t *testing.T) {
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0), RetryTimeout(5*time.Second))
 
-	resp, err := p.Chat(context.Background(), ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -216,8 +216,8 @@ func WithSemanticBatching(b bool) Option {
 
 // WithLLMTimeout sets the maximum duration for individual LLM calls during
 // graph extraction and contextual enrichment (default 2 minutes). This prevents
-// a hung provider.Chat call from blocking workers indefinitely, which can cause
-// deadlocks in the worker pool.
+// a hung provider.ChatStream / core.Chat call from blocking workers indefinitely,
+// which can cause deadlocks in the worker pool.
 func WithLLMTimeout(d time.Duration) Option {
 	return func(ing *Ingestor) { ing.llmTimeout = d }
 }

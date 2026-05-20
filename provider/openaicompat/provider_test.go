@@ -33,22 +33,28 @@ func TestProvider_Chat(t *testing.T) {
 		if req.Model != "gpt-4o" {
 			t.Errorf("expected model gpt-4o, got %s", req.Model)
 		}
+		if !req.Stream {
+			t.Error("expected stream=true (oasis.Chat routes through ChatStream)")
+		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ChatResponse{
-			ID: "chatcmpl-1",
-			Choices: []Choice{{
-				Index:   0,
-				Message: &ChoiceMessage{Role: "assistant", Content: "Hello!"},
-			}},
-			Usage: &Usage{PromptTokens: 5, CompletionTokens: 2},
-		})
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		chunks := []string{
+			`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`,
+			`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"Hello!"}}]}`,
+			`data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			w.Write([]byte(chunk + "\n\n"))
+			flusher.Flush()
+		}
 	}))
 	defer srv.Close()
 
 	p := NewProvider("test-key", "gpt-4o", srv.URL)
 
-	resp, err := p.Chat(context.Background(), oasis.ChatRequest{
+	resp, err := oasis.Chat(context.Background(), p, oasis.ChatRequest{
 		Messages: []oasis.ChatMessage{{Role: "user", Content: "Hi"}},
 	})
 	if err != nil {
@@ -80,25 +86,18 @@ func TestProvider_ChatWithToolsOnRequest(t *testing.T) {
 			t.Errorf("expected tool name 'get_weather', got %q", req.Tools[0].Function.Name)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ChatResponse{
-			ID: "chatcmpl-2",
-			Choices: []Choice{{
-				Index: 0,
-				Message: &ChoiceMessage{
-					Role: "assistant",
-					ToolCalls: []ToolCallRequest{{
-						ID:   "call_abc",
-						Type: "function",
-						Function: FunctionCall{
-							Name:      "get_weather",
-							Arguments: `{"city":"London"}`,
-						},
-					}},
-				},
-			}},
-			Usage: &Usage{PromptTokens: 10, CompletionTokens: 8},
-		})
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		chunks := []string{
+			`data: {"id":"chatcmpl-2","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":""}}]}}]}`,
+			`data: {"id":"chatcmpl-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"London\"}"}}]}}]}`,
+			`data: {"id":"chatcmpl-2","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18}}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			w.Write([]byte(chunk + "\n\n"))
+			flusher.Flush()
+		}
 	}))
 	defer srv.Close()
 
@@ -110,7 +109,7 @@ func TestProvider_ChatWithToolsOnRequest(t *testing.T) {
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`),
 	}}
 
-	resp, err := p.Chat(context.Background(), oasis.ChatRequest{
+	resp, err := oasis.Chat(context.Background(), p, oasis.ChatRequest{
 		Messages: []oasis.ChatMessage{{Role: "user", Content: "Weather in London?"}},
 		Tools:    tools,
 	})
@@ -240,7 +239,7 @@ func TestProvider_Chat_HTTPError(t *testing.T) {
 
 	p := NewProvider("test-key", "gpt-4o", srv.URL)
 
-	_, err := p.Chat(context.Background(), oasis.ChatRequest{
+	_, err := oasis.Chat(context.Background(), p, oasis.ChatRequest{
 		Messages: []oasis.ChatMessage{{Role: "user", Content: "Hi"}},
 	})
 
@@ -275,21 +274,25 @@ func TestProvider_NoAPIKey(t *testing.T) {
 			t.Error("expected no auth header for empty API key")
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ChatResponse{
-			ID: "chatcmpl-4",
-			Choices: []Choice{{
-				Index:   0,
-				Message: &ChoiceMessage{Role: "assistant", Content: "OK"},
-			}},
-		})
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		chunks := []string{
+			`data: {"id":"chatcmpl-4","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`,
+			`data: {"id":"chatcmpl-4","choices":[{"index":0,"delta":{"content":"OK"}}]}`,
+			`data: {"id":"chatcmpl-4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			w.Write([]byte(chunk + "\n\n"))
+			flusher.Flush()
+		}
 	}))
 	defer srv.Close()
 
 	// Ollama and other local providers don't need API keys.
 	p := NewProvider("", "llama3", srv.URL)
 
-	resp, err := p.Chat(context.Background(), oasis.ChatRequest{
+	resp, err := oasis.Chat(context.Background(), p, oasis.ChatRequest{
 		Messages: []oasis.ChatMessage{{Role: "user", Content: "Hi"}},
 	})
 	if err != nil {
@@ -314,14 +317,17 @@ func TestProvider_WithOptions(t *testing.T) {
 			t.Errorf("expected max_tokens 2048, got %d", req.MaxTokens)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ChatResponse{
-			ID: "chatcmpl-5",
-			Choices: []Choice{{
-				Index:   0,
-				Message: &ChoiceMessage{Role: "assistant", Content: "OK"},
-			}},
-		})
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		chunks := []string{
+			`data: {"id":"chatcmpl-5","choices":[{"index":0,"delta":{"content":"OK"}}]}`,
+			`data: {"id":"chatcmpl-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			w.Write([]byte(chunk + "\n\n"))
+			flusher.Flush()
+		}
 	}))
 	defer srv.Close()
 
@@ -329,7 +335,7 @@ func TestProvider_WithOptions(t *testing.T) {
 		WithOptions(WithTemperature(0.7), WithMaxTokens(2048)),
 	)
 
-	_, err := p.Chat(context.Background(), oasis.ChatRequest{
+	_, err := oasis.Chat(context.Background(), p, oasis.ChatRequest{
 		Messages: []oasis.ChatMessage{{Role: "user", Content: "Hi"}},
 	})
 	if err != nil {

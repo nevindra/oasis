@@ -21,9 +21,6 @@ type syncMockProvider struct {
 }
 
 func (m *syncMockProvider) Name() string { return m.name }
-func (m *syncMockProvider) Chat(_ context.Context, _ core.ChatRequest) (core.ChatResponse, error) {
-	return m.next(), nil
-}
 func (m *syncMockProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	resp := m.next()

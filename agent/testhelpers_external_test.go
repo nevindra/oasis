@@ -12,15 +12,12 @@ type fakeProvider struct {
 }
 
 func (f *fakeProvider) Name() string { return "fake" }
-func (f *fakeProvider) Chat(_ context.Context, _ core.ChatRequest) (core.ChatResponse, error) {
-	return f.response, nil
-}
 func (f *fakeProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	return f.response, nil
 }
 
-// newFakeProviderReturning returns a core.Provider whose Chat method always
+// newFakeProviderReturning returns a core.Provider whose ChatStream method always
 // returns a ChatResponse with the given text as Content.
 func newFakeProviderReturning(text string) core.Provider {
 	return &fakeProvider{response: core.ChatResponse{Content: text}}

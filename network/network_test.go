@@ -160,17 +160,14 @@ type mockProvider struct {
 }
 
 func (m *mockProvider) Name() string { return m.name }
-func (m *mockProvider) Chat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
+func (m *mockProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+	defer close(ch)
 	if m.idx >= len(m.responses) {
 		return core.ChatResponse{}, context.Canceled
 	}
 	resp := m.responses[m.idx]
 	m.idx++
 	return resp, nil
-}
-func (m *mockProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
-	defer close(ch)
-	return m.Chat(ctx, req)
 }
 
 type callbackProvider struct {
@@ -180,15 +177,12 @@ type callbackProvider struct {
 }
 
 func (c *callbackProvider) Name() string { return c.name }
-func (c *callbackProvider) Chat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
+func (c *callbackProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+	defer close(ch)
 	if c.onChat != nil {
 		c.onChat(req)
 	}
 	return c.response, nil
-}
-func (c *callbackProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
-	defer close(ch)
-	return c.Chat(ctx, req)
 }
 
 type contextReadingTool struct {

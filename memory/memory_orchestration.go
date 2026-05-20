@@ -574,7 +574,7 @@ const maxTitleInputLen = 500
 // the LLM and updates the thread. Reads the existing thread first to avoid
 // overwriting ChatID, Metadata, or other fields with zero values.
 func (m *AgentMemory) generateTitleNewThread(ctx context.Context, agentName, userText, threadID string) {
-	resp, err := m.provider.Chat(ctx, core.ChatRequest{
+	resp, err := core.Chat(ctx, m.provider, core.ChatRequest{
 		Messages: []core.ChatMessage{
 			core.SystemMessage(generateTitlePrompt),
 			core.UserMessage(truncateStr(userText, maxTitleInputLen)),
@@ -672,7 +672,7 @@ func (m *AgentMemory) extractAndPersistFacts(ctx context.Context, agentName, use
 		return
 	}
 
-	resp, err := m.provider.Chat(ctx, core.ChatRequest{
+	resp, err := core.Chat(ctx, m.provider, core.ChatRequest{
 		Messages: []core.ChatMessage{
 			core.SystemMessage(extractFactsPrompt),
 			core.UserMessage(fmt.Sprintf("User: %s\nAssistant: %s", userText, assistantText)),

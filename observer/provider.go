@@ -27,46 +27,6 @@ func WrapProvider(inner oasis.Provider, model string, inst *Instruments) *Observ
 
 func (o *ObservedProvider) Name() string { return o.inner.Name() }
 
-func (o *ObservedProvider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-	spanAttrs := []trace.SpanStartOption{
-		trace.WithAttributes(
-			AttrLLMModel.String(o.model),
-			AttrLLMProvider.String(o.inner.Name()),
-		),
-	}
-	spanName := "llm.chat"
-	method := "chat"
-	if len(req.Tools) > 0 {
-		toolNames := make([]string, len(req.Tools))
-		for i, t := range req.Tools {
-			toolNames[i] = t.Name
-		}
-		spanAttrs = append(spanAttrs, trace.WithAttributes(
-			AttrToolCount.Int(len(req.Tools)),
-			AttrToolNames.StringSlice(toolNames),
-		))
-		spanName = "llm.chat_with_tools"
-		method = "chat_with_tools"
-	}
-
-	ctx, span := o.inst.Tracer.Start(ctx, spanName, spanAttrs...)
-	defer span.End()
-	start := time.Now()
-
-	resp, err := o.inner.Chat(ctx, req)
-
-	durationMs := float64(time.Since(start).Milliseconds())
-	status := "ok"
-	if err != nil {
-		status = "error"
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	}
-
-	o.record(ctx, span, method, status, durationMs, resp.Usage)
-	return resp, err
-}
-
 func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	ctx, span := o.inst.Tracer.Start(ctx, "llm.chat_stream", trace.WithAttributes(
 		AttrLLMModel.String(o.model),

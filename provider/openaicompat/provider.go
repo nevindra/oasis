@@ -79,13 +79,6 @@ func (p *Provider) mergeGenParams(params *oasis.GenerationParams) []Option {
 	return opts
 }
 
-// Chat sends a non-streaming chat request and returns the complete response.
-// When req.Tools is non-empty, the response may contain ToolCalls.
-func (p *Provider) Chat(ctx context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
-	body := BuildBody(req.Messages, req.Tools, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
-	return p.doRequest(ctx, body)
-}
-
 // ChatStream streams text-delta events into ch, then returns the final accumulated response.
 // The channel is closed when streaming completes (via StreamSSE) or on error.
 // When req.Tools is non-empty, tool call arguments stream as EventToolCallDelta events.

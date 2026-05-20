@@ -73,9 +73,6 @@ type syncMockProvider struct {
 }
 
 func (m *syncMockProvider) Name() string { return m.name }
-func (m *syncMockProvider) Chat(_ context.Context, _ ChatRequest) (ChatResponse, error) {
-	return m.next(), nil
-}
 func (m *syncMockProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	resp := m.next()
@@ -281,9 +278,6 @@ type syncCallbackProvider struct {
 }
 
 func (p *syncCallbackProvider) Name() string { return p.name }
-func (p *syncCallbackProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
-	return p.onChat(req), nil
-}
 func (p *syncCallbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	resp := p.onChat(req)

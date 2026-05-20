@@ -21,9 +21,6 @@ type mockProvider struct {
 }
 
 func (m *mockProvider) Name() string { return m.name }
-func (m *mockProvider) Chat(_ context.Context, _ oasis.ChatRequest) (oasis.ChatResponse, error) {
-	return m.chatResp, m.chatErr
-}
 func (m *mockProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: "hello"}
 	ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: " world"}
@@ -39,9 +36,6 @@ type mockProviderManyEvents struct {
 }
 
 func (m *mockProviderManyEvents) Name() string { return m.name }
-func (m *mockProviderManyEvents) Chat(_ context.Context, _ oasis.ChatRequest) (oasis.ChatResponse, error) {
-	return m.chatResp, nil
-}
 func (m *mockProviderManyEvents) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	for i := range m.count {
 		select {
@@ -117,7 +111,7 @@ func TestObservedProviderChat(t *testing.T) {
 	inner := &mockProvider{name: "p", chatResp: want}
 	op := WrapProvider(inner, "m", testInstruments(t))
 
-	got, err := op.Chat(context.Background(), oasis.ChatRequest{})
+	got, err := oasis.Chat(context.Background(), op, oasis.ChatRequest{})
 	if err != nil {
 		t.Fatalf("Chat returned unexpected error: %v", err)
 	}
@@ -134,7 +128,7 @@ func TestObservedProviderChatError(t *testing.T) {
 	inner := &mockProvider{name: "p", chatErr: wantErr}
 	op := WrapProvider(inner, "m", testInstruments(t))
 
-	_, err := op.Chat(context.Background(), oasis.ChatRequest{})
+	_, err := oasis.Chat(context.Background(), op, oasis.ChatRequest{})
 	if !errors.Is(err, wantErr) {
 		t.Errorf("Chat error = %v, want %v", err, wantErr)
 	}
@@ -152,7 +146,7 @@ func TestObservedProviderChatWithToolsOnRequest(t *testing.T) {
 	op := WrapProvider(inner, "m", testInstruments(t))
 
 	tools := []oasis.ToolDefinition{{Name: "search", Description: "search things"}}
-	got, err := op.Chat(context.Background(), oasis.ChatRequest{Tools: tools})
+	got, err := oasis.Chat(context.Background(), op, oasis.ChatRequest{Tools: tools})
 	if err != nil {
 		t.Fatalf("Chat with tools returned unexpected error: %v", err)
 	}
@@ -294,7 +288,7 @@ func TestObservedToolDefinition(t *testing.T) {
 }
 
 func TestObservedToolExecute(t *testing.T) {
-	want := oasis.ToolResult{Content: "result data"}
+	want := oasis.ToolResult{Content: json.RawMessage(`"result data"`)}
 	inner := &mockTool{def: oasis.ToolDefinition{Name: "search"}, result: want}
 	ot := WrapTool(inner, testInstruments(t))
 
@@ -302,7 +296,7 @@ func TestObservedToolExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteRaw returned unexpected error: %v", err)
 	}
-	if got.Content != want.Content {
+	if string(got.Content) != string(want.Content) {
 		t.Errorf("Content = %q, want %q", got.Content, want.Content)
 	}
 	if got.Error != "" {

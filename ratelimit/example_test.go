@@ -12,10 +12,8 @@ import (
 type passThroughProvider struct{}
 
 func (passThroughProvider) Name() string { return "example" }
-func (passThroughProvider) Chat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
-	return core.ChatResponse{Content: "ok"}, nil
-}
 func (passThroughProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+	defer close(ch)
 	return core.ChatResponse{Content: "ok"}, nil
 }
 
@@ -27,7 +25,7 @@ func ExampleWithRateLimit() {
 		ratelimit.TPM(100_000), // 100k tokens per minute
 	)
 
-	resp, _ := limited.Chat(context.Background(), core.ChatRequest{})
+	resp, _ := core.Chat(context.Background(), limited, core.ChatRequest{})
 	fmt.Println(resp.Content)
 	// Output: ok
 }

@@ -67,7 +67,7 @@ func (s *StructuredCompactor) Compact(ctx context.Context, req core.CompactReque
 		GenerationParams: &core.GenerationParams{MaxTokens: &budget},
 	}
 
-	resp, err := provider.Chat(ctx, chatReq)
+	resp, err := core.Chat(ctx, provider, chatReq)
 	if err != nil {
 		return core.CompactResult{}, fmt.Errorf("compact: provider chat: %w", err)
 	}

@@ -338,6 +338,13 @@ func NewID() string { return core.NewID() }
 // NowUnix returns current time as Unix seconds.
 func NowUnix() int64 { return core.NowUnix() }
 
+// Chat is a non-streaming convenience wrapper around Provider.ChatStream.
+// It discards stream events and returns the final assembled response.
+// For UI-facing streaming, call ChatStream directly.
+func Chat(ctx context.Context, p core.Provider, req core.ChatRequest) (core.ChatResponse, error) {
+	return core.Chat(ctx, p, req)
+}
+
 // --- Provider / embedding ---
 
 type Provider = core.Provider

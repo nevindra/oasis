@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // loopState holds the mutable per-execution state shared across runIteration
@@ -99,7 +101,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		streamedThisIter = true
 	} else if len(cfg.tools) > 0 {
 		cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(cfg.tools))
-		resp, err = cfg.provider.Chat(iterCtx, req)
+		resp, err = core.Chat(iterCtx, cfg.provider, req)
 	} else if ch != nil {
 		// No tools, streaming — terminal path (single-shot stream then return).
 		cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
@@ -141,7 +143,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		}
 	} else {
 		cfg.logger.Debug("calling LLM (no tools)", "agent", cfg.name, "iteration", i)
-		resp, err = cfg.provider.Chat(iterCtx, req)
+		resp, err = core.Chat(iterCtx, cfg.provider, req)
 	}
 
 	if err != nil {

@@ -17,7 +17,8 @@ type mockContextProvider struct {
 	onChat func()
 }
 
-func (m *mockContextProvider) Chat(_ context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
+func (m *mockContextProvider) ChatStream(_ context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+	defer close(ch)
 	m.calls.Add(1)
 	if m.onChat != nil {
 		m.onChat()
@@ -25,20 +26,14 @@ func (m *mockContextProvider) Chat(_ context.Context, req oasis.ChatRequest) (oa
 	return oasis.ChatResponse{Content: m.prefix}, nil
 }
 
-func (m *mockContextProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, _ chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-	return oasis.ChatResponse{}, fmt.Errorf("not implemented")
-}
-
 func (m *mockContextProvider) Name() string { return "mock-context" }
 
 // mockErrorProvider always returns an error.
 type mockErrorProvider struct{}
 
-func (m *mockErrorProvider) Chat(_ context.Context, _ oasis.ChatRequest) (oasis.ChatResponse, error) {
+func (m *mockErrorProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+	close(ch)
 	return oasis.ChatResponse{}, fmt.Errorf("llm unavailable")
-}
-func (m *mockErrorProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, _ chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-	return oasis.ChatResponse{}, fmt.Errorf("not implemented")
 }
 func (m *mockErrorProvider) Name() string { return "mock-error" }
 

@@ -59,17 +59,6 @@ func WithRateLimit(p core.Provider, opts ...RateLimitOption) core.Provider {
 
 func (r *rateLimitProvider) Name() string { return r.inner.Name() }
 
-func (r *rateLimitProvider) Chat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
-	if err := r.waitForBudget(ctx); err != nil {
-		return core.ChatResponse{}, err
-	}
-	resp, err := r.inner.Chat(ctx, req)
-	if err == nil {
-		r.recordUsage(resp.Usage)
-	}
-	return resp, err
-}
-
 func (r *rateLimitProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	if err := r.waitForBudget(ctx); err != nil {
 		close(ch)

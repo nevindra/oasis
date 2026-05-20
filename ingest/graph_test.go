@@ -346,7 +346,8 @@ type mockGraphProvider struct {
 	capturePrompt *string
 }
 
-func (m *mockGraphProvider) Chat(_ context.Context, req oasis.ChatRequest) (oasis.ChatResponse, error) {
+func (m *mockGraphProvider) ChatStream(_ context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+	defer close(ch)
 	if m.capturePrompt != nil && len(req.Messages) > 0 {
 		*m.capturePrompt = req.Messages[0].Content
 	}
@@ -354,10 +355,6 @@ func (m *mockGraphProvider) Chat(_ context.Context, req oasis.ChatRequest) (oasi
 		m.onChat()
 	}
 	return oasis.ChatResponse{Content: m.response}, nil
-}
-
-func (m *mockGraphProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, _ chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-	return oasis.ChatResponse{}, fmt.Errorf("not implemented")
 }
 
 func (m *mockGraphProvider) Name() string { return "mock" }

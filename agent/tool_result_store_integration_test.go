@@ -39,7 +39,8 @@ type sequentialProvider struct {
 }
 
 func (p *sequentialProvider) Name() string { return "sequential" }
-func (p *sequentialProvider) Chat(_ context.Context, req core.ChatRequest) (core.ChatResponse, error) {
+func (p *sequentialProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+	defer close(ch)
 	p.captured = append(p.captured, req)
 	idx := p.calls
 	if idx >= len(p.responses) {
@@ -47,10 +48,6 @@ func (p *sequentialProvider) Chat(_ context.Context, req core.ChatRequest) (core
 	}
 	p.calls++
 	return p.responses[idx], nil
-}
-func (p *sequentialProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
-	defer close(ch)
-	return p.Chat(context.Background(), req)
 }
 
 // newFakeProviderReturning overrides the simpler version in testhelpers_external_test.go

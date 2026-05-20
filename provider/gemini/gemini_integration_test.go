@@ -30,7 +30,7 @@ func TestIntegration(t *testing.T) {
 	t.Run("Chat", func(t *testing.T) {
 		g := New(key, "gemini-2.0-flash")
 
-		resp, err := g.Chat(context.Background(), oasis.ChatRequest{
+		resp, err := oasis.Chat(context.Background(), g, oasis.ChatRequest{
 			Messages: []oasis.ChatMessage{
 				{Role: "user", Content: "Reply with exactly: hello"},
 			},
@@ -53,7 +53,7 @@ func TestIntegration(t *testing.T) {
 			WithTopP(0.8),
 		)
 
-		resp, err := g.Chat(context.Background(), oasis.ChatRequest{
+		resp, err := oasis.Chat(context.Background(), g, oasis.ChatRequest{
 			Messages: []oasis.ChatMessage{
 				{Role: "user", Content: "Reply with exactly: configured"},
 			},
@@ -81,7 +81,7 @@ func TestIntegration(t *testing.T) {
 			"required": ["name", "age"]
 		}`)
 
-		resp, err := g.Chat(context.Background(), oasis.ChatRequest{
+		resp, err := oasis.Chat(context.Background(), g, oasis.ChatRequest{
 			Messages: []oasis.ChatMessage{
 				{Role: "user", Content: "Generate a fictional person with a name and age."},
 			},
@@ -111,7 +111,7 @@ func TestIntegration(t *testing.T) {
 
 		schema := json.RawMessage(`{"type": "object", "properties": {"name": {"type": "string"}}}`)
 
-		resp, err := g.Chat(context.Background(), oasis.ChatRequest{
+		resp, err := oasis.Chat(context.Background(), g, oasis.ChatRequest{
 			Messages: []oasis.ChatMessage{
 				{Role: "user", Content: "Reply with exactly: free text"},
 			},
@@ -174,7 +174,7 @@ func TestIntegration(t *testing.T) {
 			},
 		}
 
-		resp, err := g.Chat(context.Background(), oasis.ChatRequest{
+		resp, err := oasis.Chat(context.Background(), g, oasis.ChatRequest{
 			Messages: []oasis.ChatMessage{
 				{Role: "user", Content: "What's the weather in Tokyo?"},
 			},

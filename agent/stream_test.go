@@ -636,7 +636,8 @@ type alwaysToolProvider struct {
 }
 
 func (a *alwaysToolProvider) Name() string { return "always-tool" }
-func (a *alwaysToolProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
+func (a *alwaysToolProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	defer close(ch)
 	// If the last message looks like a forced-synthesis prompt, return text.
 	if len(req.Messages) > 0 {
 		last := req.Messages[len(req.Messages)-1]
@@ -648,10 +649,6 @@ func (a *alwaysToolProvider) Chat(_ context.Context, req ChatRequest) (ChatRespo
 	return ChatResponse{
 		ToolCalls: []ToolCall{{ID: "loop-1", Name: a.toolName, Args: json.RawMessage(`{}`)}},
 	}, nil
-}
-func (a *alwaysToolProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
-	defer close(ch)
-	return a.Chat(context.Background(), req)
 }
 
 func TestEventMaxIterReachedEmitted(t *testing.T) {

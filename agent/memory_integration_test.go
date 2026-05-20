@@ -1353,7 +1353,8 @@ func (p *capturingProvider) firstCall() ChatRequest {
 	return p.reqs[0]
 }
 
-func (p *capturingProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
+func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	defer close(ch)
 	p.record(req)
 	if p.extractionResp != nil {
 		p.mu.Lock()
@@ -1363,11 +1364,6 @@ func (p *capturingProvider) Chat(_ context.Context, req ChatRequest) (ChatRespon
 			return *p.extractionResp, nil
 		}
 	}
-	return p.resp, nil
-}
-func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
-	defer close(ch)
-	p.record(req)
 	ch <- StreamEvent{Type: EventTextDelta, Content: p.resp.Content}
 	return p.resp, nil
 }

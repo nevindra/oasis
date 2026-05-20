@@ -68,9 +68,6 @@ type mockProvider struct {
 }
 
 func (m *mockProvider) Name() string { return m.name }
-func (m *mockProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
-	return m.next(), nil
-}
 func (m *mockProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	resp := m.next()
@@ -171,9 +168,6 @@ type errProvider struct {
 }
 
 func (p *errProvider) Name() string { return p.name }
-func (p *errProvider) Chat(_ context.Context, _ ChatRequest) (ChatResponse, error) {
-	return ChatResponse{}, p.err
-}
 func (p *errProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	return ChatResponse{}, p.err
@@ -183,9 +177,6 @@ func (p *errProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- Str
 type ctxProvider struct{ name string }
 
 func (p *ctxProvider) Name() string { return p.name }
-func (p *ctxProvider) Chat(ctx context.Context, _ ChatRequest) (ChatResponse, error) {
-	return ChatResponse{}, ctx.Err()
-}
 func (p *ctxProvider) ChatStream(ctx context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)
 	return ChatResponse{}, ctx.Err()
@@ -870,9 +861,6 @@ func (s *sequentialCallbackProvider) next(req ChatRequest) ChatResponse {
 	resp := s.responses[s.idx]
 	s.idx++
 	return resp
-}
-func (s *sequentialCallbackProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
-	return s.next(req), nil
 }
 func (s *sequentialCallbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
 	defer close(ch)

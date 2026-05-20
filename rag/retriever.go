@@ -523,7 +523,7 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Retrie
 		callCtx, cancel = context.WithTimeout(ctx, r.timeout)
 		defer cancel()
 	}
-	resp, err := r.provider.Chat(callCtx, core.ChatRequest{
+	resp, err := core.Chat(callCtx, r.provider, core.ChatRequest{
 		Messages: []core.ChatMessage{
 			{Role: "user", Content: prompt},
 		},

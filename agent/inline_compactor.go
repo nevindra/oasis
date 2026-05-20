@@ -47,7 +47,7 @@ func (c *inlineCompactor) Compact(ctx context.Context, req core.CompactRequest) 
 		b.WriteString("\n")
 	}
 
-	resp, err := summarizer.Chat(ctx, core.ChatRequest{
+	resp, err := core.Chat(ctx, summarizer, core.ChatRequest{
 		Messages: []core.ChatMessage{
 			core.SystemMessage(prompt),
 			core.UserMessage(b.String()),

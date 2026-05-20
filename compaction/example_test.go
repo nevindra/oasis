@@ -14,7 +14,8 @@ type canonProvider struct{}
 
 func (canonProvider) Name() string { return "example" }
 
-func (canonProvider) Chat(ctx context.Context, _ core.ChatRequest) (core.ChatResponse, error) {
+func (canonProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+	defer close(ch)
 	return core.ChatResponse{
 		Content: `<analysis>chronological</analysis>
 <summary>
@@ -46,11 +47,6 @@ func (canonProvider) Chat(ctx context.Context, _ core.ChatRequest) (core.ChatRes
    none
 </summary>`,
 	}, nil
-}
-
-func (canonProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
-	// Not used in this example, but required by the Provider interface.
-	return core.ChatResponse{}, nil
 }
 
 // ExampleNewStructuredCompactor shows the typical 3-line wiring for

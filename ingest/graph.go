@@ -192,7 +192,7 @@ func extractFromBatches(ctx context.Context, provider oasis.Provider, batches []
 						callCtx, cancel = context.WithTimeout(ctx, llmTimeout)
 						defer cancel()
 					}
-					resp, err := provider.Chat(callCtx, oasis.ChatRequest{
+					resp, err := oasis.Chat(callCtx, provider, oasis.ChatRequest{
 						Messages: []oasis.ChatMessage{
 							{Role: "user", Content: prompt.String()},
 						},
