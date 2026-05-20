@@ -33,6 +33,9 @@ type ToolResultStore interface {
 	Get(ctx context.Context, id string, offset, length int) (content string, total int, err error)
 }
 
+// Compile-time interface satisfaction check.
+var _ ToolResultStore = (*inMemoryStore)(nil)
+
 // InMemoryToolResultStoreOption configures the default in-memory ToolResultStore.
 type InMemoryToolResultStoreOption func(*inMemoryStore)
 
