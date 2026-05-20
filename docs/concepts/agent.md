@@ -367,10 +367,10 @@ Both `LLMAgent` and `Network` expose `Drain()`. Without it, messages from the la
 ```go
 agent := oasis.NewLLMAgent("orchestrator", "Breaks work into sub-tasks", provider,
     oasis.WithTools(searchTool, writeTool),
-    oasis.WithSubAgentSpawning(oasis.SubAgentConfig{
-        MaxSpawnDepth:  2,
-        DenySpawnTools: []string{"write"},
-    }),
+    oasis.WithSubAgentSpawning(
+        oasis.MaxSpawnDepth(2),
+        oasis.DenySpawnTools("write"),
+    ),
 )
 ```
 
@@ -402,9 +402,9 @@ They do **not** inherit: store, memory, processors, input handler, response sche
 `DenySpawnTools` lists tool names to strip from sub-agents. Use this to prevent sub-agents from calling side-effectful tools (writes, sends, etc.) while still allowing reads.
 
 ```go
-oasis.SubAgentConfig{
-    DenySpawnTools: []string{"send_email", "write_file"},
-}
+oasis.WithSubAgentSpawning(
+    oasis.DenySpawnTools("send_email", "write_file"),
+)
 ```
 
 ### Blocked Behaviors

@@ -142,6 +142,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
     from the Go type by reflection inside `Erase`.
 - **BREAKING — Schema-shape errors now panic (Phase 1.5)**: Schema-shape errors now **panic** at `Erase[In, Out]()` registration time with a descriptive message (field path, offending Go type, supported alternatives). They previously failed silently at LLM-call time.
 
+### Changed (breaking)
+
+- `agent.AgentCore` fields are no longer exported. Access via methods
+  (`Name()`, `Tools()`, `Logger()`, `HasDynamicTools()`, `CachedToolDefs()`,
+  `SetCachedToolDefs()`, `ActiveSkillInstructions()`) or via methods that
+  absorb operations previously requiring field access (`ExecuteSpawn`,
+  `DispatchBuiltins`). Internal type — was documented "do not depend on
+  stability."
+- `agent.BuildConfig` now returns `*agent.Config` instead of
+  `agent.agentConfig` (by value). The returned type's fields are no
+  longer exported; access via methods (`Agents()` and same-package reads
+  in `agent/`).
+- Removed `agent.SubAgentConfig` struct. State now lives on `AgentCore`
+  and is accessed via the new `ExecuteSpawn` method.
+- Removed package-level helpers `agent.ExecuteSpawnAgent` and
+  `agent.DispatchBuiltins`. Use methods on `*AgentCore` instead.
+
+### Changed (non-breaking)
+
+- `core/` package documentation no longer says "do not import directly."
+  Importing `core/` is supported for power users and satellite authors;
+  the umbrella `github.com/nevindra/oasis` remains the recommended path
+  for most consumers.
+
 ### Changed
 
 - **Default `maxIter` raised 10 → 25.** Real tool-using workflows commonly need 15-20 iterations. Set `WithMaxIter(10)` to restore the old default. (finding 3.6)
