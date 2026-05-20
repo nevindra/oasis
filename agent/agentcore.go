@@ -48,6 +48,7 @@ type AgentCore struct {
 	maxSuspendBytes     int64
 	compressModel       ModelFunc
 	compressThreshold   int
+	compressor          Compactor // per-turn tool-result compressor; sourced from agentConfig.compactor
 	GenParams        *GenerationParams // exported for network subpackage access (avoid clash with GenerationParams type name)
 	SpawnEnabled     bool              // exported for network subpackage access
 	SpawnDepthLimit  int               // exported for network subpackage access (avoid clash with MaxSpawnDepth option func)
@@ -118,6 +119,7 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg age
 	c.maxSuspendBytes = cfg.maxSuspendBytes
 	c.compressModel = cfg.compressModel
 	c.compressThreshold = cfg.compressThreshold
+	c.compressor = cfg.compactor // reuse the per-thread compactor for per-turn tool-result compression
 	c.GenParams = cfg.generationParams
 	c.SpawnEnabled = cfg.spawnEnabled
 	c.SpawnDepthLimit = cfg.maxSpawnDepth
@@ -246,6 +248,7 @@ func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools
 		maxSuspendBytes:     c.maxSuspendBytes,
 		compressModel:       c.compressModel,
 		compressThreshold:   c.compressThreshold,
+		compressor:          c.compressor,
 		generationParams:    c.GenParams,
 		maxParallelDispatch: c.MaxParallelDispatch,
 		maxToolResultLen:    c.MaxToolResultLen,

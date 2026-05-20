@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
 )
 
@@ -106,6 +107,7 @@ type LoopConfig struct {
 	maxSuspendBytes     int64
 	compressModel       ModelFunc
 	compressThreshold   int // 0 = default (200K runes), negative = disabled
+	compressor          Compactor         // nil = NewInlineCompactor(provider) on first call
 	generationParams    *GenerationParams // nil = use provider defaults
 	maxParallelDispatch int               // 0 → uses package-level default
 	maxToolResultLen    int               // 0 → uses package-level default
@@ -615,7 +617,8 @@ func runeCount(messages []ChatMessage) int {
 // Returns the compressed message slice and new rune count, or the
 // original slice on error (degrade, don't die).
 func compressMessages(ctx context.Context, cfg LoopConfig, task AgentTask, messages []ChatMessage, preserveIters, currentRuneCount int) ([]ChatMessage, int) {
-	// Pick compression provider.
+	// Pick compression provider (used as fallback for inlineCompactor and for
+	// resolving a per-request summarizer override via compressModel).
 	provider := cfg.provider
 	if cfg.compressModel != nil {
 		if p := cfg.compressModel(ctx, task); p != nil {
@@ -639,23 +642,21 @@ func compressMessages(ctx context.Context, cfg LoopConfig, task AgentTask, messa
 		}
 	}
 
-	// Collect old tool-result content and prior summaries (before preserveFrom).
+	// Collect old tool-result messages and prior summaries (before preserveFrom).
 	// Prior summaries are re-compressed so successive passes fold together.
 	const summaryPrefix = "[Summary of earlier tool results]\n"
-	var oldContent strings.Builder
+	var oldMsgs []ChatMessage
 	var toRemove []int
 	for i := 0; i < preserveFrom; i++ {
 		m := messages[i]
 		switch {
 		case m.ToolCallID != "" && m.Content != "":
 			// Tool result message.
-			oldContent.WriteString(m.Content)
-			oldContent.WriteString("\n---\n")
+			oldMsgs = append(oldMsgs, m)
 			toRemove = append(toRemove, i)
 		case m.Role == "user" && strings.HasPrefix(m.Content, summaryPrefix) && i > 0:
 			// Prior summary from an earlier compression pass (skip the initial user message at i=0).
-			oldContent.WriteString(m.Content)
-			oldContent.WriteString("\n---\n")
+			oldMsgs = append(oldMsgs, m)
 			toRemove = append(toRemove, i)
 		}
 	}
@@ -673,12 +674,19 @@ func compressMessages(ctx context.Context, cfg LoopConfig, task AgentTask, messa
 		defer span.End()
 	}
 
-	// Call compression provider.
-	summaryResp, err := provider.Chat(compressCtx, ChatRequest{
-		Messages: []ChatMessage{
-			SystemMessage("Summarize the following tool execution results concisely. Preserve key facts, data values, decisions, and errors. Omit redundant details."),
-			UserMessage(oldContent.String()),
-		},
+	// Pick the compactor: use the configured one, or fall back to a default
+	// inlineCompactor backed by the (possibly override-resolved) provider.
+	compactor := cfg.compressor
+	if compactor == nil {
+		compactor = NewInlineCompactor(provider)
+	}
+
+	// Delegate to the compactor with ScopeToolResultsOnly so the Compactor
+	// implementation decides the prompt and summarization strategy.
+	result, err := compactor.Compact(compressCtx, CompactRequest{
+		Messages:           oldMsgs,
+		Scope:              core.ScopeToolResultsOnly,
+		SummarizerProvider: provider,
 	})
 	if err != nil {
 		cfg.logger.Warn("context compression failed, continuing uncompressed", "error", err)
@@ -695,7 +703,7 @@ func compressMessages(ctx context.Context, cfg LoopConfig, task AgentTask, messa
 	for i, m := range messages {
 		if removeSet[i] {
 			if !summaryInserted {
-				compressed = append(compressed, UserMessage("[Summary of earlier tool results]\n"+summaryResp.Content))
+				compressed = append(compressed, UserMessage(summaryPrefix+result.SummaryText))
 				summaryInserted = true
 			}
 			continue
