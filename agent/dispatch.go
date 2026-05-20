@@ -56,6 +56,45 @@ func DispatchTool(ctx context.Context, executeTool ToolExecFunc, executeToolStre
 	return toolResultToDispatch(executeTool(ctx, name, args))
 }
 
+// AgentRouter is an optional hook between built-ins and standard tool dispatch.
+// Returning (result, true) short-circuits dispatch with that result.
+// Returning (_, false) falls through to regular tool dispatch.
+type AgentRouter func(ctx context.Context, tc ToolCall) (DispatchResult, bool)
+
+// StandardDispatchConfig is the configuration for NewStandardDispatch.
+type StandardDispatchConfig struct {
+	Builtins          func(ctx context.Context, tc ToolCall, dispatch DispatchFunc) (DispatchResult, bool)
+	SpawnHandler      func(ctx context.Context, args json.RawMessage, defs []ToolDefinition, exec ToolExecFunc) DispatchResult
+	AgentRouter       AgentRouter // optional; network/ supplies this
+	ExecuteTool       ToolExecFunc
+	ExecuteToolStream ToolExecStreamFunc
+	ResolvedToolDefs  []ToolDefinition
+	StreamCh          chan<- StreamEvent
+}
+
+// NewStandardDispatch builds the recursive DispatchFunc.
+// Order: Builtins → spawn_agent → AgentRouter → DispatchTool.
+func NewStandardDispatch(cfg StandardDispatchConfig) DispatchFunc {
+	var dispatch DispatchFunc
+	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
+		if cfg.Builtins != nil {
+			if r, ok := cfg.Builtins(ctx, tc, dispatch); ok {
+				return r
+			}
+		}
+		if tc.Name == "spawn_agent" && cfg.SpawnHandler != nil {
+			return cfg.SpawnHandler(ctx, tc.Args, cfg.ResolvedToolDefs, cfg.ExecuteTool)
+		}
+		if cfg.AgentRouter != nil {
+			if r, ok := cfg.AgentRouter(ctx, tc); ok {
+				return r
+			}
+		}
+		return DispatchTool(ctx, cfg.ExecuteTool, cfg.ExecuteToolStream, tc.Name, tc.Args, cfg.StreamCh)
+	}
+	return dispatch
+}
+
 // --- parallel tool dispatch ---
 
 // toolExecResult holds the result of a single parallel tool call.

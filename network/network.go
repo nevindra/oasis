@@ -98,28 +98,22 @@ func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch 
 // and agent-finish events are emitted for subagent delegation. Tools
 // implementing StreamingAnyTool emit progress events via executeToolStream.
 func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.StreamEvent, executeTool agent.ToolExecFunc, executeToolStream agent.ToolExecStreamFunc, resolvedToolDefs []core.ToolDefinition) agent.DispatchFunc {
-	var dispatch agent.DispatchFunc
-	dispatch = func(ctx context.Context, tc core.ToolCall) agent.DispatchResult {
-		// Built-in tools: ask_user, execute_plan.
-		if r, ok := n.DispatchBuiltins(ctx, tc, dispatch); ok {
-			return r
+	agentRouter := func(ctx context.Context, tc core.ToolCall) (agent.DispatchResult, bool) {
+		const prefix = "agent_"
+		if !strings.HasPrefix(tc.Name, prefix) {
+			return agent.DispatchResult{}, false
 		}
-
-		// spawn_agent: dynamic sub-agent creation.
-		if tc.Name == "spawn_agent" {
-			return n.ExecuteSpawn(ctx, tc.Args, resolvedToolDefs, executeTool)
-		}
-
-		// Check if it's an agent call (prefixed with "agent_")
-		const agentPrefix = "agent_"
-		if strings.HasPrefix(tc.Name, agentPrefix) {
-			return n.dispatchAgent(ctx, tc, agentPrefix, parentTask, ch)
-		}
-
-		// Regular tool call.
-		return agent.DispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
+		return n.dispatchAgent(ctx, tc, prefix, parentTask, ch), true
 	}
-	return dispatch
+	return agent.NewStandardDispatch(agent.StandardDispatchConfig{
+		Builtins:          n.DispatchBuiltins,
+		SpawnHandler:      n.ExecuteSpawn,
+		AgentRouter:       agentRouter,
+		ExecuteTool:       executeTool,
+		ExecuteToolStream: executeToolStream,
+		ResolvedToolDefs:  resolvedToolDefs,
+		StreamCh:          ch,
+	})
 }
 
 // dispatchAgent handles delegation to a subagent. Emits agent-start/finish

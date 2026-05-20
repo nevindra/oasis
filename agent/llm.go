@@ -83,17 +83,14 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 // When executeToolStream and ch are non-nil, tools implementing StreamingAnyTool
 // emit progress events during execution.
 func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition) DispatchFunc {
-	var dispatch DispatchFunc
-	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
-		if r, ok := a.DispatchBuiltins(ctx, tc, dispatch); ok {
-			return r
-		}
-		if tc.Name == "spawn_agent" {
-			return a.ExecuteSpawn(ctx, tc.Args, resolvedToolDefs, executeTool)
-		}
-		return DispatchTool(ctx, executeTool, executeToolStream, tc.Name, tc.Args, ch)
-	}
-	return dispatch
+	return NewStandardDispatch(StandardDispatchConfig{
+		Builtins:          a.DispatchBuiltins,
+		SpawnHandler:      a.ExecuteSpawn,
+		ExecuteTool:       executeTool,
+		ExecuteToolStream: executeToolStream,
+		ResolvedToolDefs:  resolvedToolDefs,
+		StreamCh:          ch,
+	})
 }
 
 // compile-time checks
