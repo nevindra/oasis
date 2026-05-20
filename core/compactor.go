@@ -2,6 +2,21 @@ package core
 
 import "context"
 
+// CompactScope tells the Compactor what subset of messages to summarize.
+type CompactScope int
+
+const (
+	// ScopeFull instructs the Compactor to summarize the full message slice
+	// into a structured synopsis. This is the default and preserves
+	// pre-Phase-2 behavior.
+	ScopeFull CompactScope = iota
+
+	// ScopeToolResultsOnly instructs the Compactor to compress only the
+	// tool-result messages in the slice and leave user/assistant messages
+	// intact. Used by the per-turn rune-count compression path.
+	ScopeToolResultsOnly
+)
+
 // Compactor turns a message list into a structured summary via an LLM call.
 // Implementations MUST be safe to call concurrently.
 type Compactor interface {
@@ -33,6 +48,10 @@ type CompactRequest struct {
 	// ExtraSections are appended to the default 9 sections.
 	// Use for domain-specific additions (e.g., "Active Skills").
 	ExtraSections []CompactSection
+
+	// Scope tells the Compactor what subset of Messages to summarize.
+	// Zero value is ScopeFull (today's behavior).
+	Scope CompactScope
 }
 
 // CompactSection describes a domain-specific summary section.
