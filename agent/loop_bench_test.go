@@ -7,6 +7,38 @@ import (
 	"testing"
 )
 
+// --- stream forwarder benchmarks ---
+
+// BenchmarkIterChStreaming exercises newStreamForwarder with a realistic
+// per-iteration event burst (64 events ≈ one LLM call worth of text deltas).
+// Serves as a regression guard for future changes to defaultIterChBufSize
+// (Phase 4 finding 4.1.a): a meaningful drop in ns/op or B/op alongside a
+// buffer-size change confirms the new size is workable; a regression alongside
+// other refactors flags an unintended slowdown in the streaming path.
+func BenchmarkIterChStreaming(b *testing.B) {
+	ev := StreamEvent{Type: EventTextDelta, Content: "delta chunk"}
+	ctx := context.Background()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		dest := make(chan StreamEvent, 256)
+		iterCh, wait := newStreamForwarder(ctx, dest, defaultIterChBufSize)
+		done := make(chan struct{})
+		go func() {
+			for range dest {
+			}
+			close(done)
+		}()
+		for range 64 {
+			iterCh <- ev
+		}
+		close(iterCh)
+		wait()
+		close(dest)
+		<-done
+	}
+}
+
 // --- runeCount benchmarks ---
 
 func BenchmarkRuneCount_ASCII(b *testing.B) {

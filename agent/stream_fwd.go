@@ -6,9 +6,12 @@ import (
 )
 
 // defaultIterChBufSize is the per-iteration StreamEvent forwarder buffer.
-// Chosen empirically (Wave 4 of Phase 4): max observed fill across realistic
-// multi-turn workloads stays well below 64; will be revisited with
-// instrumentation data and lowered if appropriate.
+// Holding at 64 (the pre-Phase-4 value) until a real-workload measurement
+// justifies a reduction. Phase 4 finding 4.1.a originally proposed dropping
+// this to 16-32 based on observed fill, but that decision needs deployment
+// telemetry (e.g. instrumenting `cmd/bot_example` against live LLM streaming),
+// which is out of reach in current dev environments. BenchmarkIterChStreaming
+// in loop_bench_test.go is the regression guard for any future change.
 const defaultIterChBufSize = 64
 
 // newStreamForwarder creates an intermediate StreamEvent channel and spawns a
