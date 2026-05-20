@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// appendStepBounded appends trace to steps, enforcing the max cap. When max <= 0
+// the slice grows without bound. When full, the oldest entry is dropped and the
+// newest takes its place (ring-buffer semantics via in-place copy).
+func appendStepBounded(steps []StepTrace, trace StepTrace, max int) []StepTrace {
+	if max <= 0 || len(steps) < max {
+		return append(steps, trace)
+	}
+	copy(steps, steps[1:])
+	steps[len(steps)-1] = trace
+	return steps
+}
+
 // handleProcessorErrorWithSteps converts a processor error into an AgentResult.
 // ErrHalt produces a graceful result; other errors propagate as failures.
 // Any step traces collected before the error are preserved in the result.

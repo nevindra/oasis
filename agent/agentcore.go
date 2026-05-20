@@ -57,6 +57,7 @@ type AgentCore struct {
 	maxPlanSteps        int
 	maxToolResultLen    int
 	toolResultStore     core.ToolResultStore
+	maxSteps            int
 }
 
 // initCore initializes shared fields on an AgentCore from the given config.
@@ -143,6 +144,7 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Co
 	c.maxPlanSteps = cfg.maxPlanSteps
 	c.maxToolResultLen = cfg.maxToolResultLen
 	c.toolResultStore = cfg.toolResultStore
+	c.maxSteps = *cfg.maxSteps
 
 	// Build active skill instructions block.
 	if len(cfg.activeSkills) > 0 {
@@ -285,6 +287,7 @@ func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools
 		maxToolResultLen:    c.maxToolResultLen,
 		maxPlanSteps:        c.maxPlanSteps,
 		toolResultStore:     c.toolResultStore,
+		maxSteps:            c.maxSteps,
 	}
 }
 

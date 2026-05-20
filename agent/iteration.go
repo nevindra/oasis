@@ -287,7 +287,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 
 		// Build step trace.
 		trace := buildStepTrace(tc, results[j])
-		state.steps = append(state.steps, trace)
+		state.steps = appendStepBounded(state.steps, trace, cfg.maxSteps)
 
 		// Accumulate attachments from sub-agent results, capped by count and byte budget.
 		for _, a := range results[j].attachments {

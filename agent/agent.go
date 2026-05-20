@@ -72,6 +72,9 @@ type Config struct {
 	// Tool result paging store (set by WithToolResultStore; default in-memory).
 	toolResultStore    core.ToolResultStore
 	toolResultStoreSet bool // distinguishes "default" from "explicitly nil"
+
+	// maxSteps: nil = unset (default 100), &0 = unbounded, &n = cap at n.
+	maxSteps *int
 }
 
 // Agents returns the subagents registered via WithAgents.
@@ -422,6 +425,13 @@ func WithToolResultStore(s core.ToolResultStore) AgentOption {
 	}
 }
 
+// WithMaxSteps caps the number of StepTrace entries kept in AgentResult.Steps.
+// When the cap is exceeded the oldest entry is dropped (most-recent-N semantics).
+// WithMaxSteps(0) means unbounded. Default when not set: 100.
+func WithMaxSteps(n int) AgentOption {
+	return func(c *Config) { c.maxSteps = &n }
+}
+
 // nopLogger is a logger that discards all output. Used when WithLogger is not set.
 var nopLogger = slog.New(discardHandler{})
 
@@ -457,6 +467,11 @@ func BuildConfig(opts []AgentOption) *Config {
 	// Default to an in-memory store unless the caller explicitly passed nil.
 	if !c.toolResultStoreSet {
 		c.toolResultStore = core.NewInMemoryToolResultStore()
+	}
+	// Default maxSteps to 100 when not explicitly set.
+	if c.maxSteps == nil {
+		n := 100
+		c.maxSteps = &n
 	}
 	// Conflict: WithUserMemory and history.CrossThreadSearch configured with
 	// different embedding provider instances. Both write to c.embedding; the

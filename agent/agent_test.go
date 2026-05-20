@@ -1363,3 +1363,52 @@ func TestBuildConfigAllowsMatchingEmbedding(t *testing.T) {
 		WithHistory(history.CrossThreadSearch(em)),
 	})
 }
+
+// TestAgentResultStepsCapped verifies that WithMaxSteps(n) keeps at most n
+// StepTrace entries, retaining the most recent ones when the cap is exceeded.
+func TestAgentResultStepsCapped(t *testing.T) {
+	const cap = 3
+	// 5 tool calls, final text response.
+	responses := []ChatResponse{
+		{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{ToolCalls: []ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{ToolCalls: []ToolCall{{ID: "3", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{ToolCalls: []ToolCall{{ID: "4", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{ToolCalls: []ToolCall{{ID: "5", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{Content: "done"},
+	}
+	provider := &mockProvider{name: "test", responses: responses}
+	a := NewLLMAgent("capped", "step cap test", provider,
+		WithTools(mockTool{}),
+		WithMaxSteps(cap),
+	)
+	result, err := a.Execute(context.Background(), AgentTask{Input: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Steps) != cap {
+		t.Fatalf("Steps len = %d, want %d", len(result.Steps), cap)
+	}
+}
+
+// TestAgentResultStepsUnbounded verifies that WithMaxSteps(0) keeps all steps.
+func TestAgentResultStepsUnbounded(t *testing.T) {
+	const numCalls = 5
+	responses := make([]ChatResponse, numCalls+1)
+	for i := range numCalls {
+		responses[i] = ChatResponse{ToolCalls: []ToolCall{{ID: fmt.Sprintf("%d", i+1), Name: "greet", Args: json.RawMessage(`{}`)}}}
+	}
+	responses[numCalls] = ChatResponse{Content: "done"}
+	provider := &mockProvider{name: "test", responses: responses}
+	a := NewLLMAgent("unbounded", "step unbounded test", provider,
+		WithTools(mockTool{}),
+		WithMaxSteps(0),
+	)
+	result, err := a.Execute(context.Background(), AgentTask{Input: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Steps) != numCalls {
+		t.Fatalf("Steps len = %d, want %d", len(result.Steps), numCalls)
+	}
+}

@@ -41,6 +41,8 @@ type LoopConfig struct {
 	maxToolResultLen    int               // 0 → uses package-level default
 	maxPlanSteps        int               // 0 → uses package-level default
 	toolResultStore     core.ToolResultStore // nil = legacy truncation marker
+	// maxSteps bounds AgentResult.Steps; 0 = unbounded; oldest entry dropped when exceeded.
+	maxSteps int
 }
 
 // maxToolResultMessageLen is the maximum rune length for a tool result stored
