@@ -6,7 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
-### Changed (breaking)
+### Breaking
+
+- **`AgentHandle.State()` no longer blocks.** Callers that read `Result()` after `State().IsTerminal()` must insert `h.Sync()` between the two. Migration hint: `grep -n 'State().IsTerminal' your-project/` and add `Sync()` calls. (finding 3.4)
+- **Conflicting embedding providers panic at build time.** `WithUserMemory(em1, ...)` and `WithHistory(history.CrossThreadSearch(em2, ...))` with non-equal embeddings now panic from `BuildConfig`. Pass the same `EmbeddingProvider` to both, or pick one. (finding 1.2.g)
+- **`WithSandbox(any)` is now `WithSandbox(core.Sandbox)`.** The `sandbox/` satellite's existing type already implements the new `core.Sandbox` interface — no satellite changes needed. Custom sandbox types must implement `Close() error`. (finding 1.2.k)
 - `AgentTask.Context map[string]any` removed. Use the typed `ThreadID`/`UserID`/`ChatID` fields. App-defined metadata moves to `AgentTask.Extra`. The `ContextThreadID`/`ContextUserID`/`ContextChatID` constants and `TaskThreadID()`/`TaskUserID()`/`TaskChatID()` accessors are deleted.
 - `Attachment.Base64` field removed. Construct via `NewAttachment` / `NewAttachmentFromURL` / `NewAttachmentFromBase64`. `InlineData()` is now infallible and returns `Data` directly.
 - `ChatMessage.Role` switches from `string` to typed `Role`. String literals still compile for comparisons; direct assignments of `msg.Role` to a `string` variable need an explicit `string()` conversion. New code should use `RoleSystem` / `RoleUser` / `RoleAssistant` / `RoleTool`.
@@ -43,40 +47,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
     and the `skill*.go` re-export shims have been deleted; their content is
     now in `oasis.go`.
   - `scheduler.go` was removed from the root (no external callers).
-
-### Added
-- `StreamingTool[In, Out]` generic interface for type-safe streaming tool authoring. Bridge via `EraseStreaming[In, Out]` to register as a `StreamingAnyTool`.
-- `NewAttachment`, `NewAttachmentFromURL`, `NewAttachmentFromBase64` constructors.
-- `Role` type with `RoleSystem`, `RoleUser`, `RoleAssistant`, `RoleTool` constants.
-
-### Removed
-- Dead `subAgentConfig` alias in `agent/llm.go`.
-
-### Fixed
-- `Provider.ChatStream` doc no longer claims providers leave the channel open — every implementation closes it, matching the actual contract used by the agent loop.
-- `ErrHalt` doc now clarifies that processors must return `&ErrHalt{...}` (pointer), not a value, to satisfy the `error` interface.
-- Silent base64-decode swallow in `Attachment.InlineData()` — moved to construction time via `NewAttachmentFromBase64`.
-
-### Migration notes
-- The root `go.mod` no longer requires `modernc.org/sqlite`,
-  `github.com/jackc/pgx/v5`, the OTEL stack, the Docker SDK, or
-  `github.com/ledongthuc/pdf` directly. Apps that previously got those
-  transitively must now explicitly import the matching satellite (e.g.
-  `import _ "github.com/nevindra/oasis/store/sqlite"`).
-- All re-exported types and functions from `oasis.*` retain their names. If
-  your code uses `oasis.Provider`, `oasis.LLMAgent`, `oasis.WithCompaction`,
-  `oasis.CosineSimilarity`, etc., no source change is needed.
-- Direct imports of the satellites (`oasis/store/sqlite`,
-  `oasis/provider/gemini`, etc.) are unchanged.
-
-### Removed
-- Root-package `scheduler.go` (`Scheduler`, `NewScheduler`, `ComputeNextRun`,
-  `FormatLocalTime`, `RunHook`, `WithSchedulerInterval`,
-  `WithSchedulerTZOffset`, `WithOnRun`). Re-add separately if needed.
-- Transitional alias files (`types_aliases.go`, `processor_aliases.go`,
-  `tool_aliases.go`, `types.go`, `skill.go`, `skill_builtin.go`,
-  `skill_scan.go`, `skill_tool.go`). The aliases now live in `oasis.go`.
-
 - **BREAKING**: Compaction *implementation* moved to a separate Go module
   `github.com/nevindra/oasis/compaction`. The `Compactor` interface and
   `CompactRequest`/`CompactSection`/`CompactResult` types remain in the
@@ -105,8 +75,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   - Third extraction in the microkernel migration. First one exercising
     the "kernel-consumed interface stays, satellite implementation moves"
     split. See `docs/superpowers/specs/2026-05-17-microkernel-migration-design.md` §6.
-
-### Changed
 - **BREAKING**: `InjectionGuard`, `ContentGuard`, `KeywordGuard`,
   `MaxToolCallsGuard` and their constructors/options moved to a separate
   Go module `github.com/nevindra/oasis/guardrail`.
@@ -132,8 +100,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
     KeywordGuard), `MaxToolCallsGuard`, `NewMaxToolCallsGuard`.
   - Second extraction in the microkernel migration. See
     `docs/superpowers/specs/2026-05-17-microkernel-migration-design.md`.
-
-### Changed
 - **BREAKING**: `RateLimitOption`, `RPM`, `TPM`, `WithRateLimit` moved to
   separate Go module `github.com/nevindra/oasis/ratelimit`.
   - Migration:
@@ -154,13 +120,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
     ```
   - First extraction in the microkernel migration. See
     `docs/superpowers/specs/2026-05-17-microkernel-migration-design.md`.
-
-### Added
-- `go.work` workspace file for local multi-module development.
-- `scripts/check-module-deps.sh` enforces microkernel dependency invariants
-  in CI.
-
-### Changed
 - **BREAKING — `Tool` interface reshaped from bundle to atomic.** One
   implementation now describes exactly one operation. New types:
   - `AnyTool`: type-erased atomic interface (`Name() / Definition() /
@@ -175,110 +134,73 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   atomic implementations. Built-in tools migrated: `tools/http` (now
   `oasis.Tool[FetchInput, string]`), `tools/data` (split into 4 atomic
   tools), skill tools (split into 4), sandbox tools, MCP wrappers.
-
-### Removed
-- **Reference app `cmd/bot_example/`** — no longer the integration gate.
-- **Out-of-scope tool packages** — `tools/knowledge`, `tools/remember`,
-  `tools/skill`, `tools/shell`, `tools/file`, `tools/search`,
-  `tools/schedule`, `tools/todo`. Will be re-implemented inside their
-  owner modules during Phase 2 / harness layer.
-
-### Added
-- **Deferred MCP tool schemas** (opt-in via `WithDeferredSchemas`): advertise
-  MCP tool names + descriptions without their input schemas; load schemas on
-  demand via an auto-registered `ToolSearch` tool. Saves ~600 tokens per
-  unloaded tool schema for setups with many MCP servers. Auto-prepends a
-  system-prompt block teaching the model the deferral mechanism. New options
-  `WithDeferredSchemas`, `DeferOption`, `DeferThreshold`, `DeferAlwaysOn`,
-  `DeferExclude`. New methods `ToolRegistry.EnsureSchema`,
-  `ToolRegistry.DeferredDefinitions`, `MCPRegistry.SetDeferredMode`. New
-  capability interface `SchemaEnsurer` (tools may implement to participate in
-  deferred-schema loading). See [`docs/guides/connecting-mcp-servers.md`](docs/guides/connecting-mcp-servers.md) §
-  "Deferred schemas".
-- **MCP client** — connect agents to external Model Context Protocol servers over
-  stdio and HTTP transports. Tools from MCP servers register into the existing
-  `ToolRegistry` under `mcp__<server>__<tool>` namespacing and are callable like
-  any other tool. Reconnect loop uses exponential backoff (500ms → 30s cap,
-  10 attempts, ±25% jitter). New options `WithMCPServer`, `WithMCPServers`,
-  `WithSharedMCPRegistry`, `WithMCPLifecycleHandler`; runtime management via
-  `(*LLMAgent).MCP()` controller. File-based config loader at `mcp/config`
-  (Claude Desktop compatible schema, `${ENV_VAR}` interpolation). See
-  [`docs/guides/connecting-mcp-servers.md`](docs/guides/connecting-mcp-servers.md).
-- New root types: `MCPServerConfig`, `StdioMCPConfig`, `HTTPMCPConfig`, `Auth`,
-  `BearerAuth`, `MCPToolFilter`, `MCPServerStatus`, `MCPServerInfo`,
-  `MCPServerState`, `MCPLifecycleHandler`, `NoopMCPLifecycle`, `MCPController`,
-  `MCPRegistry`, `MCPEvent`, `MCPEventType`, `MCPAccessor`.
-- New `mcp` package client types: `Client`, `StdioClient`, `HTTPClient`, `Auth`,
-  `BearerAuth`, `InitializeResult`, `ListToolsResult`, `CallToolResult`,
-  `ContentBlock`, `ServerInfo`. Test fixture at `mcp/mcptest`.
-- `ToolRegistry.Remove(name string) error` method — required for removing MCP
-  tools on server unregister; also usable by any caller that needs dynamic
-  tool removal.
-- **`tools/todo` package** — Claude-Code-style `todo_write` tool for agent task
-  tracking. Exposes a single tool function (`todo_write`) that accepts a list
-  of `{content, activeForm, status}` items (status ∈ `pending` /
-  `in_progress` / `completed`). Validates length (max 50 items, 1000-char
-  content, 200-char activeForm) and auto-clears the stored list when every
-  item is `completed` so downstream UIs can hide the panel.
-- **`todo.Backend` interface** — storage adapter (`Get`/`Set` by key) so
-  embedders can persist task lists to whatever fits (in-memory, JSONB column,
-  file, etc.). Implementations must serialize concurrent `Set` on the same
-  key.
-- **`todo.New(backend, keyFn)` constructor** — `keyFn(ctx)` extracts the
-  scoping identifier (conversation ID, session ID, …) from the agent's
-  execution context, letting a single tool instance serve many concurrent
-  conversations.
-- **`todo.ToolDescription` constant** — full prompt ported from Claude
-  Code's `TodoWriteTool/prompt.ts` so the LLM actually uses the tool. The
-  port replaces the `${FILE_EDIT_TOOL_NAME}` template with a literal
-  "file edit tool"; the verification-agent nudge logic is not part of the
-  prompt text and is not ported.
-
-### Notes
-- Deferred MCP tool schemas + `ToolSearch` follow in next release (Plan α-2).
-
-### Changed (breaking) — Phase 1.5: typed tool schemas
-- `Tool[In, Out]` interface shrunk from three methods to two:
+- **BREAKING — `Tool` interface shrunk (Phase 1.5: typed tool schemas)**:
   - Removed `Name() string`. The tool's name now lives in the `ToolMeta`
     returned by `Definition()`.
   - `Definition() ToolDefinition` → `Definition() ToolMeta`. Authors
     return name + description only; the JSON Schema for `In` is derived
     from the Go type by reflection inside `Erase`.
-- `StreamingTool[In, Out]` inherits the shrunken `Tool` interface
-  automatically.
-- Schema-shape errors now **panic** at `Erase[In, Out]()` registration time
-  with a descriptive message (field path, offending Go type, supported
-  alternatives). They previously failed silently at LLM-call time.
+- **BREAKING — Schema-shape errors now panic (Phase 1.5)**: Schema-shape errors now **panic** at `Erase[In, Out]()` registration time with a descriptive message (field path, offending Go type, supported alternatives). They previously failed silently at LLM-call time.
 
-### Added — Phase 1.5
-- `core.ToolMeta` struct — `Name` + `Description` fields, returned by
-  `Tool.Definition()`.
-- `core.SchemaProvider` interface — implement `JSONSchema()
-  json.RawMessage` on an input type to bypass reflection (recursive
-  shapes, `oneOf`, provider-specific schemas).
-- `core.DeriveSchema[T any]() json.RawMessage` — exported helper that
-  builds a JSON Schema from any Go type by reflection. Used internally
-  by `Erase`/`EraseStreaming`; also callable by built-in tool defs that
-  don't go through `Erase`.
-- Struct-tag vocabulary recognised by the reflector:
-  - `json:"name,omitempty"` (stdlib; honored for naming and optionality)
-  - `describe:"..."` — free-text description shown to the LLM
-  - `enum:"a,b,c"` — comma-separated string enumeration (string fields only)
-- Three umbrella re-exports: `oasis.ToolMeta`, `oasis.SchemaProvider`,
-  `oasis.DeriveSchema`.
+### Changed
 
-### Migration notes (Phase 1.5)
-- Every external `Tool[In, Out]` implementation must:
-  1. Delete the `Name()` method.
-  2. Change `Definition() ToolDefinition` to `Definition() ToolMeta` and
-     return only `{Name, Description}` (no `Parameters` field).
-  3. Add `describe:"..."` and (where applicable) `enum:"..."` tags to the
-     `In` struct fields.
-  4. Delete the hand-written `Parameters: json.RawMessage(...)` block.
-- For schemas reflection cannot express, implement
-  `SchemaProvider.JSONSchema() json.RawMessage` on the input type.
-- See `docs/guides/typed-tool-schemas.md` for a worked side-by-side
-  example.
+- **Default `maxIter` raised 10 → 25.** Real tool-using workflows commonly need 15-20 iterations. Set `WithMaxIter(10)` to restore the old default. (finding 3.6)
+- **`compressMessages` now routes through the `Compactor` interface** instead of an inline English prompt. Users with custom `Compactor` implementations should handle both `ScopeFull` and `ScopeToolResultsOnly` (default `inlineCompactor` does both). (findings 1.2.f, 3.9)
+- `StreamingTool[In, Out]` inherits the shrunken `Tool` interface automatically.
+
+### Added
+
+- **`core.ToolResultStore` interface** + default in-memory implementation (`core.NewInMemoryToolResultStore`) for paging large tool results. Auto-enabled with 10 MiB total cap and 5-minute TTL per entry; opt out with `WithToolResultStore(nil)`. (finding 3.7)
+- **`read_full_result` built-in tool** for the LLM to retrieve slices of stored results. Auto-registered when a `ToolResultStore` is configured. (finding 3.7)
+- **`core.Sandbox` interface** — see breaking note above. (finding 1.2.k)
+- **`core.CompactRequest.Scope`** field with `core.ScopeFull` and `core.ScopeToolResultsOnly` constants. (finding 1.2.f)
+- **`AgentHandle.Sync()`** — see breaking note above. (finding 3.4)
+- **`core.EventMaxIterReached`** stream event emitted before forced synthesis. (finding 3.6)
+- **Four new options:** `WithToolResultStore`, `WithMaxToolResultLen`, `WithMaxParallelDispatch`, `WithMaxPlanSteps`. (findings 3.7, 3.8)
+- **Helper option functions:** `WithToolResultMaxBytes`, `WithToolResultTTL` for tuning the in-memory store. (finding 3.7)
+- `StreamingTool[In, Out]` generic interface for type-safe streaming tool authoring. Bridge via `EraseStreaming[In, Out]` to register as a `StreamingAnyTool`.
+- `NewAttachment`, `NewAttachmentFromURL`, `NewAttachmentFromBase64` constructors.
+- `Role` type with `RoleSystem`, `RoleUser`, `RoleAssistant`, `RoleTool` constants.
+- `go.work` workspace file for local multi-module development.
+- `scripts/check-module-deps.sh` enforces microkernel dependency invariants in CI.
+- `core.ToolMeta` struct — `Name` + `Description` fields, returned by `Tool.Definition()` (Phase 1.5).
+- `core.SchemaProvider` interface — implement `JSONSchema() json.RawMessage` on an input type to bypass reflection (recursive shapes, `oneOf`, provider-specific schemas) (Phase 1.5).
+- `core.DeriveSchema[T any]() json.RawMessage` — exported helper that builds a JSON Schema from any Go type by reflection (Phase 1.5).
+- Struct-tag vocabulary recognised by the reflector: `json:"name,omitempty"` (stdlib), `describe:"..."`, `enum:"a,b,c"` (Phase 1.5).
+- Three umbrella re-exports: `oasis.ToolMeta`, `oasis.SchemaProvider`, `oasis.DeriveSchema` (Phase 1.5).
+- **Deferred MCP tool schemas** (opt-in via `WithDeferredSchemas`): advertise MCP tool names + descriptions without their input schemas; load schemas on demand via an auto-registered `ToolSearch` tool. Saves ~600 tokens per unloaded tool schema for setups with many MCP servers. Auto-prepends a system-prompt block teaching the model the deferral mechanism. New options `WithDeferredSchemas`, `DeferOption`, `DeferThreshold`, `DeferAlwaysOn`, `DeferExclude`. New methods `ToolRegistry.EnsureSchema`, `ToolRegistry.DeferredDefinitions`, `MCPRegistry.SetDeferredMode`. New capability interface `SchemaEnsurer` (tools may implement to participate in deferred-schema loading). See [`docs/guides/connecting-mcp-servers.md`](docs/guides/connecting-mcp-servers.md) § "Deferred schemas".
+- **MCP client** — connect agents to external Model Context Protocol servers over stdio and HTTP transports. Tools from MCP servers register into the existing `ToolRegistry` under `mcp__<server>__<tool>` namespacing and are callable like any other tool. Reconnect loop uses exponential backoff (500ms → 30s cap, 10 attempts, ±25% jitter). New options `WithMCPServer`, `WithMCPServers`, `WithSharedMCPRegistry`, `WithMCPLifecycleHandler`; runtime management via `(*LLMAgent).MCP()` controller. File-based config loader at `mcp/config` (Claude Desktop compatible schema, `${ENV_VAR}` interpolation). See [`docs/guides/connecting-mcp-servers.md`](docs/guides/connecting-mcp-servers.md).
+- New root types: `MCPServerConfig`, `StdioMCPConfig`, `HTTPMCPConfig`, `Auth`, `BearerAuth`, `MCPToolFilter`, `MCPServerStatus`, `MCPServerInfo`, `MCPServerState`, `MCPLifecycleHandler`, `NoopMCPLifecycle`, `MCPController`, `MCPRegistry`, `MCPEvent`, `MCPEventType`, `MCPAccessor`.
+- New `mcp` package client types: `Client`, `StdioClient`, `HTTPClient`, `Auth`, `BearerAuth`, `InitializeResult`, `ListToolsResult`, `CallToolResult`, `ContentBlock`, `ServerInfo`. Test fixture at `mcp/mcptest`.
+- `ToolRegistry.Remove(name string) error` method — required for removing MCP tools on server unregister; also usable by any caller that needs dynamic tool removal.
+- **`tools/todo` package** — Claude-Code-style `todo_write` tool for agent task tracking. Exposes a single tool function (`todo_write`) that accepts a list of `{content, activeForm, status}` items (status ∈ `pending` / `in_progress` / `completed`). Validates length (max 50 items, 1000-char content, 200-char activeForm) and auto-clears the stored list when every item is `completed` so downstream UIs can hide the panel.
+- **`todo.Backend` interface** — storage adapter (`Get`/`Set` by key) so embedders can persist task lists to whatever fits (in-memory, JSONB column, file, etc.). Implementations must serialize concurrent `Set` on the same key.
+- **`todo.New(backend, keyFn)` constructor** — `keyFn(ctx)` extracts the scoping identifier (conversation ID, session ID, …) from the agent's execution context, letting a single tool instance serve many concurrent conversations.
+- **`todo.ToolDescription` constant** — full prompt ported from Claude Code's `TodoWriteTool/prompt.ts` so the LLM actually uses the tool. The port replaces the `${FILE_EDIT_TOOL_NAME}` template with a literal "file edit tool"; the verification-agent nudge logic is not part of the prompt text and is not ported.
+
+### Removed
+
+- **Reference app `cmd/bot_example/`** — no longer the integration gate.
+- **Out-of-scope tool packages** — `tools/knowledge`, `tools/remember`, `tools/skill`, `tools/shell`, `tools/file`, `tools/search`, `tools/schedule`, `tools/todo`. Will be re-implemented inside their owner modules during Phase 2 / harness layer.
+- Dead `subAgentConfig` alias in `agent/llm.go`.
+- Root-package `scheduler.go` (`Scheduler`, `NewScheduler`, `ComputeNextRun`, `FormatLocalTime`, `RunHook`, `WithSchedulerInterval`, `WithSchedulerTZOffset`, `WithOnRun`). Re-add separately if needed.
+- Transitional alias files (`types_aliases.go`, `processor_aliases.go`, `tool_aliases.go`, `types.go`, `skill.go`, `skill_builtin.go`, `skill_scan.go`, `skill_tool.go`). The aliases now live in `oasis.go`.
+- Inline English compression prompt in `agent/loop.go` (replaced by `inlineCompactor`).
+
+### Fixed
+
+- **`forwardSubagentStream` double-close** routed through a single `sync.Once` (the actual bypass sites were the no-tools streaming path and synthesis path in `agent/loop.go`, plus `agent/suspend.go`'s resume path). The `recover()` in `onceClose` is removed; the real bypass paths are fixed. (finding 2.2.g)
+- `Provider.ChatStream` doc no longer claims providers leave the channel open — every implementation closes it, matching the actual contract used by the agent loop.
+- `ErrHalt` doc now clarifies that processors must return `&ErrHalt{...}` (pointer), not a value, to satisfy the `error` interface.
+- Silent base64-decode swallow in `Attachment.InlineData()` — moved to construction time via `NewAttachmentFromBase64`.
+
+### Migration notes
+
+- The root `go.mod` no longer requires `modernc.org/sqlite`, `github.com/jackc/pgx/v5`, the OTEL stack, the Docker SDK, or `github.com/ledongthuc/pdf` directly. Apps that previously got those transitively must now explicitly import the matching satellite (e.g. `import _ "github.com/nevindra/oasis/store/sqlite"`).
+- All re-exported types and functions from `oasis.*` retain their names. If your code uses `oasis.Provider`, `oasis.LLMAgent`, `oasis.WithCompaction`, `oasis.CosineSimilarity`, etc., no source change is needed.
+- Direct imports of the satellites (`oasis/store/sqlite`, `oasis/provider/gemini`, etc.) are unchanged.
+- Every external `Tool[In, Out]` implementation must: (1) Delete the `Name()` method. (2) Change `Definition() ToolDefinition` to `Definition() ToolMeta` and return only `{Name, Description}` (no `Parameters` field). (3) Add `describe:"..."` and (where applicable) `enum:"..."` tags to the `In` struct fields. (4) Delete the hand-written `Parameters: json.RawMessage(...)` block. For schemas reflection cannot express, implement `SchemaProvider.JSONSchema() json.RawMessage` on the input type. See `docs/guides/typed-tool-schemas.md` for a worked side-by-side example (Phase 1.5).
+- Deferred MCP tool schemas + `ToolSearch` follow in next release (Plan α-2).
 
 ## [0.15.0] - 2026-04-16
 
