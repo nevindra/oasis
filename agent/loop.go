@@ -92,14 +92,21 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 
 	// Build initial messages (system prompt + user memory + history + user input).
 	// If resumeMessages is set (suspend/resume), use those instead.
-	// Pre-alloc capacity for ~4 appends per iteration (assistant msg + tool results)
-	// per §5.5 of the Phase 4 design — avoids unbounded reallocations on long runs.
+	// Factor 8 per iteration: empirical 1 assistant + ~5-7 tool result messages; factor
+	// 4 hit capacity at iteration 2 and realloc'd 6-8 times in 25-iter runs. Ceiling
+	// guards against pathologically large maxIter pre-allocating megabytes upfront.
+	const preAllocPer = 8
+	const preAllocCeil = 2000
 	var messages []ChatMessage
 	if len(cfg.resumeMessages) > 0 {
 		messages = cfg.resumeMessages
 	} else {
 		initial := cfg.mem.BuildMessages(ctx, cfg.name, cfg.systemPrompt, task)
-		messages = make([]ChatMessage, len(initial), len(initial)+cfg.maxIter*4)
+		preAllocCap := cfg.maxIter * preAllocPer
+		if preAllocCap > preAllocCeil {
+			preAllocCap = preAllocCeil
+		}
+		messages = make([]ChatMessage, len(initial), len(initial)+preAllocCap)
 		copy(messages, initial)
 	}
 
