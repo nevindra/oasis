@@ -440,3 +440,33 @@ func onceClose[T any](ch chan<- T) func() {
 func safeAgentError(agentName string, p any) error {
 	return fmt.Errorf("subagent %q panic: %v", agentName, p)
 }
+
+// HasDynamicTools reports whether the agent has a dynamic tool resolver configured.
+func (c *AgentCore) HasDynamicTools() bool {
+	return c.DynamicTools != nil
+}
+
+// ExecuteSpawn handles a spawn_agent tool call by delegating to ExecuteSpawnAgent
+// with configuration drawn from the AgentCore fields, avoiding repetitive field
+// threading at each call site.
+func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, toolDefs []ToolDefinition, executeTool ToolExecFunc) DispatchResult {
+	return ExecuteSpawnAgent(ctx, args, SubAgentConfig{
+		Provider:       c.LLMProvider,
+		ToolDefs:       toolDefs,
+		ExecuteTool:    executeTool,
+		MaxIter:        c.MaxIter,
+		MaxSpawnDepth:  c.SpawnDepthLimit,
+		DenySpawnTools: c.DeniedSpawnTools,
+		PlanExecution:  c.PlanExecution,
+		Logger:         c.Logger,
+		GenParams:      c.GenParams,
+	})
+}
+
+// DispatchBuiltins handles built-in tool calls (ask_user, execute_plan) using
+// configuration drawn from the AgentCore fields. Returns (result, true) when
+// the call was handled; (zero, false) otherwise.
+// Within this method, DispatchBuiltins(...) resolves to the package-level function.
+func (c *AgentCore) DispatchBuiltins(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool) {
+	return DispatchBuiltins(ctx, tc, dispatch, c.Handler, c.name, c.PlanExecution, c.MaxPlanSteps, c.MaxParallelDispatch)
+}
