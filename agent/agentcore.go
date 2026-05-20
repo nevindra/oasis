@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
 )
 
@@ -30,7 +31,7 @@ type AgentCore struct {
 	MaxIter          int              // exported for network subpackage access
 	Handler          InputHandler     // exported for network subpackage access (avoid clash with InputHandler interface name)
 	PlanExecution    bool             // exported for network subpackage access
-	sandbox          any              // holds a sandbox.Sandbox when set
+	sandbox          core.Sandbox     // holds a sandbox.Sandbox when set
 	responseSchema   *ResponseSchema
 	dynamicPrompt    PromptFunc
 	dynamicModel     ModelFunc

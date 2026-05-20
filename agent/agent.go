@@ -38,7 +38,7 @@ type agentConfig struct {
 	memoryEmbedding      EmbeddingProvider // set only by WithUserMemory; used to detect provider conflicts
 	crossThreadEmbedding EmbeddingProvider // set only by history.CrossThreadSearch; used to detect provider conflicts
 	planExecution     bool            // enabled by WithPlanExecution option
-	Sandbox           any             // set by WithSandbox option; holds a sandbox.Sandbox (exported for network subpackage)
+	Sandbox           core.Sandbox    // set by WithSandbox option (exported for network subpackage)
 	SandboxTools      []AnyTool       // tools auto-registered by WithSandbox (exported for network subpackage)
 	responseSchema    *ResponseSchema // set by WithResponseSchema option
 	dynamicPrompt     PromptFunc      // set by WithDynamicPrompt option
@@ -217,7 +217,7 @@ func WithPlanExecution() AgentOption {
 //
 //	sb, _ := mgr.Create(ctx, sandbox.CreateOpts{SessionID: "s1"})
 //	agent := oasis.NewLLMAgent("a", "d", provider, oasis.WithSandbox(sb, sandbox.Tools(sb)...))
-func WithSandbox(sb any, tools ...AnyTool) AgentOption {
+func WithSandbox(sb core.Sandbox, tools ...AnyTool) AgentOption {
 	return func(c *agentConfig) {
 		c.Sandbox = sb
 		c.SandboxTools = tools
