@@ -624,3 +624,80 @@ func TestNoThinkingEventWhenEmpty(t *testing.T) {
 
 // --- Workflow streaming tests ---
 
+// --- EventMaxIterReached tests ---
+
+// alwaysToolProvider is a Provider that always returns a single ToolCall so
+// the loop keeps requesting tools until it hits maxIter.
+type alwaysToolProvider struct {
+	toolName string
+	synthResp ChatResponse
+}
+
+func (a *alwaysToolProvider) Name() string { return "always-tool" }
+func (a *alwaysToolProvider) Chat(_ context.Context, req ChatRequest) (ChatResponse, error) {
+	// If the last message looks like a forced-synthesis prompt, return text.
+	if len(req.Messages) > 0 {
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role == "user" && len(last.Content) > 20 &&
+			last.Content[:20] == "You have used all av" {
+			return a.synthResp, nil
+		}
+	}
+	return ChatResponse{
+		ToolCalls: []ToolCall{{ID: "loop-1", Name: a.toolName, Args: json.RawMessage(`{}`)}},
+	}, nil
+}
+func (a *alwaysToolProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	defer close(ch)
+	return a.Chat(context.Background(), req)
+}
+
+func TestEventMaxIterReachedEmitted(t *testing.T) {
+	provider := &alwaysToolProvider{
+		toolName:  "loop_tool",
+		synthResp: ChatResponse{Content: "forced synthesis result"},
+	}
+	a := NewLLMAgent("test", "", provider,
+		WithTools(&configuredFakeAgentTool{name: "loop_tool", output: "still going"}),
+		WithMaxIter(3),
+	)
+
+	ch := make(chan StreamEvent, 64)
+	_, _ = a.ExecuteStream(context.Background(), AgentTask{Input: "loop"}, ch)
+
+	var saw bool
+	for ev := range ch {
+		if ev.Type == EventMaxIterReached {
+			saw = true
+			if ev.Content == "" {
+				t.Error("EventMaxIterReached content should carry iter/maxIter JSON")
+			}
+			// Verify JSON is parseable and has max_iter key.
+			var payload map[string]int
+			if err := json.Unmarshal([]byte(ev.Content), &payload); err != nil {
+				t.Errorf("EventMaxIterReached content is not valid JSON: %v", err)
+			}
+			if _, ok := payload["max_iter"]; !ok {
+				t.Error("EventMaxIterReached JSON missing max_iter key")
+			}
+		}
+	}
+	if !saw {
+		t.Error("expected EventMaxIterReached, got none")
+	}
+}
+
+// configuredFakeAgentTool is a local AnyTool with a configurable name/output.
+type configuredFakeAgentTool struct {
+	name   string
+	output string
+}
+
+func (t *configuredFakeAgentTool) Name() string { return t.name }
+func (t *configuredFakeAgentTool) Definition() ToolDefinition {
+	return ToolDefinition{Name: t.name, Description: "fake tool"}
+}
+func (t *configuredFakeAgentTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{Content: t.output}, nil
+}
+

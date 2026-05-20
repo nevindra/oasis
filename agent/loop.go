@@ -532,6 +532,23 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 	}
 
 	// Max iterations — force synthesis.
+	// Surface the max-iter hit so UIs can show the forced-synthesis cost.
+	if ch != nil {
+		payload, _ := json.Marshal(map[string]int{
+			"iter":     cfg.maxIter,
+			"max_iter": cfg.maxIter,
+		})
+		select {
+		case ch <- StreamEvent{
+			Type:    EventMaxIterReached,
+			Name:    cfg.name,
+			Content: string(payload),
+		}:
+		case <-ctx.Done():
+			safeCloseCh()
+			return AgentResult{Usage: totalUsage}, ctx.Err()
+		}
+	}
 	cfg.logger.Warn("max iterations reached, forcing synthesis", "agent", cfg.name, "iteration", cfg.maxIter)
 	messages = append(messages, UserMessage(
 		"You have used all available tool calls. Summarize what you found and respond to the user."))

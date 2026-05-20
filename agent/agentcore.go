@@ -14,7 +14,7 @@ import (
 	"github.com/nevindra/oasis/memory"
 )
 
-const defaultMaxIter = 10
+const defaultMaxIter = 25
 
 // AgentCore holds fields shared by LLMAgent and Network.
 // Both types embed this struct to eliminate field duplication.

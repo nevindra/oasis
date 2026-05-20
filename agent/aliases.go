@@ -67,6 +67,7 @@ const (
 	EventStepProgress    = core.EventStepProgress
 	EventRoutingDecision = core.EventRoutingDecision
 	EventFileAttachment  = core.EventFileAttachment
+	EventMaxIterReached  = core.EventMaxIterReached
 )
 
 // --- Processors ---

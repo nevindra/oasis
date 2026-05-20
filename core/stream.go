@@ -58,6 +58,11 @@ const (
 	// and is available for download. Content carries JSON metadata:
 	// {"name":"report.pdf","mime_type":"application/pdf","size":12345,"url":"/api/files/…/download"}.
 	EventFileAttachment StreamEventType = "file_attachment"
+	// EventMaxIterReached signals that the agent loop hit its iteration limit
+	// and is about to force a synthesis LLM call. Content carries a JSON object
+	// {"iter":N,"max_iter":M}. Emitted exactly once per execution that hits the
+	// cap.
+	EventMaxIterReached StreamEventType = "max-iter-reached"
 )
 
 // StreamEvent is a typed event emitted during agent streaming.

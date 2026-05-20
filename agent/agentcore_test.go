@@ -62,6 +62,15 @@ func TestInitCoreDefaultMaxIter(t *testing.T) {
 	}
 }
 
+func TestDefaultMaxIterIs25(t *testing.T) {
+	cfg := BuildConfig(nil)
+	var c AgentCore
+	InitCore(&c, "t", "", &mockProvider{name: "p"}, cfg)
+	if c.MaxIter != 25 {
+		t.Errorf("expected defaultMaxIter 25, got %d", c.MaxIter)
+	}
+}
+
 func TestInitCoreMemoryFieldsWired(t *testing.T) {
 	// Verifies that memory options wire through InitCore without panicking.
 	// Deep field verification is done via integration tests in memory_test.go.
