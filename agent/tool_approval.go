@@ -96,6 +96,20 @@ func (a *approvalWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) 
 		return core.ToolResult{}, errors.New("approval required but no InputHandler configured")
 	}
 
+	// Emit pending event on the stream if a sink is configured.
+	if ch := streamSinkFromContext(ctx); ch != nil {
+		ev := core.StreamEvent{
+			Type: core.EventToolApprovalPending,
+			Name: a.inner.Name(),
+			Args: args,
+		}
+		select {
+		case ch <- ev:
+		case <-ctx.Done():
+			return core.ToolResult{}, ctx.Err()
+		}
+	}
+
 	call := core.ToolCall{Name: a.inner.Name(), Args: args}
 	question := a.cfg.prompt(call)
 

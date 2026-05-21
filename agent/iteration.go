@@ -366,6 +366,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		toolNames[ti] = tc.Name
 	}
 	cfg.logger.Info("dispatching tool calls", "agent", cfg.name, "iteration", i, "tools", toolNames)
+	iterCtx = contextWithStreamSink(iterCtx, ch)
 	dispatchStart := time.Now()
 	results := dispatchParallel(iterCtx, resp.ToolCalls, cfg.dispatch, cfg.maxParallelDispatch)
 	cfg.logger.Debug("tool dispatch completed", "agent", cfg.name, "iteration", i, "duration", time.Since(dispatchStart))

@@ -107,3 +107,41 @@ func TestToolApproval_NonGuardedToolNotAffected(t *testing.T) {
 		t.Errorf("InputHandler called %d times, want 0 (no approval configured)", handler.calls)
 	}
 }
+
+func TestToolApproval_EmitsPendingEvent(t *testing.T) {
+	handler := &fakeInputHandler{approve: true}
+	ag := NewLLMAgent("test", "", &callbackProvider{},
+		WithTools(&recordingTool{called: new(bool)}),
+		WithInputHandler(handler),
+		WithToolApproval("rec"),
+	)
+
+	ch := make(chan core.StreamEvent, 8)
+	ctx := contextWithStreamSink(context.Background(), ch)
+
+	// Call the registered tool through the registry; approval wrapper should
+	// read the sink from ctx and emit the pending event.
+	resultCh := make(chan struct{}, 1)
+	go func() {
+		_, _ = ag.tools.Execute(ctx, "rec", json.RawMessage(`{}`))
+		close(ch)
+		resultCh <- struct{}{}
+	}()
+
+	var got []core.StreamEventType
+	for ev := range ch {
+		got = append(got, ev.Type)
+	}
+	<-resultCh
+
+	found := false
+	for _, ty := range got {
+		if ty == core.EventToolApprovalPending {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected EventToolApprovalPending in stream, got: %v", got)
+	}
+}
