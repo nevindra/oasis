@@ -63,6 +63,34 @@ const (
 	// {"iter":N,"max_iter":M}. Emitted exactly once per execution that hits the
 	// cap.
 	EventMaxIterReached StreamEventType = "max-iter-reached"
+	// EventReasoningStart marks the beginning of a reasoning block from a
+	// provider that emits reasoning incrementally (Claude extended thinking,
+	// OpenAI o1). No payload.
+	EventReasoningStart StreamEventType = "reasoning-start"
+	// EventReasoningDelta carries an incremental reasoning text chunk.
+	EventReasoningDelta StreamEventType = "reasoning-delta"
+	// EventReasoningEnd marks the end of a reasoning block. Content carries
+	// the full reassembled reasoning text for consumers that prefer the
+	// monolithic form. Always followed by zero or more subsequent events.
+	EventReasoningEnd StreamEventType = "reasoning-end"
+	// EventHalt signals a processor halted the loop via *ErrHalt. Name carries
+	// the processor name; Content carries the canned response shown to the user.
+	EventHalt StreamEventType = "halt"
+	// EventError signals terminal failure of the run. Content carries the
+	// error message. Always immediately followed by channel close. ExecuteStream
+	// returns the same error to the caller.
+	EventError StreamEventType = "error"
+	// EventStreamWarning carries non-fatal stream-wrapper notifications.
+	// Content is one of:
+	//   - "replay-truncated": ring buffer overflowed; some history lost.
+	//   - "subscriber-dropped": a slow subscriber was removed; its channel
+	//     received this warning then closed.
+	EventStreamWarning StreamEventType = "stream-warning"
+	// EventToolApprovalPending is emitted by the tool approval middleware
+	// before a guarded tool runs. ID carries the tool call ID; Name carries
+	// the tool name; Args carries the proposed arguments. A subsequent
+	// EventToolCallStart appears only if the approval is granted.
+	EventToolApprovalPending StreamEventType = "tool-approval-pending"
 )
 
 // StreamEvent is a typed event emitted during agent streaming.

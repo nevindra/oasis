@@ -27,6 +27,13 @@ func TestNewStreamEventTypes(t *testing.T) {
 		{EventStepFinish, "step-finish"},
 		{EventStepProgress, "step-progress"},
 		{EventRoutingDecision, "routing-decision"},
+		{EventReasoningStart, "reasoning-start"},
+		{EventReasoningDelta, "reasoning-delta"},
+		{EventReasoningEnd, "reasoning-end"},
+		{EventHalt, "halt"},
+		{EventError, "error"},
+		{EventStreamWarning, "stream-warning"},
+		{EventToolApprovalPending, "tool-approval-pending"},
 	}
 	for _, tt := range tests {
 		if string(tt.got) != tt.want {

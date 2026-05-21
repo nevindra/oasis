@@ -68,6 +68,13 @@ const (
 	EventRoutingDecision = core.EventRoutingDecision
 	EventFileAttachment  = core.EventFileAttachment
 	EventMaxIterReached  = core.EventMaxIterReached
+	EventReasoningStart  = core.EventReasoningStart
+	EventReasoningDelta  = core.EventReasoningDelta
+	EventReasoningEnd    = core.EventReasoningEnd
+	EventHalt            = core.EventHalt
+	EventError           = core.EventError
+	EventStreamWarning   = core.EventStreamWarning
+	EventToolApprovalPending = core.EventToolApprovalPending
 )
 
 // --- Processors ---
