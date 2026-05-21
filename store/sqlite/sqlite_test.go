@@ -183,7 +183,7 @@ func TestSearchMessages(t *testing.T) {
 	}
 
 	// Search for cats-like vector
-	results, err := s.SearchMessages(ctx, []float32{0.9, 0.1, 0}, 2)
+	results, err := s.SearchMessages(ctx, []float32{0.9, 0.1, 0}, 2, "")
 	if err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}

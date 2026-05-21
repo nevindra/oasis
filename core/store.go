@@ -14,9 +14,14 @@ type Store interface {
 	// --- Messages ---
 	StoreMessage(ctx context.Context, msg Message) error
 	GetMessages(ctx context.Context, threadID string, limit int) ([]Message, error)
-	// SearchMessages performs semantic similarity search across all messages.
+	// SearchMessages performs semantic similarity search across messages.
 	// Results are sorted by Score descending (cosine similarity in [0, 1]).
-	SearchMessages(ctx context.Context, embedding []float32, topK int) ([]ScoredMessage, error)
+	//
+	// When chatID is non-empty, results are restricted to messages whose
+	// thread belongs to that chat — prevents cross-user contamination in
+	// multi-tenant deployments and eliminates an N+1 lookup at the caller.
+	// When chatID is "", the search spans all messages.
+	SearchMessages(ctx context.Context, embedding []float32, topK int, chatID string) ([]ScoredMessage, error)
 
 	// --- Documents + Chunks ---
 	StoreDocument(ctx context.Context, doc Document, chunks []Chunk) error

@@ -25,7 +25,7 @@ func (s *stubStore) UpdateThread(_ context.Context, _ Thread) error { return nil
 func (s *stubStore) DeleteThread(_ context.Context, _ string) error { return nil }
 func (s *stubStore) StoreMessage(_ context.Context, _ Message) error { return nil }
 func (s *stubStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error) { return nil, nil }
-func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]ScoredMessage, error) { return nil, nil }
+func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]ScoredMessage, error) { return nil, nil }
 func (s *stubStore) StoreDocument(_ context.Context, _ Document, _ []Chunk) error { return nil }
 func (s *stubStore) ListDocuments(_ context.Context, _ int) ([]Document, error)   { return nil, nil }
 func (s *stubStore) DeleteDocument(_ context.Context, _ string) error             { return nil }
@@ -61,8 +61,21 @@ func (s *recordingStore) GetMessages(_ context.Context, _ string, limit int) ([]
 	return s.history, nil
 }
 
-func (s *recordingStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]ScoredMessage, error) {
-	return s.related, nil
+func (s *recordingStore) SearchMessages(_ context.Context, _ []float32, _ int, chatID string) ([]ScoredMessage, error) {
+	if chatID == "" {
+		return s.related, nil
+	}
+	// Mirror real-store JOIN semantics: only return messages whose thread
+	// belongs to the given chat.
+	out := make([]ScoredMessage, 0, len(s.related))
+	for _, r := range s.related {
+		t, ok := s.threads[r.ThreadID]
+		if !ok || t.ChatID != chatID {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 func (s *recordingStore) StoreMessage(_ context.Context, msg Message) error {

@@ -31,7 +31,7 @@ func (nopStore) UpdateThread(_ context.Context, _ Thread) error                 
 func (nopStore) DeleteThread(_ context.Context, _ string) error                               { return nil }
 func (nopStore) StoreMessage(_ context.Context, _ Message) error                              { return nil }
 func (nopStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error)            { return nil, nil }
-func (nopStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]ScoredMessage, error) { return nil, nil }
+func (nopStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]ScoredMessage, error) { return nil, nil }
 func (nopStore) StoreDocument(_ context.Context, _ Document, _ []Chunk) error              { return nil }
 func (nopStore) ListDocuments(_ context.Context, _ int) ([]Document, error)                { return nil, nil }
 func (nopStore) DeleteDocument(_ context.Context, _ string) error                          { return nil }

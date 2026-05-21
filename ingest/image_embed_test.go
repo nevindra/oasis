@@ -61,7 +61,7 @@ func (f *fakeImageStore) UpdateThread(context.Context, oasis.Thread) error      
 func (f *fakeImageStore) DeleteThread(context.Context, string) error                           { return nil }
 func (f *fakeImageStore) StoreMessage(context.Context, oasis.Message) error                    { return nil }
 func (f *fakeImageStore) GetMessages(context.Context, string, int) ([]oasis.Message, error)    { return nil, nil }
-func (f *fakeImageStore) SearchMessages(context.Context, []float32, int) ([]oasis.ScoredMessage, error) {
+func (f *fakeImageStore) SearchMessages(context.Context, []float32, int, string) ([]oasis.ScoredMessage, error) {
 	return nil, nil
 }
 func (f *fakeImageStore) ListDocuments(context.Context, int) ([]oasis.Document, error) { return nil, nil }

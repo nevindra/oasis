@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/nevindra/oasis"
 )
 
@@ -107,18 +108,34 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 
 // SearchMessages performs vector similarity search over messages
 // using pgvector's cosine distance operator with HNSW index.
-func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
+// When chatID is non-empty, restricts the candidate set to messages whose
+// thread belongs to that chat via a join on threads.chat_id.
+func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int, chatID string) ([]oasis.ScoredMessage, error) {
 	start := time.Now()
-	s.logger.Debug("postgres: search messages", "top_k", topK, "embedding_dim", len(embedding))
+	s.logger.Debug("postgres: search messages", "top_k", topK, "embedding_dim", len(embedding), "chat_id", chatID)
 	embStr := serializeEmbedding(embedding)
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, thread_id, role, content, metadata, created_at,
-		        1 - (embedding <=> $1::vector) AS score
-		 FROM messages
-		 WHERE embedding IS NOT NULL
-		 ORDER BY embedding <=> $1::vector
-		 LIMIT $2`,
-		embStr, topK)
+	var rows pgx.Rows
+	var err error
+	if chatID != "" {
+		rows, err = s.pool.Query(ctx,
+			`SELECT m.id, m.thread_id, m.role, m.content, m.metadata, m.created_at,
+			        1 - (m.embedding <=> $1::vector) AS score
+			 FROM messages m
+			 INNER JOIN threads t ON m.thread_id = t.id
+			 WHERE m.embedding IS NOT NULL AND t.chat_id = $2
+			 ORDER BY m.embedding <=> $1::vector
+			 LIMIT $3`,
+			embStr, chatID, topK)
+	} else {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id, thread_id, role, content, metadata, created_at,
+			        1 - (embedding <=> $1::vector) AS score
+			 FROM messages
+			 WHERE embedding IS NOT NULL
+			 ORDER BY embedding <=> $1::vector
+			 LIMIT $2`,
+			embStr, topK)
+	}
 	if err != nil {
 		s.logger.Error("postgres: search messages failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("postgres: search messages: %w", err)

@@ -86,14 +86,28 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 }
 
 // SearchMessages performs brute-force cosine similarity search over messages.
-func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int) ([]oasis.ScoredMessage, error) {
+// When chatID is non-empty, restricts the candidate set to messages whose
+// thread belongs to that chat via the indexed threads.chat_id column.
+func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK int, chatID string) ([]oasis.ScoredMessage, error) {
 	start := time.Now()
-	s.logger.Debug("sqlite: search messages", "top_k", topK, "embedding_dim", len(embedding))
+	s.logger.Debug("sqlite: search messages", "top_k", topK, "embedding_dim", len(embedding), "chat_id", chatID)
 
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, thread_id, role, content, embedding, metadata, created_at
-		 FROM messages WHERE embedding IS NOT NULL`,
-	)
+	var rows *sql.Rows
+	var err error
+	if chatID != "" {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT m.id, m.thread_id, m.role, m.content, m.embedding, m.metadata, m.created_at
+			 FROM messages m
+			 INNER JOIN threads t ON m.thread_id = t.id
+			 WHERE m.embedding IS NOT NULL AND t.chat_id = ?`,
+			chatID,
+		)
+	} else {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT id, thread_id, role, content, embedding, metadata, created_at
+			 FROM messages WHERE embedding IS NOT NULL`,
+		)
+	}
 	if err != nil {
 		s.logger.Error("sqlite: search messages failed", "error", err, "duration", time.Since(start))
 		return nil, fmt.Errorf("search messages: %w", err)

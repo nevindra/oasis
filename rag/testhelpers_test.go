@@ -23,7 +23,7 @@ func (nopStore) StoreMessage(_ context.Context, _ core.Message) error {
 func (nopStore) GetMessages(_ context.Context, _ string, _ int) ([]core.Message, error) {
 	return nil, nil
 }
-func (nopStore) SearchMessages(_ context.Context, _ []float32, _ int) ([]core.ScoredMessage, error) {
+func (nopStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]core.ScoredMessage, error) {
 	return nil, nil
 }
 func (nopStore) StoreDocument(_ context.Context, _ core.Document, _ []core.Chunk) error {
