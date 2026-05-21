@@ -210,6 +210,37 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - **`todo.Backend` interface** — storage adapter (`Get`/`Set` by key) so embedders can persist task lists to whatever fits (in-memory, JSONB column, file, etc.). Implementations must serialize concurrent `Set` on the same key.
 - **`todo.New(backend, keyFn)` constructor** — `keyFn(ctx)` extracts the scoping identifier (conversation ID, session ID, …) from the agent's execution context, letting a single tool instance serve many concurrent conversations.
 - **`todo.ToolDescription` constant** — full prompt ported from Claude Code's `TodoWriteTool/prompt.ts` so the LLM actually uses the tool. The port replaces the `${FILE_EDIT_TOOL_NAME}` template with a literal "file edit tool"; the verification-agent nudge logic is not part of the prompt text and is not ported.
+- **Streaming `Stream` wrapper.** `oasis.StartStream(ctx, agent, task)` returns
+  a multi-reader stream with blocking accessors (`Text()`, `ToolCalls()`,
+  `ToolResults()`, `Reasoning()`, `Usage()`, `Result()`), live subscription
+  via `Events()`, and filtered callbacks (`OnTextDelta`, `OnReasoningDelta`,
+  `OnToolCall`, `OnToolResult`, `OnEvent`). Bounded ring-buffer replay
+  (default 256 events, configurable via `RunOptions.StreamReplayLimit`).
+  Slow subscribers receive a `subscriber-dropped` warning and are dropped —
+  they cannot stall the agent. The single-reader channel kernel
+  (`ExecuteStream`) is unchanged.
+- **`AgentResult` convenience accessors.** `Text()`, `Reasoning()`,
+  `ToolCalls()`, `ToolResults()`, `LastStep()`, `StepByTool(name)`. Pure
+  functions over existing fields; identical shapes to the `Stream` accessors,
+  so synchronous and streaming code use the same method names.
+- **Stream event types.** `EventReasoningStart`/`Delta`/`End` (provider
+  incremental reasoning), `EventHalt` (processor halts), `EventError`
+  (terminal failures), `EventStreamWarning` (replay-truncated /
+  subscriber-dropped), `EventToolApprovalPending` (approval gate).
+  `EventThinking` remains; deprecated when providers port to the triplet.
+- **Tool middleware chain.** `core.ToolMiddleware` + `oasis.WithToolMiddleware`
+  with built-in `LoggingMiddleware`, `TimingMiddleware`,
+  `TransformMiddleware`, and `OTelSpanMiddleware` (auto-applied when a
+  `Tracer` is configured and not already in the user's chain).
+  Innermost-first ordering matches `net/http`.
+- **Framework-enforced tool approval.** `oasis.WithToolApproval(name, opts...)`
+  pauses tool execution for human approval via the configured `InputHandler`.
+  Built on the middleware chain — composes with logging, tracing, policy,
+  and any custom middleware. Approve/deny decisions via `InputResponse.Value`;
+  `DenyAskLLMToRevise` (default) returns an error `ToolResult` so the LLM
+  can adapt, `DenyHalt` halts the run with `*core.ErrHalt`. Outermost layer
+  of the chain — retries do not re-prompt. Emits `EventToolApprovalPending`
+  on the stream before prompting.
 
 ### Removed
 
