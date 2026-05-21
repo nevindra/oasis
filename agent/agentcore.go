@@ -99,20 +99,20 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Co
 	})
 
 	for _, t := range cfg.tools {
-		c.tools.Add(t)
+		c.tools.Add(core.ApplyToolMiddleware(t, cfg.toolMiddleware))
 	}
 
 	// Register sandbox tools when a sandbox is configured.
 	if cfg.sandbox != nil {
 		for _, t := range cfg.sandboxTools {
-			c.tools.Add(t)
+			c.tools.Add(core.ApplyToolMiddleware(t, cfg.toolMiddleware))
 		}
 	}
 
 	// Register skill tools when a skill provider is configured.
 	if cfg.skillProvider != nil {
 		for _, t := range skills.NewSkillTools(cfg.skillProvider) {
-			c.tools.Add(t)
+			c.tools.Add(core.ApplyToolMiddleware(t, cfg.toolMiddleware))
 		}
 	}
 

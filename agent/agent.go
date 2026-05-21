@@ -69,6 +69,10 @@ type Config struct {
 	onIterationComplete OnIterationComplete
 	onError             OnError
 
+	// toolMiddleware is applied to every registered tool at agent build time.
+	// First in slice = innermost; last = outermost. Empty = no overhead.
+	toolMiddleware []core.ToolMiddleware
+
 	// Per-tool retry/timeout policy. toolPolicies are exact-name entries
 	// (ServeMux-style; later registrations overwrite). toolPolicyMatchers
 	// is an ordered list scanned in registration order; first matcher
@@ -127,6 +131,22 @@ type toolPolicyMatcher struct {
 // WithTools adds tools to the agent or network.
 func WithTools(tools ...AnyTool) AgentOption {
 	return func(c *Config) { c.tools = append(c.tools, tools...) }
+}
+
+// WithToolMiddleware registers a chain of tool middlewares applied to every
+// tool at build time. First in mws is innermost (closest to the tool); last
+// is outermost. Pass-through for empty input.
+//
+// Order from innermost to outermost in the final wrapping is:
+//
+//	[tool] -> [user middleware in order] -> [tool policy: retry+timeout] -> [approval] -> dispatch
+//
+// User middleware sits inside ToolPolicy so retries see one middleware
+// invocation per attempt — each retry is a real attempt.
+func WithToolMiddleware(mws ...core.ToolMiddleware) AgentOption {
+	return func(c *Config) {
+		c.toolMiddleware = append(c.toolMiddleware, mws...)
+	}
 }
 
 // WithPrompt sets the system prompt for the agent or network router.
