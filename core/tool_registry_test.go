@@ -154,3 +154,31 @@ func TestToolRegistry_EnsureSchema_ToolNotSchemaEnsurer(t *testing.T) {
 		t.Errorf("expected no-op for non-ensurer: %v", err)
 	}
 }
+
+// streamingAnyToolStub is a minimal StreamingAnyTool used for registry tests.
+type streamingAnyToolStub struct{ name string }
+
+func (s *streamingAnyToolStub) Name() string               { return s.name }
+func (s *streamingAnyToolStub) Definition() ToolDefinition { return ToolDefinition{Name: s.name} }
+func (s *streamingAnyToolStub) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	return TextResult("ok"), nil
+}
+func (s *streamingAnyToolStub) ExecuteStream(_ context.Context, _ json.RawMessage, _ chan<- StreamEvent) (ToolResult, error) {
+	return TextResult("ok"), nil
+}
+
+func TestToolRegistry_IsStreamingTool(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.Add(stubRegistryTool{name: "plain"})
+	reg.Add(&streamingAnyToolStub{name: "stream"})
+
+	if reg.IsStreamingTool("stream") != true {
+		t.Errorf("IsStreamingTool(stream) = false, want true")
+	}
+	if reg.IsStreamingTool("plain") != false {
+		t.Errorf("IsStreamingTool(plain) = true, want false")
+	}
+	if reg.IsStreamingTool("missing") != false {
+		t.Errorf("IsStreamingTool(missing) = true, want false")
+	}
+}

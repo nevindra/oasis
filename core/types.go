@@ -215,6 +215,18 @@ func (r *ToolRegistry) ExecuteStream(ctx context.Context, name string, args json
 	return t.ExecuteRaw(ctx, args)
 }
 
+// IsStreamingTool reports whether the tool registered under name implements
+// StreamingAnyTool. Returns false for unknown names. Used by the agent
+// dispatch layer to decide whether to bypass the per-tool policy wrapper.
+func (r *ToolRegistry) IsStreamingTool(name string) bool {
+	t, ok := r.index[name]
+	if !ok {
+		return false
+	}
+	_, ok = t.(StreamingAnyTool)
+	return ok
+}
+
 // --- LLM protocol types ---
 
 // Role is the originator of a chat message.
@@ -366,7 +378,24 @@ type Usage struct {
 type ToolDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"` // JSON Schema
+	Parameters  json.RawMessage `json:"parameters"`            // JSON Schema for the input.
+	// OutputSchema is the JSON Schema for the tool's successful result. It is
+	// derived at registration time by Erase/EraseStreaming via DeriveSchema[Out].
+	// Tools that need richer constraints than reflection produces may implement
+	// OutSchemaProvider to override the derived schema. Provider implementations
+	// decide whether to forward this field to the LLM in the tool spec.
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
+}
+
+// OutSchemaProvider is the opt-in override for the reflection-based output
+// schema derivation performed by Erase. Tool implementations may implement
+// this to supply a custom JSON Schema (enum values, format hints, min/max)
+// that reflection cannot express.
+//
+// When a Tool[In, Out] also implements OutSchemaProvider, Erase uses the
+// override and discards the schema derived from Out.
+type OutSchemaProvider interface {
+	OutSchema() json.RawMessage
 }
 
 // --- ChatMessage constructors ---
