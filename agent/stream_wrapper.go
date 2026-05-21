@@ -289,3 +289,47 @@ func (s *Stream) ToolResults() []core.ToolResult {
 	r, _ := s.Result()
 	return r.ToolResults()
 }
+
+// OnEvent registers a catch-all callback invoked for every event in order.
+// The callback runs on the dispatcher goroutine — keep it fast. Panics in
+// the callback are recovered and ignored.
+//
+// Callbacks registered after subscription start receive only future events,
+// not replay history. Subscribe via Events() if replay is needed.
+func (s *Stream) OnEvent(fn func(core.StreamEvent)) {
+	s.subscribe("", fn)
+}
+
+// OnTextDelta registers a callback invoked for every EventTextDelta event.
+// fn receives the Content string directly.
+func (s *Stream) OnTextDelta(fn func(string)) {
+	s.subscribe(core.EventTextDelta, func(ev core.StreamEvent) {
+		fn(ev.Content)
+	})
+}
+
+// OnReasoningDelta registers a callback invoked for every EventReasoningDelta
+// event. fn receives the Content string directly.
+func (s *Stream) OnReasoningDelta(fn func(string)) {
+	s.subscribe(core.EventReasoningDelta, func(ev core.StreamEvent) {
+		fn(ev.Content)
+	})
+}
+
+// OnToolCall registers a callback invoked when the LLM emits a tool call
+// (EventToolCallStart). fn receives the reconstructed ToolCall.
+func (s *Stream) OnToolCall(fn func(core.ToolCall)) {
+	s.subscribe(core.EventToolCallStart, func(ev core.StreamEvent) {
+		fn(core.ToolCall{ID: ev.ID, Name: ev.Name, Args: ev.Args})
+	})
+}
+
+// OnToolResult registers a callback invoked when a tool returns
+// (EventToolCallResult). fn receives a synthesized ToolResult with the raw
+// Content. To inspect Usage or Duration, use OnEvent and read the
+// StreamEvent directly.
+func (s *Stream) OnToolResult(fn func(core.ToolResult)) {
+	s.subscribe(core.EventToolCallResult, func(ev core.StreamEvent) {
+		fn(core.ToolResult{Content: []byte(ev.Content)})
+	})
+}

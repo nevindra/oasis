@@ -13,6 +13,7 @@ import (
 type emitterAgent struct {
 	events []core.StreamEvent
 	final  AgentResult
+	delay  time.Duration // optional delay before emitting first event
 }
 
 func (e *emitterAgent) Name() string        { return "emitter" }
@@ -22,6 +23,9 @@ func (e *emitterAgent) Execute(ctx context.Context, task AgentTask) (AgentResult
 }
 func (e *emitterAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) (AgentResult, error) {
 	defer close(ch)
+	if e.delay > 0 {
+		time.Sleep(e.delay)
+	}
 	for _, ev := range e.events {
 		select {
 		case ch <- ev:
@@ -125,6 +129,115 @@ func TestStream_Events_LateReplay(t *testing.T) {
 	}
 	if !equalStrings(got, []string{"early"}) {
 		t.Errorf("late subscriber got %v, want [early]", got)
+	}
+}
+
+func TestStream_OnTextDelta(t *testing.T) {
+	ag := &emitterAgent{
+		events: []core.StreamEvent{
+			{Type: core.EventTextDelta, Content: "x"},
+			{Type: core.EventTextDelta, Content: "y"},
+			{Type: core.EventToolCallStart, Name: "ignored"},
+		},
+		final:  AgentResult{Output: "xy"},
+		delay:  10 * time.Millisecond, // Ensure callback is registered before events start
+	}
+	s := StartStream(context.Background(), ag, AgentTask{})
+
+	var got []string
+	s.OnTextDelta(func(chunk string) { got = append(got, chunk) })
+
+	_, _ = s.Result()
+	if !equalStrings(got, []string{"x", "y"}) {
+		t.Errorf("OnTextDelta callback got %v, want [x y]", got)
+	}
+}
+
+func TestStream_OnReasoningDelta(t *testing.T) {
+	ag := &emitterAgent{
+		events: []core.StreamEvent{
+			{Type: core.EventReasoningDelta, Content: "think1"},
+			{Type: core.EventReasoningDelta, Content: "think2"},
+			{Type: core.EventTextDelta, Content: "ignored"},
+		},
+		final:  AgentResult{Thinking: "think1think2"},
+		delay:  10 * time.Millisecond,
+	}
+	s := StartStream(context.Background(), ag, AgentTask{})
+
+	var got []string
+	s.OnReasoningDelta(func(chunk string) { got = append(got, chunk) })
+
+	_, _ = s.Result()
+	if !equalStrings(got, []string{"think1", "think2"}) {
+		t.Errorf("OnReasoningDelta callback got %v, want [think1 think2]", got)
+	}
+}
+
+func TestStream_OnToolCall(t *testing.T) {
+	ag := &emitterAgent{
+		events: []core.StreamEvent{
+			{Type: core.EventToolCallStart, ID: "1", Name: "search"},
+		},
+		final:  AgentResult{},
+		delay:  10 * time.Millisecond,
+	}
+	s := StartStream(context.Background(), ag, AgentTask{})
+
+	var seen []string
+	s.OnToolCall(func(tc core.ToolCall) { seen = append(seen, tc.Name) })
+
+	_, _ = s.Result()
+	if !equalStrings(seen, []string{"search"}) {
+		t.Errorf("OnToolCall got %v, want [search]", seen)
+	}
+}
+
+func TestStream_OnToolResult(t *testing.T) {
+	ag := &emitterAgent{
+		events: []core.StreamEvent{
+			{Type: core.EventToolCallResult, Content: "result1"},
+			{Type: core.EventToolCallResult, Content: "result2"},
+		},
+		final:  AgentResult{},
+		delay:  10 * time.Millisecond,
+	}
+	s := StartStream(context.Background(), ag, AgentTask{})
+
+	var got []string
+	s.OnToolResult(func(tr core.ToolResult) { got = append(got, string(tr.Content)) })
+
+	_, _ = s.Result()
+	if !equalStrings(got, []string{"result1", "result2"}) {
+		t.Errorf("OnToolResult got %v, want [result1 result2]", got)
+	}
+}
+
+func TestStream_OnEvent(t *testing.T) {
+	ag := &emitterAgent{
+		events: []core.StreamEvent{
+			{Type: core.EventTextDelta, Content: "text1"},
+			{Type: core.EventToolCallStart, Name: "tool1"},
+			{Type: core.EventTextDelta, Content: "text2"},
+		},
+		final:  AgentResult{},
+		delay:  10 * time.Millisecond,
+	}
+	s := StartStream(context.Background(), ag, AgentTask{})
+
+	var got []core.StreamEventType
+	s.OnEvent(func(ev core.StreamEvent) { got = append(got, ev.Type) })
+
+	_, _ = s.Result()
+	want := []core.StreamEventType{core.EventTextDelta, core.EventToolCallStart, core.EventTextDelta}
+	if len(got) != len(want) {
+		t.Errorf("OnEvent got %d events, want %d", len(got), len(want))
+	} else {
+		for i, g := range got {
+			if g != want[i] {
+				t.Errorf("OnEvent event %d: got %v, want %v", i, g, want[i])
+			}
+		}
 	}
 }
 
