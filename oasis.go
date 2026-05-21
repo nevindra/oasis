@@ -626,6 +626,26 @@ const (
 	EventStepProgress    = core.EventStepProgress
 	EventRoutingDecision = core.EventRoutingDecision
 	EventFileAttachment  = core.EventFileAttachment
+
+	// Lifecycle envelope (Phase 2 streaming).
+	EventRunStart        = core.EventRunStart
+	EventRunFinish       = core.EventRunFinish
+	EventIterationStart  = core.EventIterationStart
+	EventIterationFinish = core.EventIterationFinish
+)
+
+// FinishReason describes why an agent run ended.
+type FinishReason = core.FinishReason
+
+const (
+	FinishStop          = core.FinishStop
+	FinishToolCalls     = core.FinishToolCalls
+	FinishLength        = core.FinishLength
+	FinishContentFilter = core.FinishContentFilter
+	FinishHalted        = core.FinishHalted
+	FinishSuspended     = core.FinishSuspended
+	FinishMaxIter       = core.FinishMaxIter
+	FinishError         = core.FinishError
 )
 
 // --- Processors ---

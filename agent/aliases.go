@@ -75,6 +75,26 @@ const (
 	EventError           = core.EventError
 	EventStreamWarning   = core.EventStreamWarning
 	EventToolApprovalPending = core.EventToolApprovalPending
+
+	// Lifecycle envelope (Phase 2).
+	EventRunStart        = core.EventRunStart
+	EventRunFinish       = core.EventRunFinish
+	EventIterationStart  = core.EventIterationStart
+	EventIterationFinish = core.EventIterationFinish
+)
+
+// FinishReason aliases.
+type FinishReason = core.FinishReason
+
+const (
+	FinishStop          = core.FinishStop
+	FinishToolCalls     = core.FinishToolCalls
+	FinishLength        = core.FinishLength
+	FinishContentFilter = core.FinishContentFilter
+	FinishHalted        = core.FinishHalted
+	FinishSuspended     = core.FinishSuspended
+	FinishMaxIter       = core.FinishMaxIter
+	FinishError         = core.FinishError
 )
 
 // --- Processors ---

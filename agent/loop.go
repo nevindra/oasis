@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
@@ -115,16 +114,6 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 		copy(messages, initial)
 	}
 
-	// Emit processing-start event after context is built, before the loop.
-	if ch != nil {
-		select {
-		case ch <- StreamEvent{Type: EventProcessingStart, Name: cfg.name}:
-		case <-ctx.Done():
-			safeCloseCh()
-			return AgentResult{}, ctx.Err()
-		}
-	}
-
 	// Attachment byte budget (0/negative → default 50MB).
 	attachByteBudget := cfg.maxAttachmentBytes
 	if attachByteBudget <= 0 {
@@ -168,28 +157,40 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- Stre
 	return forceSynthesis(ctx, cfg, task, ch, state)
 }
 
-// forceSynthesis runs the post-loop forced-synthesis tail when runLoop hits
-// cfg.maxIter without a natural termination. Surfaces EventMaxIterReached for
-// UIs, appends a synthesis prompt, makes one more LLM call (streamed if ch is
-// set), and returns the final AgentResult.
-func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- StreamEvent, state *loopState) (AgentResult, error) {
-	// Surface the max-iter hit so UIs can show the forced-synthesis cost.
+// finalizeRun emits EventRunFinish with the supplied FinishReason and result
+// metadata, then closes the streaming channel. Idempotent via state.safeCloseCh.
+// Pass nil ch in non-streaming mode (Execute path); the function still invokes
+// safeCloseCh so that non-streaming callers can share this helper.
+func finalizeRun(ctx context.Context, ch chan<- StreamEvent, state *loopState, name string, reason FinishReason, result AgentResult) {
 	if ch != nil {
-		payload, _ := json.Marshal(map[string]int{
-			"iter":     cfg.maxIter,
-			"max_iter": cfg.maxIter,
-		})
+		ev := StreamEvent{
+			Type:         EventRunFinish,
+			Name:         name,
+			Content:      result.Output,
+			Usage:        result.Usage,
+			FinishReason: reason,
+			Warnings:     result.Warnings,
+			ProviderMeta: result.ProviderMeta,
+		}
+		if reason == FinishSuspended {
+			ev.Content = string(result.SuspendPayload)
+		}
 		select {
-		case ch <- StreamEvent{
-			Type:    EventMaxIterReached,
-			Name:    cfg.name,
-			Content: string(payload),
-		}:
+		case ch <- ev:
 		case <-ctx.Done():
-			state.safeCloseCh()
-			return AgentResult{Usage: state.totalUsage}, ctx.Err()
+			// Best-effort: still close.
 		}
 	}
+	state.safeCloseCh()
+}
+
+// forceSynthesis runs the post-loop forced-synthesis tail when runLoop hits
+// cfg.maxIter without a natural termination. Previously emitted EventMaxIterReached
+// for UIs; now collapses into FinishReason=FinishMaxIter on EventRunFinish.
+func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- StreamEvent, state *loopState) (AgentResult, error) {
+	// EventMaxIterReached is collapsed into FinishReason=FinishMaxIter on
+	// EventRunFinish (emitted by finalizeRun at the end of this function).
+	// Log only so UIs that read EventRunFinish.FinishReason still get the info.
 	cfg.logger.Warn("max iterations reached, forcing synthesis", "agent", cfg.name, "iteration", cfg.maxIter)
 	state.messages = append(state.messages, UserMessage(
 		"You have used all available tool calls. Summarize what you found and respond to the user."))
@@ -218,8 +219,9 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 	}
 	if err != nil {
 		cfg.logger.Error("synthesis LLM call failed", "agent", cfg.name, "error", err)
-		state.safeCloseCh()
-		return AgentResult{Usage: state.totalUsage, Steps: state.steps}, err
+		errResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishError}
+		finalizeRun(ctx, ch, state, cfg.name, FinishError, errResult)
+		return errResult, err
 	}
 	cfg.logger.Info("synthesis completed", "agent", cfg.name,
 		"input_tokens", resp.Usage.InputTokens,
@@ -229,11 +231,20 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 
 	// PostProcessor hook.
 	if err := cfg.processors.RunPostLLM(synthCtx, &resp); err != nil {
-		state.safeCloseCh()
 		if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-			return AgentResult{Usage: state.totalUsage, Steps: state.steps}, s
+			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended}
+			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
+			return suspResult, s
 		}
-		return handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
+		res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
+		reason := FinishError
+		if res.Output != "" {
+			// handleProcessorErrorWithSteps returned a graceful halt result.
+			reason = FinishHalted
+		}
+		res.FinishReason = reason
+		finalizeRun(ctx, ch, state, cfg.name, reason, res)
+		return res, retErr
 	}
 
 	// Capture thinking from the synthesis response.
@@ -241,13 +252,15 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 		state.lastThinking = resp.Thinking
 	}
 
-	state.safeCloseCh()
 	cfg.mem.PersistMessages(synthCtx, cfg.name, task, task.Input, resp.Content, state.steps)
-	return AgentResult{
-		Output:      resp.Content,
-		Thinking:    state.lastThinking,
-		Attachments: mergeAttachments(state.accumulatedAttachments, resp.Attachments),
-		Usage:       state.totalUsage,
-		Steps:       state.steps,
-	}, nil
+	result := AgentResult{
+		Output:       resp.Content,
+		Thinking:     state.lastThinking,
+		Attachments:  mergeAttachments(state.accumulatedAttachments, resp.Attachments),
+		Usage:        state.totalUsage,
+		Steps:        state.steps,
+		FinishReason: FinishMaxIter,
+	}
+	finalizeRun(ctx, ch, state, cfg.name, FinishMaxIter, result)
+	return result, nil
 }

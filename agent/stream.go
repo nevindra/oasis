@@ -22,6 +22,12 @@ import (
 //	event: <event-type>
 //	data: <json-encoded StreamEvent>
 //
+// The stream emits [EventRunStart] as the first event and [EventRunFinish] as
+// the last event inside the channel loop. [EventRunFinish] carries the
+// [FinishReason] and any provider warnings or metadata. After the channel
+// closes, a final "done" SSE event is written for legacy clients that wait on
+// it. New clients should read [EventRunFinish] for structured completion data.
+//
 // On completion it sends a final "done" event. If the agent returns an error,
 // it is sent as an "error" event before returning.
 //

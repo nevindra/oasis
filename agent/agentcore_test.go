@@ -280,7 +280,12 @@ func TestForwardSubagentStreamFiltersInputReceived(t *testing.T) {
 		desc: "test",
 		events: []StreamEvent{
 			{Type: EventInputReceived, Content: "should be filtered"},
+			// New lifecycle envelope events should also be filtered.
+			{Type: EventRunStart, Content: "should be filtered"},
+			{Type: EventIterationStart, Name: "0"},
 			{Type: EventTextDelta, Content: "visible"},
+			{Type: EventIterationFinish, Name: "0"},
+			{Type: EventRunFinish, Content: "should be filtered"},
 		},
 		result: AgentResult{Output: "done"},
 	}
@@ -308,14 +313,22 @@ func TestForwardSubagentStreamFiltersInputReceived(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "done")
 	}
 
-	// EventInputReceived should be filtered out.
+	// EventInputReceived and the new lifecycle envelope events should be filtered out.
 	for _, ev := range forwarded {
-		if ev.Type == EventInputReceived {
-			t.Error("EventInputReceived should be filtered from forwarded events")
+		if ev.Type == EventInputReceived ||
+			ev.Type == EventRunStart || ev.Type == EventRunFinish ||
+			ev.Type == EventIterationStart || ev.Type == EventIterationFinish {
+			t.Errorf("envelope event %q should be filtered from forwarded events", ev.Type)
 		}
 	}
 	if len(forwarded) != 1 {
-		t.Errorf("forwarded %d events, want 1 (only text-delta)", len(forwarded))
+		t.Errorf("forwarded %d events, want 1 (only text-delta); got: %v", len(forwarded), func() []StreamEventType {
+			types := make([]StreamEventType, len(forwarded))
+			for i, e := range forwarded {
+				types[i] = e.Type
+			}
+			return types
+		}())
 	}
 }
 

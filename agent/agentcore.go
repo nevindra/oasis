@@ -361,10 +361,11 @@ func (c *AgentCore) ExecuteWithSpan(
 	agentType, logKey string,
 	buildCfg func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig,
 ) (AgentResult, error) {
-	// Emit input-received event so consumers know a task arrived.
+	// Emit run-start as the first event on every stream. Replaces the
+	// deprecated EventInputReceived + EventProcessingStart pair.
 	if ch != nil {
 		select {
-		case ch <- StreamEvent{Type: EventInputReceived, Name: c.name, Content: task.Input}:
+		case ch <- StreamEvent{Type: EventRunStart, Name: c.name, Content: task.Input}:
 		case <-ctx.Done():
 			return AgentResult{}, ctx.Err()
 		}
@@ -454,9 +455,12 @@ func forwardSubagentStream(
 	go func() {
 		defer close(done)
 		for ev := range subCh {
-			// Filter EventInputReceived from sub-agents — Network's
-			// EventAgentStart is the canonical signal for delegation.
-			if ev.Type == EventInputReceived {
+			// Filter run/iteration envelope events from sub-agents — the parent
+			// Network emits EventAgentStart / EventAgentFinish as its own envelope.
+			// EventInputReceived is also suppressed for back-compat.
+			if ev.Type == EventInputReceived ||
+				ev.Type == EventRunStart || ev.Type == EventRunFinish ||
+				ev.Type == EventIterationStart || ev.Type == EventIterationFinish {
 				continue
 			}
 			select {

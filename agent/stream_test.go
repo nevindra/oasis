@@ -89,11 +89,11 @@ func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
 		events = append(events, ev)
 	}
 	if len(events) < 3 {
-		t.Fatalf("expected at least 3 events (input-received, processing-start, text-delta), got %d", len(events))
+		t.Fatalf("expected at least 3 events (run-start, iteration-start, text-delta...), got %d", len(events))
 	}
-	// First event should be input-received.
-	if events[0].Type != EventInputReceived {
-		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventInputReceived)
+	// First event should be run-start (replaced EventInputReceived + EventProcessingStart).
+	if events[0].Type != EventRunStart {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventRunStart)
 	}
 	if events[0].Name != "streamer" {
 		t.Errorf("events[0].Name = %q, want %q", events[0].Name, "streamer")
@@ -101,9 +101,13 @@ func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
 	if events[0].Content != "hi" {
 		t.Errorf("events[0].Content = %q, want %q", events[0].Content, "hi")
 	}
-	// Second event should be processing-start.
-	if events[1].Type != EventProcessingStart {
-		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventProcessingStart)
+	// Second event should be iteration-start.
+	if events[1].Type != EventIterationStart {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventIterationStart)
+	}
+	// Last event should be run-finish.
+	if events[len(events)-1].Type != EventRunFinish {
+		t.Errorf("last event type = %q, want %q", events[len(events)-1].Type, EventRunFinish)
 	}
 }
 
@@ -139,12 +143,12 @@ func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 	if len(events) < 3 {
 		t.Fatalf("expected at least 3 events, got %d", len(events))
 	}
-	// First two events should be lifecycle events.
-	if events[0].Type != EventInputReceived {
-		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventInputReceived)
+	// First two events should be the new lifecycle events.
+	if events[0].Type != EventRunStart {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventRunStart)
 	}
-	if events[1].Type != EventProcessingStart {
-		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventProcessingStart)
+	if events[1].Type != EventIterationStart {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventIterationStart)
 	}
 	// Should have tool-call-start, tool-call-result, and text-delta events
 	var hasToolStart, hasToolResult, hasTextDelta bool
@@ -633,7 +637,7 @@ func TestNoThinkingEventWhenEmpty(t *testing.T) {
 
 // --- Workflow streaming tests ---
 
-// --- EventMaxIterReached tests ---
+// --- Max-iteration tests (EventMaxIterReached replaced by EventRunFinish{FinishReason: FinishMaxIter}) ---
 
 // alwaysToolProvider is a Provider that always returns a single ToolCall so
 // the loop keeps requesting tools until it hits maxIter.
@@ -658,6 +662,9 @@ func (a *alwaysToolProvider) ChatStream(_ context.Context, req ChatRequest, ch c
 	}, nil
 }
 
+// TestEventMaxIterReachedEmitted verifies that hitting max iterations results
+// in an EventRunFinish with FinishReason=FinishMaxIter (replaces the
+// deprecated EventMaxIterReached event).
 func TestEventMaxIterReachedEmitted(t *testing.T) {
 	provider := &alwaysToolProvider{
 		toolName:  "loop_tool",
@@ -671,25 +678,21 @@ func TestEventMaxIterReachedEmitted(t *testing.T) {
 	ch := make(chan StreamEvent, 64)
 	_, _ = a.ExecuteStream(context.Background(), AgentTask{Input: "loop"}, ch)
 
-	var saw bool
+	var sawRunFinish bool
+	var sawMaxIterReached bool
 	for ev := range ch {
+		if ev.Type == EventRunFinish && ev.FinishReason == FinishMaxIter {
+			sawRunFinish = true
+		}
 		if ev.Type == EventMaxIterReached {
-			saw = true
-			if ev.Content == "" {
-				t.Error("EventMaxIterReached content should carry iter/maxIter JSON")
-			}
-			// Verify JSON is parseable and has max_iter key.
-			var payload map[string]int
-			if err := json.Unmarshal([]byte(ev.Content), &payload); err != nil {
-				t.Errorf("EventMaxIterReached content is not valid JSON: %v", err)
-			}
-			if _, ok := payload["max_iter"]; !ok {
-				t.Error("EventMaxIterReached JSON missing max_iter key")
-			}
+			sawMaxIterReached = true
 		}
 	}
-	if !saw {
-		t.Error("expected EventMaxIterReached, got none")
+	if !sawRunFinish {
+		t.Error("expected EventRunFinish with FinishReason=FinishMaxIter, got none")
+	}
+	if sawMaxIterReached {
+		t.Error("EventMaxIterReached should not be emitted (replaced by EventRunFinish)")
 	}
 }
 
