@@ -202,6 +202,106 @@ func TestParseToolCalls_Empty(t *testing.T) {
 	}
 }
 
+func TestMapOpenAIFinishReason(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"stop", "stop"},
+		{"tool_calls", "tool-calls"},
+		{"length", "length"},
+		{"content_filter", "content-filter"},
+		{"", ""},
+		{"unknown_value", ""},
+	}
+	for _, c := range cases {
+		got := string(mapOpenAIFinishReason(c.in))
+		if got != c.want {
+			t.Errorf("mapOpenAIFinishReason(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParseResponse_FinishReasonAndMeta(t *testing.T) {
+	resp := ChatResponse{
+		ID: "chatcmpl-fp",
+		Choices: []Choice{
+			{
+				Message: &ChoiceMessage{
+					Content: "Done",
+				},
+				FinishReason: "stop",
+			},
+		},
+		SystemFingerprint: "fp_abc123",
+	}
+
+	result, err := ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse returned error: %v", err)
+	}
+
+	if result.FinishReason != "stop" {
+		t.Errorf("expected FinishReason 'stop', got %q", result.FinishReason)
+	}
+	if result.ProviderMeta == nil {
+		t.Fatal("expected ProviderMeta to be set")
+	}
+
+	var meta map[string]string
+	if err := json.Unmarshal(result.ProviderMeta, &meta); err != nil {
+		t.Fatalf("failed to parse ProviderMeta: %v", err)
+	}
+	if meta["system_fingerprint"] != "fp_abc123" {
+		t.Errorf("expected system_fingerprint 'fp_abc123', got %q", meta["system_fingerprint"])
+	}
+}
+
+func TestParseResponse_NoSystemFingerprint(t *testing.T) {
+	resp := ChatResponse{
+		ID: "chatcmpl-nofp",
+		Choices: []Choice{
+			{
+				Message:      &ChoiceMessage{Content: "Hi"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	result, err := ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse returned error: %v", err)
+	}
+
+	if result.ProviderMeta != nil {
+		t.Errorf("expected nil ProviderMeta when system_fingerprint absent, got %s", result.ProviderMeta)
+	}
+}
+
+func TestParseResponse_FinishReasonToolCalls(t *testing.T) {
+	resp := ChatResponse{
+		ID: "chatcmpl-tc",
+		Choices: []Choice{
+			{
+				Message: &ChoiceMessage{
+					ToolCalls: []ToolCallRequest{
+						{ID: "call_1", Function: FunctionCall{Name: "search", Arguments: `{}`}},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+
+	result, err := ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse returned error: %v", err)
+	}
+	if result.FinishReason != "tool-calls" {
+		t.Errorf("expected FinishReason 'tool-calls', got %q", result.FinishReason)
+	}
+}
+
 func TestParseToolCalls_InvalidJSON(t *testing.T) {
 	tcs := []ToolCallRequest{
 		{

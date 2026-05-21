@@ -1,7 +1,10 @@
 package gemini
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/nevindra/oasis"
@@ -948,5 +951,190 @@ func TestBuildBody_JSONRoundTrip(t *testing.T) {
 	}
 	if _, ok := parsed["generationConfig"]; !ok {
 		t.Error("missing 'generationConfig' in round-tripped JSON")
+	}
+}
+
+func TestMapGeminiFinishReason(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"STOP", "stop"},
+		{"MAX_TOKENS", "length"},
+		{"SAFETY", "content-filter"},
+		{"PROHIBITED_CONTENT", "content-filter"},
+		{"SPII", "content-filter"},
+		{"BLOCKLIST", "content-filter"},
+		{"MALFORMED_FUNCTION_CALL", "stop"},
+		{"", ""},
+		{"OTHER", ""},
+		{"FINISH_REASON_UNSPECIFIED", ""},
+	}
+	for _, c := range cases {
+		got := string(mapGeminiFinishReason(c.in))
+		if got != c.want {
+			t.Errorf("mapGeminiFinishReason(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestDoGenerate_FinishReasonAndSafetyRatings(t *testing.T) {
+	// Build a mock Gemini response with finishReason and safetyRatings.
+	mockResp := `{
+		"candidates": [{
+			"content": {
+				"parts": [{"text": "Hello world"}],
+				"role": "model"
+			},
+			"finishReason": "STOP",
+			"safetyRatings": [
+				{"category": "HARM_CATEGORY_HARASSMENT", "probability": "NEGLIGIBLE"},
+				{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}
+			]
+		}],
+		"usageMetadata": {
+			"promptTokenCount": 5,
+			"candidatesTokenCount": 2
+		}
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(mockResp))
+	}))
+	defer srv.Close()
+
+	// Temporarily override baseURL for testing.
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-2.0-flash")
+	body, err := g.buildBody([]oasis.ChatMessage{{Role: "user", Content: "Hi"}}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildBody: %v", err)
+	}
+	result, err := g.doGenerate(context.Background(), body)
+	if err != nil {
+		t.Fatalf("doGenerate: %v", err)
+	}
+
+	if result.Content != "Hello world" {
+		t.Errorf("expected content 'Hello world', got %q", result.Content)
+	}
+	if result.FinishReason != oasis.FinishStop {
+		t.Errorf("expected FinishReason %q, got %q", oasis.FinishStop, result.FinishReason)
+	}
+	if result.ProviderMeta == nil {
+		t.Fatal("expected ProviderMeta to be set for safety ratings")
+	}
+
+	var meta map[string]json.RawMessage
+	if err := json.Unmarshal(result.ProviderMeta, &meta); err != nil {
+		t.Fatalf("decode ProviderMeta: %v", err)
+	}
+	if _, ok := meta["safety_ratings"]; !ok {
+		t.Error("expected 'safety_ratings' key in ProviderMeta")
+	}
+}
+
+func TestDoGenerate_NoSafetyRatingsNoMeta(t *testing.T) {
+	mockResp := `{
+		"candidates": [{
+			"content": {"parts": [{"text": "Hi"}], "role": "model"},
+			"finishReason": "STOP"
+		}],
+		"usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1}
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(mockResp))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-2.0-flash")
+	body, _ := g.buildBody([]oasis.ChatMessage{{Role: "user", Content: "Hi"}}, nil, nil, nil)
+	result, err := g.doGenerate(context.Background(), body)
+	if err != nil {
+		t.Fatalf("doGenerate: %v", err)
+	}
+	if result.FinishReason != oasis.FinishStop {
+		t.Errorf("expected FinishStop, got %q", result.FinishReason)
+	}
+	if result.ProviderMeta != nil {
+		t.Errorf("expected nil ProviderMeta when no safety ratings, got %s", result.ProviderMeta)
+	}
+}
+
+func TestDoGenerate_FinishReasonMaxTokens(t *testing.T) {
+	mockResp := `{
+		"candidates": [{
+			"content": {"parts": [{"text": "Truncated"}], "role": "model"},
+			"finishReason": "MAX_TOKENS"
+		}]
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(mockResp))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-2.0-flash")
+	body, _ := g.buildBody([]oasis.ChatMessage{{Role: "user", Content: "Hi"}}, nil, nil, nil)
+	result, err := g.doGenerate(context.Background(), body)
+	if err != nil {
+		t.Fatalf("doGenerate: %v", err)
+	}
+	if result.FinishReason != oasis.FinishLength {
+		t.Errorf("expected FinishLength, got %q", result.FinishReason)
+	}
+}
+
+func TestDoGenerate_FinishReasonSafety(t *testing.T) {
+	mockResp := `{
+		"candidates": [{
+			"content": {"parts": [{"text": ""}], "role": "model"},
+			"finishReason": "SAFETY",
+			"safetyRatings": [
+				{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "HIGH", "blocked": true}
+			]
+		}]
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(mockResp))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-2.0-flash")
+	body, _ := g.buildBody([]oasis.ChatMessage{{Role: "user", Content: "Hi"}}, nil, nil, nil)
+	result, err := g.doGenerate(context.Background(), body)
+	if err != nil {
+		t.Fatalf("doGenerate: %v", err)
+	}
+	if result.FinishReason != oasis.FinishContentFilter {
+		t.Errorf("expected FinishContentFilter, got %q", result.FinishReason)
+	}
+	if result.ProviderMeta == nil {
+		t.Fatal("expected ProviderMeta for blocked safety rating")
 	}
 }

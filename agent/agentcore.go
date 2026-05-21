@@ -347,6 +347,7 @@ func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools
 		prepareStep:         c.prepareStep,
 		onError:             c.onError,
 		onIterationComplete: c.onIterationComplete,
+		lookupTool:          c.tools.Lookup,
 	}
 }
 

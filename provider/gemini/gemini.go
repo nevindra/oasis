@@ -95,6 +95,8 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 	var fullContent strings.Builder
 	var usage oasis.Usage
 	var attachments []oasis.Attachment
+	var finishReason string
+	var safetyRatings []geminiSafetyRating
 
 	scanner := bufio.NewScanner(resp.Body)
 	// Large buffer for SSE payloads: image generation returns base64-encoded
@@ -112,7 +114,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 			if jsonBuf.Len() > 0 {
 				jsonBuf.WriteString(line)
 				if isCompleteJSON(jsonBuf.String()) {
-					g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, &attachments, ch)
+					g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch)
 					jsonBuf.Reset()
 				}
 			}
@@ -126,7 +128,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 
 		// Check if JSON is complete in a single line.
 		if isCompleteJSON(data) {
-			g.processStreamChunk(data, &fullContent, &usage, &attachments, ch)
+			g.processStreamChunk(data, &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch)
 		} else {
 			jsonBuf.Reset()
 			jsonBuf.WriteString(data)
@@ -135,19 +137,31 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 
 	// Process any remaining buffered JSON.
 	if jsonBuf.Len() > 0 && isCompleteJSON(jsonBuf.String()) {
-		g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, &attachments, ch)
+		g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch)
 	}
 
-	return oasis.ChatResponse{
-		Content:     fullContent.String(),
-		Attachments: attachments,
-		Usage:       usage,
-	}, nil
+	out := oasis.ChatResponse{
+		Content:      fullContent.String(),
+		Attachments:  attachments,
+		Usage:        usage,
+		FinishReason: mapGeminiFinishReason(finishReason),
+	}
+	if len(safetyRatings) > 0 {
+		meta, err := json.Marshal(map[string]any{
+			"safety_ratings": safetyRatings,
+		})
+		if err == nil {
+			out.ProviderMeta = meta
+		}
+	}
+	return out, nil
 }
 
 // processStreamChunk parses a single JSON chunk from the SSE stream,
-// extracts text deltas and usage, and sends text to the channel.
-func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, attachments *[]oasis.Attachment, ch chan<- oasis.StreamEvent) {
+// extracts text deltas, usage, finish reason, and safety ratings, and sends
+// text events to the channel. The last non-empty finishReason and any safety
+// ratings from candidates[0] overwrite the caller's accumulators.
+func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, attachments *[]oasis.Attachment, finishReason *string, safetyRatings *[]geminiSafetyRating, ch chan<- oasis.StreamEvent) {
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		return
@@ -167,6 +181,9 @@ func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder
 
 	// Extract usage metadata (overwrite each time; last chunk wins).
 	extractUsageFromParsed(parsed, usage)
+
+	// Extract finish reason and safety ratings from candidates[0].
+	extractFinishMetaFromParsed(parsed, finishReason, safetyRatings)
 }
 
 // doGenerate performs a non-streaming generateContent call and parses the response.
@@ -253,13 +270,28 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 		usage.CachedTokens = parsed.UsageMetadata.CachedContentTokenCount
 	}
 
-	return oasis.ChatResponse{
+	out := oasis.ChatResponse{
 		Content:     content.String(),
 		Thinking:    thinking.String(),
 		Attachments: attachments,
 		ToolCalls:   toolCalls,
 		Usage:       usage,
-	}, nil
+	}
+
+	if len(parsed.Candidates) > 0 {
+		candidate := parsed.Candidates[0]
+		out.FinishReason = mapGeminiFinishReason(candidate.FinishReason)
+		if len(candidate.SafetyRatings) > 0 {
+			meta, err := json.Marshal(map[string]any{
+				"safety_ratings": candidate.SafetyRatings,
+			})
+			if err == nil {
+				out.ProviderMeta = meta
+			}
+		}
+	}
+
+	return out, nil
 }
 
 func (g *Gemini) wrapErr(msg string) error {
@@ -630,6 +662,25 @@ func mapRole(role string) string {
 	return role
 }
 
+// mapGeminiFinishReason converts a Gemini finishReason string to an
+// oasis.FinishReason constant. Unknown values return an empty string so
+// the agent loop can synthesize a reason from context.
+func mapGeminiFinishReason(reason string) oasis.FinishReason {
+	switch reason {
+	case "STOP":
+		return oasis.FinishStop
+	case "MAX_TOKENS":
+		return oasis.FinishLength
+	case "SAFETY", "PROHIBITED_CONTENT", "SPII", "BLOCKLIST":
+		return oasis.FinishContentFilter
+	case "MALFORMED_FUNCTION_CALL":
+		// Function call that the model couldn't complete — treat as stop.
+		return oasis.FinishStop
+	default:
+		return ""
+	}
+}
+
 // ---- Response parsing types ----
 
 type geminiResponse struct {
@@ -638,7 +689,16 @@ type geminiResponse struct {
 }
 
 type geminiCandidate struct {
-	Content geminiContent `json:"content"`
+	Content       geminiContent        `json:"content"`
+	FinishReason  string               `json:"finishReason,omitempty"`
+	SafetyRatings []geminiSafetyRating `json:"safetyRatings,omitempty"`
+}
+
+// geminiSafetyRating represents a Gemini safety rating for a response candidate.
+type geminiSafetyRating struct {
+	Category    string `json:"category"`
+	Probability string `json:"probability"`
+	Blocked     bool   `json:"blocked,omitempty"`
 }
 
 type geminiContent struct {
@@ -773,6 +833,36 @@ func extractUsageFromParsed(parsed map[string]json.RawMessage, usage *oasis.Usag
 		usage.InputTokens = u.PromptTokenCount
 		usage.OutputTokens = u.CandidatesTokenCount
 		usage.CachedTokens = u.CachedContentTokenCount
+	}
+}
+
+// extractFinishMetaFromParsed extracts finishReason and safetyRatings from
+// candidates[0] in a raw parsed JSON map. Called on each streaming chunk;
+// the last non-empty values win (last chunk carries the terminal state).
+func extractFinishMetaFromParsed(parsed map[string]json.RawMessage, finishReason *string, safetyRatings *[]geminiSafetyRating) {
+	candidatesRaw, ok := parsed["candidates"]
+	if !ok {
+		return
+	}
+
+	var candidates []json.RawMessage
+	if err := json.Unmarshal(candidatesRaw, &candidates); err != nil || len(candidates) == 0 {
+		return
+	}
+
+	var candidate struct {
+		FinishReason  string               `json:"finishReason"`
+		SafetyRatings []geminiSafetyRating `json:"safetyRatings"`
+	}
+	if err := json.Unmarshal(candidates[0], &candidate); err != nil {
+		return
+	}
+
+	if candidate.FinishReason != "" {
+		*finishReason = candidate.FinishReason
+	}
+	if len(candidate.SafetyRatings) > 0 {
+		*safetyRatings = candidate.SafetyRatings
 	}
 }
 

@@ -30,6 +30,8 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 
 	var fullContent strings.Builder
 	var usage oasis.Usage
+	var finishReason string
+	var systemFingerprint string
 
 	// Accumulate tool calls across chunks. OpenAI streams tool calls
 	// incrementally: each chunk has an index, and arguments arrive as string fragments.
@@ -61,6 +63,11 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 			continue
 		}
 
+		// Capture system_fingerprint from any chunk that has it.
+		if chunk.SystemFingerprint != "" {
+			systemFingerprint = chunk.SystemFingerprint
+		}
+
 		if len(chunk.Choices) == 0 {
 			// Usage-only chunk (some providers send this).
 			if chunk.Usage != nil {
@@ -73,7 +80,14 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 			continue
 		}
 
-		delta := chunk.Choices[0].Delta
+		choice := chunk.Choices[0]
+
+		// Capture finish_reason from the chunk that carries it.
+		if choice.FinishReason != "" {
+			finishReason = choice.FinishReason
+		}
+
+		delta := choice.Delta
 		if delta == nil {
 			continue
 		}
@@ -135,9 +149,21 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 		})
 	}
 
-	return oasis.ChatResponse{
-		Content:   fullContent.String(),
-		ToolCalls: oasisToolCalls,
-		Usage:     usage,
-	}, nil
+	out := oasis.ChatResponse{
+		Content:      fullContent.String(),
+		ToolCalls:    oasisToolCalls,
+		Usage:        usage,
+		FinishReason: mapOpenAIFinishReason(finishReason),
+	}
+
+	if systemFingerprint != "" {
+		meta, err := json.Marshal(map[string]string{
+			"system_fingerprint": systemFingerprint,
+		})
+		if err == nil {
+			out.ProviderMeta = meta
+		}
+	}
+
+	return out, nil
 }

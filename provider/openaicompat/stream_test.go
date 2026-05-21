@@ -274,3 +274,98 @@ func TestStreamSSE_NonDataLinesIgnored(t *testing.T) {
 		t.Errorf("expected content 'OK', got %q", resp.Content)
 	}
 }
+
+func TestStreamSSE_FinishReasonStop(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"chatcmpl-fr","choices":[{"index":0,"delta":{"content":"Hello"}}]}`,
+		`{"id":"chatcmpl-fr","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 10)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+	for range ch {
+	}
+
+	if resp.FinishReason != oasis.FinishStop {
+		t.Errorf("expected FinishReason %q, got %q", oasis.FinishStop, resp.FinishReason)
+	}
+}
+
+func TestStreamSSE_FinishReasonToolCalls(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"chatcmpl-tc","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"search","arguments":"{}"}}]}}]}`,
+		`{"id":"chatcmpl-tc","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 10)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+	for range ch {
+	}
+
+	if resp.FinishReason != oasis.FinishToolCalls {
+		t.Errorf("expected FinishReason %q, got %q", oasis.FinishToolCalls, resp.FinishReason)
+	}
+}
+
+func TestStreamSSE_SystemFingerprint(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"chatcmpl-sfp","system_fingerprint":"fp_xyz789","choices":[{"index":0,"delta":{"content":"Hi"}}]}`,
+		`{"id":"chatcmpl-sfp","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 10)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+	for range ch {
+	}
+
+	if resp.ProviderMeta == nil {
+		t.Fatal("expected ProviderMeta to be set when system_fingerprint present")
+	}
+	var meta map[string]string
+	if err := json.Unmarshal(resp.ProviderMeta, &meta); err != nil {
+		t.Fatalf("failed to decode ProviderMeta: %v", err)
+	}
+	if meta["system_fingerprint"] != "fp_xyz789" {
+		t.Errorf("expected system_fingerprint 'fp_xyz789', got %q", meta["system_fingerprint"])
+	}
+}
+
+func TestStreamSSE_NoSystemFingerprintNoMeta(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"chatcmpl-nsfp","choices":[{"index":0,"delta":{"content":"Hi"}}]}`,
+		`{"id":"chatcmpl-nsfp","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 10)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+	for range ch {
+	}
+
+	if resp.ProviderMeta != nil {
+		t.Errorf("expected nil ProviderMeta when no system_fingerprint, got %s", resp.ProviderMeta)
+	}
+}

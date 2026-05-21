@@ -826,3 +826,117 @@ func TestLLMReranker_GracefulDegradation(t *testing.T) {
 		t.Fatalf("should return original results on parse failure, got %d", len(got))
 	}
 }
+
+// --- Task 10.1: core.Sourced interface tests ---
+
+func TestHybridRetriever_Sources_NilBeforeRetrieve(t *testing.T) {
+	store := &retrieverStore{}
+	emb := &mockEmbeddingProvider{embedding: []float32{0.1}}
+	r := NewHybridRetriever(store, emb)
+	if srcs := r.Sources(); srcs != nil {
+		t.Errorf("Sources() before any Retrieve = %v, want nil", srcs)
+	}
+}
+
+func TestHybridRetriever_Sources_PopulatedAfterRetrieve(t *testing.T) {
+	store := &retrieverStore{
+		chunks: []core.ScoredChunk{
+			{Chunk: core.Chunk{ID: "c1", DocumentID: "d1", Content: "chunk one"}, Score: 0.9},
+			{Chunk: core.Chunk{ID: "c2", DocumentID: "d1", Content: "chunk two"}, Score: 0.5},
+		},
+	}
+	emb := &mockEmbeddingProvider{embedding: []float32{0.1, 0.2}}
+
+	r := NewHybridRetriever(store, emb)
+	results, err := r.Retrieve(context.Background(), "query", 5)
+	if err != nil {
+		t.Fatalf("Retrieve() error = %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("Retrieve() returned no results")
+	}
+
+	srcs := r.Sources()
+	if len(srcs) != len(results) {
+		t.Fatalf("Sources() len = %d, want %d (same as Retrieve)", len(srcs), len(results))
+	}
+
+	// Verify each source has Origin="rag" and non-empty Meta.
+	for i, s := range srcs {
+		if s.Origin != "rag" {
+			t.Errorf("Sources()[%d].Origin = %q, want %q", i, s.Origin, "rag")
+		}
+		if len(s.Meta) == 0 {
+			t.Errorf("Sources()[%d].Meta is empty, want JSON with chunk_id and score", i)
+		}
+	}
+
+	// Verify quote from the first source matches the chunk content.
+	if srcs[0].Quote != results[0].Content {
+		t.Errorf("Sources()[0].Quote = %q, want %q", srcs[0].Quote, results[0].Content)
+	}
+}
+
+func TestResultsToSources_FieldMapping(t *testing.T) {
+	results := []RetrievalResult{
+		{
+			ChunkID:        "cid1",
+			Score:          0.75,
+			Content:        "some passage",
+			DocumentSource: "https://example.com",
+			DocumentTitle:  "Example Doc",
+		},
+	}
+	srcs := resultsToSources(results)
+	if len(srcs) != 1 {
+		t.Fatalf("len = %d, want 1", len(srcs))
+	}
+	s := srcs[0]
+	if s.URL != "https://example.com" {
+		t.Errorf("URL = %q, want %q", s.URL, "https://example.com")
+	}
+	if s.Title != "Example Doc" {
+		t.Errorf("Title = %q, want %q", s.Title, "Example Doc")
+	}
+	if s.Quote != "some passage" {
+		t.Errorf("Quote = %q, want %q", s.Quote, "some passage")
+	}
+	if s.Origin != "rag" {
+		t.Errorf("Origin = %q, want %q", s.Origin, "rag")
+	}
+	if len(s.Meta) == 0 {
+		t.Error("Meta is empty, want JSON with chunk_id and score")
+	}
+}
+
+func TestHybridRetriever_ImplementsSourced(t *testing.T) {
+	store := &retrieverStore{}
+	emb := &mockEmbeddingProvider{embedding: []float32{0.1}}
+	r := NewHybridRetriever(store, emb)
+	var _ core.Sourced = r // compile-time check; this test ensures it stays wired at runtime
+	_ = r.Sources()
+}
+
+func TestResultsToSources_Empty(t *testing.T) {
+	srcs := resultsToSources(nil)
+	if srcs != nil {
+		t.Errorf("resultsToSources(nil) = %v, want nil", srcs)
+	}
+}
+
+func TestResultsToSources_QuoteTruncation(t *testing.T) {
+	longContent := make([]byte, 600)
+	for i := range longContent {
+		longContent[i] = 'x'
+	}
+	results := []RetrievalResult{
+		{ChunkID: "c1", Content: string(longContent), Score: 0.8},
+	}
+	srcs := resultsToSources(results)
+	if len(srcs) != 1 {
+		t.Fatalf("len = %d, want 1", len(srcs))
+	}
+	if len(srcs[0].Quote) != 500 {
+		t.Errorf("Quote len = %d, want 500 (truncated)", len(srcs[0].Quote))
+	}
+}

@@ -45,6 +45,10 @@ type LoopConfig struct {
 	prepareStep         PrepareStep         // optional; called before each LLM call
 	onError             OnError             // optional; called on non-graceful LLM/tool errors
 	onIterationComplete OnIterationComplete // optional; called after each iteration completes
+	// lookupTool resolves a registered tool by name. When non-nil, the agent
+	// loop checks each dispatched tool for core.Sourced and aggregates its
+	// sources onto AgentResult.Sources. nil = no source aggregation.
+	lookupTool func(string) (core.AnyTool, bool)
 }
 
 // maxToolResultMessageLen is the maximum rune length for a tool result stored
@@ -213,7 +217,9 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 		// directly. safeCloseCh remains the sole closer of ch.
 		// Task 3.4: Use capturing forwarder so EventFileAttachment from synthesis
 		// are intercepted and appended to state.files.
-		synthCh, wait := newCapturingStreamForwarder(ctx, ch, defaultIterChBufSize, state)
+		// Task 6.1: Use object-stream forwarder when schema is set so that
+		// EventObjectDelta snapshots are emitted during synthesis streaming.
+		synthCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.responseSchema)
 		resp, err = cfg.provider.ChatStream(synthCtx, synthReq, synthCh)
 		wait()
 	} else {
@@ -269,7 +275,10 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 		ProviderMeta: state.lastProviderMeta,
 		Files:        state.files,
 		Iterations:   state.iterations,
+		Sources:      state.sources,
 	}
+	// Task 6.1: Emit EventObjectFinish and populate result.Object when schema is set.
+	emitObjectFinish(ctx, ch, cfg.responseSchema, resp.Content, &result)
 	finalizeRun(ctx, ch, state, cfg.name, FinishMaxIter, result)
 	return result, nil
 }

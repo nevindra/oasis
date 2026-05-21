@@ -121,9 +121,14 @@ type FunctionCall struct {
 
 // ChatResponse is the OpenAI chat completions response.
 type ChatResponse struct {
-	ID      string   `json:"id"`
-	Choices []Choice `json:"choices"`
-	Usage   *Usage   `json:"usage,omitempty"`
+	ID                string   `json:"id"`
+	Choices           []Choice `json:"choices"`
+	Usage             *Usage   `json:"usage,omitempty"`
+	// SystemFingerprint is an OpenAI-specific opaque string identifying the
+	// backend configuration used for the request. Present on most OpenAI
+	// responses; absent on other providers. Propagated into
+	// oasis.ChatResponse.ProviderMeta as {"system_fingerprint":"..."}.
+	SystemFingerprint string   `json:"system_fingerprint,omitempty"`
 }
 
 // Choice is a single completion choice.

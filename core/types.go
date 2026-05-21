@@ -215,6 +215,14 @@ func (r *ToolRegistry) ExecuteStream(ctx context.Context, name string, args json
 	return t.ExecuteRaw(ctx, args)
 }
 
+// Lookup returns the tool registered under name, or (nil, false) when not found.
+// Used by the agent loop to perform interface checks (e.g. core.Sourced) on
+// the live tool object after dispatch.
+func (r *ToolRegistry) Lookup(name string) (AnyTool, bool) {
+	t, ok := r.index[name]
+	return t, ok
+}
+
 // IsStreamingTool reports whether the tool registered under name implements
 // StreamingAnyTool. Returns false for unknown names. Used by the agent
 // dispatch layer to decide whether to bypass the per-tool policy wrapper.

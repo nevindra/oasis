@@ -81,6 +81,11 @@ const (
 	EventRunFinish       = core.EventRunFinish
 	EventIterationStart  = core.EventIterationStart
 	EventIterationFinish = core.EventIterationFinish
+
+	// Structured object streaming (Phase 6).
+	EventObjectDelta  = core.EventObjectDelta
+	EventObjectFinish = core.EventObjectFinish
+	EventElementDelta = core.EventElementDelta
 )
 
 // FinishReason aliases.

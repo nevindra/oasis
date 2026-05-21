@@ -199,9 +199,16 @@ type HybridRetriever struct {
 	store     core.Store
 	embedding core.EmbeddingProvider
 	cfg       retrieverConfig
+
+	// mu guards lastSources.
+	mu          sync.RWMutex
+	lastSources []core.Source
 }
 
 var _ Retriever = (*HybridRetriever)(nil)
+
+// Compile-time assertion: HybridRetriever implements core.Sourced.
+var _ core.Sourced = (*HybridRetriever)(nil)
 
 // NewHybridRetriever creates a Retriever that combines vector and keyword search
 // using Reciprocal Rank Fusion, resolves parent-child chunks, and optionally
@@ -220,7 +227,12 @@ func NewHybridRetriever(store core.Store, embedding core.EmbeddingProvider, opts
 
 // Retrieve searches the knowledge base using hybrid vector + keyword search,
 // resolves parent-child chunks, optionally re-ranks, and returns the top results.
+// On success the retrieved chunks are stored as []core.Source accessible via Sources().
 func (h *HybridRetriever) Retrieve(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
+	var (
+		results []RetrievalResult
+		err     error
+	)
 	if h.cfg.tracer != nil {
 		var span core.Span
 		ctx, span = h.cfg.tracer.Start(ctx, "retriever.retrieve",
@@ -228,15 +240,30 @@ func (h *HybridRetriever) Retrieve(ctx context.Context, query string, topK int) 
 			core.IntAttr("topK", topK))
 		defer func() { span.End() }()
 
-		results, err := h.retrieveInner(ctx, query, topK)
+		results, err = h.retrieveInner(ctx, query, topK)
 		if err != nil {
 			span.Error(err)
 		} else {
 			span.SetAttr(core.IntAttr("result_count", len(results)))
 		}
-		return results, err
+	} else {
+		results, err = h.retrieveInner(ctx, query, topK)
 	}
-	return h.retrieveInner(ctx, query, topK)
+	if err == nil {
+		h.mu.Lock()
+		h.lastSources = resultsToSources(results)
+		h.mu.Unlock()
+	}
+	return results, err
+}
+
+// Sources returns the cited chunks from the most recent Retrieve call as
+// []core.Source, satisfying the core.Sourced interface. Returns nil when
+// no successful Retrieve call has been made.
+func (h *HybridRetriever) Sources() []core.Source {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.lastSources
 }
 
 func (h *HybridRetriever) retrieveInner(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
@@ -477,6 +504,35 @@ func extractJSON(s string) string {
 	return s
 }
 
+// resultsToSources converts retrieval results to []core.Source for the
+// core.Sourced interface. Each result maps to one Source: DocumentSource →
+// URL, DocumentTitle → Title, Content → Quote (first 500 chars), Origin="rag",
+// and Meta carrying chunk_id and score.
+func resultsToSources(results []RetrievalResult) []core.Source {
+	if len(results) == 0 {
+		return nil
+	}
+	srcs := make([]core.Source, 0, len(results))
+	for _, r := range results {
+		quote := r.Content
+		if len(quote) > 500 {
+			quote = quote[:500]
+		}
+		meta, _ := json.Marshal(map[string]any{
+			"chunk_id": r.ChunkID,
+			"score":    r.Score,
+		})
+		srcs = append(srcs, core.Source{
+			URL:    r.DocumentSource,
+			Title:  r.DocumentTitle,
+			Quote:  quote,
+			Origin: "rag",
+			Meta:   meta,
+		})
+	}
+	return srcs
+}
+
 // --- LLMReranker ---
 
 // LLMReranker uses an LLM to score query-document relevance.
@@ -679,9 +735,16 @@ type GraphRetriever struct {
 	store     core.Store
 	embedding core.EmbeddingProvider
 	cfg       graphRetrieverConfig
+
+	// mu guards lastSources.
+	mu          sync.RWMutex
+	lastSources []core.Source
 }
 
 var _ Retriever = (*GraphRetriever)(nil)
+
+// Compile-time assertion: GraphRetriever implements core.Sourced.
+var _ core.Sourced = (*GraphRetriever)(nil)
 
 // NewGraphRetriever creates a Retriever that combines vector search with
 // graph traversal for multi-hop contextual retrieval.
@@ -700,7 +763,12 @@ func NewGraphRetriever(store core.Store, embedding core.EmbeddingProvider, opts 
 }
 
 // Retrieve searches the knowledge base using vector search + graph traversal.
+// On success the retrieved chunks are stored as []core.Source accessible via Sources().
 func (g *GraphRetriever) Retrieve(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {
+	var (
+		results []RetrievalResult
+		err     error
+	)
 	if g.cfg.tracer != nil {
 		var span core.Span
 		ctx, span = g.cfg.tracer.Start(ctx, "retriever.retrieve",
@@ -708,15 +776,30 @@ func (g *GraphRetriever) Retrieve(ctx context.Context, query string, topK int) (
 			core.IntAttr("topK", topK))
 		defer func() { span.End() }()
 
-		results, err := g.retrieveInner(ctx, query, topK)
+		results, err = g.retrieveInner(ctx, query, topK)
 		if err != nil {
 			span.Error(err)
 		} else {
 			span.SetAttr(core.IntAttr("result_count", len(results)))
 		}
-		return results, err
+	} else {
+		results, err = g.retrieveInner(ctx, query, topK)
 	}
-	return g.retrieveInner(ctx, query, topK)
+	if err == nil {
+		g.mu.Lock()
+		g.lastSources = resultsToSources(results)
+		g.mu.Unlock()
+	}
+	return results, err
+}
+
+// Sources returns the cited chunks from the most recent Retrieve call as
+// []core.Source, satisfying the core.Sourced interface. Returns nil when
+// no successful Retrieve call has been made.
+func (g *GraphRetriever) Sources() []core.Source {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.lastSources
 }
 
 func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK int) ([]RetrievalResult, error) {

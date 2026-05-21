@@ -6,8 +6,27 @@ import (
 	"github.com/nevindra/oasis"
 )
 
+// mapOpenAIFinishReason converts an OpenAI finish_reason string to an
+// oasis.FinishReason constant. Unknown values return an empty string so
+// the agent loop can synthesize a reason from context (e.g. tool calls present).
+func mapOpenAIFinishReason(reason string) oasis.FinishReason {
+	switch reason {
+	case "stop":
+		return oasis.FinishStop
+	case "tool_calls":
+		return oasis.FinishToolCalls
+	case "length":
+		return oasis.FinishLength
+	case "content_filter":
+		return oasis.FinishContentFilter
+	default:
+		return ""
+	}
+}
+
 // ParseResponse converts an OpenAI-format ChatResponse to an oasis ChatResponse.
-// It extracts content, tool calls, and usage from choices[0].
+// It extracts content, tool calls, usage, finish reason, and provider metadata
+// from choices[0] and the top-level response fields.
 func ParseResponse(resp ChatResponse) (oasis.ChatResponse, error) {
 	var out oasis.ChatResponse
 
@@ -21,6 +40,8 @@ func ParseResponse(resp ChatResponse) (oasis.ChatResponse, error) {
 		out.ToolCalls = ParseToolCalls(choice.Message.ToolCalls)
 	}
 
+	out.FinishReason = mapOpenAIFinishReason(choice.FinishReason)
+
 	if resp.Usage != nil {
 		out.Usage = oasis.Usage{
 			InputTokens:  resp.Usage.PromptTokens,
@@ -28,6 +49,15 @@ func ParseResponse(resp ChatResponse) (oasis.ChatResponse, error) {
 		}
 		if resp.Usage.PromptTokensDetails != nil {
 			out.Usage.CachedTokens = resp.Usage.PromptTokensDetails.CachedTokens
+		}
+	}
+
+	if resp.SystemFingerprint != "" {
+		meta, err := json.Marshal(map[string]string{
+			"system_fingerprint": resp.SystemFingerprint,
+		})
+		if err == nil {
+			out.ProviderMeta = meta
 		}
 	}
 

@@ -40,6 +40,10 @@ type loopState struct {
 
 	// Task 4.3: Per-iteration timing and usage traces; copied onto AgentResult.
 	iterations []IterationTrace
+
+	// Task 10.2: Sources aggregated from tools that implement core.Sourced.
+	// Copied onto AgentResult.Sources on every terminal path.
+	sources []core.Source
 }
 
 // iterationOutcome signals whether to continue to the next iteration or
@@ -192,7 +196,9 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		// Task 3.4: Use capturing forwarder so EventFileAttachment from the
 		// provider are intercepted and appended to state.files.
 		cfg.logger.Debug("calling LLM (streaming, with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
-		iterCh, wait := newCapturingStreamForwarder(ctx, ch, defaultIterChBufSize, state)
+		// Task 6.1: Use object-stream forwarder when schema is set so that
+		// EventObjectDelta snapshots are emitted alongside text deltas.
+		iterCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.responseSchema)
 		// Task 4.2: llm.generate span wrapping the provider call.
 		llmCtx := iterCtx
 		var llmSpan Span
@@ -247,8 +253,10 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		// No tools, streaming — terminal path (single-shot stream then return).
 		// Task 3.4: Use capturing forwarder so EventFileAttachment from the
 		// provider are intercepted and appended to state.files.
+		// Task 6.1: Use object-stream forwarder when schema is set so that
+		// EventObjectDelta snapshots are emitted alongside text deltas.
 		cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
-		iterCh, wait := newCapturingStreamForwarder(ctx, ch, defaultIterChBufSize, state)
+		iterCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.responseSchema)
 		// Task 4.2: llm.generate span wrapping the provider call.
 		llmCtx := iterCtx
 		var llmSpan Span
@@ -341,6 +349,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 				r.ProviderMeta = state.lastProviderMeta
 				r.Files = state.files
 				r.Iterations = state.iterations
+				r.Sources = state.sources
 				finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 				return iterationResult{outcome: iterDone, final: r}
 			}
@@ -370,7 +379,10 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			ProviderMeta: state.lastProviderMeta,
 			Files:        state.files,
 			Iterations:   state.iterations,
+			Sources:      state.sources,
 		}
+		// Task 6.1: Emit EventObjectFinish and populate result.Object when schema is set.
+		emitObjectFinish(ctx, ch, cfg.responseSchema, resp.Content, &result)
 		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
 		return iterationResult{
 			outcome: iterDone,
@@ -500,6 +512,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 				r.ProviderMeta = state.lastProviderMeta
 				r.Files = state.files
 				r.Iterations = state.iterations
+				r.Sources = state.sources
 				finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 				return iterationResult{outcome: iterDone, final: r}
 			}
@@ -529,7 +542,10 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			ProviderMeta: state.lastProviderMeta,
 			Files:        state.files,
 			Iterations:   state.iterations,
+			Sources:      state.sources,
 		}
+		// Task 6.1: Emit EventObjectFinish and populate result.Object when schema is set.
+		emitObjectFinish(ctx, ch, cfg.responseSchema, content, &result)
 		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
 		return iterationResult{
 			outcome: iterDone,
@@ -690,6 +706,16 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		if strings.HasPrefix(tc.Name, "agent_") {
 			state.lastAgentOutput = string(result.Content)
 		}
+
+		// Task 10.2: If the dispatched tool implements core.Sourced, collect its
+		// cited sources. Only runs on a successful dispatch (non-error result).
+		if !results[j].isError && cfg.lookupTool != nil {
+			if t, ok := cfg.lookupTool(tc.Name); ok {
+				if sourced, ok := t.(core.Sourced); ok {
+					state.sources = append(state.sources, sourced.Sources()...)
+				}
+			}
+		}
 	}
 	// Compress context if over budget (within the iteration span so compression
 	// traces are children of the iteration that triggered them).
@@ -731,6 +757,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			r.ProviderMeta = state.lastProviderMeta
 			r.Files = state.files
 			r.Iterations = state.iterations
+			r.Sources = state.sources
 			finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 			return iterationResult{outcome: iterDone, final: r}
 		case decisionInject:
