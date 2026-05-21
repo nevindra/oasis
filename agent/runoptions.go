@@ -51,6 +51,13 @@ type RunOptions struct {
 	// Caller-supplied passthrough. Shallow-merged with agent-level metadata
 	// (call-site keys win on conflict). Surfaces in StepTrace and hook args.
 	Metadata map[string]any
+
+	// Streaming overrides — apply only to ExecuteStream / StartStream paths.
+
+	// StreamReplayLimit caps the per-stream replay ring buffer when using
+	// the Stream wrapper (see StartStream). Zero means use the default (256).
+	// Negative is invalid.
+	StreamReplayLimit int
 }
 
 // Validate checks RunOptions for invalid field values. Called once at the
@@ -73,6 +80,9 @@ func (o *RunOptions) Validate() error {
 	}
 	if o.MaxToolResultLen != nil && *o.MaxToolResultLen <= 0 {
 		return &RunOptionsError{Field: "MaxToolResultLen", Message: "must be > 0"}
+	}
+	if o.StreamReplayLimit < 0 {
+		return &RunOptionsError{Field: "StreamReplayLimit", Message: "must be >= 0"}
 	}
 	return nil
 }
@@ -105,7 +115,8 @@ func (o *RunOptions) HasOverrides() bool {
 		o.InputHandler != nil ||
 		o.Tracer != nil ||
 		o.Logger != nil ||
-		len(o.Metadata) > 0
+		len(o.Metadata) > 0 ||
+		o.StreamReplayLimit != 0
 }
 
 // RunOptionsError reports a RunOptions validation failure.

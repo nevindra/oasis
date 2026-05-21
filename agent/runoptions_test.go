@@ -229,3 +229,24 @@ func TestRunOptions_MemoryOverride_PerCall(t *testing.T) {
 		t.Fatalf("override store received 0 writes — should be > 0")
 	}
 }
+
+func TestRunOptions_StreamReplayLimit_Valid(t *testing.T) {
+	opts := &RunOptions{StreamReplayLimit: 128}
+	if err := opts.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+func TestRunOptions_StreamReplayLimit_NegativeInvalid(t *testing.T) {
+	opts := &RunOptions{StreamReplayLimit: -1}
+	if err := opts.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want error for negative StreamReplayLimit")
+	}
+}
+
+func TestRunOptions_StreamReplayLimit_ZeroOK(t *testing.T) {
+	opts := &RunOptions{StreamReplayLimit: 0}
+	if err := opts.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (0 means default)", err)
+	}
+}
