@@ -1,9 +1,11 @@
 package oasis_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 )
 
 func TestReExports_HookTypes(t *testing.T) {
@@ -38,4 +40,24 @@ func TestReExports_AgentOptions(t *testing.T) {
 func TestReExports_Interfaces(t *testing.T) {
 	var _ oasis.AgentWithOptions
 	var _ oasis.StreamingAgentWithOptions
+}
+
+// nopStreamingAgent satisfies oasis.StreamingAgent with a fixed result.
+type nopStreamingAgent struct{}
+
+func (n *nopStreamingAgent) Name() string        { return "nop" }
+func (n *nopStreamingAgent) Description() string { return "" }
+func (n *nopStreamingAgent) Execute(ctx context.Context, task oasis.AgentTask) (oasis.AgentResult, error) {
+	return oasis.AgentResult{Output: "hi"}, nil
+}
+func (n *nopStreamingAgent) ExecuteStream(ctx context.Context, task oasis.AgentTask, ch chan<- core.StreamEvent) (oasis.AgentResult, error) {
+	close(ch)
+	return oasis.AgentResult{Output: "hi"}, nil
+}
+
+func TestOasis_StartStream(t *testing.T) {
+	s := oasis.StartStream(context.Background(), &nopStreamingAgent{}, oasis.AgentTask{})
+	if got := s.Text(); got != "hi" {
+		t.Errorf("Text() = %q, want %q", got, "hi")
+	}
 }

@@ -624,6 +624,24 @@ type AgentTask = core.AgentTask
 type AgentResult = core.AgentResult
 type StepTrace = core.StepTrace
 
+// --- Stream wrapper ---
+
+// Stream is an opt-in wrapper around StreamingAgent.ExecuteStream that
+// provides multi-reader fan-out, bounded replay, blocking accessors, and
+// event-typed callbacks. See agent.Stream for full documentation.
+type Stream = agent.Stream
+
+// StartStream runs agent.ExecuteStream in a background goroutine and returns
+// a Stream that consumers may subscribe to or query for the final result.
+func StartStream(ctx context.Context, ag StreamingAgent, task AgentTask) *Stream {
+	return agent.StartStream(ctx, ag, task)
+}
+
+// StartStreamWith is the RunOptions-aware constructor for Stream.
+func StartStreamWith(ctx context.Context, ag StreamingAgentWithOptions, task AgentTask, opts *RunOptions) *Stream {
+	return agent.StartStreamWith(ctx, ag, task, opts)
+}
+
 // --- Tracer types ---
 
 type Tracer = core.Tracer
