@@ -121,16 +121,60 @@ func (s *Stream) run(ctx context.Context, agent StreamingAgent, task AgentTask) 
 	s.finalize(r.res, r.err)
 }
 
-// dispatch appends to replay buffer and pushes to subscribers.
-// Fan-out lands in the next task — for now it just appends to replay.
 func (s *Stream) dispatch(ev core.StreamEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Append to replay ring buffer. Oldest events drop when full.
 	if len(s.replay) >= s.replayLimit {
 		s.replay = append(s.replay[1:], ev)
 	} else {
 		s.replay = append(s.replay, ev)
+	}
+
+	// Fan out to subscribers. Collect drops to close after the loop so we
+	// don't mutate the loop's slice mid-iteration.
+	var dropped []*subscriber
+	for _, sub := range s.subscribers {
+		if sub.dropped {
+			continue
+		}
+		if !s.pushTo(sub, ev) {
+			sub.dropped = true
+			dropped = append(dropped, sub)
+		}
+	}
+
+	// Notify and close dropped subscribers.
+	for _, sub := range dropped {
+		warn := core.StreamEvent{Type: core.EventStreamWarning, Content: "subscriber-dropped"}
+		select {
+		case sub.ch <- warn:
+		default:
+		}
+		close(sub.ch)
+	}
+}
+
+// pushTo writes ev to sub.ch non-blockingly. Returns false if the channel is
+// full (slow subscriber). Callback subscribers are invoked synchronously and
+// always return true (callback panics are recovered).
+func (s *Stream) pushTo(sub *subscriber, ev core.StreamEvent) bool {
+	if sub.callback != nil {
+		func() {
+			defer func() { _ = recover() }()
+			if sub.filter == "" || sub.filter == ev.Type {
+				sub.callback(ev)
+			}
+		}()
+		return true
+	}
+	// Channel subscriber.
+	select {
+	case sub.ch <- ev:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -141,9 +185,67 @@ func (s *Stream) finalize(res AgentResult, err error) {
 	s.err = err
 	s.closed = true
 	for _, sub := range s.subscribers {
-		close(sub.ch)
+		if !sub.dropped && sub.callback == nil {
+			close(sub.ch)
+		}
 	}
 	s.subscribers = nil
+}
+
+// Events returns a new channel that receives a copy of every stream event.
+// Late subscribers (after some events have been dispatched) receive a replay
+// of buffered history first, then live events.
+//
+// The returned channel is closed when the underlying agent finishes. If the
+// subscriber's channel fills (slow consumer), the wrapper emits a single
+// EventStreamWarning{Content:"subscriber-dropped"} into the channel and closes
+// it. Other subscribers are unaffected.
+//
+// Buffer size is fixed at defaultSubscriberBufSize (32). For larger needs,
+// pull from a goroutine that forwards into your own buffered channel.
+func (s *Stream) Events() <-chan core.StreamEvent {
+	return s.subscribe("", nil)
+}
+
+// subscribe registers a new subscriber. filter is the event type to match
+// (empty string = catch-all); callback is non-nil for OnXxx callbacks (no
+// channel allocated in that case). Returns the channel for channel
+// subscribers, nil for callback subscribers.
+func (s *Stream) subscribe(filter core.StreamEventType, callback func(core.StreamEvent)) chan core.StreamEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var ch chan core.StreamEvent
+	if callback == nil {
+		ch = make(chan core.StreamEvent, defaultSubscriberBufSize)
+		// Replay history non-blockingly. If the subscriber is slow before it
+		// even starts reading, we treat it the same as a runtime drop.
+		for _, ev := range s.replay {
+			select {
+			case ch <- ev:
+			default:
+				warn := core.StreamEvent{Type: core.EventStreamWarning, Content: "subscriber-dropped"}
+				select {
+				case ch <- warn:
+				default:
+				}
+				close(ch)
+				return ch
+			}
+		}
+		// If the stream is already closed, deliver replay then close.
+		if s.closed {
+			close(ch)
+			return ch
+		}
+	}
+
+	s.subscribers = append(s.subscribers, &subscriber{
+		ch:       ch,
+		filter:   filter,
+		callback: callback,
+	})
+	return ch
 }
 
 // Done returns a channel that closes when the underlying agent finishes.
