@@ -69,6 +69,14 @@ type Config struct {
 	onIterationComplete OnIterationComplete
 	onError             OnError
 
+	// Per-tool retry/timeout policy. toolPolicies are exact-name entries
+	// (ServeMux-style; later registrations overwrite). toolPolicyMatchers
+	// is an ordered list scanned in registration order; first matcher
+	// whose predicate returns true wins. Exact matches always beat
+	// matchers (mirrors net/http.ServeMux).
+	toolPolicies       map[string]core.ToolPolicy
+	toolPolicyMatchers []toolPolicyMatcher
+
 	// Configurable runtime limits (defaults applied in BuildConfig).
 	maxParallelDispatch int // set by WithMaxParallelDispatch; default 10
 	maxPlanSteps        int // set by WithMaxPlanSteps; default 50
@@ -108,6 +116,13 @@ type PromptFunc func(ctx context.Context, task AgentTask) string
 // Execute/ExecuteStream call. The returned tools REPLACE (not append to)
 // the construction-time tools for that execution.
 type ToolsFunc func(ctx context.Context, task AgentTask) []AnyTool
+
+// toolPolicyMatcher pairs a name predicate with a policy for use by
+// WithToolPolicyMatch.
+type toolPolicyMatcher struct {
+	match  func(name string) bool
+	policy core.ToolPolicy
+}
 
 // WithTools adds tools to the agent or network.
 func WithTools(tools ...AnyTool) AgentOption {
@@ -460,6 +475,31 @@ func WithMaxToolResultLen(n int) AgentOption {
 		if n > 0 {
 			c.maxToolResultLen = n
 		}
+	}
+}
+
+// WithToolPolicy attaches a per-tool timeout and retry policy to the tool
+// registered under the exact name. Re-registering the same name overwrites
+// the prior entry (last-call-wins). Exact names take precedence over any
+// matcher registered via WithToolPolicyMatch. Streaming tools (those
+// implementing core.StreamingAnyTool) silently bypass policy wrapping.
+func WithToolPolicy(name string, p core.ToolPolicy) AgentOption {
+	return func(c *Config) {
+		if c.toolPolicies == nil {
+			c.toolPolicies = map[string]core.ToolPolicy{}
+		}
+		c.toolPolicies[name] = p
+	}
+}
+
+// WithToolPolicyMatch attaches a policy to every tool whose name satisfies
+// the matcher predicate. Matchers are scanned in registration order; the
+// first matcher whose predicate returns true wins. Useful for applying a
+// single policy to MCP tool families (e.g. names prefixed with mcp__).
+// Exact-name entries from WithToolPolicy always take precedence.
+func WithToolPolicyMatch(matcher func(name string) bool, p core.ToolPolicy) AgentOption {
+	return func(c *Config) {
+		c.toolPolicyMatchers = append(c.toolPolicyMatchers, toolPolicyMatcher{match: matcher, policy: p})
 	}
 }
 
