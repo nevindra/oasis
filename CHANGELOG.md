@@ -141,6 +141,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
     return name + description only; the JSON Schema for `In` is derived
     from the Go type by reflection inside `Erase`.
 - **BREAKING — Schema-shape errors now panic (Phase 1.5)**: Schema-shape errors now **panic** at `Erase[In, Out]()` registration time with a descriptive message (field path, offending Go type, supported alternatives). They previously failed silently at LLM-call time.
+- **`Tool.Execute` errors now propagate as Go errors from the erased adapters.** Previously `core.Erase` swallowed the Go error from `tool.Execute(...)` into `ToolResult.Error` and returned `(result, nil)`. It now returns `(result, err)` so the new dispatch policy wrapper can inspect typed errors (`Retryable`, `net.Error.Timeout()`, `context.DeadlineExceeded`). The LLM-visible result is unchanged because `agent.toolResultToDispatch` already prioritizes the Go error path. External `AnyTool` implementers that read `ToolResult.Error` are unaffected. Implementers that re-wrap erased tools and previously assumed a nil error return from `ExecuteRaw` must now propagate or absorb the typed error. Argument-unmarshal errors and result-marshal errors continue to return `(result, nil)`.
 
 ### Changed (breaking)
 
@@ -168,6 +169,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Changed
 
+- `core.Erase` now applies structural input coercion (`null`/empty → `{}`, stringified-JSON object/array unwrap one level) before `json.Unmarshal`. Coercion is pure-function, zero-alloc on the happy path, and never errors — malformed inputs that don't match either pattern pass through unchanged so the existing `json.Unmarshal` failure path reports the real problem. This default-on behavior is intentional: no opt-out.
 - **Default `maxIter` raised 10 → 25.** Real tool-using workflows commonly need 15-20 iterations. Set `WithMaxIter(10)` to restore the old default. (finding 3.6)
 - **`compressMessages` now routes through the `Compactor` interface** instead of an inline English prompt. Users with custom `Compactor` implementations should handle both `ScopeFull` and `ScopeToolResultsOnly` (default `inlineCompactor` does both). (findings 1.2.f, 3.9)
 - `StreamingTool[In, Out]` inherits the shrunken `Tool` interface automatically.
@@ -197,6 +199,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - New root types: `MCPServerConfig`, `StdioMCPConfig`, `HTTPMCPConfig`, `Auth`, `BearerAuth`, `MCPToolFilter`, `MCPServerStatus`, `MCPServerInfo`, `MCPServerState`, `MCPLifecycleHandler`, `NoopMCPLifecycle`, `MCPController`, `MCPRegistry`, `MCPEvent`, `MCPEventType`, `MCPAccessor`.
 - New `mcp` package client types: `Client`, `StdioClient`, `HTTPClient`, `Auth`, `BearerAuth`, `InitializeResult`, `ListToolsResult`, `CallToolResult`, `ContentBlock`, `ServerInfo`. Test fixture at `mcp/mcptest`.
 - `ToolRegistry.Remove(name string) error` method — required for removing MCP tools on server unregister; also usable by any caller that needs dynamic tool removal.
+- `core.ToolPolicy` (per-tool `Timeout`, `Retries`, `RetryDelay`, `MaxRetryDelay`, `RetryOn`).
+- `core.Retryable` interface, `core.RetryableError(err) error` wrapper, `core.DefaultRetryOn(err) bool` predicate, `core.BackoffDelay(base, max, attempt)` helper.
+- `core.OutSchemaProvider` opt-in interface — tools may publish a custom output JSON Schema that overrides the schema derived from `Out` by reflection.
+- `core.ToolDefinition.OutputSchema json.RawMessage` field, populated by `core.Erase` / `core.EraseStreaming` via `DeriveSchema[Out]()` (or the override). Provider implementations decide whether to forward this to the LLM.
+- `core.ToolRegistry.IsStreamingTool(name) bool` lookup.
+- `agent.WithToolPolicy(name string, p core.ToolPolicy)` and `agent.WithToolPolicyMatch(matcher func(name string) bool, p core.ToolPolicy)` options. ServeMux-style precedence: exact name first, then matchers in registration order. Streaming tools bypass the policy wrapper entirely (with a one-shot `slog.Warn` if a policy was registered for one).
+- Umbrella re-exports: `oasis.ToolPolicy`, `oasis.Retryable`, `oasis.RetryableError`, `oasis.DefaultRetryOn`, `oasis.OutSchemaProvider`.
 - **`tools/todo` package** — Claude-Code-style `todo_write` tool for agent task tracking. Exposes a single tool function (`todo_write`) that accepts a list of `{content, activeForm, status}` items (status ∈ `pending` / `in_progress` / `completed`). Validates length (max 50 items, 1000-char content, 200-char activeForm) and auto-clears the stored list when every item is `completed` so downstream UIs can hide the panel.
 - **`todo.Backend` interface** — storage adapter (`Get`/`Set` by key) so embedders can persist task lists to whatever fits (in-memory, JSONB column, file, etc.). Implementations must serialize concurrent `Set` on the same key.
 - **`todo.New(backend, keyFn)` constructor** — `keyFn(ctx)` extracts the scoping identifier (conversation ID, session ID, …) from the agent's execution context, letting a single tool instance serve many concurrent conversations.
