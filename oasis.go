@@ -470,6 +470,29 @@ func EraseStreaming[In, Out any](t core.StreamingTool[In, Out]) core.StreamingAn
 	return core.EraseStreaming(t)
 }
 
+// --- Tool robustness primitives ---
+
+// ToolPolicy describes a per-tool timeout and retry policy applied by the
+// agent's dispatch wrapper. See agent.WithToolPolicy / agent.WithToolPolicyMatch.
+type ToolPolicy = core.ToolPolicy
+
+// Retryable is the opt-in convention for marking a Go error as retryable.
+// Use core.RetryableError to wrap an existing error so it satisfies this
+// interface; DefaultRetryOn honors the wrapper via errors.As.
+type Retryable = core.Retryable
+
+// OutSchemaProvider is the opt-in override for Erase's auto-derived output
+// schema. Tool implementations may implement this to publish a richer
+// JSON Schema than reflection produces.
+type OutSchemaProvider = core.OutSchemaProvider
+
+// RetryableError wraps err so DefaultRetryOn reports it as retryable.
+func RetryableError(err error) error { return core.RetryableError(err) }
+
+// DefaultRetryOn is the predicate used when ToolPolicy.RetryOn is nil.
+// Exported for composition: user predicates can fall through to it.
+func DefaultRetryOn(err error) bool { return core.DefaultRetryOn(err) }
+
 // --- LLM protocol types ---
 
 type ChatMessage = core.ChatMessage
