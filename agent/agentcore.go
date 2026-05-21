@@ -98,21 +98,28 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Co
 		Logger:            cfg.logger,
 	})
 
+	// Compute effective middleware chain: user-provided + auto-OTel when
+	// a tracer is configured and the user hasn't already included one.
+	effectiveMiddleware := cfg.toolMiddleware
+	if cfg.tracer != nil && !hasOTelSpanMiddleware(effectiveMiddleware) {
+		effectiveMiddleware = append(effectiveMiddleware, OTelSpanMiddleware(cfg.tracer))
+	}
+
 	for _, t := range cfg.tools {
-		c.tools.Add(core.ApplyToolMiddleware(t, cfg.toolMiddleware))
+		c.tools.Add(core.ApplyToolMiddleware(t, effectiveMiddleware))
 	}
 
 	// Register sandbox tools when a sandbox is configured.
 	if cfg.sandbox != nil {
 		for _, t := range cfg.sandboxTools {
-			c.tools.Add(core.ApplyToolMiddleware(t, cfg.toolMiddleware))
+			c.tools.Add(core.ApplyToolMiddleware(t, effectiveMiddleware))
 		}
 	}
 
 	// Register skill tools when a skill provider is configured.
 	if cfg.skillProvider != nil {
 		for _, t := range skills.NewSkillTools(cfg.skillProvider) {
-			c.tools.Add(core.ApplyToolMiddleware(t, cfg.toolMiddleware))
+			c.tools.Add(core.ApplyToolMiddleware(t, effectiveMiddleware))
 		}
 	}
 

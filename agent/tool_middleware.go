@@ -87,3 +87,77 @@ func (w *transformWrapper) ExecuteRaw(ctx context.Context, a json.RawMessage) (c
 	}
 	return w.fn(w.inner.Name(), r), nil
 }
+
+// OTelSpanMiddleware emits a tracing span named "tool.execute" for each tool
+// call, with attributes for tool name and arg byte length. Errors are recorded
+// on the span. Pass the tracer the agent was built with.
+//
+// This middleware is automatically applied when the agent has a Tracer
+// configured (via WithTracer) and the user did not already include an
+// OTelSpanMiddleware in their WithToolMiddleware list. To opt out of
+// auto-application, include a custom OTelSpanMiddleware (e.g. one with
+// extra attributes) explicitly.
+//
+// When tracer is nil, returns a pass-through middleware.
+func OTelSpanMiddleware(tracer Tracer) core.ToolMiddleware {
+	if tracer == nil {
+		return func(t core.AnyTool) core.AnyTool { return t }
+	}
+	return func(inner core.AnyTool) core.AnyTool {
+		return &otelSpanWrapper{inner: inner, tracer: tracer}
+	}
+}
+
+type otelSpanWrapper struct {
+	inner  core.AnyTool
+	tracer Tracer
+}
+
+func (w *otelSpanWrapper) Name() string                    { return w.inner.Name() }
+func (w *otelSpanWrapper) Definition() core.ToolDefinition { return w.inner.Definition() }
+func (w *otelSpanWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
+	ctx, span := w.tracer.Start(ctx, "tool.execute",
+		StringAttr("tool.name", w.inner.Name()),
+		IntAttr("tool.args_bytes", len(args)),
+	)
+	defer span.End()
+	r, err := w.inner.ExecuteRaw(ctx, args)
+	if err != nil {
+		span.Error(err)
+	}
+	if r.Error != "" {
+		span.SetAttr(StringAttr("tool.error", r.Error))
+	}
+	return r, err
+}
+
+// hasOTelSpanMiddleware reports whether the chain already includes an
+// OTelSpanMiddleware. Used by the auto-wiring path in InitCore to avoid
+// double-spanning.
+//
+// Detection works by applying each middleware to a sentinel AnyTool and
+// checking whether the resulting wrapper is an *otelSpanWrapper. Function
+// values cannot be compared for equality in Go, so type-tagging the wrapper
+// is the only reliable approach.
+func hasOTelSpanMiddleware(mws []core.ToolMiddleware) bool {
+	sentinel := &otelDetectSentinel{}
+	for _, mw := range mws {
+		if mw == nil {
+			continue
+		}
+		wrapped := mw(sentinel)
+		if _, ok := wrapped.(*otelSpanWrapper); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// otelDetectSentinel is a no-op core.AnyTool used only by hasOTelSpanMiddleware.
+type otelDetectSentinel struct{}
+
+func (*otelDetectSentinel) Name() string                    { return "" }
+func (*otelDetectSentinel) Definition() core.ToolDefinition { return core.ToolDefinition{} }
+func (*otelDetectSentinel) ExecuteRaw(context.Context, json.RawMessage) (core.ToolResult, error) {
+	return core.ToolResult{}, nil
+}

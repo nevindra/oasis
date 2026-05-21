@@ -135,6 +135,101 @@ func TestTimingMiddleware_PassesThrough(t *testing.T) {
 	}
 }
 
+type spanCaptureTracer struct {
+	mu    sync.Mutex
+	spans []capturedSpan
+}
+
+type capturedSpan struct {
+	name  string
+	attrs []SpanAttr
+}
+
+type capturedSpanRef struct{ parent *spanCaptureTracer }
+
+func (s *capturedSpanRef) SetAttr(attrs ...SpanAttr)          {}
+func (s *capturedSpanRef) Event(name string, attrs ...SpanAttr) {}
+func (s *capturedSpanRef) Error(err error)                    {}
+func (s *capturedSpanRef) End()                               {}
+
+func (t *spanCaptureTracer) Start(ctx context.Context, name string, attrs ...SpanAttr) (context.Context, Span) {
+	t.mu.Lock()
+	t.spans = append(t.spans, capturedSpan{name: name, attrs: attrs})
+	t.mu.Unlock()
+	return ctx, &capturedSpanRef{parent: t}
+}
+
+func (t *spanCaptureTracer) count() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.spans)
+}
+
+func TestOTelSpanMiddleware_EmitsSpanPerCall(t *testing.T) {
+	tracer := &spanCaptureTracer{}
+	tool := core.ApplyToolMiddleware(
+		&recordingTool{called: new(bool)},
+		[]core.ToolMiddleware{OTelSpanMiddleware(tracer)},
+	)
+
+	_, _ = tool.ExecuteRaw(context.Background(), json.RawMessage(`{}`))
+
+	if tracer.count() != 1 {
+		t.Fatalf("spans = %d, want 1", tracer.count())
+	}
+	if tracer.spans[0].name != "tool.execute" {
+		t.Errorf("span name = %q, want tool.execute", tracer.spans[0].name)
+	}
+}
+
+func TestOTelSpanMiddleware_AutoApplied(t *testing.T) {
+	tracer := &spanCaptureTracer{}
+	called := new(bool)
+	ag := NewLLMAgent("test", "", &callbackProvider{},
+		WithTools(&recordingTool{called: called}),
+		WithTracer(tracer),
+	)
+
+	_, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("tools.Execute err = %v", err)
+	}
+
+	if tracer.count() == 0 {
+		t.Error("expected auto-applied OTelSpanMiddleware to emit at least one span")
+	}
+}
+
+func TestOTelSpanMiddleware_NotAutoAppliedWithoutTracer(t *testing.T) {
+	called := new(bool)
+	ag := NewLLMAgent("test", "", &callbackProvider{},
+		WithTools(&recordingTool{called: called}),
+	)
+	// No tracer → no OTel wrapper → tool runs normally without spans.
+	_, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("tools.Execute err = %v", err)
+	}
+	if !*called {
+		t.Error("tool should still run when no tracer is configured")
+	}
+}
+
+func TestOTelSpanMiddleware_UserExplicitNotDoubleWrapped(t *testing.T) {
+	tracer := &spanCaptureTracer{}
+	called := new(bool)
+	ag := NewLLMAgent("test", "", &callbackProvider{},
+		WithTools(&recordingTool{called: called}),
+		WithTracer(tracer),
+		WithToolMiddleware(OTelSpanMiddleware(tracer)),
+	)
+	_, _ = ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	// Only one span per tool call — auto-application must detect and skip.
+	if tracer.count() != 1 {
+		t.Errorf("spans = %d, want exactly 1 (auto-application must skip when user already provided)", tracer.count())
+	}
+}
+
 // testLogBuffer is a thread-safe buffer for slog output capture.
 type testLogBuffer struct {
 	mu  sync.Mutex
