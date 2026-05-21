@@ -193,13 +193,15 @@ Defaults when no options are passed: prompt is a generic `"Approve call to <tool
 1. LLM emits a tool call for `delete_user`.
 2. Approval middleware (outermost layer of the chain) intercepts before the tool runs.
 3. Stream emits a new `EventToolApprovalPending` event with the call ID, tool name, and args.
-4. Middleware calls `InputHandler.RequestInput` with a structured approval payload (`{"kind":"approval","tool":"delete_user","args":{...}}`).
-5. Human responds:
-   - **approve** → tool runs normally, normal event sequence resumes.
-   - **deny** → behavior depends on `OnDeny`:
+4. Middleware calls `InputHandler.RequestInput(ctx, InputRequest{Question, Options:["approve","deny"], Metadata:{"kind":"tool-approval","tool":..., "args":...}})`.
+5. Human responds via `InputResponse.Value`:
+   - **"approve"** → tool runs normally, normal event sequence resumes.
+   - **"deny"** → behavior depends on `OnDeny`:
      - `DenyAskLLMToRevise`: returns `ToolResult{Error: "user denied call to delete_user"}` to the LLM so it can adapt.
-     - `DenyHalt`: middleware returns `*ErrHalt`, the loop halts cleanly.
-   - **modify** (advanced): modified args replace the LLM's args before the tool runs.
+     - `DenyHalt`: middleware returns `*core.ErrHalt{Response: ...}`, the loop halts cleanly.
+   - **anything else** → treated as deny + ask-LLM-to-revise (forward-compatible with future literal values like `"modify"`).
+
+Reserved for a follow-up: a richer `ApprovalResponse` (or InputHandler v2) that lets humans propose modified args. Today's string-valued `InputResponse` is sufficient for the approve/deny path; modify can land when there's a real consumer for it.
 
 **Why a middleware, not a special case:**
 - Composes predictably with logging/tracing/policy.
