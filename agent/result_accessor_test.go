@@ -91,6 +91,33 @@ func TestAgentResultWarningsAccumulateAcrossIterations(t *testing.T) {
 	}
 }
 
+// Task 4.3 — Iterations populated per LLM call.
+func TestAgentResultIterationsPopulated(t *testing.T) {
+	provider := newFnProvider(func(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+		close(ch)
+		return core.ChatResponse{
+			Content:      "ok",
+			Usage:        core.Usage{InputTokens: 10, OutputTokens: 5},
+			FinishReason: core.FinishStop,
+		}, nil
+	})
+	a := NewLLMAgent("t", "test", provider)
+	result, _ := a.Execute(context.Background(), AgentTask{Input: "x"})
+	if len(result.Iterations) != 1 {
+		t.Fatalf("Iterations len = %d, want 1", len(result.Iterations))
+	}
+	it := result.Iterations[0]
+	if it.Iter != 0 {
+		t.Errorf("Iter = %d, want 0", it.Iter)
+	}
+	if it.LLMCall.InputTokens != 10 || it.LLMCall.OutputTokens != 5 {
+		t.Errorf("LLMCall = %+v, want InputTokens=10, OutputTokens=5", it.LLMCall)
+	}
+	if it.LLMCall.FinishReason != core.FinishStop {
+		t.Errorf("LLMCall.FinishReason = %q, want %q", it.LLMCall.FinishReason, core.FinishStop)
+	}
+}
+
 // Task 3.4 — Files aggregated from EventFileAttachment events.
 func TestAgentResultFilesAggregated(t *testing.T) {
 	// Stub a provider that emits an EventFileAttachment event through the

@@ -268,6 +268,7 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 		Warnings:     state.lastWarnings,
 		ProviderMeta: state.lastProviderMeta,
 		Files:        state.files,
+		Iterations:   state.iterations,
 	}
 	finalizeRun(ctx, ch, state, cfg.name, FinishMaxIter, result)
 	return result, nil

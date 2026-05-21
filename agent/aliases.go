@@ -129,6 +129,11 @@ func NewID() string { return core.NewID() }
 
 // (Agent, StreamingAgent, AgentTask, AgentResult, StepTrace are aliased in agent.go.)
 
+// IterationTrace and LLMCallTrace are re-exported so agent-internal code
+// (iteration.go) can reference them without a core. qualifier.
+type IterationTrace = core.IterationTrace
+type LLMCallTrace = core.LLMCallTrace
+
 // --- Persistence types used by agent (memory wiring) ---
 
 type Store = core.Store

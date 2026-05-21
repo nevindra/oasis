@@ -37,6 +37,9 @@ type loopState struct {
 
 	// Task 3.4: File attachments aggregated from EventFileAttachment events.
 	files []Attachment
+
+	// Task 4.3: Per-iteration timing and usage traces; copied onto AgentResult.
+	iterations []IterationTrace
 }
 
 // iterationOutcome signals whether to continue to the next iteration or
@@ -77,16 +80,43 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 	}
 	iterStart := time.Now()
 
-	// Iteration tracing span.
+	// Iteration tracing span (Task 4.1: named "agent.iteration").
 	iterCtx := ctx
 	var iterSpan Span
 	if cfg.tracer != nil {
-		iterCtx, iterSpan = cfg.tracer.Start(ctx, "agent.loop.iteration",
+		iterCtx, iterSpan = cfg.tracer.Start(ctx, "agent.iteration",
 			IntAttr("iteration", i),
 			BoolAttr("has_tools", len(cfg.tools) > 0))
 	}
-	// endIter closes the tracing span and emits EventIterationFinish.
+
+	// Task 4.3: llmTrace accumulates per-iteration LLM call timing/usage.
+	// llmModel holds the provider name used for this iteration's LLM call.
+	// llmCalled is set to true after a successful provider call completes so
+	// that endIter only records an IterationTrace when an LLM call happened.
+	var llmTrace LLMCallTrace
+	llmModel := cfg.provider.Name() // default; may be updated if PrepareStep overrides provider
+	llmCalled := false
+
+	// endIter closes the tracing span, emits EventIterationFinish, and appends
+	// the completed IterationTrace to state.iterations (Task 4.3).
 	endIter := func() {
+		dur := time.Since(iterStart)
+		// Only record a trace if an LLM call actually happened this iteration.
+		if llmCalled {
+			trace := IterationTrace{
+				Iter:      i,
+				Model:     llmModel,
+				StartedAt: iterStart,
+				Duration:  dur,
+				LLMCall:   llmTrace,
+				Usage: Usage{
+					InputTokens:  llmTrace.InputTokens,
+					OutputTokens: llmTrace.OutputTokens,
+				},
+			}
+			state.iterations = append(state.iterations, trace)
+		}
+
 		if iterSpan != nil {
 			iterSpan.End()
 		}
@@ -95,7 +125,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			case ch <- StreamEvent{
 				Type:     EventIterationFinish,
 				Name:     strconv.Itoa(i),
-				Duration: time.Since(iterStart),
+				Duration: dur,
 			}:
 			case <-ctx.Done():
 			}
@@ -143,6 +173,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		}
 		if ctrl.Model != nil {
 			iterProvider = ctrl.Model
+			llmModel = iterProvider.Name() // Task 4.3: track which provider is used
 		}
 		if ctrl.Tools != nil {
 			defs := make([]ToolDefinition, len(ctrl.Tools))
@@ -162,19 +193,85 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		// provider are intercepted and appended to state.files.
 		cfg.logger.Debug("calling LLM (streaming, with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
 		iterCh, wait := newCapturingStreamForwarder(ctx, ch, defaultIterChBufSize, state)
-		resp, err = iterProvider.ChatStream(iterCtx, req, iterCh)
+		// Task 4.2: llm.generate span wrapping the provider call.
+		llmCtx := iterCtx
+		var llmSpan Span
+		if cfg.tracer != nil {
+			llmCtx, llmSpan = cfg.tracer.Start(iterCtx, "llm.generate",
+				StringAttr("provider", llmModel))
+		}
+		resp, err = iterProvider.ChatStream(llmCtx, req, iterCh)
+		if llmSpan != nil {
+			llmSpan.SetAttr(
+				IntAttr("input_tokens", resp.Usage.InputTokens),
+				IntAttr("output_tokens", resp.Usage.OutputTokens),
+				StringAttr("finish_reason", string(resp.FinishReason)),
+			)
+			llmSpan.End()
+		}
+		llmTrace = LLMCallTrace{
+			Duration:     time.Since(llmStart),
+			InputTokens:  resp.Usage.InputTokens,
+			OutputTokens: resp.Usage.OutputTokens,
+			FinishReason: resp.FinishReason,
+		}
+		llmCalled = true
 		wait()
 		streamedThisIter = true
 	} else if len(req.Tools) > 0 {
 		cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
-		resp, err = core.Chat(iterCtx, iterProvider, req)
+		// Task 4.2: llm.generate span wrapping the provider call.
+		llmCtx := iterCtx
+		var llmSpan Span
+		if cfg.tracer != nil {
+			llmCtx, llmSpan = cfg.tracer.Start(iterCtx, "llm.generate",
+				StringAttr("provider", llmModel))
+		}
+		resp, err = core.Chat(llmCtx, iterProvider, req)
+		if llmSpan != nil {
+			llmSpan.SetAttr(
+				IntAttr("input_tokens", resp.Usage.InputTokens),
+				IntAttr("output_tokens", resp.Usage.OutputTokens),
+				StringAttr("finish_reason", string(resp.FinishReason)),
+			)
+			llmSpan.End()
+		}
+		llmTrace = LLMCallTrace{
+			Duration:     time.Since(llmStart),
+			InputTokens:  resp.Usage.InputTokens,
+			OutputTokens: resp.Usage.OutputTokens,
+			FinishReason: resp.FinishReason,
+		}
+		llmCalled = true
 	} else if ch != nil {
 		// No tools, streaming — terminal path (single-shot stream then return).
 		// Task 3.4: Use capturing forwarder so EventFileAttachment from the
 		// provider are intercepted and appended to state.files.
 		cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
 		iterCh, wait := newCapturingStreamForwarder(ctx, ch, defaultIterChBufSize, state)
-		resp, err = iterProvider.ChatStream(iterCtx, req, iterCh)
+		// Task 4.2: llm.generate span wrapping the provider call.
+		llmCtx := iterCtx
+		var llmSpan Span
+		if cfg.tracer != nil {
+			llmCtx, llmSpan = cfg.tracer.Start(iterCtx, "llm.generate",
+				StringAttr("provider", llmModel))
+		}
+		resp, err = iterProvider.ChatStream(llmCtx, req, iterCh)
+		if llmSpan != nil {
+			llmSpan.SetAttr(
+				IntAttr("input_tokens", resp.Usage.InputTokens),
+				IntAttr("output_tokens", resp.Usage.OutputTokens),
+				StringAttr("finish_reason", string(resp.FinishReason)),
+			)
+			llmSpan.End()
+		}
+		llmTrace = LLMCallTrace{
+			Duration:     time.Since(llmStart),
+			InputTokens:  resp.Usage.InputTokens,
+			OutputTokens: resp.Usage.OutputTokens,
+			FinishReason: resp.FinishReason,
+		}
+		llmCalled = true
 		wait()
 		if err != nil {
 			endIter()
@@ -243,6 +340,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 				r.Warnings = state.lastWarnings
 				r.ProviderMeta = state.lastProviderMeta
 				r.Files = state.files
+				r.Iterations = state.iterations
 				finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 				return iterationResult{outcome: iterDone, final: r}
 			}
@@ -271,6 +369,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			Warnings:     state.lastWarnings,
 			ProviderMeta: state.lastProviderMeta,
 			Files:        state.files,
+			Iterations:   state.iterations,
 		}
 		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
 		return iterationResult{
@@ -279,7 +378,29 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		}
 	} else {
 		cfg.logger.Debug("calling LLM (no tools)", "agent", cfg.name, "iteration", i)
-		resp, err = core.Chat(iterCtx, iterProvider, req)
+		// Task 4.2: llm.generate span wrapping the provider call.
+		llmCtx := iterCtx
+		var llmSpan Span
+		if cfg.tracer != nil {
+			llmCtx, llmSpan = cfg.tracer.Start(iterCtx, "llm.generate",
+				StringAttr("provider", llmModel))
+		}
+		resp, err = core.Chat(llmCtx, iterProvider, req)
+		if llmSpan != nil {
+			llmSpan.SetAttr(
+				IntAttr("input_tokens", resp.Usage.InputTokens),
+				IntAttr("output_tokens", resp.Usage.OutputTokens),
+				StringAttr("finish_reason", string(resp.FinishReason)),
+			)
+			llmSpan.End()
+		}
+		llmTrace = LLMCallTrace{
+			Duration:     time.Since(llmStart),
+			InputTokens:  resp.Usage.InputTokens,
+			OutputTokens: resp.Usage.OutputTokens,
+			FinishReason: resp.FinishReason,
+		}
+		llmCalled = true
 	}
 
 	if err != nil {
@@ -378,6 +499,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 				r.Warnings = state.lastWarnings
 				r.ProviderMeta = state.lastProviderMeta
 				r.Files = state.files
+				r.Iterations = state.iterations
 				finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 				return iterationResult{outcome: iterDone, final: r}
 			}
@@ -406,6 +528,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			Warnings:     state.lastWarnings,
 			ProviderMeta: state.lastProviderMeta,
 			Files:        state.files,
+			Iterations:   state.iterations,
 		}
 		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
 		return iterationResult{
@@ -607,6 +730,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			r.Warnings = state.lastWarnings
 			r.ProviderMeta = state.lastProviderMeta
 			r.Files = state.files
+			r.Iterations = state.iterations
 			finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 			return iterationResult{outcome: iterDone, final: r}
 		case decisionInject:
