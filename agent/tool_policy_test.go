@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -187,5 +188,94 @@ func TestResolvePolicy_Unknown(t *testing.T) {
 	cfg := BuildConfig(nil)
 	if _, ok := cfg.resolveToolPolicy("nope"); ok {
 		t.Error("resolveToolPolicy(nope) = ok=true, want false")
+	}
+}
+
+// --- NewStandardDispatch policy integration tests ---
+
+// policyTestExec is a configurable fake tool executor for dispatch tests.
+type policyTestExec struct {
+	calls  int32
+	errFn  func(int32) error
+	result ToolResult
+}
+
+func (p *policyTestExec) exec(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+	n := atomic.AddInt32(&p.calls, 1)
+	if p.errFn != nil {
+		if err := p.errFn(n); err != nil {
+			return ToolResult{}, err
+		}
+	}
+	return p.result, nil
+}
+
+func (p *policyTestExec) execStream(_ context.Context, _ string, _ json.RawMessage, _ chan<- StreamEvent) (ToolResult, error) {
+	atomic.AddInt32(&p.calls, 1)
+	return p.result, nil
+}
+
+func TestNewStandardDispatch_PolicyRetries(t *testing.T) {
+	p := &policyTestExec{
+		result: ToolResult{Content: []byte(`"done"`)},
+		errFn: func(n int32) error {
+			if n < 3 {
+				return core.RetryableError(errors.New("transient"))
+			}
+			return nil
+		},
+	}
+	cfg := StandardDispatchConfig{
+		ExecuteTool:     p.exec,
+		IsStreamingTool: func(string) bool { return false },
+		ResolvePolicy: func(name string) (core.ToolPolicy, bool) {
+			return core.ToolPolicy{Retries: 5, RetryDelay: 1 * time.Millisecond}, true
+		},
+	}
+	d := NewStandardDispatch(cfg)
+	dr := d(context.Background(), ToolCall{Name: "myTool", Args: json.RawMessage(`{}`)})
+	if dr.IsError {
+		t.Fatalf("expected success after retries, got IsError; Content=%q", dr.Content)
+	}
+	if p.calls != 3 {
+		t.Errorf("calls = %d, want 3", p.calls)
+	}
+}
+
+func TestNewStandardDispatch_StreamingBypassesPolicy(t *testing.T) {
+	p := &policyTestExec{result: ToolResult{Content: []byte(`"streamed"`)}}
+	cfg := StandardDispatchConfig{
+		ExecuteTool:       p.exec,
+		ExecuteToolStream: p.execStream,
+		StreamCh:          make(chan StreamEvent, 1),
+		IsStreamingTool:   func(string) bool { return true },
+		ResolvePolicy: func(string) (core.ToolPolicy, bool) {
+			return core.ToolPolicy{Retries: 99}, true
+		},
+	}
+	d := NewStandardDispatch(cfg)
+	dr := d(context.Background(), ToolCall{Name: "stream", Args: json.RawMessage(`{}`)})
+	if dr.IsError {
+		t.Fatalf("unexpected IsError: %q", dr.Content)
+	}
+	if p.calls != 1 {
+		t.Errorf("calls = %d, want 1 (policy must NOT apply to streaming tools)", p.calls)
+	}
+}
+
+func TestNewStandardDispatch_NoPolicyPassthrough(t *testing.T) {
+	p := &policyTestExec{result: ToolResult{Content: []byte(`"plain"`)}}
+	cfg := StandardDispatchConfig{
+		ExecuteTool:     p.exec,
+		IsStreamingTool: func(string) bool { return false },
+		ResolvePolicy:   func(string) (core.ToolPolicy, bool) { return core.ToolPolicy{}, false },
+	}
+	d := NewStandardDispatch(cfg)
+	dr := d(context.Background(), ToolCall{Name: "plain", Args: nil})
+	if dr.IsError {
+		t.Fatalf("unexpected IsError: %q", dr.Content)
+	}
+	if p.calls != 1 {
+		t.Errorf("calls = %d, want 1", p.calls)
 	}
 }

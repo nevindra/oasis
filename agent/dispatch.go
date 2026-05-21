@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // DispatchResult holds the result of a single tool or agent dispatch.
@@ -78,16 +81,31 @@ type AgentRouter func(ctx context.Context, tc ToolCall) (DispatchResult, bool)
 type StandardDispatchConfig struct {
 	Builtins          func(ctx context.Context, tc ToolCall, dispatch DispatchFunc) (DispatchResult, bool)
 	SpawnHandler      func(ctx context.Context, args json.RawMessage, defs []ToolDefinition, exec ToolExecFunc) DispatchResult
-	AgentRouter       AgentRouter // optional; network/ supplies this
+	AgentRouter       AgentRouter
 	ExecuteTool       ToolExecFunc
 	ExecuteToolStream ToolExecStreamFunc
 	ResolvedToolDefs  []ToolDefinition
 	StreamCh          chan<- StreamEvent
+	// ResolvePolicy returns the ToolPolicy for a tool name. nil = no policy
+	// lookup. Returning (_, false) means no policy applies (pass-through).
+	// LLMAgent passes a closure over Config.resolveToolPolicy.
+	ResolvePolicy func(name string) (core.ToolPolicy, bool)
+	// IsStreamingTool reports whether the tool registered under name is a
+	// StreamingAnyTool. Used to bypass policy wrapping for streaming tools.
+	// nil ⇒ treat all tools as non-streaming.
+	IsStreamingTool func(name string) bool
+	// Logger is used to emit a one-time warning when a streaming tool
+	// has a policy registered. nil = no logging.
+	Logger *slog.Logger
 }
 
 // NewStandardDispatch builds the recursive DispatchFunc.
-// Order: Builtins → spawn_agent → AgentRouter → DispatchTool.
+// Order: Builtins → spawn_agent → AgentRouter → (policy/streaming) → DispatchTool.
 func NewStandardDispatch(cfg StandardDispatchConfig) DispatchFunc {
+	// streamPolicyWarned tracks tool names for which a policy was registered
+	// but the tool resolved as streaming; we log a warning once per name.
+	var streamPolicyWarned sync.Map
+
 	var dispatch DispatchFunc
 	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
 		if cfg.Builtins != nil {
@@ -101,6 +119,33 @@ func NewStandardDispatch(cfg StandardDispatchConfig) DispatchFunc {
 		if cfg.AgentRouter != nil {
 			if r, ok := cfg.AgentRouter(ctx, tc); ok {
 				return r
+			}
+		}
+
+		isStreaming := cfg.IsStreamingTool != nil && cfg.IsStreamingTool(tc.Name)
+
+		// Streaming-tool bypass: policy never applies to a streaming tool.
+		// Warn once if a user attempted to attach a policy to a streaming tool.
+		if isStreaming {
+			if cfg.ResolvePolicy != nil {
+				if _, hasPolicy := cfg.ResolvePolicy(tc.Name); hasPolicy {
+					if _, already := streamPolicyWarned.LoadOrStore(tc.Name, struct{}{}); !already && cfg.Logger != nil {
+						cfg.Logger.Warn("tool policy ignored: tool is a StreamingAnyTool", "tool", tc.Name)
+					}
+				}
+			}
+			if cfg.StreamCh != nil && cfg.ExecuteToolStream != nil {
+				return toolResultToDispatch(cfg.ExecuteToolStream(ctx, tc.Name, tc.Args, cfg.StreamCh))
+			}
+			return toolResultToDispatch(cfg.ExecuteTool(ctx, tc.Name, tc.Args))
+		}
+
+		// Non-streaming path: apply policy if one is registered for this name.
+		if cfg.ResolvePolicy != nil {
+			if policy, ok := cfg.ResolvePolicy(tc.Name); ok {
+				return toolResultToDispatch(runWithPolicy(ctx, policy, func(c context.Context) (ToolResult, error) {
+					return cfg.ExecuteTool(c, tc.Name, tc.Args)
+				}))
 			}
 		}
 		return DispatchTool(ctx, cfg.ExecuteTool, cfg.ExecuteToolStream, tc.Name, tc.Args, cfg.StreamCh)
