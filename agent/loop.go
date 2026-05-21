@@ -211,7 +211,9 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 	if ch != nil {
 		// Intermediate channel so the provider's defer-close doesn't touch ch
 		// directly. safeCloseCh remains the sole closer of ch.
-		synthCh, wait := newStreamForwarder(ctx, ch, defaultIterChBufSize)
+		// Task 3.4: Use capturing forwarder so EventFileAttachment from synthesis
+		// are intercepted and appended to state.files.
+		synthCh, wait := newCapturingStreamForwarder(ctx, ch, defaultIterChBufSize, state)
 		resp, err = cfg.provider.ChatStream(synthCtx, synthReq, synthCh)
 		wait()
 	} else {
@@ -229,10 +231,13 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 	state.totalUsage.InputTokens += resp.Usage.InputTokens
 	state.totalUsage.OutputTokens += resp.Usage.OutputTokens
 
+	// Task 3.3: Accumulate provider warnings and remember the latest provider meta.
+	captureProviderMeta(state, &resp)
+
 	// PostProcessor hook.
 	if err := cfg.processors.RunPostLLM(synthCtx, &resp); err != nil {
 		if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended}
+			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload}
 			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
 			return suspResult, s
 		}
@@ -260,6 +265,9 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 		Usage:        state.totalUsage,
 		Steps:        state.steps,
 		FinishReason: FinishMaxIter,
+		Warnings:     state.lastWarnings,
+		ProviderMeta: state.lastProviderMeta,
+		Files:        state.files,
 	}
 	finalizeRun(ctx, ch, state, cfg.name, FinishMaxIter, result)
 	return result, nil

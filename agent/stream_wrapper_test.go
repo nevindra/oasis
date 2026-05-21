@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -251,4 +252,47 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestStreamBlockingAccessors(t *testing.T) {
+	// Use emitterAgent to set AgentResult fields with FinishReason, Warnings, etc.
+	ag := &emitterAgent{
+		events: []core.StreamEvent{},
+		final: AgentResult{
+			Output:       "done",
+			FinishReason: core.FinishStop,
+			Warnings:     []string{"x"},
+			ProviderMeta: json.RawMessage(`{"a":1}`),
+			Sources:      nil,
+			Files:        nil,
+			SuspendPayload: nil,
+			Iterations:   []core.IterationTrace{
+				{Iter: 0, Model: "test", Usage: core.Usage{}},
+			},
+		},
+	}
+	s := StartStream(context.Background(), ag, AgentTask{Input: "x"})
+
+	if s.FinishReason() != core.FinishStop {
+		t.Errorf("FinishReason = %q", s.FinishReason())
+	}
+	if len(s.Warnings()) != 1 || s.Warnings()[0] != "x" {
+		t.Errorf("Warnings = %v", s.Warnings())
+	}
+	if string(s.ProviderMeta()) != `{"a":1}` {
+		t.Errorf("ProviderMeta = %s", s.ProviderMeta())
+	}
+	// Sources/Files default to nil for this trivial run.
+	if s.Sources() != nil {
+		t.Errorf("Sources should be nil, got %v", s.Sources())
+	}
+	if s.Files() != nil {
+		t.Errorf("Files should be nil, got %v", s.Files())
+	}
+	if s.SuspendPayload() != nil {
+		t.Errorf("SuspendPayload should be nil, got %s", s.SuspendPayload())
+	}
+	if len(s.Iterations()) != 1 {
+		t.Errorf("Iterations len = %d", len(s.Iterations()))
+	}
 }

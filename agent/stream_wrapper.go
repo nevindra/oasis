@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	"github.com/nevindra/oasis/core"
@@ -288,6 +289,48 @@ func (s *Stream) ToolCalls() []core.ToolCall {
 func (s *Stream) ToolResults() []core.ToolResult {
 	r, _ := s.Result()
 	return r.ToolResults()
+}
+
+// FinishReason blocks until completion and returns Result().FinishReason.
+func (s *Stream) FinishReason() core.FinishReason {
+	r, _ := s.Result()
+	return r.FinishReason
+}
+
+// Sources blocks until completion and returns Result().Sources.
+func (s *Stream) Sources() []core.Source {
+	r, _ := s.Result()
+	return r.Sources
+}
+
+// Files blocks until completion and returns Result().Files.
+func (s *Stream) Files() []core.Attachment {
+	r, _ := s.Result()
+	return r.Files
+}
+
+// Warnings blocks until completion and returns Result().Warnings.
+func (s *Stream) Warnings() []string {
+	r, _ := s.Result()
+	return r.Warnings
+}
+
+// ProviderMeta blocks until completion and returns Result().ProviderMeta.
+func (s *Stream) ProviderMeta() json.RawMessage {
+	r, _ := s.Result()
+	return r.ProviderMeta
+}
+
+// SuspendPayload blocks until completion and returns Result().SuspendPayload.
+func (s *Stream) SuspendPayload() json.RawMessage {
+	r, _ := s.Result()
+	return r.SuspendPayload
+}
+
+// Iterations blocks until completion and returns Result().Iterations.
+func (s *Stream) Iterations() []core.IterationTrace {
+	r, _ := s.Result()
+	return r.Iterations
 }
 
 // OnEvent registers a catch-all callback invoked for every event in order.

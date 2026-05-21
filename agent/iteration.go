@@ -30,6 +30,13 @@ type loopState struct {
 	hasAgentTools              bool
 	compressThreshold          int
 	safeCloseCh                func()
+
+	// Task 3.3: Carry forward across iterations; final values land on AgentResult.
+	lastWarnings     []string
+	lastProviderMeta json.RawMessage
+
+	// Task 3.4: File attachments aggregated from EventFileAttachment events.
+	files []Attachment
 }
 
 // iterationOutcome signals whether to continue to the next iteration or
@@ -102,7 +109,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		cfg.logger.Error("pre-processor failed", "agent", cfg.name, "iteration", i, "error", err)
 		endIter()
 		if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended}
+			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload}
 			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
 			return iterationResult{outcome: iterDone, final: suspResult, err: s}
 		}
@@ -151,8 +158,10 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		// Streaming with tools (single agent only): intermediate channel so the
 		// provider's defer-close doesn't shut down the main stream. Networks
 		// use Chat() to preserve router text-delta deduplication.
+		// Task 3.4: Use capturing forwarder so EventFileAttachment from the
+		// provider are intercepted and appended to state.files.
 		cfg.logger.Debug("calling LLM (streaming, with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
-		iterCh, wait := newStreamForwarder(ctx, ch, defaultIterChBufSize)
+		iterCh, wait := newCapturingStreamForwarder(ctx, ch, defaultIterChBufSize, state)
 		resp, err = iterProvider.ChatStream(iterCtx, req, iterCh)
 		wait()
 		streamedThisIter = true
@@ -161,8 +170,10 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		resp, err = core.Chat(iterCtx, iterProvider, req)
 	} else if ch != nil {
 		// No tools, streaming — terminal path (single-shot stream then return).
+		// Task 3.4: Use capturing forwarder so EventFileAttachment from the
+		// provider are intercepted and appended to state.files.
 		cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
-		iterCh, wait := newStreamForwarder(ctx, ch, defaultIterChBufSize)
+		iterCh, wait := newCapturingStreamForwarder(ctx, ch, defaultIterChBufSize, state)
 		resp, err = iterProvider.ChatStream(iterCtx, req, iterCh)
 		wait()
 		if err != nil {
@@ -182,12 +193,15 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		state.totalUsage.InputTokens += resp.Usage.InputTokens
 		state.totalUsage.OutputTokens += resp.Usage.OutputTokens
 
+		// Task 3.3: Accumulate provider warnings and remember the latest provider meta.
+		captureProviderMeta(state, &resp)
+
 		// PostProcessor hook (response already streamed, but processors still
 		// run for side effects like logging and validation).
 		if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
 			endIter()
 			if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-				suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended}
+				suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload}
 				finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
 				return iterationResult{outcome: iterDone, final: suspResult, err: s}
 			}
@@ -226,6 +240,9 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 				endIter()
 				r := decision.result
 				r.FinishReason = FinishStop
+				r.Warnings = state.lastWarnings
+				r.ProviderMeta = state.lastProviderMeta
+				r.Files = state.files
 				finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 				return iterationResult{outcome: iterDone, final: r}
 			}
@@ -251,6 +268,9 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			Usage:        state.totalUsage,
 			Steps:        state.steps,
 			FinishReason: FinishStop,
+			Warnings:     state.lastWarnings,
+			ProviderMeta: state.lastProviderMeta,
+			Files:        state.files,
 		}
 		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
 		return iterationResult{
@@ -284,11 +304,14 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 	state.totalUsage.InputTokens += resp.Usage.InputTokens
 	state.totalUsage.OutputTokens += resp.Usage.OutputTokens
 
+	// Task 3.3: Accumulate provider warnings and remember the latest provider meta.
+	captureProviderMeta(state, &resp)
+
 	// PostProcessor hook.
 	if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
 		endIter()
 		if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended}
+			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload}
 			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
 			return iterationResult{outcome: iterDone, final: suspResult, err: s}
 		}
@@ -352,6 +375,9 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 				endIter()
 				r := decision.result
 				r.FinishReason = FinishStop
+				r.Warnings = state.lastWarnings
+				r.ProviderMeta = state.lastProviderMeta
+				r.Files = state.files
 				finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 				return iterationResult{outcome: iterDone, final: r}
 			}
@@ -377,6 +403,9 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			Usage:        state.totalUsage,
 			Steps:        state.steps,
 			FinishReason: FinishStop,
+			Warnings:     state.lastWarnings,
+			ProviderMeta: state.lastProviderMeta,
+			Files:        state.files,
 		}
 		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
 		return iterationResult{
@@ -433,10 +462,19 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		toolNames[ti] = tc.Name
 	}
 	cfg.logger.Info("dispatching tool calls", "agent", cfg.name, "iteration", i, "tools", toolNames)
-	iterCtx = contextWithStreamSink(iterCtx, ch)
+	// Task 3.4: Wrap the sink channel so EventFileAttachment events are captured
+	// into state.files while being forwarded to ch unchanged. newFileCapturingSink
+	// returns nil (and a no-op wait) when ch is nil (non-streaming path).
+	fileSinkCh, waitFileSink := newFileCapturingSink(ctx, ch, state)
+	iterCtx = contextWithStreamSink(iterCtx, fileSinkCh)
 	dispatchStart := time.Now()
 	results := dispatchParallel(iterCtx, resp.ToolCalls, cfg.dispatch, cfg.maxParallelDispatch)
 	cfg.logger.Debug("tool dispatch completed", "agent", cfg.name, "iteration", i, "duration", time.Since(dispatchStart))
+	// Close the capturing sink (only when non-nil) and wait for the forwarder to drain.
+	if fileSinkCh != nil {
+		close(fileSinkCh)
+	}
+	waitFileSink()
 
 	// Process results sequentially (PostToolProcessor + message assembly + trace).
 	for j, tc := range resp.ToolCalls {
@@ -483,7 +521,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		if err := cfg.processors.RunPostTool(iterCtx, tc, &result); err != nil {
 			endIter()
 			if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-				suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended}
+				suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload}
 				finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
 				return iterationResult{outcome: iterDone, final: suspResult, err: s}
 			}
@@ -566,6 +604,9 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			endIter()
 			r := decision.result
 			r.FinishReason = FinishStop
+			r.Warnings = state.lastWarnings
+			r.ProviderMeta = state.lastProviderMeta
+			r.Files = state.files
 			finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
 			return iterationResult{outcome: iterDone, final: r}
 		case decisionInject:
@@ -579,6 +620,19 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 
 	endIter()
 	return iterationResult{outcome: iterContinue}
+}
+
+// captureProviderMeta appends resp.Warnings to state.lastWarnings and
+// updates state.lastProviderMeta with resp.ProviderMeta when non-empty.
+// Call after every successful provider call so the final AgentResult carries
+// the accumulated warnings and the last-seen provider metadata.
+func captureProviderMeta(state *loopState, resp *ChatResponse) {
+	if len(resp.Warnings) > 0 {
+		state.lastWarnings = append(state.lastWarnings, resp.Warnings...)
+	}
+	if len(resp.ProviderMeta) > 0 {
+		state.lastProviderMeta = resp.ProviderMeta
+	}
 }
 
 // handleOnError consults cfg.onError when a non-graceful LLM error occurs.
