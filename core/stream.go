@@ -91,6 +91,59 @@ const (
 	// the tool name; Args carries the proposed arguments. A subsequent
 	// EventToolCallStart appears only if the approval is granted.
 	EventToolApprovalPending StreamEventType = "tool-approval-pending"
+	// EventRunStart is the first event on every stream. Name carries the
+	// agent name; Content carries the task input. Replaces the deprecated
+	// EventInputReceived + EventProcessingStart pair.
+	EventRunStart StreamEventType = "run-start"
+	// EventRunFinish is the last event on every stream before channel close.
+	// FinishReason indicates why the run ended; Warnings, ProviderMeta carry
+	// additional context. Content carries the final output for FinishHalted
+	// (canned response) and FinishSuspended (suspend payload as text).
+	EventRunFinish StreamEventType = "run-finish"
+	// EventIterationStart marks the beginning of one LLM-call iteration.
+	// Name carries the iteration index ("0", "1", ...).
+	EventIterationStart StreamEventType = "iteration-start"
+	// EventIterationFinish marks the end of one LLM-call iteration. Usage
+	// carries that iteration's token usage; Duration carries wall-clock time.
+	EventIterationFinish StreamEventType = "iteration-finish"
+	// EventObjectDelta carries a partial JSON snapshot of the structured
+	// output produced under WithResponseSchema. Object carries the snapshot
+	// bytes. Emitted only when ResponseSchema is set on the request.
+	EventObjectDelta StreamEventType = "object-delta"
+	// EventObjectFinish carries the final validated structured output.
+	// Object carries the final JSON bytes. Always preceded by zero or more
+	// EventObjectDelta events.
+	EventObjectFinish StreamEventType = "object-finish"
+	// EventElementDelta is emitted once per completed array element when the
+	// top-level schema is a JSON array (e.g. []Item). Content / Object carry
+	// the just-completed element. Not emitted for nested arrays.
+	EventElementDelta StreamEventType = "element-delta"
+)
+
+// FinishReason describes why an agent run ended. It is carried on
+// EventRunFinish and on AgentResult.FinishReason.
+type FinishReason string
+
+const (
+	// FinishStop — model produced a natural stop (no further tool calls).
+	FinishStop FinishReason = "stop"
+	// FinishToolCalls — model stopped to request tool calls. Intermediate
+	// state on per-iteration finish; not emitted on EventRunFinish.
+	FinishToolCalls FinishReason = "tool-calls"
+	// FinishLength — model hit max_tokens before completing.
+	FinishLength FinishReason = "length"
+	// FinishContentFilter — provider safety / content filter blocked output.
+	FinishContentFilter FinishReason = "content-filter"
+	// FinishHalted — a processor returned *ErrHalt. Content carries the
+	// canned response; Name carries the processor name on EventRunFinish.
+	FinishHalted FinishReason = "halted"
+	// FinishSuspended — the run paused awaiting human input. SuspendPayload
+	// on AgentResult carries the payload (if any).
+	FinishSuspended FinishReason = "suspended"
+	// FinishMaxIter — the run hit the MaxIter cap before completing.
+	FinishMaxIter FinishReason = "max-iterations"
+	// FinishError — the run terminated with an error.
+	FinishError FinishReason = "error"
 )
 
 // StreamEvent is a typed event emitted during agent streaming.
@@ -114,4 +167,18 @@ type StreamEvent struct {
 	// Duration is the wall-clock time for the completed step.
 	// Set on agent-finish and tool-call-result events. Zero value otherwise.
 	Duration time.Duration `json:"duration,omitempty"`
+	// FinishReason is set on EventRunFinish events only. Empty on other types.
+	FinishReason FinishReason `json:"finish_reason,omitempty"`
+	// Warnings is set on EventRunFinish events when the run accumulated
+	// non-fatal provider warnings (e.g. fallback model used, rate-limit
+	// throttling, deprecated parameter ignored). Empty on other events.
+	Warnings []string `json:"warnings,omitempty"`
+	// ProviderMeta carries provider-specific opaque metadata on
+	// EventRunFinish (e.g. Gemini safety ratings, Anthropic stop reason).
+	// Consumers may decode it according to the provider's documentation.
+	ProviderMeta json.RawMessage `json:"provider_meta,omitempty"`
+	// Object carries the partial JSON snapshot on EventObjectDelta and
+	// the final validated bytes on EventObjectFinish / EventElementDelta.
+	// Empty on all other event types.
+	Object json.RawMessage `json:"object,omitempty"`
 }

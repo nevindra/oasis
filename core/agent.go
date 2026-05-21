@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -84,6 +85,31 @@ type AgentResult struct {
 	// Populated by LLMAgent (tool calls) and Network (tool + agent delegations).
 	// Nil when no tools were called.
 	Steps []StepTrace
+
+	// FinishReason indicates why the run ended. Zero value is empty string.
+	FinishReason FinishReason `json:"finish_reason,omitempty"`
+	// Sources are citations declared by tools, retrievers, or the model
+	// via the Sourced interface. Nil when no source was declared.
+	Sources []Source `json:"sources,omitempty"`
+	// Files are attachments produced during the run (sandbox artifacts,
+	// generated images). Aggregated from EventFileAttachment.
+	Files []Attachment `json:"files,omitempty"`
+	// Warnings are non-fatal notes accumulated from providers and
+	// decorators. Empty when none.
+	Warnings []string `json:"warnings,omitempty"`
+	// ProviderMeta carries provider-specific opaque metadata from the
+	// final LLM call. Nil when no provider populated it.
+	ProviderMeta json.RawMessage `json:"provider_meta,omitempty"`
+	// SuspendPayload is set when FinishReason == FinishSuspended. Carries
+	// the payload from *ErrSuspended for caller convenience.
+	SuspendPayload json.RawMessage `json:"suspend_payload,omitempty"`
+	// Object is the final structured output when WithResponseSchema was
+	// configured. Nil when the schema was not set or the response did
+	// not validate.
+	Object json.RawMessage `json:"object,omitempty"`
+	// Iterations records per-iteration timing and usage. One entry per
+	// LLM call. Nil for runs that hit cancellation before the first call.
+	Iterations []IterationTrace `json:"iterations,omitempty"`
 }
 
 // ModelFunc resolves the LLM provider per-request.
@@ -109,6 +135,48 @@ type StepTrace struct {
 	Usage Usage `json:"usage"`
 	// Duration is the wall-clock time for this step.
 	Duration time.Duration `json:"duration"`
+}
+
+// ToolCallTrace is a per-tool-call execution record. It is an alias for
+// StepTrace, introduced for naming consistency with IterationTrace and
+// LLMCallTrace. New code should use ToolCallTrace; StepTrace is kept as
+// a name alias for back-compat for one minor release and will be removed
+// in the next major.
+type ToolCallTrace = StepTrace
+
+// IterationTrace records one iteration of the agent's tool-calling loop.
+// One LLM call plus zero or more tool dispatches. Collected automatically
+// during runs and exposed on AgentResult.Iterations.
+type IterationTrace struct {
+	// Iter is the 0-indexed iteration number.
+	Iter int `json:"iter"`
+	// Model is the provider model used for this iteration (e.g. "gpt-4o").
+	Model string `json:"model,omitempty"`
+	// StartedAt is the wall-clock time the iteration began.
+	StartedAt time.Time `json:"started_at"`
+	// Duration is the wall-clock time for the entire iteration (LLM call
+	// + tool dispatches).
+	Duration time.Duration `json:"duration"`
+	// LLMCall records the model call timing and usage for this iteration.
+	LLMCall LLMCallTrace `json:"llm_call"`
+	// ToolCalls records the tool calls that fired in this iteration.
+	// In execution order. Empty if the iteration was text-only.
+	ToolCalls []ToolCallTrace `json:"tool_calls,omitempty"`
+	// Usage is the per-iteration token usage (excluding tool-side usage).
+	Usage Usage `json:"usage"`
+}
+
+// LLMCallTrace records a single LLM model call. Nested inside
+// IterationTrace.
+type LLMCallTrace struct {
+	// Duration is the model-side wall-clock time.
+	Duration time.Duration `json:"duration"`
+	// InputTokens is the prompt token count for this call.
+	InputTokens int `json:"input_tokens"`
+	// OutputTokens is the generated token count.
+	OutputTokens int `json:"output_tokens"`
+	// FinishReason is the model-reported reason for stopping this call.
+	FinishReason FinishReason `json:"finish_reason,omitempty"`
 }
 
 // Text returns the agent's final text output. Alias for r.Output that exists

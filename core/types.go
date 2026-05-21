@@ -367,6 +367,17 @@ type ChatResponse struct {
 	Attachments []Attachment `json:"attachments,omitempty"`
 	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
 	Usage       Usage        `json:"usage"`
+	// FinishReason is the provider-reported reason for stopping. Providers
+	// that don't report a finish reason leave this empty; the agent loop
+	// then synthesizes one (FinishToolCalls if ToolCalls is non-empty,
+	// otherwise FinishStop) when populating EventRunFinish and AgentResult.
+	FinishReason FinishReason `json:"finish_reason,omitempty"`
+	// Warnings are non-fatal provider notes (e.g. fallback used, parameter
+	// ignored). Decorator providers (WithRetry, WithRateLimit) may append.
+	Warnings []string `json:"warnings,omitempty"`
+	// ProviderMeta carries provider-specific opaque metadata. Documented
+	// per provider package; consumers decode according to provider docs.
+	ProviderMeta json.RawMessage `json:"provider_meta,omitempty"`
 }
 
 type Usage struct {
