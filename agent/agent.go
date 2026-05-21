@@ -73,6 +73,10 @@ type Config struct {
 	// First in slice = innermost; last = outermost. Empty = no overhead.
 	toolMiddleware []core.ToolMiddleware
 
+	// toolApprovals lists per-tool approval gates configured via
+	// WithToolApproval. Compiled into approval middlewares at build time.
+	toolApprovals []approvalConfig
+
 	// Per-tool retry/timeout policy. toolPolicies are exact-name entries
 	// (ServeMux-style; later registrations overwrite). toolPolicyMatchers
 	// is an ordered list scanned in registration order; first matcher

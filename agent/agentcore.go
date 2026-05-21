@@ -105,6 +105,12 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Co
 		effectiveMiddleware = append(effectiveMiddleware, OTelSpanMiddleware(cfg.tracer))
 	}
 
+	// Approval middlewares are outermost — retries inside ToolPolicy do not
+	// re-prompt the human, since the policy wrap (if any) sits inside.
+	for _, ac := range cfg.toolApprovals {
+		effectiveMiddleware = append(effectiveMiddleware, approvalMiddleware(ac, cfg.inputHandler))
+	}
+
 	for _, t := range cfg.tools {
 		c.tools.Add(core.ApplyToolMiddleware(t, effectiveMiddleware))
 	}
