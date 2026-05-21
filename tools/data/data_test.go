@@ -50,10 +50,10 @@ func callErr(t *testing.T, name string, args any) string {
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)
 	}
-	result, err := dispatch(t, name, raw)
-	if err != nil {
-		t.Fatalf("ExecuteRaw returned error: %v", err)
-	}
+	result, _ := dispatch(t, name, raw)
+	// Change C: Erase now propagates the typed Go error from Execute alongside
+	// ToolResult.Error. We ignore the Go error here because callErr is testing
+	// the LLM-visible error string (ToolResult.Error), not the retry signal.
 	if result.Error == "" {
 		t.Fatal("expected tool error but got none")
 	}

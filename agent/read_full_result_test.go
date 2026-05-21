@@ -41,11 +41,16 @@ func TestReadFullResultUnknownID(t *testing.T) {
 	argsJSON, _ := json.Marshal(map[string]any{"id": "no-such-id", "offset": 0, "length": 10})
 
 	result, err := tool.ExecuteRaw(context.Background(), argsJSON)
-	if err != nil {
-		t.Fatalf("unexpected hard error: %v", err)
+	// Change C: Erase now propagates the typed Go error from Execute so that
+	// dispatch policy wrappers can inspect it (Retryable, timeout, etc.).
+	// ToolResult.Error is also populated for the LLM-visible string.
+	if err == nil {
+		t.Fatalf("expected Go error to be propagated for unknown id, got nil")
 	}
-	// Erase converts Execute errors into ToolResult.Error, not a Go error.
 	if result.Error == "" {
 		t.Error("expected non-empty ToolResult.Error for unknown id")
+	}
+	if !strings.Contains(result.Error, "not found or expired") {
+		t.Errorf("unexpected ToolResult.Error: %q", result.Error)
 	}
 }
