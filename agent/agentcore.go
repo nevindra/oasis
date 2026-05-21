@@ -57,6 +57,8 @@ type AgentCore struct {
 	maxPlanSteps        int
 	maxToolResultLen    int
 	toolResultStore     core.ToolResultStore
+	toolPolicies        map[string]core.ToolPolicy
+	toolPolicyMatchers  []toolPolicyMatcher
 	maxSteps            int
 	prepareStep         PrepareStep         // optional; set via WithPrepareStep
 	onError             OnError             // optional; set via WithOnError
@@ -147,6 +149,8 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Co
 	c.maxPlanSteps = cfg.maxPlanSteps
 	c.maxToolResultLen = cfg.maxToolResultLen
 	c.toolResultStore = cfg.toolResultStore
+	c.toolPolicies = cfg.toolPolicies
+	c.toolPolicyMatchers = cfg.toolPolicyMatchers
 	c.maxSteps = *cfg.maxSteps
 	c.prepareStep = cfg.prepareStep
 	c.onError = cfg.onError

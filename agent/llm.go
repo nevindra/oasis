@@ -64,17 +64,20 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 	var toolDefs []ToolDefinition
 	var executeTool ToolExecFunc
 	var executeToolStream ToolExecStreamFunc
+	var isStreamingTool func(string) bool
 	if dynDefs, dynExec := a.ResolveDynamicTools(ctx, task); dynDefs != nil {
 		a.logger.Debug("using dynamic tools", "agent", a.name, "tool_count", len(dynDefs))
 		toolDefs = a.CacheBuiltinToolDefs(dynDefs)
 		executeTool = dynExec
+		isStreamingTool = func(string) bool { return false }
 	} else {
 		toolDefs = a.cachedToolDefs
 		executeTool = a.tools.Execute
 		executeToolStream = a.tools.ExecuteStream
+		isStreamingTool = a.tools.IsStreamingTool
 	}
 
-	return a.BaseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool, executeToolStream, ch, toolDefs))
+	return a.BaseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool, executeToolStream, ch, toolDefs, isStreamingTool))
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
@@ -82,7 +85,7 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 // and spawn_agent special cases via the shared DispatchBuiltins method.
 // When executeToolStream and ch are non-nil, tools implementing StreamingAnyTool
 // emit progress events during execution.
-func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition) DispatchFunc {
+func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition, isStreamingTool func(string) bool) DispatchFunc {
 	return NewStandardDispatch(StandardDispatchConfig{
 		Builtins:          a.DispatchBuiltins,
 		SpawnHandler:      a.ExecuteSpawn,
@@ -90,6 +93,9 @@ func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream Tool
 		ExecuteToolStream: executeToolStream,
 		ResolvedToolDefs:  resolvedToolDefs,
 		StreamCh:          ch,
+		ResolvePolicy:     a.cfg().resolveToolPolicy,
+		IsStreamingTool:   isStreamingTool,
+		Logger:            a.logger,
 	})
 }
 
@@ -138,6 +144,8 @@ func (a *LLMAgent) cfg() *Config {
 		maxAttachmentBytes:  a.maxAttachmentBytes,
 		maxToolResultLen:    a.maxToolResultLen,
 		maxPlanSteps:        a.maxPlanSteps,
+		toolPolicies:        a.toolPolicies,
+		toolPolicyMatchers:  a.toolPolicyMatchers,
 		generationParams:    a.genParams,
 		tracer:              a.tracer,
 		logger:              a.logger,
@@ -179,17 +187,20 @@ func (a *LLMAgent) buildLoopConfigFrom(ctx context.Context, task AgentTask, ch c
 	var toolDefs []ToolDefinition
 	var executeTool ToolExecFunc
 	var executeToolStream ToolExecStreamFunc
+	var isStreamingTool func(string) bool
 	if dynDefs, dynExec := a.ResolveDynamicTools(ctx, task); dynDefs != nil {
 		a.logger.Debug("using dynamic tools", "agent", a.name, "tool_count", len(dynDefs))
 		toolDefs = a.CacheBuiltinToolDefs(dynDefs)
 		executeTool = dynExec
+		isStreamingTool = func(string) bool { return false }
 	} else {
 		toolDefs = a.cachedToolDefs
 		executeTool = a.tools.Execute
 		executeToolStream = a.tools.ExecuteStream
+		isStreamingTool = a.tools.IsStreamingTool
 	}
 
-	dispatch := a.makeDispatch(executeTool, executeToolStream, ch, toolDefs)
+	dispatch := a.makeDispatch(executeTool, executeToolStream, ch, toolDefs, isStreamingTool)
 
 	// Resolve memory orchestrator: per-call override takes precedence.
 	mem := &a.mem
