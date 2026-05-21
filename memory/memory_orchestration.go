@@ -63,6 +63,8 @@ type AgentMemory struct {
 	semOnce           sync.Once              // guards sem initialization
 	sem               chan struct{}          // bounded concurrency for background goroutines
 	wg                sync.WaitGroup         // tracks in-flight persist goroutines
+	trimCacheOnce     sync.Once              // guards trimCache initialization
+	trimCache         *embeddingCache        // memoizes semantic-trim embeddings
 }
 
 // AgentMemoryConfig holds the optional settings for AgentMemory.
@@ -111,6 +113,16 @@ func (m *AgentMemory) initSem() {
 	m.semOnce.Do(func() {
 		if m.sem == nil {
 			m.sem = make(chan struct{}, maxPersistGoroutines)
+		}
+	})
+}
+
+// initTrimCache lazily allocates the semantic-trim embedding cache.
+// Only callers that actually run semantic trimming pay the allocation.
+func (m *AgentMemory) initTrimCache() {
+	m.trimCacheOnce.Do(func() {
+		if m.trimCache == nil {
+			m.trimCache = newEmbeddingCache(trimCacheCap)
 		}
 	})
 }

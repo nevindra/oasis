@@ -190,57 +190,10 @@ func (m *AgentMemory) trimHistory(ctx context.Context, messages []core.ChatMessa
 
 	// Semantic trimming: score older messages by relevance, drop lowest first.
 	if m.semanticTrimming && len(inputEmbedding) > 0 && historyLen > keepRecent {
-		embedProvider := m.trimmingEmbedding
-		if embedProvider == nil {
-			embedProvider = m.embedding
-		}
-
-		// Embed all older history messages (before the "keep recent" boundary).
-		olderEnd := historyEnd - keepRecent
-		olderTexts := make([]string, 0, olderEnd-historyStart)
-		for i := historyStart; i < olderEnd; i++ {
-			olderTexts = append(olderTexts, messages[i].Content)
-		}
-
-		embeddings, err := embedProvider.Embed(ctx, olderTexts)
-		if err != nil {
-			m.logger.Warn("semantic trimming embedding failed, falling back to oldest-first", "error", err)
-		} else if len(embeddings) == len(olderTexts) {
-			// Score each older message by cosine similarity.
-			type scored struct {
-				idx   int // index into messages
-				score float32
-			}
-			items := make([]scored, len(olderTexts))
-			for i, emb := range embeddings {
-				items[i] = scored{idx: historyStart + i, score: core.CosineSimilarity(inputEmbedding, emb)}
-			}
-
-			// Sort by score ascending — lowest relevance first (will be dropped first).
-			sort.Slice(items, func(a, b int) bool {
-				return items[a].score < items[b].score
-			})
-
-			// Drop lowest-scoring messages until under token budget.
-			dropSet := make(map[int]bool)
-			remaining := totalTokens
-			for _, item := range items {
-				if remaining <= m.maxTokens {
-					break
-				}
-				remaining -= estimateTokens(messages[item.idx])
-				dropSet[item.idx] = true
-			}
-
-			// Rebuild message slice excluding dropped messages.
-			trimmed := make([]core.ChatMessage, 0, len(messages)-len(dropSet))
-			for i, msg := range messages {
-				if !dropSet[i] {
-					trimmed = append(trimmed, msg)
-				}
-			}
+		if trimmed, ok := m.semanticTrimMessages(ctx, messages, historyStart, historyEnd, totalTokens, inputEmbedding, keepRecent); ok {
 			return trimmed
 		}
+		// Fall through to oldest-first on any failure.
 	}
 
 	// Fallback: oldest-first trimming.
@@ -254,6 +207,85 @@ func (m *AgentMemory) trimHistory(ctx context.Context, messages []core.ChatMessa
 	}
 	trimmed = append(trimmed, messages[historyStart:historyEnd]...)
 	return trimmed
+}
+
+// semanticTrimMessages scores the older portion of history by cosine similarity
+// to the query and drops the least-relevant messages until totalTokens fits in
+// m.maxTokens. Returns (trimmed, true) on success or (nil, false) on any
+// embedding-pipeline error so the caller can fall back to oldest-first trimming.
+//
+// Older-message embeddings are memoized in m.trimCache: across consecutive
+// BuildMessages calls in a session, only newly-arrived messages hit the
+// embedding API. Cache misses are batched into a single Embed call.
+func (m *AgentMemory) semanticTrimMessages(ctx context.Context, messages []core.ChatMessage, historyStart, historyEnd, totalTokens int, inputEmbedding []float32, keepRecent int) ([]core.ChatMessage, bool) {
+	embedProvider := m.trimmingEmbedding
+	if embedProvider == nil {
+		embedProvider = m.embedding
+	}
+
+	olderEnd := historyEnd - keepRecent
+	olderCount := olderEnd - historyStart
+	m.initTrimCache()
+
+	// Resolve each older message's embedding from cache, collecting misses
+	// into a single batched Embed call.
+	olderEmbeddings := make([][]float32, olderCount)
+	var missTexts []string
+	var missSlots []int // positions in olderEmbeddings that need filling
+	for i := 0; i < olderCount; i++ {
+		text := messages[historyStart+i].Content
+		if cached, ok := m.trimCache.get(text); ok {
+			olderEmbeddings[i] = cached
+			continue
+		}
+		missTexts = append(missTexts, text)
+		missSlots = append(missSlots, i)
+	}
+
+	if len(missTexts) > 0 {
+		missEmbs, err := embedProvider.Embed(ctx, missTexts)
+		if err != nil {
+			m.logger.Warn("semantic trimming embedding failed, falling back to oldest-first", "error", err)
+			return nil, false
+		}
+		if len(missEmbs) != len(missTexts) {
+			return nil, false
+		}
+		for i, emb := range missEmbs {
+			olderEmbeddings[missSlots[i]] = emb
+			m.trimCache.put(missTexts[i], emb)
+		}
+	}
+
+	// Score each older message by cosine similarity, lowest first.
+	type scored struct {
+		idx   int // index into messages
+		score float32
+	}
+	items := make([]scored, olderCount)
+	for i, emb := range olderEmbeddings {
+		items[i] = scored{idx: historyStart + i, score: core.CosineSimilarity(inputEmbedding, emb)}
+	}
+	sort.Slice(items, func(a, b int) bool { return items[a].score < items[b].score })
+
+	// Drop lowest-scoring messages until under the token budget.
+	dropSet := make(map[int]bool)
+	remaining := totalTokens
+	for _, item := range items {
+		if remaining <= m.maxTokens {
+			break
+		}
+		remaining -= estimateTokens(messages[item.idx])
+		dropSet[item.idx] = true
+	}
+
+	trimmed := make([]core.ChatMessage, 0, len(messages)-len(dropSet))
+	for i, msg := range messages {
+		if !dropSet[i] {
+			trimmed = append(trimmed, msg)
+		}
+	}
+	return trimmed, true
 }
 
 // buildSystemPrompt assembles the system prompt with optional user memory context.
