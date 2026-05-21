@@ -14,6 +14,7 @@ package oasis
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/nevindra/oasis/agent"
@@ -80,6 +81,37 @@ var NewInMemoryToolResultStore = core.NewInMemoryToolResultStore
 var WithToolResultMaxBytes = core.WithToolResultMaxBytes
 var WithToolResultTTL = core.WithToolResultTTL
 var ErrToolResultNotFound = core.ErrToolResultNotFound
+
+// ToolMiddleware wraps an AnyTool with additional behavior. See
+// core.ToolMiddleware.
+type ToolMiddleware = core.ToolMiddleware
+
+// WithToolMiddleware registers a chain of tool middlewares. See
+// agent.WithToolMiddleware for ordering and rationale.
+func WithToolMiddleware(mws ...ToolMiddleware) AgentOption {
+	return agent.WithToolMiddleware(mws...)
+}
+
+// LoggingMiddleware logs tool start/finish events at slog.Info.
+func LoggingMiddleware(logger *slog.Logger) ToolMiddleware {
+	return agent.LoggingMiddleware(logger)
+}
+
+// TimingMiddleware logs tool duration at slog.Debug.
+func TimingMiddleware() ToolMiddleware {
+	return agent.TimingMiddleware()
+}
+
+// OTelSpanMiddleware emits a tool.execute span per call. Auto-wired when
+// a Tracer is configured.
+func OTelSpanMiddleware(tracer Tracer) ToolMiddleware {
+	return agent.OTelSpanMiddleware(tracer)
+}
+
+// TransformMiddleware applies fn to the ToolResult before it returns to the LLM.
+func TransformMiddleware(fn func(name string, r ToolResult) ToolResult) ToolMiddleware {
+	return agent.TransformMiddleware(fn)
+}
 
 // TextResult wraps a plain string as a ToolResult. Use for hand-rolled tools producing plain text.
 var TextResult = core.TextResult
