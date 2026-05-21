@@ -64,6 +64,11 @@ type Config struct {
 	activeSkills   []Skill        // set by WithActiveSkills
 	skillProvider  SkillProvider  // set by WithSkills
 
+	// Hook fields — set via WithPrepareStep / WithOnIterationComplete / WithOnError.
+	prepareStep         PrepareStep
+	onIterationComplete OnIterationComplete
+	onError             OnError
+
 	// Configurable runtime limits (defaults applied in BuildConfig).
 	maxParallelDispatch int // set by WithMaxParallelDispatch; default 10
 	maxPlanSteps        int // set by WithMaxPlanSteps; default 50
@@ -75,6 +80,9 @@ type Config struct {
 
 	// maxSteps: nil = unset (default 100), &0 = unbounded, &n = cap at n.
 	maxSteps *int
+
+	// metadata is shallow-merged with RunOptions.Metadata at run time.
+	metadata map[string]any
 }
 
 // Agents returns the subagents registered via WithAgents.
@@ -343,6 +351,21 @@ func WithLogger(l *slog.Logger) AgentOption {
 	return func(c *Config) { c.logger = l }
 }
 
+// WithMetadata adds key/value pairs to the agent's static metadata map.
+// Metadata flows into StepTrace, structured logs, and is available to
+// hooks. Per-call RunOptions.Metadata shallow-merges over this map
+// (call-site keys win on conflict).
+func WithMetadata(kv map[string]any) AgentOption {
+	return func(c *Config) {
+		if c.metadata == nil {
+			c.metadata = make(map[string]any, len(kv))
+		}
+		for k, v := range kv {
+			c.metadata[k] = v
+		}
+	}
+}
+
 // WithPreProcessors registers PreProcessor hooks that run before each LLM call.
 func WithPreProcessors(processors ...PreProcessor) AgentOption {
 	return func(c *Config) { c.preProcessors = append(c.preProcessors, processors...) }
@@ -365,6 +388,32 @@ func WithInputHandler(h InputHandler) AgentOption {
 	return func(c *Config) { c.inputHandler = h }
 }
 
+// WithPrepareStep registers a PrepareStep hook that runs before every LLM call
+// in the agent loop, including retries. Use to mutate the request, swap the
+// model, or override the tool set for individual iterations.
+//
+// If a PrepareStep is set on both the Config (via this option) and the
+// RunOptions for a single call, the RunOptions hook wins entirely
+// (no chaining).
+func WithPrepareStep(fn PrepareStep) AgentOption {
+	return func(c *Config) { c.prepareStep = fn }
+}
+
+// WithOnIterationComplete registers an OnIterationComplete hook that runs
+// after each loop iteration's LLM response, tool dispatch, and post-tool
+// processor chain. The hook returns an IterationDecision controlling
+// what the loop does next: Continue, Stop, InjectFeedback, InjectMessages.
+func WithOnIterationComplete(fn OnIterationComplete) AgentOption {
+	return func(c *Config) { c.onIterationComplete = fn }
+}
+
+// WithOnError registers an OnError hook for mid-loop error recovery.
+// The hook returns an ErrorDecision: Propagate, Retry, RetryWithFeedback,
+// or HaltDecision. *ErrHalt, *ErrSuspended, and context cancellation
+// bypass this hook.
+func WithOnError(fn OnError) AgentOption {
+	return func(c *Config) { c.onError = fn }
+}
 
 // WithUserMemory enables the full user memory pipeline: read + write.
 //

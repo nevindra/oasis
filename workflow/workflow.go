@@ -35,6 +35,12 @@ func StringAttr(k, v string) SpanAttr     { return core.StringAttr(k, v) }
 func IntAttr(k string, v int) SpanAttr    { return core.IntAttr(k, v) }
 func Float64Attr(k string, v float64) SpanAttr { return core.Float64Attr(k, v) }
 
+// optionsWithOverrides is a local interface that workflow needs for stub checks.
+// It is satisfied by agent.RunOptions.
+type optionsWithOverrides interface {
+	HasOverrides() bool
+}
+
 // nopLogger discards all log output. Used when WithWorkflowLogger is not set.
 var nopLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 

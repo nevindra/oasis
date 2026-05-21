@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -579,4 +580,25 @@ func (w *Workflow) safeCallback(fn func()) {
 		}
 	}()
 	fn()
+}
+
+// ExecuteWith runs the workflow like Execute, but with per-call RunOptions overrides.
+// Workflow does not yet propagate RunOptions to its steps — non-empty overrides return an error.
+// A nil opts is equivalent to Execute.
+func (w *Workflow) ExecuteWith(ctx context.Context, task core.AgentTask, opts optionsWithOverrides) (core.AgentResult, error) {
+	if opts != nil && opts.HasOverrides() {
+		return core.AgentResult{}, fmt.Errorf("workflow: ExecuteWith with overrides not yet supported (use Execute)")
+	}
+	return w.Execute(ctx, task)
+}
+
+// ExecuteStreamWith runs the workflow like ExecuteStream, but with per-call RunOptions overrides.
+// Workflow does not yet propagate RunOptions to its steps — non-empty overrides return an error.
+// A nil opts is equivalent to ExecuteStream.
+func (w *Workflow) ExecuteStreamWith(ctx context.Context, task core.AgentTask, ch chan<- core.StreamEvent, opts optionsWithOverrides) (core.AgentResult, error) {
+	if opts != nil && opts.HasOverrides() {
+		close(ch) // StreamingAgent contract: must close ch
+		return core.AgentResult{}, fmt.Errorf("workflow: ExecuteStreamWith with overrides not yet supported (use ExecuteStream)")
+	}
+	return w.ExecuteStream(ctx, task, ch)
 }

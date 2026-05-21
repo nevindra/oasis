@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // --- WorkflowContext tests ---
@@ -331,4 +333,82 @@ func TestWorkflowErrorUnwrap(t *testing.T) {
 	if err.Unwrap() != inner {
 		t.Errorf("Unwrap() = %v, want %v", err.Unwrap(), inner)
 	}
+}
+
+// --- ExecuteWith / ExecuteStreamWith tests ---
+
+func TestWorkflow_ExecuteWith_NilSameAsExecute(t *testing.T) {
+	wf, err := NewWorkflow("test", "test",
+		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("a.output", "result")
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewWorkflow: %v", err)
+	}
+
+	r1, err := wf.Execute(context.Background(), AgentTask{Input: "x"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	r2, err := wf.ExecuteWith(context.Background(), AgentTask{Input: "x"}, nil)
+	if err != nil {
+		t.Fatalf("ExecuteWith(nil): %v", err)
+	}
+	if r1.Output != r2.Output {
+		t.Fatalf("Execute(%q) != ExecuteWith(nil, %q)", r1.Output, r2.Output)
+	}
+}
+
+func TestWorkflow_ExecuteWith_OverridesRejected(t *testing.T) {
+	wf, err := NewWorkflow("test", "test",
+		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("a.output", "result")
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewWorkflow: %v", err)
+	}
+
+	// Create a mock optionsWithOverrides that reports HasOverrides=true
+	mockOpts := &mockRunOptions{hasOverrides: true}
+	_, err = wf.ExecuteWith(context.Background(), AgentTask{Input: "x"}, mockOpts)
+	if err == nil {
+		t.Fatalf("ExecuteWith(overrides): expected error")
+	}
+}
+
+func TestWorkflow_ExecuteStreamWith_OverridesRejected(t *testing.T) {
+	wf, err := NewWorkflow("test", "test",
+		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("a.output", "result")
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewWorkflow: %v", err)
+	}
+
+	ch := make(chan core.StreamEvent)
+	mockOpts := &mockRunOptions{hasOverrides: true}
+	_, err = wf.ExecuteStreamWith(context.Background(), AgentTask{Input: "x"}, ch, mockOpts)
+	if err == nil {
+		t.Fatalf("ExecuteStreamWith(overrides): expected error")
+	}
+	// Verify channel was closed
+	_, ok := <-ch
+	if ok {
+		t.Fatalf("ExecuteStreamWith(overrides): expected channel to be closed")
+	}
+}
+
+// mockRunOptions is a test helper that implements optionsWithOverrides
+type mockRunOptions struct {
+	hasOverrides bool
+}
+
+func (m *mockRunOptions) HasOverrides() bool {
+	return m.hasOverrides
 }

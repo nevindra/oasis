@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -490,4 +491,118 @@ func (b *blockingStreamAgent) ExecuteStream(ctx context.Context, _ AgentTask, ch
 	defer close(ch)
 	<-ctx.Done()
 	return AgentResult{}, ctx.Err()
+}
+
+// --- LLMAgent.Generation() tests ---
+
+func TestLLMAgent_Generation_ReturnsCopy(t *testing.T) {
+	temp := 0.5
+	a := NewLLMAgent("a", "d", &mockProvider{name: "test"}, WithGeneration(Generation{
+		Temperature: &temp,
+	}))
+
+	g := a.Generation()
+	if g.Temperature == nil {
+		t.Fatalf("Generation: Temperature is nil")
+	}
+	if *g.Temperature != 0.5 {
+		t.Fatalf("Generation: Temperature = %v, want 0.5", *g.Temperature)
+	}
+
+	// Mutate the returned struct's referenced data; original must not change.
+	*g.Temperature = 0.9
+	g2 := a.Generation()
+	if g2.Temperature == nil || *g2.Temperature != 0.5 {
+		t.Fatalf("Generation: original mutated to %v, want unchanged at 0.5", *g2.Temperature)
+	}
+}
+
+func TestLLMAgent_Generation_UnsetReturnsEmpty(t *testing.T) {
+	a := NewLLMAgent("a", "d", &mockProvider{name: "test"})
+	g := a.Generation()
+	if g.Temperature != nil || g.TopP != nil || g.TopK != nil || g.MaxTokens != nil {
+		t.Fatalf("Generation: unset returned %+v, want all-nil", g)
+	}
+}
+
+// --- ExecuteWith / ExecuteStreamWith tests ---
+
+// newExecuteTestAgent returns a minimal LLMAgent backed by a mock provider
+// that deterministically returns "ok" for every call.
+func newExecuteTestAgent(t *testing.T) *LLMAgent {
+	t.Helper()
+	return NewLLMAgent("test", "desc", &mockProvider{
+		name:      "mock",
+		responses: []ChatResponse{{Content: "ok"}},
+	})
+}
+
+func TestExecuteWith_NilEquivalentToExecute(t *testing.T) {
+	a := newExecuteTestAgent(t)
+	r1, err := a.Execute(context.Background(), AgentTask{Input: "hello"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// Fresh agent with same mock for second call.
+	a2 := newExecuteTestAgent(t)
+	r2, err := a2.ExecuteWith(context.Background(), AgentTask{Input: "hello"}, nil)
+	if err != nil {
+		t.Fatalf("ExecuteWith(nil): %v", err)
+	}
+	if r1.Output != r2.Output {
+		t.Fatalf("Execute(%q) != ExecuteWith(nil, %q)", r1.Output, r2.Output)
+	}
+}
+
+func TestExecuteWith_EmptyEquivalentToExecute(t *testing.T) {
+	a := newExecuteTestAgent(t)
+	r1, err := a.Execute(context.Background(), AgentTask{Input: "hello"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	a2 := newExecuteTestAgent(t)
+	r2, err := a2.ExecuteWith(context.Background(), AgentTask{Input: "hello"}, &RunOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteWith(&{}): %v", err)
+	}
+	if r1.Output != r2.Output {
+		t.Fatalf("Execute(%q) != ExecuteWith(&{}, %q)", r1.Output, r2.Output)
+	}
+}
+
+func TestExecuteWith_ValidationFails(t *testing.T) {
+	a := newExecuteTestAgent(t)
+	n := 0
+	_, err := a.ExecuteWith(context.Background(), AgentTask{Input: "x"}, &RunOptions{MaxIter: &n})
+	if err == nil {
+		t.Fatalf("ExecuteWith(MaxIter=0): err = nil, want validation error")
+	}
+	var roErr *RunOptionsError
+	if !errors.As(err, &roErr) {
+		t.Fatalf("ExecuteWith(MaxIter=0): err is not *RunOptionsError: %v", err)
+	}
+}
+
+func TestExecuteStreamWith_NilEquivalentToExecuteStream(t *testing.T) {
+	a := newExecuteTestAgent(t)
+	ch1 := make(chan StreamEvent, 32)
+	r1, err := a.ExecuteStream(context.Background(), AgentTask{Input: "hello"}, ch1)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+	for range ch1 {
+	}
+
+	a2 := newExecuteTestAgent(t)
+	ch2 := make(chan StreamEvent, 32)
+	r2, err := a2.ExecuteStreamWith(context.Background(), AgentTask{Input: "hello"}, ch2, nil)
+	if err != nil {
+		t.Fatalf("ExecuteStreamWith(nil): %v", err)
+	}
+	for range ch2 {
+	}
+
+	if r1.Output != r2.Output {
+		t.Fatalf("ExecuteStream(%q) != ExecuteStreamWith(nil, %q)", r1.Output, r2.Output)
+	}
 }

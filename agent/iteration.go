@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -89,28 +90,55 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 	streamedThisIter := false // true when ChatStream already emitted text deltas
 
 	req.Tools = cfg.tools
+
+	// PrepareStep hook: mutate the request and optionally override the provider
+	// or tools for this iteration only.
+	iterProvider := cfg.provider
+	if cfg.prepareStep != nil {
+		ctrl := &StepControl{Request: &req}
+		if err := cfg.prepareStep(iterCtx, i, ctrl); err != nil {
+			cfg.logger.Error("PrepareStep hook failed", "agent", cfg.name, "iteration", i, "error", err)
+			endIter()
+			state.safeCloseCh()
+			return iterationResult{outcome: iterDone, final: AgentResult{Usage: state.totalUsage, Steps: state.steps}, err: fmt.Errorf("PrepareStep: %w", err)}
+		}
+		if ctrl.Model != nil {
+			iterProvider = ctrl.Model
+		}
+		if ctrl.Tools != nil {
+			defs := make([]ToolDefinition, len(ctrl.Tools))
+			for idx, t := range ctrl.Tools {
+				defs[idx] = t.Definition()
+			}
+			req.Tools = defs
+		}
+	}
+
 	llmStart := time.Now()
-	if len(cfg.tools) > 0 && ch != nil && !state.hasAgentTools {
+	if len(req.Tools) > 0 && ch != nil && !state.hasAgentTools {
 		// Streaming with tools (single agent only): intermediate channel so the
 		// provider's defer-close doesn't shut down the main stream. Networks
 		// use Chat() to preserve router text-delta deduplication.
-		cfg.logger.Debug("calling LLM (streaming, with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(cfg.tools))
+		cfg.logger.Debug("calling LLM (streaming, with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
 		iterCh, wait := newStreamForwarder(ctx, ch, defaultIterChBufSize)
-		resp, err = cfg.provider.ChatStream(iterCtx, req, iterCh)
+		resp, err = iterProvider.ChatStream(iterCtx, req, iterCh)
 		wait()
 		streamedThisIter = true
-	} else if len(cfg.tools) > 0 {
-		cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(cfg.tools))
-		resp, err = core.Chat(iterCtx, cfg.provider, req)
+	} else if len(req.Tools) > 0 {
+		cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
+		resp, err = core.Chat(iterCtx, iterProvider, req)
 	} else if ch != nil {
 		// No tools, streaming — terminal path (single-shot stream then return).
 		cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
 		iterCh, wait := newStreamForwarder(ctx, ch, defaultIterChBufSize)
-		resp, err = cfg.provider.ChatStream(iterCtx, req, iterCh)
+		resp, err = iterProvider.ChatStream(iterCtx, req, iterCh)
 		wait()
 		if err != nil {
 			endIter()
 			state.safeCloseCh()
+			if r, handled := handleOnError(iterCtx, cfg, state, i, err); handled {
+				return r
+			}
 			return iterationResult{outcome: iterDone, final: AgentResult{Usage: state.totalUsage, Steps: state.steps}, err: err}
 		}
 		state.totalUsage.InputTokens += resp.Usage.InputTokens
@@ -128,6 +156,44 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			return iterationResult{outcome: iterDone, final: res, err: retErr}
 		}
 
+		// OnIterationComplete hook (streaming no-tools path).
+		if cfg.onIterationComplete != nil {
+			// Append the assistant response to history before running the hook
+			// so that an InjectFeedback decision places feedback after it.
+			state.messages = append(state.messages, ChatMessage{
+				Role:    "assistant",
+				Content: resp.Content,
+			})
+			state.messageRuneCount += utf8.RuneCountInString(resp.Content)
+
+			snap := &IterationSnapshot{
+				Response:  &resp,
+				ToolCalls: nil,
+			}
+			decision, hookErr := cfg.onIterationComplete(iterCtx, i, snap)
+			if hookErr != nil {
+				endIter()
+				state.safeCloseCh()
+				return iterationResult{outcome: iterDone, final: AgentResult{Usage: state.totalUsage, Steps: state.steps}, err: fmt.Errorf("OnIterationComplete: %w", hookErr)}
+			}
+			if decision.action == decisionStop {
+				endIter()
+				state.safeCloseCh()
+				return iterationResult{outcome: iterDone, final: decision.result}
+			}
+			if decision.action == decisionInject {
+				// Inject feedback messages and re-run. Note: content was already
+				// streamed to the caller before this point.
+				for _, m := range decision.msgs {
+					state.messages = append(state.messages, m)
+					state.messageRuneCount += utf8.RuneCountInString(m.Content)
+				}
+				endIter()
+				return iterationResult{outcome: iterContinue}
+			}
+			// decisionContinue: fall through to natural iterDone.
+		}
+
 		endIter()
 		state.safeCloseCh()
 		cfg.mem.PersistMessages(iterCtx, cfg.name, task, task.Input, resp.Content, state.steps)
@@ -143,13 +209,16 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		}
 	} else {
 		cfg.logger.Debug("calling LLM (no tools)", "agent", cfg.name, "iteration", i)
-		resp, err = core.Chat(iterCtx, cfg.provider, req)
+		resp, err = core.Chat(iterCtx, iterProvider, req)
 	}
 
 	if err != nil {
 		cfg.logger.Error("LLM call failed", "agent", cfg.name, "iteration", i, "error", err, "duration", time.Since(llmStart))
 		endIter()
 		state.safeCloseCh()
+		if r, handled := handleOnError(iterCtx, cfg, state, i, err); handled {
+			return r
+		}
 		return iterationResult{outcome: iterDone, final: AgentResult{Usage: state.totalUsage, Steps: state.steps}, err: err}
 	}
 	cfg.logger.Debug("LLM call completed", "agent", cfg.name, "iteration", i,
@@ -195,6 +264,45 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			case <-ctx.Done():
 			}
 		}
+
+		// OnIterationComplete hook (no-tool-call / final path).
+		if cfg.onIterationComplete != nil {
+			// Append the assistant response to history before running the hook
+			// so that an InjectFeedback decision places feedback after it.
+			state.messages = append(state.messages, ChatMessage{
+				Role:    "assistant",
+				Content: content,
+			})
+			state.messageRuneCount += utf8.RuneCountInString(content)
+
+			snap := &IterationSnapshot{
+				Response:  &resp,
+				ToolCalls: nil,
+			}
+			decision, hookErr := cfg.onIterationComplete(iterCtx, i, snap)
+			if hookErr != nil {
+				endIter()
+				state.safeCloseCh()
+				return iterationResult{outcome: iterDone, final: AgentResult{Usage: state.totalUsage, Steps: state.steps}, err: fmt.Errorf("OnIterationComplete: %w", hookErr)}
+			}
+			if decision.action == decisionStop {
+				endIter()
+				state.safeCloseCh()
+				return iterationResult{outcome: iterDone, final: decision.result}
+			}
+			if decision.action == decisionInject {
+				// Inject feedback messages and re-run so the LLM can address the
+				// feedback. The assistant message was already appended above.
+				for _, m := range decision.msgs {
+					state.messages = append(state.messages, m)
+					state.messageRuneCount += utf8.RuneCountInString(m.Content)
+				}
+				endIter()
+				return iterationResult{outcome: iterContinue}
+			}
+			// decisionContinue: fall through to natural iterDone.
+		}
+
 		state.safeCloseCh()
 		endIter()
 		cfg.mem.PersistMessages(iterCtx, cfg.name, task, task.Input, content, state.steps)
@@ -353,6 +461,89 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		cfg.logger.Info("context compression triggered", "agent", cfg.name, "iteration", i, "runes", state.messageRuneCount, "threshold", state.compressThreshold)
 		state.messages, state.messageRuneCount = compressMessages(iterCtx, cfg, task, state.messages, 2, state.messageRuneCount)
 	}
+
+	// OnIterationComplete hook (tool-call path): fires after all tool results
+	// have been processed and history has been updated.
+	if cfg.onIterationComplete != nil {
+		toolResults := make([]core.ToolResult, len(resp.ToolCalls))
+		for j := range resp.ToolCalls {
+			toolResults[j] = core.ToolResult{Content: json.RawMessage(results[j].content)}
+		}
+		var firstTrace StepTrace
+		if len(state.steps) > 0 {
+			firstTrace = state.steps[len(state.steps)-len(resp.ToolCalls)]
+		}
+		snap := &IterationSnapshot{
+			Response:    &resp,
+			ToolCalls:   resp.ToolCalls,
+			ToolResults: toolResults,
+			Trace:       firstTrace,
+		}
+		decision, hookErr := cfg.onIterationComplete(iterCtx, i, snap)
+		if hookErr != nil {
+			endIter()
+			state.safeCloseCh()
+			return iterationResult{outcome: iterDone, final: AgentResult{Usage: state.totalUsage, Steps: state.steps}, err: fmt.Errorf("OnIterationComplete: %w", hookErr)}
+		}
+		switch decision.action {
+		case decisionStop:
+			endIter()
+			state.safeCloseCh()
+			return iterationResult{outcome: iterDone, final: decision.result}
+		case decisionInject:
+			for _, m := range decision.msgs {
+				state.messages = append(state.messages, m)
+				state.messageRuneCount += utf8.RuneCountInString(m.Content)
+			}
+		// decisionContinue: fall through to normal continuation
+		}
+	}
+
 	endIter()
 	return iterationResult{outcome: iterContinue}
+}
+
+// handleOnError consults cfg.onError when a non-graceful LLM error occurs.
+// It skips the hook for graceful exits: context cancellation, *ErrSuspended,
+// and errors wrapping *errSuspend (processor-level suspend signals).
+//
+// Returns (result, true) when the hook handled the error (retry, halt, or
+// hook-level error); returns (zero, false) when the caller should propagate
+// the original error as-is.
+func handleOnError(ctx context.Context, cfg LoopConfig, state *loopState, i int, err error) (iterationResult, bool) {
+	// Grace exits bypass the hook.
+	if ctx.Err() != nil {
+		return iterationResult{}, false
+	}
+	var suspended *ErrSuspended
+	if errors.As(err, &suspended) {
+		return iterationResult{}, false
+	}
+
+	if cfg.onError == nil {
+		return iterationResult{}, false
+	}
+
+	decision, hookErr := cfg.onError(ctx, i, err)
+	if hookErr != nil {
+		return iterationResult{
+			outcome: iterDone,
+			final:   AgentResult{Usage: state.totalUsage, Steps: state.steps},
+			err:     fmt.Errorf("OnError: %w", hookErr),
+		}, true
+	}
+
+	switch decision.action {
+	case errRetry:
+		if decision.feedback != "" {
+			msg := ChatMessage{Role: core.RoleUser, Content: decision.feedback}
+			state.messages = append(state.messages, msg)
+			state.messageRuneCount += len([]rune(decision.feedback))
+		}
+		return iterationResult{outcome: iterContinue}, true
+	case errHalt:
+		return iterationResult{outcome: iterDone, final: decision.result}, true
+	default: // errPropagate
+		return iterationResult{}, false
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nevindra/oasis/agent"
@@ -282,4 +283,182 @@ func (s *stubSkillProvider) Discover(_ context.Context) ([]skills.SkillSummary, 
 
 func (s *stubSkillProvider) Activate(_ context.Context, name string) (skills.Skill, error) {
 	return skills.Skill{}, nil
+}
+
+// TestNetwork_ExecuteWith_NilSameAsExecute verifies that ExecuteWith(nil) behaves
+// identically to Execute.
+func TestNetwork_ExecuteWith_NilSameAsExecute(t *testing.T) {
+	sub := &stubAgent{
+		name: "worker",
+		desc: "Does work",
+		fn: func(task agent.AgentTask) (agent.AgentResult, error) {
+			return agent.AgentResult{Output: "result"}, nil
+		},
+	}
+	router := &mockProvider{
+		name: "router",
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "agent_worker", Args: []byte(`{"task":"x"}`)}}},
+			{Content: "done"},
+		},
+	}
+	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+
+	r1, err1 := net.Execute(context.Background(), core.AgentTask{Input: "x"})
+	if err1 != nil {
+		t.Fatalf("Execute: %v", err1)
+	}
+
+	// Reset router for second call
+	router.idx = 0
+	r2, err2 := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, nil)
+	if err2 != nil {
+		t.Fatalf("ExecuteWith(nil): %v", err2)
+	}
+
+	if r1.Output != r2.Output {
+		t.Fatalf("Execute(%q) != ExecuteWith(nil, %q)", r1.Output, r2.Output)
+	}
+}
+
+// TestNetwork_ExecuteWith_EmptySameAsExecute verifies that ExecuteWith with empty
+// RunOptions behaves identically to Execute.
+func TestNetwork_ExecuteWith_EmptySameAsExecute(t *testing.T) {
+	sub := &stubAgent{
+		name: "worker",
+		desc: "Does work",
+		fn: func(task agent.AgentTask) (agent.AgentResult, error) {
+			return agent.AgentResult{Output: "result"}, nil
+		},
+	}
+	router := &mockProvider{
+		name: "router",
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "agent_worker", Args: []byte(`{"task":"x"}`)}}},
+			{Content: "done"},
+		},
+	}
+	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+
+	r1, err1 := net.Execute(context.Background(), core.AgentTask{Input: "x"})
+	if err1 != nil {
+		t.Fatalf("Execute: %v", err1)
+	}
+
+	// Reset router for second call
+	router.idx = 0
+	r2, err2 := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{})
+	if err2 != nil {
+		t.Fatalf("ExecuteWith(&{}): %v", err2)
+	}
+
+	if r1.Output != r2.Output {
+		t.Fatalf("Execute(%q) != ExecuteWith(&{}, %q)", r1.Output, r2.Output)
+	}
+}
+
+// TestNetwork_ExecuteWith_OverridesRejected verifies that ExecuteWith with
+// non-empty RunOptions returns an error (Network does not yet support propagating
+// overrides to subagents).
+func TestNetwork_ExecuteWith_OverridesRejected(t *testing.T) {
+	sub := &stubAgent{
+		name: "worker",
+		desc: "Does work",
+		fn: func(task agent.AgentTask) (agent.AgentResult, error) {
+			return agent.AgentResult{Output: "result"}, nil
+		},
+	}
+	router := &mockProvider{
+		name: "router",
+		responses: []core.ChatResponse{{Content: "ok"}},
+	}
+	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+
+	maxIter := 3
+	_, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{MaxIter: &maxIter})
+	if err == nil {
+		t.Fatalf("ExecuteWith(MaxIter=3): expected error (Network does not support overrides yet)")
+	}
+	if !strings.Contains(err.Error(), "not yet supported") {
+		t.Errorf("error message should mention 'not yet supported', got: %v", err)
+	}
+}
+
+// TestNetwork_ExecuteStreamWith_NilSameAsExecuteStream verifies that
+// ExecuteStreamWith(nil) behaves identically to ExecuteStream.
+func TestNetwork_ExecuteStreamWith_NilSameAsExecuteStream(t *testing.T) {
+	sub := &stubAgent{
+		name: "worker",
+		desc: "Does work",
+		fn: func(task agent.AgentTask) (agent.AgentResult, error) {
+			return agent.AgentResult{Output: "result"}, nil
+		},
+	}
+	router := &mockProvider{
+		name: "router",
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "agent_worker", Args: []byte(`{"task":"x"}`)}}},
+			{Content: "done"},
+		},
+	}
+	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+
+	ch1 := make(chan core.StreamEvent, 100)
+	r1, err1 := net.ExecuteStream(context.Background(), core.AgentTask{Input: "x"}, ch1)
+	for range ch1 {
+	}
+	if err1 != nil {
+		t.Fatalf("ExecuteStream: %v", err1)
+	}
+
+	// Reset router for second call
+	router.idx = 0
+	ch2 := make(chan core.StreamEvent, 100)
+	r2, err2 := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch2, nil)
+	for range ch2 {
+	}
+	if err2 != nil {
+		t.Fatalf("ExecuteStreamWith(nil): %v", err2)
+	}
+
+	if r1.Output != r2.Output {
+		t.Fatalf("ExecuteStream(%q) != ExecuteStreamWith(nil, %q)", r1.Output, r2.Output)
+	}
+}
+
+// TestNetwork_ExecuteStreamWith_OverridesRejected verifies that
+// ExecuteStreamWith with non-empty RunOptions returns an error and closes the channel.
+func TestNetwork_ExecuteStreamWith_OverridesRejected(t *testing.T) {
+	sub := &stubAgent{
+		name: "worker",
+		desc: "Does work",
+		fn: func(task agent.AgentTask) (agent.AgentResult, error) {
+			return agent.AgentResult{Output: "result"}, nil
+		},
+	}
+	router := &mockProvider{
+		name: "router",
+		responses: []core.ChatResponse{{Content: "ok"}},
+	}
+	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+
+	ch := make(chan core.StreamEvent, 100)
+	maxIter := 3
+	_, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{MaxIter: &maxIter})
+	if err == nil {
+		t.Fatalf("ExecuteStreamWith(MaxIter=3): expected error")
+	}
+
+	// Verify channel is closed
+	_, ok := <-ch
+	if ok {
+		t.Fatalf("channel should be closed on error")
+	}
+}
+
+// TestNetwork_SatisfiesAgentWithOptions verifies that Network implements
+// both AgentWithOptions and StreamingAgentWithOptions interfaces.
+func TestNetwork_SatisfiesAgentWithOptions(t *testing.T) {
+	var _ agent.AgentWithOptions = (*Network)(nil)
+	var _ agent.StreamingAgentWithOptions = (*Network)(nil)
 }

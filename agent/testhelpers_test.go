@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/nevindra/oasis/core"
@@ -132,4 +133,81 @@ func (writeTool) Name() string               { return "write" }
 func (writeTool) Definition() ToolDefinition { return ToolDefinition{Name: "write", Description: "Write file"} }
 func (writeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
 	return core.TextResult("did write"), nil
+}
+
+// capturedRequestProvider records every ChatRequest it receives and returns a
+// terminal (no-tool-calls) response so the agent loop exits cleanly after one
+// iteration.
+type capturedRequestProvider struct {
+	name string
+	mu   sync.Mutex
+	reqs []ChatRequest
+}
+
+func (p *capturedRequestProvider) Name() string { return p.name }
+func (p *capturedRequestProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	defer close(ch)
+	p.mu.Lock()
+	p.reqs = append(p.reqs, req)
+	p.mu.Unlock()
+	return ChatResponse{Content: "done"}, nil
+}
+
+// last returns the most recently captured ChatRequest. Panics if none.
+func (p *capturedRequestProvider) last() ChatRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reqs[len(p.reqs)-1]
+}
+
+// callCount returns the number of Chat calls made to this provider.
+func (p *capturedRequestProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.reqs)
+}
+
+// twoIterProvider returns a tool call on the first Chat call (forcing a
+// second iteration) and plain text on the second call. Embed
+// capturedRequestProvider so last() and callCount() are available and all
+// ChatRequest values are captured.
+type twoIterProvider struct {
+	capturedRequestProvider
+}
+
+func (p *twoIterProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	defer close(ch)
+	p.mu.Lock()
+	p.reqs = append(p.reqs, req)
+	n := len(p.reqs)
+	p.mu.Unlock()
+	if n == 1 {
+		// Emit a tool call so the loop continues to a second iteration.
+		return ChatResponse{
+			ToolCalls: []core.ToolCall{{ID: "tc1", Name: "greet", Args: []byte(`{}`)}},
+		}, nil
+	}
+	// Second iteration: plain text → loop terminates.
+	return ChatResponse{Content: "done"}, nil
+}
+
+// flakyProvider wraps capturedRequestProvider; it consults errFn on each
+// ChatStream call to decide whether to return an error or a normal response.
+type flakyProvider struct {
+	capturedRequestProvider
+	mu    sync.Mutex
+	errFn func() error // called once per ChatStream; nil return means succeed
+}
+
+func (p *flakyProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	p.mu.Lock()
+	fn := p.errFn
+	p.mu.Unlock()
+	if fn != nil {
+		if err := fn(); err != nil {
+			close(ch)
+			return ChatResponse{}, err
+		}
+	}
+	return p.capturedRequestProvider.ChatStream(ctx, req, ch)
 }

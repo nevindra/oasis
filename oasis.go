@@ -90,6 +90,78 @@ var TextContent = core.TextContent
 // JSONContent wraps already-encoded JSON bytes as a ToolResult Content value.
 var JSONContent = core.JSONContent
 
+// --- Hooks and per-call overrides ---
+
+// RunOptions overrides agent-level defaults for a single Execute call.
+// See agent.RunOptions for full documentation.
+type RunOptions = agent.RunOptions
+
+// RunOptionsError reports a RunOptions validation failure.
+type RunOptionsError = agent.RunOptionsError
+
+// PrepareStep runs before each LLM call in the agent loop.
+type PrepareStep = agent.PrepareStep
+
+// OnIterationComplete runs after each loop iteration completes.
+type OnIterationComplete = agent.OnIterationComplete
+
+// OnError runs on mid-loop errors for recovery decisions.
+type OnError = agent.OnError
+
+// StepControl is the mutable control surface for PrepareStep hooks.
+type StepControl = agent.StepControl
+
+// IterationSnapshot is the read-only view passed to OnIterationComplete.
+type IterationSnapshot = agent.IterationSnapshot
+
+// IterationDecision is the return value of OnIterationComplete.
+type IterationDecision = agent.IterationDecision
+
+// ErrorDecision is the return value of OnError.
+type ErrorDecision = agent.ErrorDecision
+
+// AgentWithOptions extends Agent with ExecuteWith for per-call overrides.
+type AgentWithOptions = agent.AgentWithOptions
+
+// StreamingAgentWithOptions extends StreamingAgent with ExecuteStreamWith.
+type StreamingAgentWithOptions = agent.StreamingAgentWithOptions
+
+// Continue is the default IterationDecision — proceed to next iteration.
+var Continue = agent.Continue
+
+// Stop ends the agent run with the given result.
+var Stop = agent.Stop
+
+// InjectFeedback appends a user-role message and continues the loop.
+var InjectFeedback = agent.InjectFeedback
+
+// InjectMessages appends raw messages and continues the loop.
+var InjectMessages = agent.InjectMessages
+
+// Propagate bubbles the original error up.
+var Propagate = agent.Propagate
+
+// Retry re-runs the same iteration.
+var Retry = agent.Retry
+
+// RetryWithFeedback appends a message and retries the iteration.
+var RetryWithFeedback = agent.RetryWithFeedback
+
+// HaltDecision ends the run gracefully with a result and no error.
+var HaltDecision = agent.HaltDecision
+
+// WithPrepareStep registers a PrepareStep hook.
+var WithPrepareStep = agent.WithPrepareStep
+
+// WithOnIterationComplete registers an OnIterationComplete hook.
+var WithOnIterationComplete = agent.WithOnIterationComplete
+
+// WithOnError registers an OnError hook.
+var WithOnError = agent.WithOnError
+
+// WithMetadata adds static metadata to the agent.
+var WithMetadata = agent.WithMetadata
+
 // --- History ---
 
 // WithHistory enables conversation history and related context-window management.
@@ -230,17 +302,11 @@ var InputFrom = workflow.InputFrom
 // OutputTo writes a step's result into the given key.
 var OutputTo = workflow.OutputTo
 
-// Retry sets per-step retry behavior.
-var Retry = workflow.Retry
-
 // IterOver makes a step iterate over the collection at the given context key.
 var IterOver = workflow.IterOver
 
 // WithOnFinish registers a workflow-level completion callback.
 var WithOnFinish = workflow.WithOnFinish
-
-// WithOnError registers a per-step error handler.
-var WithOnError = workflow.WithOnError
 
 // --- Network ---
 

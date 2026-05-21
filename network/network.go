@@ -67,6 +67,26 @@ func (n *Network) ExecuteStream(ctx context.Context, task agent.AgentTask, ch ch
 	return n.ExecuteWithSpan(ctx, task, ch, "Network", "network", n.buildLoopConfig)
 }
 
+// ExecuteWith runs the network like Execute. Network does not yet propagate
+// RunOptions to its subagents — calling with overrides set returns an error.
+// Pass nil opts (or use Execute) to call the network without overrides.
+func (n *Network) ExecuteWith(ctx context.Context, task core.AgentTask, opts *agent.RunOptions) (core.AgentResult, error) {
+	if opts != nil && opts.HasOverrides() {
+		return core.AgentResult{}, fmt.Errorf("network: ExecuteWith with overrides not yet supported (use Execute)")
+	}
+	return n.Execute(ctx, task)
+}
+
+// ExecuteStreamWith runs the network like ExecuteStream. RunOptions
+// propagation is not yet supported — non-empty overrides return an error.
+func (n *Network) ExecuteStreamWith(ctx context.Context, task core.AgentTask, ch chan<- core.StreamEvent, opts *agent.RunOptions) (core.AgentResult, error) {
+	if opts != nil && opts.HasOverrides() {
+		close(ch) // StreamingAgent contract: must close ch
+		return core.AgentResult{}, fmt.Errorf("network: ExecuteStreamWith with overrides not yet supported (use ExecuteStream)")
+	}
+	return n.ExecuteStream(ctx, task, ch)
+}
+
 // buildLoopConfig wires Network fields into a LoopConfig for runLoop.
 // Resolves dynamic prompt, model, and tools when configured.
 // ch is passed through so makeDispatch can emit agent-start/finish events.

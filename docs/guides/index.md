@@ -18,6 +18,7 @@ Step-by-step how-tos for common tasks. Each guide links back to its related conc
 |-------|----------------|
 | [skills.md](skills.md) | [Skill](../concepts/skill.md) |
 | [processors-and-guardrails.md](processors-and-guardrails.md) | [Processor](../concepts/processor.md) |
+| [loop-control.md](loop-control.md) | [Agent](../concepts/agent.md) |
 | [human-in-the-loop.md](human-in-the-loop.md) | [Input Handler](../concepts/input-handler.md) |
 | [memory-and-recall.md](memory-and-recall.md) | [Memory](../concepts/memory.md) |
 | [streaming.md](streaming.md) | [Agent](../concepts/agent.md) |

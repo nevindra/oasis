@@ -58,6 +58,9 @@ type AgentCore struct {
 	maxToolResultLen    int
 	toolResultStore     core.ToolResultStore
 	maxSteps            int
+	prepareStep         PrepareStep         // optional; set via WithPrepareStep
+	onError             OnError             // optional; set via WithOnError
+	onIterationComplete OnIterationComplete // optional; set via WithOnIterationComplete
 }
 
 // initCore initializes shared fields on an AgentCore from the given config.
@@ -145,6 +148,9 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Co
 	c.maxToolResultLen = cfg.maxToolResultLen
 	c.toolResultStore = cfg.toolResultStore
 	c.maxSteps = *cfg.maxSteps
+	c.prepareStep = cfg.prepareStep
+	c.onError = cfg.onError
+	c.onIterationComplete = cfg.onIterationComplete
 
 	// Build active skill instructions block.
 	if len(cfg.activeSkills) > 0 {
@@ -186,6 +192,39 @@ func (c *AgentCore) SetCachedToolDefs(defs []ToolDefinition) { c.cachedToolDefs 
 // Returns nil today; reserved for future flush errors. Embedders that wrap
 // AgentCore inherit this signature.
 func (c *AgentCore) Close() error { return c.mem.Close() }
+
+// Generation returns a copy of this agent's current Generation parameters.
+// Mutating the returned struct does not affect the agent. Use this to
+// construct a RunOptions.Generation override that partially modifies the
+// agent default:
+//
+//	gen := a.Generation()
+//	*gen.Temperature = 0.9
+//	result, err := a.ExecuteWith(ctx, task, &agent.RunOptions{Generation: &gen})
+func (c *AgentCore) Generation() Generation {
+	p := c.genParams
+	if p == nil {
+		return Generation{}
+	}
+	var g Generation
+	if p.Temperature != nil {
+		v := *p.Temperature
+		g.Temperature = &v
+	}
+	if p.TopP != nil {
+		v := *p.TopP
+		g.TopP = &v
+	}
+	if p.TopK != nil {
+		v := *p.TopK
+		g.TopK = &v
+	}
+	if p.MaxTokens != nil {
+		v := *p.MaxTokens
+		g.MaxTokens = &v
+	}
+	return g
+}
 
 // --- Spawn depth tracking ---
 
@@ -288,6 +327,9 @@ func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools
 		maxPlanSteps:        c.maxPlanSteps,
 		toolResultStore:     c.toolResultStore,
 		maxSteps:            c.maxSteps,
+		prepareStep:         c.prepareStep,
+		onError:             c.onError,
+		onIterationComplete: c.onIterationComplete,
 	}
 }
 
