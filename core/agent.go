@@ -110,3 +110,62 @@ type StepTrace struct {
 	// Duration is the wall-clock time for this step.
 	Duration time.Duration `json:"duration"`
 }
+
+// Text returns the agent's final text output. Alias for r.Output that exists
+// for symmetry with the Stream wrapper, so synchronous and streaming
+// consumers use the same method name.
+func (r AgentResult) Text() string { return r.Output }
+
+// Reasoning returns the agent's reasoning text from the final LLM call.
+// Alias for r.Thinking that exists for symmetry with the Stream wrapper.
+func (r AgentResult) Reasoning() string { return r.Thinking }
+
+// ToolCalls returns the tool calls captured in r.Steps, in execution order.
+// Returns nil if no tools were called. Each call's Name and Args
+// mirror the ToolCall the LLM produced.
+func (r AgentResult) ToolCalls() []ToolCall {
+	if len(r.Steps) == 0 {
+		return nil
+	}
+	out := make([]ToolCall, 0, len(r.Steps))
+	for _, s := range r.Steps {
+		out = append(out, ToolCall{
+			Name: s.Name,
+			Args: []byte(s.Input),
+		})
+	}
+	return out
+}
+
+// ToolResults returns the tool results captured in r.Steps, in execution order.
+// Each result's Content mirrors the JSON the tool returned to the LLM.
+func (r AgentResult) ToolResults() []ToolResult {
+	if len(r.Steps) == 0 {
+		return nil
+	}
+	out := make([]ToolResult, 0, len(r.Steps))
+	for _, s := range r.Steps {
+		out = append(out, ToolResult{Content: []byte(s.Output)})
+	}
+	return out
+}
+
+// LastStep returns the final StepTrace in r.Steps, or the zero value if no
+// steps were recorded.
+func (r AgentResult) LastStep() StepTrace {
+	if len(r.Steps) == 0 {
+		return StepTrace{}
+	}
+	return r.Steps[len(r.Steps)-1]
+}
+
+// StepByTool returns the first StepTrace whose Name matches name.
+// Returns (zero, false) if no step matches.
+func (r AgentResult) StepByTool(name string) (StepTrace, bool) {
+	for _, s := range r.Steps {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return StepTrace{}, false
+}
