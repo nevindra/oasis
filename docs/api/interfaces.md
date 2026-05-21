@@ -510,7 +510,7 @@ type Sandbox interface {
 
 | Implementation | Constructor |
 |----------------|------------|
-| `sandbox/ix` | `ix.NewManager(ctx, ix.ManagerConfig{...})` then `mgr.Create(ctx, sandbox.CreateOpts{...})` |
+| `oasis-sandbox-ix` (external) | `ix.NewManager(ctx, ix.ManagerConfig{...})` then `mgr.Create(ctx, sandbox.CreateOpts{...})` |
 
 ---
 

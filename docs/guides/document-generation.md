@@ -54,7 +54,7 @@ agent := oasis.NewLLMAgent("pdf-agent", "PDF generation agent", llmProvider,
 The sandbox image needs document generation libraries installed:
 
 ```dockerfile
-FROM oasis-ix:latest
+FROM ghcr.io/nevindra/oasis-sandbox-ix:latest
 
 # uv for fast Python package installs.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -66,7 +66,7 @@ RUN uv pip install --system --no-cache python-docx openpyxl pypdf
 RUN npm install -g pptxgenjs
 ```
 
-Playwright and Chromium are already included in the base `oasis-ix` image for browser automation.
+Playwright and Chromium are already included in the base `oasis-sandbox-ix` image for browser automation.
 
 ### 3. Skills Directory (Optional)
 

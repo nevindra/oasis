@@ -108,7 +108,7 @@ Creates a data transform tool with four functions: `data_parse`, `data_filter`, 
 
 ## Sandbox Manager
 
-**Package:** `github.com/nevindra/oasis/sandbox/ix`
+**Package:** `github.com/nevindra/oasis-sandbox-ix` (separate repository)
 
 ```go
 mgr, err := ix.NewManager(ctx context.Context, cfg ix.ManagerConfig)

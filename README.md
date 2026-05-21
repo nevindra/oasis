@@ -203,7 +203,7 @@ h.Cancel()
 | **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Groq, Together, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure, and any OpenAI-compatible API) |
 | **Storage** | `store/sqlite` (local, pure-Go), `store/postgres` (PostgreSQL + pgvector). Both support `Store`, `MemoryStore`, `GraphStore`, and `KeywordSearcher` |
 | **Tools** | `tools/knowledge` (RAG), `tools/remember`, `tools/search` (web), `tools/schedule`, `tools/shell`, `tools/file`, `tools/http`, `tools/data` (CSV/JSON transform), `tools/skill` (agent skill management) |
-| **Sandbox** | `sandbox` (Docker-based sandbox), `sandbox/ix` (manager + ix daemon client) |
+| **Sandbox** | `sandbox` (interface + `Tools()`); implementations live in separate repos (e.g. [`oasis-sandbox-ix`](https://github.com/nevindra/oasis-sandbox-ix) — Docker-backed) |
 | **Retrieval** | `HybridRetriever` (vector + FTS + RRF), `GraphRetriever` (multi-hop BFS), `ScoreReranker`, `LLMReranker` |
 | **Ingestion** | `ingest` (HTML, Markdown, CSV, JSON, DOCX, PDF extractors; recursive, markdown, semantic chunkers; parent-child strategy) |
 | **Observability** | `observer` (OpenTelemetry-backed `Tracer` implementation) |
@@ -233,12 +233,11 @@ oasis/
 |-- provider/openaicompat/              # OpenAI-compatible provider
 |-- store/sqlite/                       # Local SQLite (pure-Go, no CGO)
 |-- store/postgres/                     # PostgreSQL + pgvector
-|-- sandbox/                           # Docker-based sandbox (shell, code, files, browser, MCP)
+|-- sandbox/                           # Sandbox interface + Tools() (implementations in separate repos, e.g. oasis-sandbox-ix)
 |-- observer/                           # OTEL observability
 |-- ingest/                             # Document chunking pipeline
 |-- tools/                              # Built-in tools
 |
-|-- cmd/ix/                             # Sandbox daemon binary
 |-- cmd/mcp-docs/                       # MCP documentation server
 |-- cmd/modelgen/                       # Provider model registry generator
 ```

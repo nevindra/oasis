@@ -898,11 +898,11 @@ Enable with `WithSandbox()`:
 ```go
 import (
     "github.com/nevindra/oasis/sandbox"
-    "github.com/nevindra/oasis/sandbox/ix"
+    ix "github.com/nevindra/oasis-sandbox-ix"
 )
 
 mgr, _ := ix.NewManager(ctx, ix.ManagerConfig{
-    Image: "oasis-ix:latest",
+    Image: "ghcr.io/nevindra/oasis-sandbox-ix:latest",
 })
 sb, _ := mgr.Create(ctx, sandbox.CreateOpts{SessionID: "s1", TTL: time.Hour})
 defer sb.Close()

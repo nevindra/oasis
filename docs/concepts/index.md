@@ -145,7 +145,7 @@ Both implement `Agent`, so they compose with each other — a Network can contai
 | Primitive | Doc | Source Files | Related Guide |
 |-----------|-----|-------------|---------------|
 | Observability | [observability.md](observability.md) | observer/ | — |
-| Sandbox | [sandbox.md](sandbox.md) | sandbox/, cmd/ix/ | [code-execution](../guides/code-execution.md), [document-generation](../guides/document-generation.md) |
+| Sandbox | [sandbox.md](sandbox.md) | sandbox/ (interface), [oasis-sandbox-ix](https://github.com/nevindra/oasis-sandbox-ix) (impl) | [code-execution](../guides/code-execution.md), [document-generation](../guides/document-generation.md) |
 
 ## Key Design Decisions
 

@@ -60,7 +60,7 @@ oasis/                              # FRAMEWORK
 |-- provider/{catalog,resolve}/     # Stdlib-only model registry helpers
 |
 |-- tools/{data,http,...}/          # Tool implementations
-|-- cmd/{ix,mcp-docs,modelgen}/     # CLI utilities
+|-- cmd/{mcp-docs,modelgen}/        # CLI utilities
 |
 |-- (satellites — each its own go.mod, opt-in via direct import)
 |   |-- mcp/                        # MCP client integration
@@ -68,8 +68,11 @@ oasis/                              # FRAMEWORK
 |   |-- provider/{gemini,openaicompat}/  # LLM providers (own evolution cadence)
 |   |-- observer/                   # OTEL observability (full OTEL SDK)
 |   |-- ingest/                     # Document ingestion (PDF, DOCX, embeddings)
-|   |-- sandbox/                    # Docker-based code sandbox
+|   |-- sandbox/                    # Sandbox interface + Tools() (implementations in separate repos)
 |   |-- rag/                        # Retrieval-augmented generation
+
+Sandbox implementations live in their own repos:
+  - github.com/nevindra/oasis-sandbox-ix — Docker-backed ix sandbox
 ```
 
 Adding a re-export to `oasis.go` is a deliberate decision — do not auto-mirror

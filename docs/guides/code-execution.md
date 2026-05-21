@@ -29,12 +29,12 @@ If the LLM just needs to call multiple independent tools at once, use `WithPlanE
 import (
     "github.com/nevindra/oasis"
     "github.com/nevindra/oasis/sandbox"
-    "github.com/nevindra/oasis/sandbox/ix"
+    ix "github.com/nevindra/oasis-sandbox-ix"
 )
 
 // Create sandbox manager (manages Docker containers)
 mgr, err := ix.NewManager(ctx, ix.ManagerConfig{
-    Image: "oasis-ix:latest",
+    Image: "ghcr.io/nevindra/oasis-sandbox-ix:latest",
 })
 
 // Create a sandbox for a session
@@ -324,7 +324,7 @@ Choose the simplest mode that handles the task.`),
 
 ```go
 mgr, err := ix.NewManager(ctx, ix.ManagerConfig{
-    Image: "oasis-ix:latest",
+    Image: "ghcr.io/nevindra/oasis-sandbox-ix:latest",
 })
 ```
 

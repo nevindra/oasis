@@ -87,7 +87,7 @@ sequenceDiagram
 └─────────────┘
 ```
 
-- **ix.Manager** (`sandbox/ix/` package) — creates and manages Docker containers directly. No external orchestration service needed.
+- **ix.Manager** (`github.com/nevindra/oasis-sandbox-ix`) — creates and manages Docker containers directly. No external orchestration service needed.
 - **Docker Container** — runs an ix daemon (Go, stdlib-only) that exposes shell, code execution, file I/O, browser, and MCP capabilities via REST + SSE. Shell and code execution use SSE for streaming output; file operations use plain JSON.
 - **Auto-registered tools** — `sandbox.Tools(sb)` returns 19 tools that the agent can use.
 
@@ -263,19 +263,19 @@ flowchart TD
 
 ## IX Manager
 
-**Package:** `github.com/nevindra/oasis/sandbox/ix`
+**Package:** `github.com/nevindra/oasis-sandbox-ix` (separate repository)
 
 The `ix.Manager` creates and manages Docker containers directly. No external orchestration service (like OpenSandbox) is needed — just Docker.
 
 ```go
 import (
     "github.com/nevindra/oasis/sandbox"
-    "github.com/nevindra/oasis/sandbox/ix"
+    ix "github.com/nevindra/oasis-sandbox-ix"
 )
 
 // Create sandbox manager
 mgr, err := ix.NewManager(ctx, ix.ManagerConfig{
-    Image: "oasis-ix:latest",
+    Image: "ghcr.io/nevindra/oasis-sandbox-ix:latest",
 })
 
 // Create a sandbox for a session
@@ -440,7 +440,7 @@ The sandbox limits parallel executions via a semaphore. When at capacity, new re
 
 ### ManagerConfig
 
-**Package:** `github.com/nevindra/oasis/sandbox/ix`
+**Package:** `github.com/nevindra/oasis-sandbox-ix` (separate repository)
 
 | Field | Default | Description |
 |-------|---------|-------------|

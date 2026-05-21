@@ -266,7 +266,7 @@ Passed inside `WithOptions(...)` or accumulated per-request.
 
 ## Sandbox Options
 
-**Package:** `github.com/nevindra/oasis/sandbox/ix`
+**Package:** `github.com/nevindra/oasis-sandbox-ix` (separate repository)
 
 ### ManagerConfig
 
