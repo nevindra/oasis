@@ -161,6 +161,12 @@ func (e *ErrSuspended) Release() {
 // A default TTL of 30 minutes is applied automatically when ErrSuspended
 // is created by the framework. Call this to override with a custom duration.
 //
+// d must be positive. A zero or negative duration fires the release timer
+// immediately, which is almost never what callers want. To disable the
+// default TTL entirely, omit Resume()/Release() management from your flow
+// and rely on garbage collection — but be aware abandoned snapshots will
+// hold their captured message slice until GC observes the ErrSuspended.
+//
 //	var suspended *oasis.ErrSuspended
 //	if errors.As(err, &suspended) {
 //	    suspended.WithSuspendTTL(5 * time.Minute)
@@ -333,8 +339,7 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 		}
 	}
 	// Apply default TTL to prevent memory leaks from abandoned suspensions.
-	// Callers can override with WithSuspendTTL or disable by calling
-	// suspended.WithSuspendTTL(0) (though that re-enables the leak risk).
+	// Callers can override with WithSuspendTTL(d) where d > 0.
 	suspended.WithSuspendTTL(defaultSuspendTTL)
 	return suspended
 }
