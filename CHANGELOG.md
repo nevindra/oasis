@@ -169,6 +169,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Changed
 
+- `StepTrace` is now an alias for `ToolCallTrace` (rename for naming consistency with `IterationTrace` and `LLMCallTrace`). The old name is kept; rename your variables at convenience.
+- `HybridRetriever` and `GraphRetriever` implement `core.Sourced`.
+- Native Gemini and OpenAI-compat providers populate `ChatResponse.FinishReason` and `ChatResponse.ProviderMeta`.
 - `core.Erase` now applies structural input coercion (`null`/empty → `{}`, stringified-JSON object/array unwrap one level) before `json.Unmarshal`. Coercion is pure-function, zero-alloc on the happy path, and never errors — malformed inputs that don't match either pattern pass through unchanged so the existing `json.Unmarshal` failure path reports the real problem. This default-on behavior is intentional: no opt-out.
 - **Default `maxIter` raised 10 → 25.** Real tool-using workflows commonly need 15-20 iterations. Set `WithMaxIter(10)` to restore the old default. (finding 3.6)
 - **`compressMessages` now routes through the `Compactor` interface** instead of an inline English prompt. Users with custom `Compactor` implementations should handle both `ScopeFull` and `ScopeToolResultsOnly` (default `inlineCompactor` does both). (findings 1.2.f, 3.9)
@@ -176,6 +179,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+#### Streaming world-class (Phases 1-11)
+- **Lifecycle envelope:** every run now starts with `EventRunStart` and ends with `EventRunFinish` carrying `FinishReason`, `Warnings`, and `ProviderMeta`. Iterations are bracketed by `EventIterationStart`/`Finish`. See `docs/superpowers/specs/2026-05-21-streaming-world-class-design.md`.
+- **Structured object streaming:** when `WithResponseSchema` is configured, the loop emits `EventObjectDelta` snapshots of partial JSON and `EventObjectFinish` with the final validated bytes. Top-level array schemas additionally emit one `EventElementDelta` per completed element.
+- **Typed adapters:** `oasis.StreamObjectAs[T](stream)` returns a typed channel of partial-object snapshots; `oasis.ResultObjectAs[T](result)` decodes the final object. Generic free functions — no contagion of generics through `Agent` / `Network` / `Workflow`.
+- **Result accessor parity:** `AgentResult` and `Stream` gain `FinishReason`, `Sources`, `Files`, `Warnings`, `ProviderMeta`, `SuspendPayload`, `Object`, `Iterations`. Same method names on both paths.
+- **Per-stream observability:** new `agent.iteration` and `llm.generate` OTel spans under the existing `agent.execute` root, populated with model / temperature / max-tokens / input-tokens / output-tokens / finish-reason attributes. `AgentResult.Iterations` exposes the same data without OTel.
+- **`core.Sourced` / `core.Warner`:** opt-in interfaces for tools, retrievers, and providers to declare citations and non-fatal warnings.
+
+#### Other additions
 - **`core.ToolResultStore` interface** + default in-memory implementation (`core.NewInMemoryToolResultStore`) for paging large tool results. Auto-enabled with 10 MiB total cap and 5-minute TTL per entry; opt out with `WithToolResultStore(nil)`. (finding 3.7)
 - **`read_full_result` built-in tool** for the LLM to retrieve slices of stored results. Auto-registered when a `ToolResultStore` is configured. (finding 3.7)
 - **`core.Sandbox` interface** — see breaking note above. (finding 1.2.k)
@@ -241,6 +253,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   can adapt, `DenyHalt` halts the run with `*core.ErrHalt`. Outermost layer
   of the chain — retries do not re-prompt. Emits `EventToolApprovalPending`
   on the stream before prompting.
+
+### Deprecated
+
+- `EventInputReceived`, `EventProcessingStart`, `EventMaxIterReached`, `EventHalt` are no longer emitted. The constants remain exported for one minor release for back-compat with consumers that type-switch on them. Replace with `EventRunStart` (for the first two) and `EventRunFinish{FinishReason: ...}` (for the last two).
+
+### Migration
+
+- Consumers iterating events should expect `EventRunStart` as the first event and `EventRunFinish` as the last. Code that triggered on `EventMaxIterReached` or `EventHalt` should switch on `EventRunFinish.FinishReason`.
+- Code calling `result.Output` continues to work; `result.Text()` is identical.
+- New `AgentResult` fields are zero-value by default; existing reads are unaffected.
 
 ### Removed
 

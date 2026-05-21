@@ -632,6 +632,10 @@ const (
 	EventRunFinish       = core.EventRunFinish
 	EventIterationStart  = core.EventIterationStart
 	EventIterationFinish = core.EventIterationFinish
+	// Structured object streaming (Phase 6 streaming).
+	EventObjectDelta  = core.EventObjectDelta
+	EventObjectFinish = core.EventObjectFinish
+	EventElementDelta = core.EventElementDelta
 )
 
 // FinishReason describes why an agent run ended.
@@ -647,6 +651,29 @@ const (
 	FinishMaxIter       = core.FinishMaxIter
 	FinishError         = core.FinishError
 )
+
+// Source, Sourced, Warner are the citation and warning interfaces.
+type Source = core.Source
+type Sourced = core.Sourced
+type Warner = core.Warner
+
+// Iteration and LLM call trace types.
+type IterationTrace = core.IterationTrace
+type LLMCallTrace = core.LLMCallTrace
+type ToolCallTrace = core.ToolCallTrace
+
+// Typed structured-output adapters.
+// StreamObjectAs decodes typed structured-output snapshots from a Stream.
+// See agent.StreamObjectAs for details.
+func StreamObjectAs[T any](s *Stream) <-chan T {
+	return agent.StreamObjectAs[T](s)
+}
+
+// ResultObjectAs decodes AgentResult.Object into T.
+// See agent.ResultObjectAs for details.
+func ResultObjectAs[T any](r AgentResult) (T, error) {
+	return agent.ResultObjectAs[T](r)
+}
 
 // --- Processors ---
 
