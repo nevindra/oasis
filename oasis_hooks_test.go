@@ -61,3 +61,12 @@ func TestOasis_StartStream(t *testing.T) {
 		t.Errorf("Text() = %q, want %q", got, "hi")
 	}
 }
+
+func TestOasis_WithToolApprovalCompiles(t *testing.T) {
+	// The point of this test is purely to assert the curated re-exports
+	// compose without import or type errors. No runtime behavior is checked
+	// — that's covered by agent/tool_approval_test.go.
+	_ = oasis.WithToolApproval("x")
+	_ = oasis.WithToolApproval("x", oasis.OnDeny(oasis.DenyHalt))
+	_ = oasis.WithToolApproval("x", oasis.ApprovalPrompt(func(c oasis.ToolCall) string { return "?" }))
+}

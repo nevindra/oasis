@@ -113,6 +113,35 @@ func TransformMiddleware(fn func(name string, r ToolResult) ToolResult) ToolMidd
 	return agent.TransformMiddleware(fn)
 }
 
+// WithToolApproval requires explicit human approval before the named tool
+// runs. Composes with the InputHandler from WithInputHandler.
+func WithToolApproval(toolName string, opts ...ApprovalOption) AgentOption {
+	return agent.WithToolApproval(toolName, opts...)
+}
+
+// ApprovalOption is a functional option for WithToolApproval.
+type ApprovalOption = agent.ApprovalOption
+
+// ApprovalPrompt sets a custom prompt builder for an approval gate.
+func ApprovalPrompt(fn func(call ToolCall) string) ApprovalOption {
+	return agent.ApprovalPrompt(fn)
+}
+
+// OnDeny sets the action taken when a human denies an approval request.
+func OnDeny(action DenyAction) ApprovalOption {
+	return agent.OnDeny(action)
+}
+
+// DenyAction controls behavior when a human denies a tool approval request.
+type DenyAction = agent.DenyAction
+
+const (
+	// DenyAskLLMToRevise returns an error result so the LLM can adapt.
+	DenyAskLLMToRevise = agent.DenyAskLLMToRevise
+	// DenyHalt halts the agent loop with *core.ErrHalt.
+	DenyHalt = agent.DenyHalt
+)
+
 // TextResult wraps a plain string as a ToolResult. Use for hand-rolled tools producing plain text.
 var TextResult = core.TextResult
 
