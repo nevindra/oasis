@@ -594,3 +594,40 @@ func TestBuildStepTraceAgentDelegation(t *testing.T) {
 		t.Errorf("Input = %q, want %q (should extract task field)", trace.Input, "find papers")
 	}
 }
+
+// TestTerminateIteration_PinsContractFields verifies that terminateIteration
+// preserves the AgentResult fields that every error-tail call site sets:
+// Usage, Steps, FinishReason, Warnings, ProviderMeta, Files, Iterations, Sources.
+// Pinning this contract lets us safely replace 6 hand-rolled tails with the helper.
+func TestTerminateIteration_PinsContractFields(t *testing.T) {
+	state := &loopState{
+		totalUsage:       Usage{InputTokens: 7, OutputTokens: 11},
+		steps:            []StepTrace{{Name: "x"}},
+		lastWarnings:     []string{"w"},
+		lastProviderMeta: json.RawMessage(`{"k":"v"}`),
+		files:            []Attachment{{MimeType: "text/plain"}},
+		iterations:       []IterationTrace{{Iter: 0}},
+		sources:          []core.Source{{URL: "https://example.test"}},
+		safeCloseCh:      func() {},
+	}
+	cfg := LoopConfig{name: "test", logger: nopLogger}
+	extra := AgentResult{SuspendPayload: json.RawMessage(`"x"`), SuspendProtocol: "tag"}
+	res := terminateIteration(context.Background(), cfg, nil, state, FinishSuspended, extra, nil)
+	if res.outcome != iterDone {
+		t.Fatalf("outcome = %v, want iterDone", res.outcome)
+	}
+	if res.final.FinishReason != FinishSuspended {
+		t.Fatalf("FinishReason = %v, want FinishSuspended", res.final.FinishReason)
+	}
+	if res.final.Usage != state.totalUsage {
+		t.Fatalf("Usage = %+v, want %+v", res.final.Usage, state.totalUsage)
+	}
+	if len(res.final.Steps) != 1 || len(res.final.Warnings) != 1 ||
+		len(res.final.Files) != 1 || len(res.final.Iterations) != 1 ||
+		len(res.final.Sources) != 1 {
+		t.Fatalf("contract fields not propagated: %+v", res.final)
+	}
+	if string(res.final.SuspendPayload) != `"x"` || res.final.SuspendProtocol != "tag" {
+		t.Fatalf("extra fields not merged: %+v", res.final)
+	}
+}

@@ -756,3 +756,36 @@ func handleOnError(ctx context.Context, cfg LoopConfig, state *loopState, i int,
 		return iterationResult{}, false
 	}
 }
+
+// terminateIteration builds the standard AgentResult for an iteration's
+// terminal exit (suspend, error, halt, stop, max-iter), emits the matching
+// EventRunFinish via finalizeRun, and returns the iterDone iterationResult.
+// Replaces a 5-7 line tail that previously appeared at 6 call sites in
+// iteration.go and 1 in loop.go's forceSynthesis.
+//
+// extra carries fields not derivable from state — typically SuspendPayload /
+// SuspendProtocol on suspend exits, or Output / Thinking / Attachments on
+// natural-stop exits. Fields set on extra win over the defaults.
+//
+// The caller is responsible for invoking endIter (the iteration-span closer)
+// BEFORE calling terminateIteration. terminateIteration handles only the
+// AgentResult assembly, finalizeRun emission, and iterationResult wrapping.
+func terminateIteration(ctx context.Context, cfg LoopConfig, ch chan<- StreamEvent, state *loopState, reason FinishReason, extra AgentResult, err error) iterationResult {
+	result := AgentResult{
+		Output:          extra.Output,
+		Thinking:        extra.Thinking,
+		Attachments:     extra.Attachments,
+		Usage:           state.totalUsage,
+		Steps:           state.steps,
+		FinishReason:    reason,
+		Warnings:        state.lastWarnings,
+		ProviderMeta:    state.lastProviderMeta,
+		Files:           state.files,
+		Iterations:      state.iterations,
+		Sources:         state.sources,
+		SuspendPayload:  extra.SuspendPayload,
+		SuspendProtocol: extra.SuspendProtocol,
+	}
+	finalizeRun(ctx, ch, state, cfg.name, reason, result)
+	return iterationResult{outcome: iterDone, final: result, err: err}
+}
