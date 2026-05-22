@@ -672,7 +672,7 @@ func TestEventMaxIterReachedEmitted(t *testing.T) {
 	}
 	a := NewLLMAgent("test", "", provider,
 		WithTools(&configuredFakeAgentTool{name: "loop_tool", output: "still going"}),
-		WithMaxIter(3),
+		WithLimits(Limits{MaxIter: 3}),
 	)
 
 	ch := make(chan StreamEvent, 64)

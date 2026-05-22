@@ -339,7 +339,7 @@ func TestSuspendBudgetExceeded(t *testing.T) {
 
 	agent := NewLLMAgent("suspender", "Suspends a lot", provider,
 		WithPostProcessors(suspendProcessor{}),
-		WithSuspendBudget(2, 1<<30), // max 2 snapshots, generous byte limit
+		WithLimits(Limits{MaxSuspendSnapshots: 2, MaxSuspendBytes: 1 << 30}), // max 2 snapshots, generous byte limit
 	)
 
 	// First suspension — should succeed.

@@ -56,6 +56,18 @@ var WithMaxIter = agent.WithMaxIter
 var WithMaxAttachmentBytes = agent.WithMaxAttachmentBytes
 var WithSuspendBudget = agent.WithSuspendBudget
 
+// Limits groups all per-agent resource-budget fields into a single value.
+// Use WithLimits to apply it.
+type Limits = agent.Limits
+
+// Unbounded is the sentinel for limit fields where 0 already means "use
+// default". Pass agent.Unbounded (or oasis.Unbounded) as the MaxSteps field
+// in Limits to mean "no cap".
+const Unbounded = agent.Unbounded
+
+// WithLimits sets the agent's resource-budget Limits in one option call.
+var WithLimits = agent.WithLimits
+
 // Typed HITL contracts — see docs/superpowers/specs/2026-05-22-typed-hitl-contracts-design.md
 type SuspendProtocol[Req, Resp any] = agent.SuspendProtocol[Req, Resp]
 type ErrSuspended = agent.ErrSuspended

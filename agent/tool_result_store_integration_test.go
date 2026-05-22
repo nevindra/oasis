@@ -79,7 +79,7 @@ func TestOversizeToolResultStored(t *testing.T) {
 	a := oasis.NewLLMAgent("test", "", provider,
 		oasis.WithTools(tool),
 		oasis.WithToolResultStore(store),
-		oasis.WithMaxToolResultLen(100_000),
+		oasis.WithLimits(oasis.Limits{MaxToolResultLen: 100_000}),
 	)
 
 	_, err := a.Execute(context.Background(), oasis.AgentTask{Input: "go"})
@@ -112,7 +112,7 @@ func TestNoStoreFallsBackToLegacyMarker(t *testing.T) {
 	a := oasis.NewLLMAgent("test", "", provider,
 		oasis.WithTools(tool),
 		oasis.WithToolResultStore(nil), // explicit opt-out
-		oasis.WithMaxToolResultLen(100_000),
+		oasis.WithLimits(oasis.Limits{MaxToolResultLen: 100_000}),
 	)
 
 	_, _ = a.Execute(context.Background(), oasis.AgentTask{Input: "go"})

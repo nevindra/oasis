@@ -143,7 +143,7 @@ func TestLLMAgentMaxIterations(t *testing.T) {
 
 	agent := NewLLMAgent("looper", "Loops forever", provider,
 		WithTools(mockTool{}),
-		WithMaxIter(3),
+		WithLimits(Limits{MaxIter: 3}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "Loop"})
@@ -824,7 +824,7 @@ func TestContextCompression(t *testing.T) {
 	agent := NewLLMAgent("compressor", "Tests compression", trackingProvider,
 		WithTools(bigResultTool{}),
 		WithHistory(history.Compress(func(_ context.Context, _ AgentTask) Provider { return compressProvider }, 1500)),
-		WithMaxIter(10),
+		WithLimits(Limits{MaxIter: 10}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "go"})
@@ -919,7 +919,7 @@ func TestBuildConfigDefaults(t *testing.T) {
 }
 
 func TestWithMaxIterOption(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{WithMaxIter(5)})
+	cfg := BuildConfig([]AgentOption{WithLimits(Limits{MaxIter: 5})})
 	if cfg.maxIter != 5 {
 		t.Errorf("maxIter = %d, want 5", cfg.maxIter)
 	}
@@ -933,7 +933,7 @@ func TestWithPromptOption(t *testing.T) {
 }
 
 func TestWithSuspendBudgetOption(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{WithSuspendBudget(5, 1<<20)})
+	cfg := BuildConfig([]AgentOption{WithLimits(Limits{MaxSuspendSnapshots: 5, MaxSuspendBytes: 1 << 20})})
 	if cfg.maxSuspendSnapshots != 5 {
 		t.Errorf("maxSuspendSnapshots = %d, want 5", cfg.maxSuspendSnapshots)
 	}
@@ -965,7 +965,7 @@ func TestCompressThreshold_ZeroDisablesInLoop(t *testing.T) {
 }
 
 func TestWithMaxAttachmentBytesOption(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{WithMaxAttachmentBytes(10 << 20)})
+	cfg := BuildConfig([]AgentOption{WithLimits(Limits{MaxAttachmentBytes: 10 << 20})})
 	if cfg.maxAttachmentBytes != 10<<20 {
 		t.Errorf("maxAttachmentBytes = %d, want %d", cfg.maxAttachmentBytes, 10<<20)
 	}
@@ -1228,7 +1228,7 @@ func TestThinkingFromForcedSynthesis(t *testing.T) {
 
 	agent := NewLLMAgent("synth-think", "Synthesis thinking", provider,
 		WithTools(mockTool{}),
-		WithMaxIter(3),
+		WithLimits(Limits{MaxIter: 3}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "loop"})
@@ -1274,21 +1274,21 @@ func TestWithActiveSkills(t *testing.T) {
 // --- Configurable limit knob tests ---
 
 func TestWithMaxParallelDispatchSetsConfig(t *testing.T) {
-	c := BuildConfig([]AgentOption{WithMaxParallelDispatch(3)})
+	c := BuildConfig([]AgentOption{WithLimits(Limits{MaxParallelDispatch: 3})})
 	if c.maxParallelDispatch != 3 {
 		t.Errorf("expected 3, got %d", c.maxParallelDispatch)
 	}
 }
 
 func TestWithMaxPlanStepsSetsConfig(t *testing.T) {
-	c := BuildConfig([]AgentOption{WithMaxPlanSteps(7)})
+	c := BuildConfig([]AgentOption{WithLimits(Limits{MaxPlanSteps: 7})})
 	if c.maxPlanSteps != 7 {
 		t.Errorf("expected 7, got %d", c.maxPlanSteps)
 	}
 }
 
 func TestWithMaxToolResultLenSetsConfig(t *testing.T) {
-	c := BuildConfig([]AgentOption{WithMaxToolResultLen(50_000)})
+	c := BuildConfig([]AgentOption{WithLimits(Limits{MaxToolResultLen: 50_000})})
 	if c.maxToolResultLen != 50_000 {
 		t.Errorf("expected 50000, got %d", c.maxToolResultLen)
 	}
@@ -1366,7 +1366,7 @@ func TestAgentResultStepsCapped(t *testing.T) {
 	provider := &mockProvider{name: "test", responses: responses}
 	a := NewLLMAgent("capped", "step cap test", provider,
 		WithTools(mockTool{}),
-		WithMaxSteps(cap),
+		WithLimits(Limits{MaxSteps: cap}),
 	)
 	result, err := a.Execute(context.Background(), AgentTask{Input: "go"})
 	if err != nil {
@@ -1388,7 +1388,7 @@ func TestAgentResultStepsUnbounded(t *testing.T) {
 	provider := &mockProvider{name: "test", responses: responses}
 	a := NewLLMAgent("unbounded", "step unbounded test", provider,
 		WithTools(mockTool{}),
-		WithMaxSteps(0),
+		WithLimits(Limits{MaxSteps: Unbounded}),
 	)
 	result, err := a.Execute(context.Background(), AgentTask{Input: "go"})
 	if err != nil {

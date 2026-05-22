@@ -682,7 +682,7 @@ func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, tool
 	opts := []AgentOption{
 		WithPrompt(subAgentPrompt),
 		WithTools(subTools...),
-		WithMaxIter(c.maxIter),
+		WithLimits(Limits{MaxIter: c.maxIter}),
 		WithLogger(c.logger),
 	}
 	if c.genParams != nil {

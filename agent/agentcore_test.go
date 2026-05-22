@@ -19,7 +19,7 @@ func ptrA[T any](v T) *T { return &v }
 func TestInitCoreWiresAllFields(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{
 		WithPrompt("test prompt"),
-		WithMaxIter(42),
+		WithLimits(Limits{MaxIter: 42}),
 		WithGeneration(Generation{Temperature: ptrA(0.7)}),
 	})
 
