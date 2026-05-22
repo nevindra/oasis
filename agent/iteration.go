@@ -156,19 +156,15 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 				}
 			}
 			endIter(FinishSuspended)
-			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload, SuspendProtocol: s.tag, Iterations: state.iterations}
-			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
-			return iterationResult{outcome: iterDone, final: suspResult, err: s}
+			return terminateIteration(ctx, cfg, ch, state, FinishSuspended, AgentResult{SuspendPayload: s.Payload, SuspendProtocol: s.tag}, s)
 		}
 		res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
 		reason := FinishError
 		if res.Output != "" {
 			reason = FinishHalted
 		}
-		res.FinishReason = reason
 		endIter(reason)
-		finalizeRun(ctx, ch, state, cfg.name, reason, res)
-		return iterationResult{outcome: iterDone, final: res, err: retErr}
+		return terminateIteration(ctx, cfg, ch, state, reason, res, retErr)
 	}
 
 	var resp ChatResponse
@@ -185,9 +181,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		if err := cfg.prepareStep(iterCtx, i, ctrl); err != nil {
 			cfg.logger.Error("PrepareStep hook failed", "agent", cfg.name, "iteration", i, "error", err)
 			endIter(FinishError)
-			errResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishError}
-			finalizeRun(ctx, ch, state, cfg.name, FinishError, errResult)
-			return iterationResult{outcome: iterDone, final: errResult, err: fmt.Errorf("PrepareStep: %w", err)}
+			return terminateIteration(ctx, cfg, ch, state, FinishError, AgentResult{}, fmt.Errorf("PrepareStep: %w", err))
 		}
 		if ctrl.Model != nil {
 			iterProvider = ctrl.Model
@@ -235,9 +229,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			}
 			return r
 		}
-		errResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishError}
-		finalizeRun(ctx, ch, state, cfg.name, FinishError, errResult)
-		return iterationResult{outcome: iterDone, final: errResult, err: err}
+		return terminateIteration(ctx, cfg, ch, state, FinishError, AgentResult{}, err)
 	}
 	cfg.logger.Debug("LLM call completed", "agent", cfg.name, "iteration", i,
 		"duration", llmTrace.Duration,
@@ -296,9 +288,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			decision, hookErr := cfg.onIterationComplete(iterCtx, i, snap)
 			if hookErr != nil {
 				endIter(FinishError)
-				errResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishError}
-				finalizeRun(ctx, ch, state, cfg.name, FinishError, errResult)
-				return iterationResult{outcome: iterDone, final: errResult, err: fmt.Errorf("OnIterationComplete: %w", hookErr)}
+				return terminateIteration(ctx, cfg, ch, state, FinishError, AgentResult{}, fmt.Errorf("OnIterationComplete: %w", hookErr))
 			}
 			if decision.action == decisionStop {
 				endIter(FinishStop)
@@ -468,19 +458,15 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 					}
 				}
 				endIter(FinishSuspended)
-				suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload, SuspendProtocol: s.tag, Iterations: state.iterations}
-				finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
-				return iterationResult{outcome: iterDone, final: suspResult, err: s}
+				return terminateIteration(ctx, cfg, ch, state, FinishSuspended, AgentResult{SuspendPayload: s.Payload, SuspendProtocol: s.tag}, s)
 			}
 			res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
 			reason := FinishError
 			if res.Output != "" {
 				reason = FinishHalted
 			}
-			res.FinishReason = reason
 			endIter(reason)
-			finalizeRun(ctx, ch, state, cfg.name, reason, res)
-			return iterationResult{outcome: iterDone, final: res, err: retErr}
+			return terminateIteration(ctx, cfg, ch, state, reason, res, retErr)
 		}
 		// Truncate large tool results before appending to message history.
 		// Stream events and step traces retain full content (transient).
@@ -553,9 +539,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		decision, hookErr := cfg.onIterationComplete(iterCtx, i, snap)
 		if hookErr != nil {
 			endIter(FinishError)
-			errResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishError}
-			finalizeRun(ctx, ch, state, cfg.name, FinishError, errResult)
-			return iterationResult{outcome: iterDone, final: errResult, err: fmt.Errorf("OnIterationComplete: %w", hookErr)}
+			return terminateIteration(ctx, cfg, ch, state, FinishError, AgentResult{}, fmt.Errorf("OnIterationComplete: %w", hookErr))
 		}
 		switch decision.action {
 		case decisionStop:

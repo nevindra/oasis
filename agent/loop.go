@@ -227,9 +227,8 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 	}
 	if err != nil {
 		cfg.logger.Error("synthesis LLM call failed", "agent", cfg.name, "error", err)
-		errResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishError}
-		finalizeRun(ctx, ch, state, cfg.name, FinishError, errResult)
-		return errResult, err
+		r := terminateIteration(ctx, cfg, ch, state, FinishError, AgentResult{}, err)
+		return r.final, r.err
 	}
 	cfg.logger.Info("synthesis completed", "agent", cfg.name,
 		"input_tokens", resp.Usage.InputTokens,
