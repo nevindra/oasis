@@ -253,6 +253,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   can adapt, `DenyHalt` halts the run with `*core.ErrHalt`. Outermost layer
   of the chain — retries do not re-prompt. Emits `EventToolApprovalPending`
   on the stream before prompting.
+- **Typed HITL contracts.** New `agent.SuspendProtocol[Req, Resp]` value (re-exported as `oasis.SuspendProtocol`) with constructor `NewSuspendProtocol[Req, Resp](name)` and methods `Suspend(Req)`, `PayloadFrom(*ErrSuspended) (Req, error)`, `Resume(*ErrSuspended, ctx, Resp)`, `ResumeStream(*ErrSuspended, ctx, Resp, ch)`, `WithRenderResume(func(Resp) string)`, and `Name()`. Compile-time contract between the suspending site and the caller that resumes — wrong payload or response type fails the build. Untyped `Suspend(json.RawMessage)` and `(*ErrSuspended).Resume` remain as the escape hatch. Also re-exports `Suspend` and `ErrSuspended` on the umbrella package (long-standing gap fixed). Spec: [`docs/superpowers/specs/2026-05-22-typed-hitl-contracts-design.md`](docs/superpowers/specs/2026-05-22-typed-hitl-contracts-design.md).
 
 ### Deprecated
 

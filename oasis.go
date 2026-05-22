@@ -55,6 +55,17 @@ var WithPrompt = agent.WithPrompt
 var WithMaxIter = agent.WithMaxIter
 var WithMaxAttachmentBytes = agent.WithMaxAttachmentBytes
 var WithSuspendBudget = agent.WithSuspendBudget
+
+// Typed HITL contracts — see docs/superpowers/specs/2026-05-22-typed-hitl-contracts-design.md
+type SuspendProtocol[Req, Resp any] = agent.SuspendProtocol[Req, Resp]
+type ErrSuspended = agent.ErrSuspended
+var Suspend = agent.Suspend
+
+// NewSuspendProtocol declares a typed HITL contract. See agent.NewSuspendProtocol.
+func NewSuspendProtocol[Req, Resp any](name string) SuspendProtocol[Req, Resp] {
+	return agent.NewSuspendProtocol[Req, Resp](name)
+}
+
 var WithAgents = agent.WithAgents
 var WithPlanExecution = agent.WithPlanExecution
 var WithSandbox = agent.WithSandbox

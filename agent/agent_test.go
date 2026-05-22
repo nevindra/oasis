@@ -65,10 +65,14 @@ type mockProvider struct {
 	name      string
 	responses []ChatResponse // popped in order
 	idx       int
+	onChat    func(*ChatRequest) // optional hook called at the start of each ChatStream
 }
 
 func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	if m.onChat != nil {
+		m.onChat(&req)
+	}
 	defer close(ch)
 	resp := m.next()
 	ch <- StreamEvent{Type: EventTextDelta, Content: resp.Content}

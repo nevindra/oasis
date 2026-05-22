@@ -26,11 +26,24 @@ const defaultSuspendTTL = 30 * time.Minute
 const defaultMaxSuspendSnapshots = 20
 const defaultMaxSuspendBytes int64 = 256 * 1024 * 1024 // 256 MB
 
+// defaultResumeFormat is the formatter used by untyped Suspend (and as a
+// fallback inside protocol suspends when their formatter is nil for any
+// reason). It preserves the exact byte-for-byte output Oasis has emitted
+// since v0.1 — callers reading transcripts can rely on it.
+func defaultResumeFormat(data json.RawMessage) string {
+	return "Human input: " + string(data)
+}
+
 // errSuspend is the internal sentinel returned by step functions to signal
 // that execution should pause for external input. The workflow/network engine
 // catches it and converts to ErrSuspended with resume capabilities.
 type errSuspend struct {
 	payload json.RawMessage
+	tag     string // empty for untyped Suspend; protocol name for typed SuspendProtocol.Suspend
+	// format produces the user-visible message injected into the LLM history
+	// from the resume bytes. When nil, the default formatter (defaultResumeFormat)
+	// is used, preserving today's "Human input: <data>" output.
+	format func(data json.RawMessage) string
 }
 
 func (e *errSuspend) Error() string { return "suspend" }
@@ -38,6 +51,9 @@ func (e *errSuspend) Error() string { return "suspend" }
 // Suspend returns an error that signals the workflow or network engine to
 // pause execution. The payload provides context for the human (what they
 // need to decide, what data to show).
+//
+// For typed payloads use SuspendProtocol.Suspend; this untyped form
+// remains as an escape hatch for prototypes and dynamic payloads.
 func Suspend(payload json.RawMessage) error {
 	return &errSuspend{payload: payload}
 }
@@ -63,6 +79,11 @@ type ErrSuspended struct {
 	Step string
 	// Payload carries context for the human (what to show, what to decide).
 	Payload json.RawMessage
+	// tag identifies the SuspendProtocol used to construct this suspension,
+	// or "" if constructed via the untyped Suspend(json.RawMessage) path.
+	// Protocol methods (PayloadFrom, Resume, ResumeStream) check tag for
+	// mismatch and return a clear error.
+	tag string
 	// resume is the closure that continues execution with human input.
 	// Guarded by mu when a TTL timer is active (timer callback writes from
 	// a separate goroutine). Without a TTL, single-goroutine access is safe.
@@ -308,14 +329,20 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 		}
 	}
 
+	formatFn := suspend.format
+	if formatFn == nil {
+		formatFn = defaultResumeFormat
+	}
+
 	suspended := &ErrSuspended{
 		Step:         cfg.name,
 		Payload:      suspend.payload,
+		tag:          suspend.tag, // propagate from sentinel
 		snapshotSize: snapSize,
 		resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
 			resumed := make([]ChatMessage, len(snapshot)+1)
 			copy(resumed, snapshot)
-			resumed[len(snapshot)] = UserMessage("Human input: " + string(data))
+			resumed[len(snapshot)] = UserMessage(formatFn(data))
 			resumeCfg := cfg
 			resumeCfg.resumeMessages = resumed
 			return runLoop(ctx, resumeCfg, task, nil)
@@ -324,7 +351,7 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 			// runLoop closes ch via its safeCloseCh — no additional defer close here.
 			resumed := make([]ChatMessage, len(snapshot)+1)
 			copy(resumed, snapshot)
-			resumed[len(snapshot)] = UserMessage("Human input: " + string(data))
+			resumed[len(snapshot)] = UserMessage(formatFn(data))
 			resumeCfg := cfg
 			resumeCfg.resumeMessages = resumed
 			return runLoop(ctx, resumeCfg, task, ch)
