@@ -1398,3 +1398,49 @@ func TestAgentResultStepsUnbounded(t *testing.T) {
 		t.Fatalf("Steps len = %d, want %d", len(result.Steps), numCalls)
 	}
 }
+
+// TestWithLimits_AppliesAllFields verifies that WithLimits wires every
+// limit field into Config. Pins the Limits → Config field mapping.
+func TestWithLimits_AppliesAllFields(t *testing.T) {
+	lim := Limits{
+		MaxIter:             7,
+		MaxSteps:            42,
+		MaxPlanSteps:        13,
+		MaxParallelDispatch: 3,
+		MaxAttachmentBytes:  1234,
+		MaxToolResultLen:    5678,
+		MaxSuspendSnapshots: 9,
+		MaxSuspendBytes:     8765,
+	}
+	cfg := BuildConfig([]AgentOption{WithLimits(lim)})
+	if cfg.maxIter != 7 || cfg.maxPlanSteps != 13 || cfg.maxParallelDispatch != 3 ||
+		cfg.maxAttachmentBytes != 1234 || cfg.maxToolResultLen != 5678 ||
+		cfg.maxSuspendSnapshots != 9 || cfg.maxSuspendBytes != 8765 {
+		t.Fatalf("Limits not propagated: %+v", cfg)
+	}
+	if cfg.maxSteps == nil || *cfg.maxSteps != 42 {
+		t.Fatalf("MaxSteps not propagated: %v", cfg.maxSteps)
+	}
+}
+
+// TestWithLimits_UnboundedMaxSteps verifies that the Unbounded sentinel
+// produces the "explicit unbounded" semantics that WithMaxSteps(0) used.
+func TestWithLimits_UnboundedMaxSteps(t *testing.T) {
+	cfg := BuildConfig([]AgentOption{WithLimits(Limits{MaxSteps: Unbounded})})
+	if cfg.maxSteps == nil || *cfg.maxSteps != 0 {
+		t.Fatalf("Unbounded should set maxSteps to 0 (legacy unbounded sentinel): %v", cfg.maxSteps)
+	}
+}
+
+// TestWithLimits_ZeroFieldsUseDefaults verifies that Limits{} fields left at
+// zero do not override the agent's defaults. Only explicit non-zero fields
+// take effect — Limits{} is a no-op.
+func TestWithLimits_ZeroFieldsUseDefaults(t *testing.T) {
+	base := BuildConfig(nil)
+	withZero := BuildConfig([]AgentOption{WithLimits(Limits{})})
+	if base.maxIter != withZero.maxIter ||
+		base.maxAttachmentBytes != withZero.maxAttachmentBytes ||
+		base.maxParallelDispatch != withZero.maxParallelDispatch {
+		t.Fatalf("Limits{} should be a no-op; base=%+v withZero=%+v", base, withZero)
+	}
+}

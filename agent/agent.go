@@ -179,6 +179,101 @@ func WithSuspendBudget(maxSnapshots int, maxBytes int64) AgentOption {
 	}
 }
 
+// Unbounded is the sentinel value for limit fields whose "0" already has a
+// meaning. Currently only Limits.MaxSteps uses this: MaxSteps == 0 means
+// "use default 100" (zero-value of an unset struct field), so to request
+// "no cap on stored steps" callers set MaxSteps: agent.Unbounded.
+const Unbounded = -1
+
+// Limits groups the agent's resource-budget knobs into one typed sub-config.
+// All fields are optional — zero values keep the agent's defaults. Set only
+// the fields you want to override.
+//
+// Why a struct instead of seven separate WithMax* options:
+//   - Discoverability: typing `agent.Limits{` in an IDE or LLM-assisted editor
+//     surfaces every budget at once.
+//   - Reusability: a shared `Limits` value can be passed to many agent
+//     constructors and to RunOptions per-call overrides.
+//   - One godoc page documents the whole cluster with cross-field semantics.
+//
+// Semantic edge: MaxSteps == 0 means "use the default 100"; to request
+// truly unbounded step storage, use MaxSteps: agent.Unbounded.
+type Limits struct {
+	// MaxIter caps the number of tool-calling iterations. 0 = default 25.
+	// Negative is invalid.
+	MaxIter int
+
+	// MaxSteps caps the number of StepTrace entries retained on AgentResult.
+	// 0 = default 100. Use Unbounded for no cap. Negative (other than
+	// Unbounded) is invalid.
+	MaxSteps int
+
+	// MaxPlanSteps caps the number of steps a single execute_plan tool call
+	// may dispatch. 0 = default 50. Negative is invalid.
+	MaxPlanSteps int
+
+	// MaxParallelDispatch caps the worker pool for parallel tool execution.
+	// 0 = default 10. Negative is invalid.
+	MaxParallelDispatch int
+
+	// MaxAttachmentBytes caps the cumulative bytes of attachments accumulated
+	// from tool/agent results during a single run. 0 = default 50MB.
+	MaxAttachmentBytes int64
+
+	// MaxToolResultLen caps the rune length of a tool result stored in the
+	// message history. 0 = default 100_000 runes.
+	MaxToolResultLen int
+
+	// MaxSuspendSnapshots caps the number of suspend snapshots an agent may
+	// produce across its lifetime. 0 = no cap. Pairs with MaxSuspendBytes.
+	MaxSuspendSnapshots int
+
+	// MaxSuspendBytes caps the cumulative bytes of suspend snapshots.
+	// 0 = no cap. Pairs with MaxSuspendSnapshots.
+	MaxSuspendBytes int64
+}
+
+// WithLimits sets the agent's resource-budget Limits in one option. Replaces
+// the older per-knob options (WithMaxIter, WithMaxSteps, WithMaxAttachmentBytes,
+// WithMaxToolResultLen, WithMaxPlanSteps, WithMaxParallelDispatch,
+// WithSuspendBudget). Calling WithLimits multiple times merges fields: a
+// later non-zero field overrides the earlier value; a later zero field does
+// not clear an earlier non-zero one.
+func WithLimits(lim Limits) AgentOption {
+	return func(c *Config) {
+		if lim.MaxIter != 0 {
+			c.maxIter = lim.MaxIter
+		}
+		if lim.MaxSteps != 0 {
+			if lim.MaxSteps == Unbounded {
+				v := 0
+				c.maxSteps = &v
+			} else {
+				v := lim.MaxSteps
+				c.maxSteps = &v
+			}
+		}
+		if lim.MaxPlanSteps != 0 {
+			c.maxPlanSteps = lim.MaxPlanSteps
+		}
+		if lim.MaxParallelDispatch != 0 {
+			c.maxParallelDispatch = lim.MaxParallelDispatch
+		}
+		if lim.MaxAttachmentBytes != 0 {
+			c.maxAttachmentBytes = lim.MaxAttachmentBytes
+		}
+		if lim.MaxToolResultLen != 0 {
+			c.maxToolResultLen = lim.MaxToolResultLen
+		}
+		if lim.MaxSuspendSnapshots != 0 {
+			c.maxSuspendSnapshots = lim.MaxSuspendSnapshots
+		}
+		if lim.MaxSuspendBytes != 0 {
+			c.maxSuspendBytes = lim.MaxSuspendBytes
+		}
+	}
+}
+
 // --- History ---
 
 // WithHistory enables conversation history and related context-window
