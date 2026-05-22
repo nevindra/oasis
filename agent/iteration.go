@@ -31,18 +31,18 @@ type loopState struct {
 	compressThreshold          int
 	safeCloseCh                func()
 
-	// Task 3.3: Carry forward across iterations; final values land on AgentResult.
 	lastWarnings     []string
 	lastProviderMeta json.RawMessage
 
-	// Task 3.4: File attachments aggregated from EventFileAttachment events.
+	// Files aggregated from EventFileAttachment events emitted by the provider
+	// or tool implementations; copied onto AgentResult.Files on all exit paths.
 	files []Attachment
 
-	// Task 4.3: Per-iteration timing and usage traces; copied onto AgentResult.
 	iterations []IterationTrace
 
-	// Task 10.2: Sources aggregated from tools that implement core.Sourced.
-	// Copied onto AgentResult.Sources on every terminal path.
+	// Why: tools implementing core.Sourced are collected here so the caller
+	// gets a unified citation list across all tool calls in a run.
+	// Copied onto AgentResult.Sources on every terminal exit path.
 	sources []core.Source
 }
 
@@ -84,7 +84,6 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 	}
 	iterStart := time.Now()
 
-	// Iteration tracing span (Task 4.1: named "agent.iteration").
 	iterCtx := ctx
 	var iterSpan Span
 	if cfg.tracer != nil {
@@ -93,16 +92,15 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			BoolAttr("has_tools", len(cfg.tools) > 0))
 	}
 
-	// Task 4.3: llmTrace accumulates per-iteration LLM call timing/usage.
-	// llmModel holds the provider name used for this iteration's LLM call.
-	// llmCalled is set to true after a successful provider call completes so
-	// that endIter only records an IterationTrace when an LLM call happened.
+	// llmCalled guards IterationTrace recording: endIter only appends a trace
+	// when an actual provider call completed (pre-processor errors may exit
+	// before any LLM call, and should not produce a trace).
 	var llmTrace LLMCallTrace
 	llmModel := cfg.provider.Name() // default; may be updated if PrepareStep overrides provider
 	llmCalled := false
 
 	// endIter closes the tracing span, emits EventIterationFinish, and appends
-	// the completed IterationTrace to state.iterations (Task 4.3).
+	// the completed IterationTrace to state.iterations.
 	// reason is the FinishReason for this iteration (e.g. FinishStop,
 	// FinishToolCalls, FinishSuspended, FinishError, FinishHalted).
 	endIter := func(reason FinishReason) {
@@ -193,7 +191,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		}
 		if ctrl.Model != nil {
 			iterProvider = ctrl.Model
-			llmModel = iterProvider.Name() // Task 4.3: track which provider is used
+			llmModel = iterProvider.Name() // keep trace accurate when PrepareStep overrides the provider
 		}
 		if ctrl.Tools != nil {
 			defs := make([]ToolDefinition, len(ctrl.Tools))
@@ -209,13 +207,10 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		// Streaming with tools (single agent only): intermediate channel so the
 		// provider's defer-close doesn't shut down the main stream. Networks
 		// use Chat() to preserve router text-delta deduplication.
-		// Task 3.4: Use capturing forwarder so EventFileAttachment from the
-		// provider are intercepted and appended to state.files.
+		// newObjectStreamForwarder intercepts EventFileAttachment events into
+		// state.files and emits EventObjectDelta snapshots when a schema is set.
 		cfg.logger.Debug("calling LLM (streaming, with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
-		// Task 6.1: Use object-stream forwarder when schema is set so that
-		// EventObjectDelta snapshots are emitted alongside text deltas.
 		iterCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.responseSchema)
-		// Task 4.2: llm.generate span wrapping the provider call.
 		llmCtx := iterCtx
 		var llmSpan Span
 		if cfg.tracer != nil {
@@ -242,7 +237,6 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		streamedThisIter = true
 	} else if len(req.Tools) > 0 {
 		cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
-		// Task 4.2: llm.generate span wrapping the provider call.
 		llmCtx := iterCtx
 		var llmSpan Span
 		if cfg.tracer != nil {
@@ -267,13 +261,10 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		llmCalled = true
 	} else if ch != nil {
 		// No tools, streaming — terminal path (single-shot stream then return).
-		// Task 3.4: Use capturing forwarder so EventFileAttachment from the
-		// provider are intercepted and appended to state.files.
-		// Task 6.1: Use object-stream forwarder when schema is set so that
-		// EventObjectDelta snapshots are emitted alongside text deltas.
+		// newObjectStreamForwarder intercepts EventFileAttachment events into
+		// state.files and emits EventObjectDelta snapshots when a schema is set.
 		cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
 		iterCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.responseSchema)
-		// Task 4.2: llm.generate span wrapping the provider call.
 		llmCtx := iterCtx
 		var llmSpan Span
 		if cfg.tracer != nil {
@@ -314,7 +305,6 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		state.totalUsage.InputTokens += resp.Usage.InputTokens
 		state.totalUsage.OutputTokens += resp.Usage.OutputTokens
 
-		// Task 3.3: Accumulate provider warnings and remember the latest provider meta.
 		captureProviderMeta(state, &resp)
 
 		// PostProcessor hook (response already streamed, but processors still
@@ -409,7 +399,6 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			Iterations:   state.iterations,
 			Sources:      state.sources,
 		}
-		// Task 6.1: Emit EventObjectFinish and populate result.Object when schema is set.
 		emitObjectFinish(ctx, ch, cfg.responseSchema, resp.Content, &result)
 		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
 		return iterationResult{
@@ -418,7 +407,6 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		}
 	} else {
 		cfg.logger.Debug("calling LLM (no tools)", "agent", cfg.name, "iteration", i)
-		// Task 4.2: llm.generate span wrapping the provider call.
 		llmCtx := iterCtx
 		var llmSpan Span
 		if cfg.tracer != nil {
@@ -465,7 +453,6 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 	state.totalUsage.InputTokens += resp.Usage.InputTokens
 	state.totalUsage.OutputTokens += resp.Usage.OutputTokens
 
-	// Task 3.3: Accumulate provider warnings and remember the latest provider meta.
 	captureProviderMeta(state, &resp)
 
 	// PostProcessor hook.
@@ -584,7 +571,6 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			Iterations:   state.iterations,
 			Sources:      state.sources,
 		}
-		// Task 6.1: Emit EventObjectFinish and populate result.Object when schema is set.
 		emitObjectFinish(ctx, ch, cfg.responseSchema, content, &result)
 		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
 		return iterationResult{
@@ -641,9 +627,9 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		toolNames[ti] = tc.Name
 	}
 	cfg.logger.Info("dispatching tool calls", "agent", cfg.name, "iteration", i, "tools", toolNames)
-	// Task 3.4: Wrap the sink channel so EventFileAttachment events are captured
-	// into state.files while being forwarded to ch unchanged. newFileCapturingSink
-	// returns nil (and a no-op wait) when ch is nil (non-streaming path).
+	// Why: tool implementations may emit EventFileAttachment during dispatch.
+	// newFileCapturingSink intercepts those events into state.files while
+	// forwarding everything else to ch. Returns nil/no-op when ch is nil.
 	fileSinkCh, waitFileSink := newFileCapturingSink(ctx, ch, state)
 	iterCtx = contextWithStreamSink(iterCtx, fileSinkCh)
 	dispatchStart := time.Now()
@@ -761,8 +747,8 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			state.lastAgentOutput = string(result.Content)
 		}
 
-		// Task 10.2: If the dispatched tool implements core.Sourced, collect its
-		// cited sources. Only runs on a successful dispatch (non-error result).
+		// Collect citations from tools that implement core.Sourced.
+		// Skipped on error results since a failed call has no authoritative sources.
 		if !results[j].isError && cfg.lookupTool != nil {
 			if t, ok := cfg.lookupTool(tc.Name); ok {
 				if sourced, ok := t.(core.Sourced); ok {

@@ -217,10 +217,8 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 	if ch != nil {
 		// Intermediate channel so the provider's defer-close doesn't touch ch
 		// directly. safeCloseCh remains the sole closer of ch.
-		// Task 3.4: Use capturing forwarder so EventFileAttachment from synthesis
-		// are intercepted and appended to state.files.
-		// Task 6.1: Use object-stream forwarder when schema is set so that
-		// EventObjectDelta snapshots are emitted during synthesis streaming.
+		// newObjectStreamForwarder intercepts EventFileAttachment events into
+		// state.files and emits EventObjectDelta snapshots when a schema is set.
 		synthCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.responseSchema)
 		resp, err = cfg.provider.ChatStream(synthCtx, synthReq, synthCh)
 		wait()
@@ -239,7 +237,6 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 	state.totalUsage.InputTokens += resp.Usage.InputTokens
 	state.totalUsage.OutputTokens += resp.Usage.OutputTokens
 
-	// Task 3.3: Accumulate provider warnings and remember the latest provider meta.
 	captureProviderMeta(state, &resp)
 
 	// PostProcessor hook.
@@ -290,7 +287,6 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 		Iterations:   state.iterations,
 		Sources:      state.sources,
 	}
-	// Task 6.1: Emit EventObjectFinish and populate result.Object when schema is set.
 	emitObjectFinish(ctx, ch, cfg.responseSchema, resp.Content, &result)
 	finalizeRun(ctx, ch, state, cfg.name, FinishMaxIter, result)
 	return result, nil
