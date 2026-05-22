@@ -22,6 +22,11 @@ type RunOptions struct {
 	MaxPlanSteps   *int
 	ResponseSchema *ResponseSchema
 
+	// Limits overrides the agent's resource budgets for this call. Zero
+	// fields on Limits keep the agent's value (partial override). nil
+	// means no override at all (same as omitting the field).
+	Limits *Limits
+
 	// Capability overrides — non-nil replaces fully; empty slice clears all.
 	Tools        []AnyTool
 	Agents       []Agent
@@ -84,6 +89,33 @@ func (o *RunOptions) Validate() error {
 	if o.StreamReplayLimit < 0 {
 		return &RunOptionsError{Field: "StreamReplayLimit", Message: "must be >= 0"}
 	}
+	if o.Limits != nil {
+		lim := o.Limits
+		if lim.MaxIter < 0 {
+			return &RunOptionsError{Field: "Limits.MaxIter", Message: "must be >= 0"}
+		}
+		if lim.MaxSteps < 0 && lim.MaxSteps != Unbounded {
+			return &RunOptionsError{Field: "Limits.MaxSteps", Message: "must be >= 0 or Unbounded"}
+		}
+		if lim.MaxPlanSteps < 0 {
+			return &RunOptionsError{Field: "Limits.MaxPlanSteps", Message: "must be >= 0"}
+		}
+		if lim.MaxParallelDispatch < 0 {
+			return &RunOptionsError{Field: "Limits.MaxParallelDispatch", Message: "must be >= 0"}
+		}
+		if lim.MaxAttachmentBytes < 0 {
+			return &RunOptionsError{Field: "Limits.MaxAttachmentBytes", Message: "must be >= 0"}
+		}
+		if lim.MaxToolResultLen < 0 {
+			return &RunOptionsError{Field: "Limits.MaxToolResultLen", Message: "must be >= 0"}
+		}
+		if lim.MaxSuspendSnapshots < 0 {
+			return &RunOptionsError{Field: "Limits.MaxSuspendSnapshots", Message: "must be >= 0"}
+		}
+		if lim.MaxSuspendBytes < 0 {
+			return &RunOptionsError{Field: "Limits.MaxSuspendBytes", Message: "must be >= 0"}
+		}
+	}
 	return nil
 }
 
@@ -100,6 +132,7 @@ func (o *RunOptions) HasOverrides() bool {
 		o.MaxSteps != nil ||
 		o.MaxPlanSteps != nil ||
 		o.ResponseSchema != nil ||
+		o.Limits != nil ||
 		o.Tools != nil ||
 		o.Agents != nil ||
 		o.ActiveSkills != nil ||
@@ -182,6 +215,41 @@ func applyRunOptions(base *Config, opts *RunOptions) *Config {
 	}
 	if opts.MaxToolResultLen != nil {
 		c.maxToolResultLen = *opts.MaxToolResultLen
+	}
+
+	// Limits block: runs after per-field handling so Limits wins if both are set.
+	if opts.Limits != nil {
+		lim := opts.Limits
+		if lim.MaxIter != 0 {
+			c.maxIter = lim.MaxIter
+		}
+		if lim.MaxSteps != 0 {
+			if lim.MaxSteps == Unbounded {
+				v := 0
+				c.maxSteps = &v
+			} else {
+				v := lim.MaxSteps
+				c.maxSteps = &v
+			}
+		}
+		if lim.MaxPlanSteps != 0 {
+			c.maxPlanSteps = lim.MaxPlanSteps
+		}
+		if lim.MaxParallelDispatch != 0 {
+			c.maxParallelDispatch = lim.MaxParallelDispatch
+		}
+		if lim.MaxAttachmentBytes != 0 {
+			c.maxAttachmentBytes = lim.MaxAttachmentBytes
+		}
+		if lim.MaxToolResultLen != 0 {
+			c.maxToolResultLen = lim.MaxToolResultLen
+		}
+		if lim.MaxSuspendSnapshots != 0 {
+			c.maxSuspendSnapshots = lim.MaxSuspendSnapshots
+		}
+		if lim.MaxSuspendBytes != 0 {
+			c.maxSuspendBytes = lim.MaxSuspendBytes
+		}
 	}
 
 	// Pipelines — non-nil replaces.

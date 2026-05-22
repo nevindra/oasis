@@ -250,3 +250,42 @@ func TestRunOptions_StreamReplayLimit_ZeroOK(t *testing.T) {
 		t.Fatalf("Validate() = %v, want nil (0 means default)", err)
 	}
 }
+
+// TestRunOptions_LimitsOverride verifies that RunOptions.Limits replaces the
+// agent's limits for the single Execute call.
+func TestRunOptions_LimitsOverride(t *testing.T) {
+	base := BuildConfig([]AgentOption{WithLimits(Limits{MaxIter: 25, MaxAttachmentBytes: 1000})})
+	override := &Limits{MaxIter: 5, MaxAttachmentBytes: 2000}
+	eff := applyRunOptions(base, &RunOptions{Limits: override})
+	if eff.maxIter != 5 {
+		t.Fatalf("MaxIter not overridden: got %d", eff.maxIter)
+	}
+	if eff.maxAttachmentBytes != 2000 {
+		t.Fatalf("MaxAttachmentBytes not overridden: got %d", eff.maxAttachmentBytes)
+	}
+}
+
+// TestRunOptions_LimitsZeroFieldKeepsBase verifies that zero fields on the
+// Limits override preserve the base agent's values (partial-override
+// semantics that match the WithLimits merge rules).
+func TestRunOptions_LimitsZeroFieldKeepsBase(t *testing.T) {
+	base := BuildConfig([]AgentOption{WithLimits(Limits{MaxIter: 25, MaxAttachmentBytes: 1000})})
+	// Override only MaxIter; MaxAttachmentBytes stays at base 1000.
+	eff := applyRunOptions(base, &RunOptions{Limits: &Limits{MaxIter: 5}})
+	if eff.maxIter != 5 || eff.maxAttachmentBytes != 1000 {
+		t.Fatalf("partial override broken: maxIter=%d maxAttachmentBytes=%d", eff.maxIter, eff.maxAttachmentBytes)
+	}
+}
+
+// TestRunOptions_LimitsValidation verifies that negative values (except
+// Unbounded on MaxSteps) are rejected by Validate.
+func TestRunOptions_LimitsValidation(t *testing.T) {
+	negIter := -1
+	if err := (&RunOptions{Limits: &Limits{MaxIter: negIter}}).Validate(); err == nil {
+		t.Fatalf("Limits.MaxIter=-1 should be rejected")
+	}
+	// Unbounded MaxSteps is a valid value, not a validation failure.
+	if err := (&RunOptions{Limits: &Limits{MaxSteps: Unbounded}}).Validate(); err != nil {
+		t.Fatalf("Limits.MaxSteps=Unbounded should be valid, got: %v", err)
+	}
+}
