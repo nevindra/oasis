@@ -585,14 +585,14 @@ func TestExecuteWith_EmptyEquivalentToExecute(t *testing.T) {
 
 func TestExecuteWith_ValidationFails(t *testing.T) {
 	a := newExecuteTestAgent(t)
-	n := 0
-	_, err := a.ExecuteWith(context.Background(), AgentTask{Input: "x"}, &RunOptions{MaxIter: &n})
+	n := -1
+	_, err := a.ExecuteWith(context.Background(), AgentTask{Input: "x"}, &RunOptions{Limits: &Limits{MaxIter: n}})
 	if err == nil {
-		t.Fatalf("ExecuteWith(MaxIter=0): err = nil, want validation error")
+		t.Fatalf("ExecuteWith(Limits.MaxIter=-1): err = nil, want validation error")
 	}
 	var roErr *RunOptionsError
 	if !errors.As(err, &roErr) {
-		t.Fatalf("ExecuteWith(MaxIter=0): err is not *RunOptionsError: %v", err)
+		t.Fatalf("ExecuteWith(Limits.MaxIter=-1): err is not *RunOptionsError: %v", err)
 	}
 }
 

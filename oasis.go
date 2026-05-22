@@ -52,9 +52,6 @@ var Spawn = agent.Spawn
 
 var WithTools = agent.WithTools
 var WithPrompt = agent.WithPrompt
-var WithMaxIter = agent.WithMaxIter
-var WithMaxAttachmentBytes = agent.WithMaxAttachmentBytes
-var WithSuspendBudget = agent.WithSuspendBudget
 
 // Limits groups all per-agent resource-budget fields into a single value.
 // Use WithLimits to apply it.
@@ -96,9 +93,6 @@ var WithPreProcessors = agent.WithPreProcessors
 var WithPostProcessors = agent.WithPostProcessors
 var WithPostToolProcessors = agent.WithPostToolProcessors
 var WithInputHandler = agent.WithInputHandler
-var WithMaxParallelDispatch = agent.WithMaxParallelDispatch
-var WithMaxPlanSteps = agent.WithMaxPlanSteps
-var WithMaxToolResultLen = agent.WithMaxToolResultLen
 var WithToolResultStore = agent.WithToolResultStore
 
 // WithEmbedding sets the shared embedding provider used by memory features

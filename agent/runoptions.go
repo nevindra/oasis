@@ -17,9 +17,6 @@ type RunOptions struct {
 	// Behavior overrides
 	Prompt         *string
 	Generation     *Generation
-	MaxIter        *int
-	MaxSteps       *int
-	MaxPlanSteps   *int
 	ResponseSchema *ResponseSchema
 
 	// Limits overrides the agent's resource budgets for this call. Zero
@@ -31,10 +28,6 @@ type RunOptions struct {
 	Tools        []AnyTool
 	Agents       []Agent
 	ActiveSkills []Skill
-
-	// Resource budget overrides
-	MaxAttachmentBytes *int64
-	MaxToolResultLen   *int
 
 	// Pipeline overrides — non-nil replaces; nil keeps agent-level.
 	PreProcessors      []PreProcessor
@@ -70,21 +63,6 @@ type RunOptions struct {
 func (o *RunOptions) Validate() error {
 	if o == nil {
 		return nil
-	}
-	if o.MaxIter != nil && *o.MaxIter <= 0 {
-		return &RunOptionsError{Field: "MaxIter", Message: "must be > 0"}
-	}
-	if o.MaxSteps != nil && *o.MaxSteps <= 0 {
-		return &RunOptionsError{Field: "MaxSteps", Message: "must be > 0"}
-	}
-	if o.MaxPlanSteps != nil && *o.MaxPlanSteps <= 0 {
-		return &RunOptionsError{Field: "MaxPlanSteps", Message: "must be > 0"}
-	}
-	if o.MaxAttachmentBytes != nil && *o.MaxAttachmentBytes <= 0 {
-		return &RunOptionsError{Field: "MaxAttachmentBytes", Message: "must be > 0"}
-	}
-	if o.MaxToolResultLen != nil && *o.MaxToolResultLen <= 0 {
-		return &RunOptionsError{Field: "MaxToolResultLen", Message: "must be > 0"}
 	}
 	if o.StreamReplayLimit < 0 {
 		return &RunOptionsError{Field: "StreamReplayLimit", Message: "must be >= 0"}
@@ -128,16 +106,11 @@ func (o *RunOptions) HasOverrides() bool {
 	}
 	return o.Prompt != nil ||
 		o.Generation != nil ||
-		o.MaxIter != nil ||
-		o.MaxSteps != nil ||
-		o.MaxPlanSteps != nil ||
 		o.ResponseSchema != nil ||
 		o.Limits != nil ||
 		o.Tools != nil ||
 		o.Agents != nil ||
 		o.ActiveSkills != nil ||
-		o.MaxAttachmentBytes != nil ||
-		o.MaxToolResultLen != nil ||
 		o.PreProcessors != nil ||
 		o.PostProcessors != nil ||
 		o.PostToolProcessors != nil ||
@@ -184,16 +157,6 @@ func applyRunOptions(base *Config, opts *RunOptions) *Config {
 	if opts.Generation != nil {
 		c.genParams = mergeGenerationParams(base.genParams, opts.Generation)
 	}
-	if opts.MaxIter != nil {
-		c.maxIter = *opts.MaxIter
-	}
-	if opts.MaxSteps != nil {
-		v := *opts.MaxSteps
-		c.maxSteps = &v
-	}
-	if opts.MaxPlanSteps != nil {
-		c.maxPlanSteps = *opts.MaxPlanSteps
-	}
 	if opts.ResponseSchema != nil {
 		c.responseSchema = opts.ResponseSchema
 	}
@@ -207,14 +170,6 @@ func applyRunOptions(base *Config, opts *RunOptions) *Config {
 	}
 	if opts.ActiveSkills != nil {
 		c.activeSkills = opts.ActiveSkills
-	}
-
-	// Resource budgets
-	if opts.MaxAttachmentBytes != nil {
-		c.maxAttachmentBytes = *opts.MaxAttachmentBytes
-	}
-	if opts.MaxToolResultLen != nil {
-		c.maxToolResultLen = *opts.MaxToolResultLen
 	}
 
 	// Limits block: runs after per-field handling so Limits wins if both are set.

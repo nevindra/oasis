@@ -155,29 +155,8 @@ func WithPrompt(s string) AgentOption {
 	return func(c *Config) { c.systemPrompt = s }
 }
 
-// WithMaxIter sets the maximum tool-calling iterations.
-func WithMaxIter(n int) AgentOption {
-	return func(c *Config) { c.maxIter = n }
-}
 
-// WithMaxAttachmentBytes sets the maximum total bytes of attachments
-// accumulated from tool results during the execution loop. Default is 50 MB.
-// Zero means use the default.
-func WithMaxAttachmentBytes(n int64) AgentOption {
-	return func(c *Config) { c.maxAttachmentBytes = n }
-}
 
-// WithSuspendBudget sets per-agent limits on concurrent suspended snapshots.
-// maxSnapshots caps the number of active suspensions. maxBytes caps total
-// estimated memory held by snapshot closures. Defaults: 20 snapshots, 256 MB.
-// When either limit is exceeded, new suspensions are rejected (the underlying
-// processor error is returned instead of ErrSuspended).
-func WithSuspendBudget(maxSnapshots int, maxBytes int64) AgentOption {
-	return func(c *Config) {
-		c.maxSuspendSnapshots = maxSnapshots
-		c.maxSuspendBytes = maxBytes
-	}
-}
 
 // Unbounded is the sentinel value for limit fields whose "0" already has a
 // meaning. Currently only Limits.MaxSteps uses this: MaxSteps == 0 means
@@ -573,36 +552,8 @@ func WithUserMemory(m MemoryStore) AgentOption {
 	return func(c *Config) { c.memory = m }
 }
 
-// WithMaxParallelDispatch caps the number of concurrent tool call goroutines.
-// Default is 10. Set higher when tools are I/O-bound and can tolerate fan-out.
-func WithMaxParallelDispatch(n int) AgentOption {
-	return func(c *Config) {
-		if n > 0 {
-			c.maxParallelDispatch = n
-		}
-	}
-}
 
-// WithMaxPlanSteps caps the number of steps in a single execute_plan call.
-// Default is 50. The LLM gets an error if it submits a plan with more steps.
-func WithMaxPlanSteps(n int) AgentOption {
-	return func(c *Config) {
-		if n > 0 {
-			c.maxPlanSteps = n
-		}
-	}
-}
 
-// WithMaxToolResultLen sets the inline budget for tool results in the
-// conversation history (in runes). Results larger than this are truncated with
-// a paging marker. Default is 100_000 runes (~25K tokens).
-func WithMaxToolResultLen(n int) AgentOption {
-	return func(c *Config) {
-		if n > 0 {
-			c.maxToolResultLen = n
-		}
-	}
-}
 
 // WithToolPolicy attaches a per-tool timeout and retry policy to the tool
 // registered under the exact name. Re-registering the same name overwrites
@@ -640,12 +591,6 @@ func WithToolResultStore(s core.ToolResultStore) AgentOption {
 	}
 }
 
-// WithMaxSteps caps the number of StepTrace entries kept in AgentResult.Steps.
-// When the cap is exceeded the oldest entry is dropped (most-recent-N semantics).
-// WithMaxSteps(0) means unbounded. Default when not set: 100.
-func WithMaxSteps(n int) AgentOption {
-	return func(c *Config) { c.maxSteps = &n }
-}
 
 // nopLogger is a logger that discards all output. Used when WithLogger is not set.
 var nopLogger = slog.New(discardHandler{})

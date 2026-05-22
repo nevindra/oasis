@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -24,45 +23,6 @@ func TestRunOptions_EmptyValidates(t *testing.T) {
 	}
 }
 
-func TestRunOptions_PositiveMaxIterValidates(t *testing.T) {
-	n := 5
-	opts := &RunOptions{MaxIter: &n}
-	if err := opts.Validate(); err != nil {
-		t.Fatalf("MaxIter=5: Validate = %v, want nil", err)
-	}
-}
-
-func TestRunOptions_ZeroMaxIterFails(t *testing.T) {
-	n := 0
-	opts := &RunOptions{MaxIter: &n}
-	err := opts.Validate()
-	if err == nil {
-		t.Fatalf("MaxIter=0: Validate = nil, want error")
-	}
-	var roErr *RunOptionsError
-	if !errors.As(err, &roErr) {
-		t.Fatalf("MaxIter=0: error is not *RunOptionsError: %v", err)
-	}
-	if roErr.Field != "MaxIter" {
-		t.Fatalf("MaxIter=0: Field = %q, want %q", roErr.Field, "MaxIter")
-	}
-}
-
-func TestRunOptions_NegativeMaxIterFails(t *testing.T) {
-	n := -1
-	opts := &RunOptions{MaxIter: &n}
-	if err := opts.Validate(); err == nil {
-		t.Fatalf("MaxIter=-1: Validate = nil, want error")
-	}
-}
-
-func TestRunOptions_ZeroMaxAttachmentBytesFails(t *testing.T) {
-	var n int64 = 0
-	opts := &RunOptions{MaxAttachmentBytes: &n}
-	if err := opts.Validate(); err == nil {
-		t.Fatalf("MaxAttachmentBytes=0: Validate = nil, want error")
-	}
-}
 
 func TestRunOptions_HasOverrides_Empty(t *testing.T) {
 	if (&RunOptions{}).HasOverrides() {
@@ -76,13 +36,6 @@ func TestRunOptions_HasOverrides_NilIsFalse(t *testing.T) {
 	}
 }
 
-func TestRunOptions_HasOverrides_MaxIterSet(t *testing.T) {
-	n := 5
-	opts := &RunOptions{MaxIter: &n}
-	if !opts.HasOverrides() {
-		t.Fatalf("RunOptions{MaxIter: &5}: HasOverrides = false, want true")
-	}
-}
 
 func TestApplyRunOptions_NilNoChange(t *testing.T) {
 	base := &Config{maxIter: 10}
@@ -103,20 +56,6 @@ func TestApplyRunOptions_EmptyNoChange(t *testing.T) {
 	}
 }
 
-func TestApplyRunOptions_MaxIterOverride(t *testing.T) {
-	base := &Config{maxIter: 10}
-	n := 3
-	out := applyRunOptions(base, &RunOptions{MaxIter: &n})
-	if out == base {
-		t.Fatalf("non-nil opts: applyRunOptions did not return a copy")
-	}
-	if out.maxIter != 3 {
-		t.Fatalf("MaxIter override: got %d, want 3", out.maxIter)
-	}
-	if base.maxIter != 10 {
-		t.Fatalf("MaxIter override leaked into base: %d", base.maxIter)
-	}
-}
 
 func TestApplyRunOptions_PromptOverride(t *testing.T) {
 	base := &Config{systemPrompt: "agent-default"}

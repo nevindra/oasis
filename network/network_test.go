@@ -374,8 +374,7 @@ func TestNetwork_ExecuteWith_AppliesOverrides(t *testing.T) {
 	}
 	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
 
-	maxIter := 3
-	r, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{MaxIter: &maxIter})
+	r, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}})
 	if err != nil {
 		t.Fatalf("ExecuteWith(MaxIter=3): expected success now that overrides are applied, got %v", err)
 	}
@@ -389,8 +388,7 @@ func TestNetwork_ExecuteWith_AppliesOverrides(t *testing.T) {
 func TestNetwork_ExecuteWith_InvalidOverrideErrors(t *testing.T) {
 	router := &mockProvider{name: "router", responses: []core.ChatResponse{{Content: "ok"}}}
 	net := NewNetwork("net", "test", router)
-	bad := 0 // MaxIter must be > 0
-	_, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{MaxIter: &bad})
+	_, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{Limits: &agent.Limits{MaxIter: -1}})
 	if err == nil {
 		t.Fatalf("ExecuteWith with invalid MaxIter: expected validation error")
 	}
@@ -456,8 +454,7 @@ func TestNetwork_ExecuteStreamWith_AppliesOverrides(t *testing.T) {
 	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
 
 	ch := make(chan core.StreamEvent, 100)
-	maxIter := 3
-	r, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{MaxIter: &maxIter})
+	r, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}})
 	for range ch {
 	}
 	if err != nil {
@@ -474,8 +471,7 @@ func TestNetwork_ExecuteStreamWith_InvalidOverrideClosesChannel(t *testing.T) {
 	router := &mockProvider{name: "router", responses: []core.ChatResponse{{Content: "ok"}}}
 	net := NewNetwork("net", "test", router)
 	ch := make(chan core.StreamEvent, 100)
-	bad := 0
-	_, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{MaxIter: &bad})
+	_, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{Limits: &agent.Limits{MaxIter: -1}})
 	if err == nil {
 		t.Fatalf("ExecuteStreamWith with invalid MaxIter: expected validation error")
 	}
