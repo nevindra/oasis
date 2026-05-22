@@ -146,10 +146,10 @@ func applyRunOptions(base *Config, opts *RunOptions) *Config {
 
 	// Behavior overrides
 	if opts.Prompt != nil {
-		c.prompt = *opts.Prompt
+		c.systemPrompt = *opts.Prompt
 	}
 	if opts.Generation != nil {
-		c.generationParams = mergeGenerationParams(base.generationParams, opts.Generation)
+		c.genParams = mergeGenerationParams(base.genParams, opts.Generation)
 	}
 	if opts.MaxIter != nil {
 		c.maxIter = *opts.MaxIter

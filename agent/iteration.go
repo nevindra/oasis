@@ -202,237 +202,31 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		}
 	}
 
-	llmStart := time.Now()
 	if len(req.Tools) > 0 && ch != nil && !state.hasAgentTools {
 		// Streaming with tools (single agent only): intermediate channel so the
 		// provider's defer-close doesn't shut down the main stream. Networks
 		// use Chat() to preserve router text-delta deduplication.
-		// newObjectStreamForwarder intercepts EventFileAttachment events into
-		// state.files and emits EventObjectDelta snapshots when a schema is set.
 		cfg.logger.Debug("calling LLM (streaming, with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
-		iterCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.responseSchema)
-		llmCtx := iterCtx
-		var llmSpan Span
-		if cfg.tracer != nil {
-			llmCtx, llmSpan = cfg.tracer.Start(iterCtx, "llm.generate",
-				StringAttr("provider", llmModel))
-		}
-		resp, err = iterProvider.ChatStream(llmCtx, req, iterCh)
-		if llmSpan != nil {
-			llmSpan.SetAttr(
-				IntAttr("input_tokens", resp.Usage.InputTokens),
-				IntAttr("output_tokens", resp.Usage.OutputTokens),
-				StringAttr("finish_reason", string(resp.FinishReason)),
-			)
-			llmSpan.End()
-		}
-		llmTrace = LLMCallTrace{
-			Duration:     time.Since(llmStart),
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			FinishReason: resp.FinishReason,
-		}
+		resp, llmTrace, _, err = callLLM(ctx, iterCtx, cfg, req, iterProvider, ch, state, llmModel, true)
 		llmCalled = true
-		wait()
 		streamedThisIter = true
 	} else if len(req.Tools) > 0 {
 		cfg.logger.Debug("calling LLM (with tools)", "agent", cfg.name, "iteration", i, "tool_count", len(req.Tools))
-		llmCtx := iterCtx
-		var llmSpan Span
-		if cfg.tracer != nil {
-			llmCtx, llmSpan = cfg.tracer.Start(iterCtx, "llm.generate",
-				StringAttr("provider", llmModel))
-		}
-		resp, err = core.Chat(llmCtx, iterProvider, req)
-		if llmSpan != nil {
-			llmSpan.SetAttr(
-				IntAttr("input_tokens", resp.Usage.InputTokens),
-				IntAttr("output_tokens", resp.Usage.OutputTokens),
-				StringAttr("finish_reason", string(resp.FinishReason)),
-			)
-			llmSpan.End()
-		}
-		llmTrace = LLMCallTrace{
-			Duration:     time.Since(llmStart),
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			FinishReason: resp.FinishReason,
-		}
+		resp, llmTrace, _, err = callLLM(ctx, iterCtx, cfg, req, iterProvider, nil, state, llmModel, false)
 		llmCalled = true
-	} else if ch != nil {
-		// No tools, streaming — terminal path (single-shot stream then return).
-		// newObjectStreamForwarder intercepts EventFileAttachment events into
-		// state.files and emits EventObjectDelta snapshots when a schema is set.
-		cfg.logger.Debug("calling LLM (streaming, no tools)", "agent", cfg.name, "iteration", i)
-		iterCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.responseSchema)
-		llmCtx := iterCtx
-		var llmSpan Span
-		if cfg.tracer != nil {
-			llmCtx, llmSpan = cfg.tracer.Start(iterCtx, "llm.generate",
-				StringAttr("provider", llmModel))
-		}
-		resp, err = iterProvider.ChatStream(llmCtx, req, iterCh)
-		if llmSpan != nil {
-			llmSpan.SetAttr(
-				IntAttr("input_tokens", resp.Usage.InputTokens),
-				IntAttr("output_tokens", resp.Usage.OutputTokens),
-				StringAttr("finish_reason", string(resp.FinishReason)),
-			)
-			llmSpan.End()
-		}
-		llmTrace = LLMCallTrace{
-			Duration:     time.Since(llmStart),
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			FinishReason: resp.FinishReason,
-		}
-		llmCalled = true
-		wait()
-		if err != nil {
-			endIter(FinishError)
-			if r, handled := handleOnError(iterCtx, cfg, state, i, err); handled {
-				// iterContinue means retry — ch stays open; no finalizeRun.
-				// iterDone means the hook handled it terminally.
-				if r.outcome == iterDone {
-					finalizeRun(ctx, ch, state, cfg.name, FinishError, r.final)
-				}
-				return r
-			}
-			errResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishError}
-			finalizeRun(ctx, ch, state, cfg.name, FinishError, errResult)
-			return iterationResult{outcome: iterDone, final: errResult, err: err}
-		}
-		state.totalUsage.InputTokens += resp.Usage.InputTokens
-		state.totalUsage.OutputTokens += resp.Usage.OutputTokens
-
-		captureProviderMeta(state, &resp)
-
-		// PostProcessor hook (response already streamed, but processors still
-		// run for side effects like logging and validation).
-		if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
-			if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-				if ch != nil {
-					select {
-					case ch <- StreamEvent{
-						Type:           EventProcessorSuspended,
-						Content:        "post",
-						Protocol:       s.tag,
-						SuspendPayload: s.Payload,
-					}:
-					case <-ctx.Done():
-					}
-				}
-				endIter(FinishSuspended)
-				suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload, SuspendProtocol: s.tag, Iterations: state.iterations}
-				finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
-				return iterationResult{outcome: iterDone, final: suspResult, err: s}
-			}
-			res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
-			reason := FinishError
-			if res.Output != "" {
-				reason = FinishHalted
-			}
-			res.FinishReason = reason
-			endIter(reason)
-			finalizeRun(ctx, ch, state, cfg.name, reason, res)
-			return iterationResult{outcome: iterDone, final: res, err: retErr}
-		}
-
-		// OnIterationComplete hook (streaming no-tools path).
-		if cfg.onIterationComplete != nil {
-			// Append the assistant response to history before running the hook
-			// so that an InjectFeedback decision places feedback after it.
-			state.messages = append(state.messages, ChatMessage{
-				Role:    "assistant",
-				Content: resp.Content,
-			})
-			state.messageRuneCount += utf8.RuneCountInString(resp.Content)
-
-			snap := &IterationSnapshot{
-				Response:  &resp,
-				ToolCalls: nil,
-			}
-			decision, hookErr := cfg.onIterationComplete(iterCtx, i, snap)
-			if hookErr != nil {
-				endIter(FinishError)
-				errResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishError}
-				finalizeRun(ctx, ch, state, cfg.name, FinishError, errResult)
-				return iterationResult{outcome: iterDone, final: errResult, err: fmt.Errorf("OnIterationComplete: %w", hookErr)}
-			}
-			if decision.action == decisionStop {
-				endIter(FinishStop)
-				r := decision.result
-				r.FinishReason = FinishStop
-				r.Warnings = state.lastWarnings
-				r.ProviderMeta = state.lastProviderMeta
-				r.Files = state.files
-				r.Iterations = state.iterations
-				r.Sources = state.sources
-				finalizeRun(ctx, ch, state, cfg.name, FinishStop, r)
-				return iterationResult{outcome: iterDone, final: r}
-			}
-			if decision.action == decisionInject {
-				// Inject feedback messages and re-run. Note: content was already
-				// streamed to the caller before this point.
-				for _, m := range decision.msgs {
-					state.messages = append(state.messages, m)
-					state.messageRuneCount += utf8.RuneCountInString(m.Content)
-				}
-				endIter(FinishStop)
-				return iterationResult{outcome: iterContinue}
-			}
-			// decisionContinue: fall through to natural iterDone.
-		}
-
-		endIter(FinishStop)
-		cfg.mem.PersistMessages(iterCtx, cfg.name, task, task.Input, resp.Content, state.steps)
-		result := AgentResult{
-			Output:       resp.Content,
-			Thinking:     resp.Thinking,
-			Attachments:  mergeAttachments(state.accumulatedAttachments, resp.Attachments),
-			Usage:        state.totalUsage,
-			Steps:        state.steps,
-			FinishReason: FinishStop,
-			Warnings:     state.lastWarnings,
-			ProviderMeta: state.lastProviderMeta,
-			Files:        state.files,
-			Iterations:   state.iterations,
-			Sources:      state.sources,
-		}
-		emitObjectFinish(ctx, ch, cfg.responseSchema, resp.Content, &result)
-		finalizeRun(ctx, ch, state, cfg.name, FinishStop, result)
-		return iterationResult{
-			outcome: iterDone,
-			final:   result,
-		}
 	} else {
-		cfg.logger.Debug("calling LLM (no tools)", "agent", cfg.name, "iteration", i)
-		llmCtx := iterCtx
-		var llmSpan Span
-		if cfg.tracer != nil {
-			llmCtx, llmSpan = cfg.tracer.Start(iterCtx, "llm.generate",
-				StringAttr("provider", llmModel))
-		}
-		resp, err = core.Chat(llmCtx, iterProvider, req)
-		if llmSpan != nil {
-			llmSpan.SetAttr(
-				IntAttr("input_tokens", resp.Usage.InputTokens),
-				IntAttr("output_tokens", resp.Usage.OutputTokens),
-				StringAttr("finish_reason", string(resp.FinishReason)),
-			)
-			llmSpan.End()
-		}
-		llmTrace = LLMCallTrace{
-			Duration:     time.Since(llmStart),
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			FinishReason: resp.FinishReason,
-		}
+		// No tools: stream when ch != nil, otherwise blocking. The no-tool-calls
+		// branch below handles result assembly for both. streamedThisIter
+		// suppresses the duplicate text emit when the provider already streamed.
+		useStream := ch != nil
+		cfg.logger.Debug("calling LLM (no tools)", "agent", cfg.name, "iteration", i, "streaming", useStream)
+		resp, llmTrace, _, err = callLLM(ctx, iterCtx, cfg, req, iterProvider, ch, state, llmModel, useStream)
+		streamedThisIter = useStream
 		llmCalled = true
 	}
 
 	if err != nil {
-		cfg.logger.Error("LLM call failed", "agent", cfg.name, "iteration", i, "error", err, "duration", time.Since(llmStart))
+		cfg.logger.Error("LLM call failed", "agent", cfg.name, "iteration", i, "error", err, "duration", llmTrace.Duration)
 		endIter(FinishError)
 		if r, handled := handleOnError(iterCtx, cfg, state, i, err); handled {
 			// iterContinue means retry — ch stays open; no finalizeRun.
@@ -446,7 +240,7 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 		return iterationResult{outcome: iterDone, final: errResult, err: err}
 	}
 	cfg.logger.Debug("LLM call completed", "agent", cfg.name, "iteration", i,
-		"duration", time.Since(llmStart),
+		"duration", llmTrace.Duration,
 		"input_tokens", resp.Usage.InputTokens,
 		"output_tokens", resp.Usage.OutputTokens,
 		"tool_calls", len(resp.ToolCalls))
@@ -456,33 +250,8 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 	captureProviderMeta(state, &resp)
 
 	// PostProcessor hook.
-	if err := cfg.processors.RunPostLLM(iterCtx, &resp); err != nil {
-		if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-			if ch != nil {
-				select {
-				case ch <- StreamEvent{
-					Type:           EventProcessorSuspended,
-					Content:        "post",
-					Protocol:       s.tag,
-					SuspendPayload: s.Payload,
-				}:
-				case <-ctx.Done():
-				}
-			}
-			endIter(FinishSuspended)
-			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload, SuspendProtocol: s.tag, Iterations: state.iterations}
-			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
-			return iterationResult{outcome: iterDone, final: suspResult, err: s}
-		}
-		res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
-		reason := FinishError
-		if res.Output != "" {
-			reason = FinishHalted
-		}
-		res.FinishReason = reason
-		endIter(reason)
-		finalizeRun(ctx, ch, state, cfg.name, reason, res)
-		return iterationResult{outcome: iterDone, final: res, err: retErr}
+	if r, handled := runPostLLMOrHandle(ctx, iterCtx, cfg, task, ch, state, &resp, endIter); handled {
+		return r
 	}
 
 	// Capture and emit thinking content from this LLM call.
@@ -811,6 +580,123 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 
 	endIter(FinishToolCalls)
 	return iterationResult{outcome: iterContinue}
+}
+
+// callLLM dispatches one LLM call (streaming or non-streaming), opens/closes
+// the llm.generate span when tracing is enabled, and builds the LLMCallTrace.
+//
+// fwdCtx is the root context passed to newObjectStreamForwarder (so its
+// goroutine outlives the iteration span). spanCtx is the parent for the
+// llm.generate span (typically the iteration-span context).
+//
+// When useStream is true, ChatStream is called via an intermediate
+// newObjectStreamForwarder channel; the forwarder is drained before returning.
+// When useStream is false, core.Chat is used directly.
+//
+// The returned bool is true when the call was streaming (caller can set
+// streamedThisIter). The LLMCallTrace Duration is measured from just before the
+// provider call; callers must NOT separately track llmStart.
+func callLLM(fwdCtx, spanCtx context.Context, cfg LoopConfig, req ChatRequest, provider Provider, ch chan<- StreamEvent, state *loopState, llmModel string, useStream bool) (ChatResponse, LLMCallTrace, bool, error) {
+	start := time.Now()
+	llmCtx := spanCtx
+	var llmSpan Span
+	if cfg.tracer != nil {
+		llmCtx, llmSpan = cfg.tracer.Start(spanCtx, "llm.generate",
+			StringAttr("provider", llmModel))
+	}
+
+	var resp ChatResponse
+	var err error
+	streamed := false
+
+	if useStream {
+		// Intermediate channel so the provider's defer-close doesn't shut down
+		// the main stream. newObjectStreamForwarder intercepts EventFileAttachment
+		// events into state.files and emits EventObjectDelta snapshots when a
+		// schema is set.
+		iterCh, wait := newObjectStreamForwarder(fwdCtx, ch, defaultIterChBufSize, state, cfg.responseSchema)
+		resp, err = provider.ChatStream(llmCtx, req, iterCh)
+		if llmSpan != nil {
+			llmSpan.SetAttr(
+				IntAttr("input_tokens", resp.Usage.InputTokens),
+				IntAttr("output_tokens", resp.Usage.OutputTokens),
+				StringAttr("finish_reason", string(resp.FinishReason)),
+			)
+			llmSpan.End()
+		}
+		wait()
+		streamed = true
+	} else {
+		resp, err = core.Chat(llmCtx, provider, req)
+		if llmSpan != nil {
+			llmSpan.SetAttr(
+				IntAttr("input_tokens", resp.Usage.InputTokens),
+				IntAttr("output_tokens", resp.Usage.OutputTokens),
+				StringAttr("finish_reason", string(resp.FinishReason)),
+			)
+			llmSpan.End()
+		}
+	}
+
+	trace := LLMCallTrace{
+		Duration:     time.Since(start),
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
+		FinishReason: resp.FinishReason,
+	}
+	return resp, trace, streamed, err
+}
+
+// runPostLLMOrHandle runs the post-LLM processor chain. On a clean return it
+// returns (zero, false) and the caller continues normally. On suspend/halt/error
+// it emits the appropriate stream event (when ch != nil), calls endIter (when
+// non-nil) with the right FinishReason, calls finalizeRun, and returns the
+// terminal iterationResult with handled=true.
+//
+// Pass endIter=nil when there is no iteration span to close (e.g. forceSynthesis
+// in loop.go, which manages its own synthesis span via defer).
+func runPostLLMOrHandle(
+	ctx, iterCtx context.Context,
+	cfg LoopConfig,
+	task AgentTask,
+	ch chan<- StreamEvent,
+	state *loopState,
+	resp *ChatResponse,
+	endIter func(FinishReason),
+) (iterationResult, bool) {
+	if err := cfg.processors.RunPostLLM(iterCtx, resp); err != nil {
+		if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
+			if ch != nil {
+				select {
+				case ch <- StreamEvent{
+					Type:           EventProcessorSuspended,
+					Content:        "post",
+					Protocol:       s.tag,
+					SuspendPayload: s.Payload,
+				}:
+				case <-ctx.Done():
+				}
+			}
+			if endIter != nil {
+				endIter(FinishSuspended)
+			}
+			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload, SuspendProtocol: s.tag, Iterations: state.iterations}
+			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
+			return iterationResult{outcome: iterDone, final: suspResult, err: s}, true
+		}
+		res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
+		reason := FinishError
+		if res.Output != "" {
+			reason = FinishHalted
+		}
+		res.FinishReason = reason
+		if endIter != nil {
+			endIter(reason)
+		}
+		finalizeRun(ctx, ch, state, cfg.name, reason, res)
+		return iterationResult{outcome: iterDone, final: res, err: retErr}, true
+	}
+	return iterationResult{}, false
 }
 
 // captureProviderMeta appends resp.Warnings to state.lastWarnings and

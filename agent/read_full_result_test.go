@@ -12,7 +12,7 @@ import (
 
 func TestReadFullResultTool(t *testing.T) {
 	store := core.NewInMemoryToolResultStore()
-	// Store plain text using TextContent so unquoteIfJSONString can unquote it.
+	// Store plain text using TextContent so rawMessageToString can unquote it.
 	id, _ := store.Put(context.Background(), core.TextContent("the quick brown fox jumps over the lazy dog"))
 
 	tool := agent.NewReadFullResultTool(store)

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/nevindra/oasis/core"
@@ -22,22 +21,20 @@ type StepTrace = core.StepTrace
 type Config struct {
 	tools            []AnyTool
 	agents           []Agent
-	prompt           string
+	systemPrompt     string
 	maxIter           int
 	preProcessors      []PreProcessor
 	postProcessors     []PostProcessor
 	postToolProcessors []PostToolProcessor
 	inputHandler     InputHandler
 	store            Store
-	embedding        EmbeddingProvider
+	embedding        EmbeddingProvider // set by WithEmbedding; shared by WithUserMemory + history.CrossThreadSearch
 	memory           MemoryStore
-	crossThreadSearch    bool    // enabled by history.CrossThreadSearch
-	semanticMinScore     float32 // set by history.MinScore
-	maxHistory           int     // set by history.MaxHistory
-	maxTokens            int     // set by history.MaxTokens (history budget)
-	autoTitle            bool    // set by history.AutoTitle
-	memoryEmbedding      EmbeddingProvider // set only by WithUserMemory; used to detect provider conflicts
-	crossThreadEmbedding EmbeddingProvider // set only by history.CrossThreadSearch; used to detect provider conflicts
+	crossThreadSearch bool    // enabled by history.CrossThreadSearch
+	semanticMinScore  float32 // set by history.MinScore
+	maxHistory        int     // set by history.MaxHistory
+	maxTokens         int     // set by history.MaxTokens (history budget)
+	autoTitle         bool    // set by history.AutoTitle
 	planExecution     bool            // enabled by WithPlanExecution option
 	sandbox           core.Sandbox    // set by WithSandbox option
 	sandboxTools      []AnyTool       // tools auto-registered by WithSandbox
@@ -54,13 +51,13 @@ type Config struct {
 	compressThreshold   int                // set by history.Compress
 	compactor           Compactor          // set by history.Compaction (per-thread compaction)
 	compactThreshold    float64            // set by history.Compaction (0 = disabled)
-	generationParams    *GenerationParams  // set by WithGeneration
+	genParams           *GenerationParams  // set by WithGeneration
 	semanticTrimming    bool               // enabled by history.SemanticTrim
 	trimmingEmbedding   EmbeddingProvider  // set by history.SemanticTrim
 	keepRecent          int                // set by history.KeepRecent
-	spawnEnabled   bool     // set by WithSubAgentSpawning
-	maxSpawnDepth  int      // set by MaxSpawnDepth (default 1)
-	denySpawnTools []string // set by DenySpawnTools
+	spawnEnabled      bool     // set by WithSubAgentSpawning
+	spawnDepthLimit   int      // set by MaxSpawnDepth (default 1)
+	deniedSpawnTools  []string // set by DenySpawnTools
 	activeSkills   []Skill        // set by WithActiveSkills
 	skillProvider  SkillProvider  // set by WithSkills
 
@@ -155,7 +152,7 @@ func WithToolMiddleware(mws ...core.ToolMiddleware) AgentOption {
 
 // WithPrompt sets the system prompt for the agent or network router.
 func WithPrompt(s string) AgentOption {
-	return func(c *Config) { c.prompt = s }
+	return func(c *Config) { c.systemPrompt = s }
 }
 
 // WithMaxIter sets the maximum tool-calling iterations.
@@ -190,11 +187,13 @@ func WithSuspendBudget(maxSnapshots int, maxBytes int64) AgentOption {
 //	oasis.WithHistory(
 //	    history.Store(store),
 //	    history.MaxHistory(30),
-//	    history.CrossThreadSearch(embedding),
+//	    history.CrossThreadSearch(),
 //	    history.Compaction(c, 0.8),
 //	    history.Compress(model, 200_000),
 //	)
 //
+// Features that need an embedding provider (CrossThreadSearch, WithUserMemory)
+// pull from WithEmbedding. Without WithEmbedding, those features silently no-op.
 // Without history.Store, only per-turn options (Compress) take effect;
 // per-thread mechanisms (Compaction, SemanticTrim, AutoTitle,
 // CrossThreadSearch) silently no-op.
@@ -206,10 +205,6 @@ func WithHistory(opts ...history.Option) AgentOption {
 		c.maxTokens = cfg.MaxTokens
 		c.autoTitle = cfg.AutoTitle
 		c.crossThreadSearch = cfg.CrossThreadSearch
-		if cfg.Embedding != nil {
-			c.embedding = cfg.Embedding
-			c.crossThreadEmbedding = cfg.Embedding // tracked separately for conflict detection
-		}
 		c.semanticMinScore = cfg.MinScore
 		c.compactor = cfg.Compactor
 		c.compactThreshold = cfg.CompactThreshold
@@ -245,13 +240,13 @@ type Generation struct {
 //	})
 func WithGeneration(g Generation) AgentOption {
 	return func(c *Config) {
-		if c.generationParams == nil {
-			c.generationParams = &GenerationParams{}
+		if c.genParams == nil {
+			c.genParams = &GenerationParams{}
 		}
-		c.generationParams.Temperature = g.Temperature
-		c.generationParams.TopP = g.TopP
-		c.generationParams.TopK = g.TopK
-		c.generationParams.MaxTokens = g.MaxTokens
+		c.genParams.Temperature = g.Temperature
+		c.genParams.TopP = g.TopP
+		c.genParams.TopK = g.TopK
+		c.genParams.MaxTokens = g.MaxTokens
 	}
 }
 
@@ -305,7 +300,7 @@ type SubAgentOption func(*Config)
 func WithSubAgentSpawning(opts ...SubAgentOption) AgentOption {
 	return func(c *Config) {
 		c.spawnEnabled = true
-		c.maxSpawnDepth = 1
+		c.spawnDepthLimit = 1
 		for _, o := range opts {
 			o(c)
 		}
@@ -316,7 +311,7 @@ func WithSubAgentSpawning(opts ...SubAgentOption) AgentOption {
 // Default: 1 (parent can spawn, children cannot).
 // A depth of 2 means sub-agents can spawn their own sub-agents once.
 func MaxSpawnDepth(n int) SubAgentOption {
-	return func(c *Config) { c.maxSpawnDepth = n }
+	return func(c *Config) { c.spawnDepthLimit = n }
 }
 
 // DenySpawnTools prevents specific tools from being inherited by sub-agents.
@@ -324,7 +319,7 @@ func MaxSpawnDepth(n int) SubAgentOption {
 // Multiple calls accumulate (append, not replace).
 // ask_user is always blocked in sub-agents regardless of this setting.
 func DenySpawnTools(names ...string) SubAgentOption {
-	return func(c *Config) { c.denySpawnTools = append(c.denySpawnTools, names...) }
+	return func(c *Config) { c.deniedSpawnTools = append(c.deniedSpawnTools, names...) }
 }
 
 // WithActiveSkills pre-activates skills whose instructions are appended to
@@ -454,6 +449,19 @@ func WithOnError(fn OnError) AgentOption {
 	return func(c *Config) { c.onError = fn }
 }
 
+// WithEmbedding sets the embedding provider used by memory features that
+// need vector search. Required by WithUserMemory and history.CrossThreadSearch
+// — both share this single provider so their queries land in the same vector
+// space. Without WithEmbedding, those features silently no-op (with a warning
+// logged at construction time).
+//
+// history.SemanticTrim takes its own embedding parameter and is independent
+// of this option — a separate (often smaller/faster) model can be used for
+// trimming without affecting cross-thread or user-memory recall.
+func WithEmbedding(e EmbeddingProvider) AgentOption {
+	return func(c *Config) { c.embedding = e }
+}
+
 // WithUserMemory enables the full user memory pipeline: read + write.
 //
 // Read (every Execute call): embeds the input, retrieves relevant facts via
@@ -463,12 +471,11 @@ func WithOnError(fn OnError) AgentOption {
 // durable user facts from the conversation exchange and persists them via
 // UpsertFact. Write requires WithHistory(history.Store(...)) — without it,
 // extraction is silently skipped (logged as a warning at construction time).
-func WithUserMemory(m MemoryStore, e EmbeddingProvider) AgentOption {
-	return func(c *Config) {
-		c.memory = m
-		c.embedding = e
-		c.memoryEmbedding = e // kept separately for conflict detection in BuildConfig
-	}
+//
+// Requires WithEmbedding. Without an embedding provider, the feature is
+// silently disabled (warning logged at construction time).
+func WithUserMemory(m MemoryStore) AgentOption {
+	return func(c *Config) { c.memory = m }
 }
 
 // WithMaxParallelDispatch caps the number of concurrent tool call goroutines.
@@ -567,6 +574,12 @@ func BuildConfig(opts []AgentOption) *Config {
 	if c.memory != nil && c.store == nil {
 		c.logger.Warn("WithUserMemory without history.Store — fact extraction (write) will be silently skipped")
 	}
+	if c.memory != nil && c.embedding == nil {
+		c.logger.Warn("WithUserMemory without WithEmbedding — user memory feature will be silently disabled")
+	}
+	if c.crossThreadSearch && c.embedding == nil {
+		c.logger.Warn("history.CrossThreadSearch without WithEmbedding — cross-thread search will be silently disabled")
+	}
 	// Apply defaults for configurable runtime limits.
 	if c.maxParallelDispatch == 0 {
 		c.maxParallelDispatch = 10
@@ -585,18 +598,6 @@ func BuildConfig(opts []AgentOption) *Config {
 	if c.maxSteps == nil {
 		n := 100
 		c.maxSteps = &n
-	}
-	// Conflict: WithUserMemory and history.CrossThreadSearch configured with
-	// different embedding provider instances. Both write to c.embedding; the
-	// last-writer-wins silently, which produces incorrect recall. Use panic
-	// instead of error-returning because NewLLMAgent's signature would otherwise
-	// need a breaking change beyond the scope of Phase 2. Misconfigured embedding
-	// providers are a developer-time error, not a runtime condition.
-	if c.memoryEmbedding != nil && c.crossThreadEmbedding != nil && c.memoryEmbedding != c.crossThreadEmbedding {
-		panic(fmt.Sprintf(
-			"oasis: conflicting embedding providers — WithUserMemory uses %T, "+
-				"history.CrossThreadSearch uses %T; use the same provider for both, or pick one",
-			c.memoryEmbedding, c.crossThreadEmbedding))
 	}
 	return c
 }

@@ -150,7 +150,8 @@ Options shared by `NewLLMAgent` and `NewNetwork`:
 | `WithDynamicModel(fn ModelFunc)` | Per-request provider/model selection |
 | `WithDynamicTools(fn ToolsFunc)` | Per-request tool set (replaces static tools) |
 | `WithConversationMemory(s Store, opts...)` | Enable history load/persist per thread |
-| `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact injection + auto-extraction |
+| `WithEmbedding(e EmbeddingProvider)` | Set the shared embedding provider for use by `WithUserMemory` and cross-thread search |
+| `WithUserMemory(m MemoryStore)` | Enable user fact injection + auto-extraction (requires `WithEmbedding`) |
 | `WithMaxAttachmentBytes(n int64)` | Max accumulated attachment bytes per execution (default 50 MB) |
 | `WithSuspendBudget(maxSnapshots int, maxBytes int64)` | Per-agent suspend snapshot limits (default 20 snapshots, 256 MB) |
 | `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven per-turn context compression (falls back to main provider). See [`WithCompaction`](compaction.md) for per-thread compaction (preferred for long threads) |

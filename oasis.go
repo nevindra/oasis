@@ -88,6 +88,15 @@ var WithMaxParallelDispatch = agent.WithMaxParallelDispatch
 var WithMaxPlanSteps = agent.WithMaxPlanSteps
 var WithMaxToolResultLen = agent.WithMaxToolResultLen
 var WithToolResultStore = agent.WithToolResultStore
+
+// WithEmbedding sets the shared embedding provider used by memory features
+// (WithUserMemory + history.CrossThreadSearch). See agent.WithEmbedding.
+var WithEmbedding = agent.WithEmbedding
+
+// WithUserMemory enables the user-memory pipeline. Requires WithEmbedding.
+// See agent.WithUserMemory.
+var WithUserMemory = agent.WithUserMemory
+
 var NewInMemoryToolResultStore = core.NewInMemoryToolResultStore
 var WithToolResultMaxBytes = core.WithToolResultMaxBytes
 var WithToolResultTTL = core.WithToolResultTTL
@@ -242,7 +251,7 @@ var WithMetadata = agent.WithMetadata
 //	oasis.WithHistory(
 //	    history.Store(store),
 //	    history.MaxHistory(30),
-//	    history.CrossThreadSearch(embedding),
+//	    history.CrossThreadSearch(),
 //	    history.Compaction(compactor, 0.8),
 //	    history.Compress(model, 200_000),
 //	)
@@ -399,8 +408,9 @@ var WithOnFinish = workflow.WithOnFinish
 //	import "github.com/nevindra/oasis/memory"
 //	...
 //	agent := oasis.NewLLMAgent(name, desc, provider,
-//		oasis.WithUserMemory(memoryStore, embedding),
-//		oasis.WithCrossThreadSearch(embedding),
+//		oasis.WithEmbedding(embedding),
+//		oasis.WithUserMemory(memoryStore),
+//		oasis.WithHistory(history.Store(store), history.CrossThreadSearch()),
 //	)
 //
 // See github.com/nevindra/oasis/memory for the full API.

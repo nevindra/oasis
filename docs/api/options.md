@@ -19,7 +19,8 @@ Shared by `NewLLMAgent` and `NewNetwork`.
 | `WithDynamicModel(fn ModelFunc)` | Per-request provider/model selection. Overrides constructor provider |
 | `WithDynamicTools(fn ToolsFunc)` | Per-request tool set. **Replaces** (not merges with) `WithTools` |
 | `WithConversationMemory(s Store, opts ...ConversationOption)` | Enable history per thread |
-| `WithUserMemory(m MemoryStore, e EmbeddingProvider)` | Enable user fact read/write |
+| `WithEmbedding(e EmbeddingProvider)` | Set the shared embedding provider for use by `WithUserMemory` and `history.CrossThreadSearch` |
+| `WithUserMemory(m MemoryStore)` | Enable user fact read/write (requires `WithEmbedding`) |
 | `WithMaxAttachmentBytes(n int64)` | Max accumulated attachment bytes per execution (default 50 MB) |
 | `WithSuspendBudget(maxSnapshots int, maxBytes int64)` | Per-agent suspend snapshot limits (default 20 snapshots, 256 MB) |
 | `WithCompressModel(fn ModelFunc)` | Provider for LLM-driven per-turn context compression (falls back to main provider). See `WithCompaction` for per-thread compaction (preferred for long threads) |
@@ -56,8 +57,8 @@ Passed to `WithConversationMemory`.
 |--------|---------|-------------|
 | `MaxHistory(n int)` | 10 | Max recent messages loaded into LLM context |
 | `MaxTokens(n int)` | 0 (disabled) | Token budget for history — trim oldest-first until total fits within n |
-| `CrossThreadSearch(e EmbeddingProvider, opts ...SemanticOption)` | — | Enable cross-thread semantic recall |
-| `WithSemanticTrimming(e EmbeddingProvider, opts ...SemanticTrimmingOption)` | — | Enable relevance-based history trimming (cosine similarity to current query). Falls back to oldest-first on embedding failure |
+| `CrossThreadSearch(opts ...SemanticOption)` | — | Enable cross-thread semantic recall (requires `WithEmbedding` at agent level) |
+| `WithSemanticTrimming(opts ...SemanticTrimmingOption)` | — | Enable relevance-based history trimming (cosine similarity to current query). Falls back to oldest-first on embedding failure. Embedding provider configured via agent-level `WithEmbedding` |
 | `AutoTitle()` | disabled | Generate a short title from the first user message. Runs in background, idempotent (skipped if thread already has a title) |
 | `WithCompaction(c Compactor, threshold float64)` | disabled | Per-thread structured compaction; threshold is a fraction (0.0–1.0) of the effective context window. Recommended: 0.80. Passing nil compactor or threshold ≤ 0 disables. See [Compactor](../concepts/compaction.md) |
 
@@ -68,6 +69,8 @@ Passed to `CrossThreadSearch`.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `MinScore(score float32)` | 0.60 | Minimum cosine similarity for recall |
+
+> **Note:** The embedding provider used by `CrossThreadSearch` is configured via the agent-level `WithEmbedding(e EmbeddingProvider)` option, not passed here.
 
 ## SemanticTrimmingOption
 

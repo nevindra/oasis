@@ -244,8 +244,8 @@ graph TB
 | Feature | Setup | Docs |
 | ------- | ----- | ---- |
 | **Conversation memory** | `WithConversationMemory(store)` | [Memory guide](guides/memory-and-recall.md) |
-| **Cross-thread recall** | `WithConversationMemory(store, CrossThreadSearch(emb))` | [Memory guide](guides/memory-and-recall.md) |
-| **User memory** | `WithUserMemory(memStore, emb)` | [Memory guide](guides/memory-and-recall.md) |
+| **Cross-thread recall** | `WithEmbedding(emb), WithConversationMemory(store, CrossThreadSearch())` | [Memory guide](guides/memory-and-recall.md) |
+| **User memory** | `WithEmbedding(emb), WithUserMemory(memStore)` | [Memory guide](guides/memory-and-recall.md) |
 | **Graph RAG** | `WithGraphExtraction(provider)` on Ingestor + `GraphRetriever` | [RAG pipeline](guides/rag-pipeline.md) |
 | **Hybrid retrieval** | `HybridRetriever` with `WithReranker`, `WithFilters` | [RAG pipeline](guides/rag-pipeline.md) |
 | **Skills** | `tools/skill` with `Store` | [Skills guide](guides/skills.md) |
@@ -370,8 +370,9 @@ Optional: `BatchProvider` and `BatchEmbeddingProvider` for async batch processin
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
     oasis.WithTools(searchTool, knowledgeTool),
     oasis.WithPrompt("You are a helpful assistant."),
-    oasis.WithConversationMemory(store, oasis.CrossThreadSearch(embedding)),
-    oasis.WithUserMemory(memoryStore, embedding),
+    oasis.WithEmbedding(embedding),
+    oasis.WithConversationMemory(store, oasis.CrossThreadSearch()),
+    oasis.WithUserMemory(memoryStore),
     oasis.WithSandbox(sb, sandbox.Tools(sb)...),
     oasis.WithPlanExecution(),
     oasis.WithTracer(observer.NewTracer()),

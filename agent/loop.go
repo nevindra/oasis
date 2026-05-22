@@ -239,33 +239,10 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 
 	captureProviderMeta(state, &resp)
 
-	// PostProcessor hook.
-	if err := cfg.processors.RunPostLLM(synthCtx, &resp); err != nil {
-		if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-			if ch != nil {
-				select {
-				case ch <- StreamEvent{
-					Type:           EventProcessorSuspended,
-					Content:        "post",
-					Protocol:       s.tag,
-					SuspendPayload: s.Payload,
-				}:
-				case <-ctx.Done():
-				}
-			}
-			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload, SuspendProtocol: s.tag, Iterations: state.iterations}
-			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
-			return suspResult, s
-		}
-		res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
-		reason := FinishError
-		if res.Output != "" {
-			// handleProcessorErrorWithSteps returned a graceful halt result.
-			reason = FinishHalted
-		}
-		res.FinishReason = reason
-		finalizeRun(ctx, ch, state, cfg.name, reason, res)
-		return res, retErr
+	// PostProcessor hook. endIter=nil because forceSynthesis has no iteration
+	// span — the synthesis span is managed via defer above.
+	if r, handled := runPostLLMOrHandle(ctx, synthCtx, cfg, task, ch, state, &resp, nil); handled {
+		return r.final, r.err
 	}
 
 	// Capture thinking from the synthesis response.

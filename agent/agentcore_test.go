@@ -118,7 +118,7 @@ func TestCacheBuiltinToolDefs(t *testing.T) {
 	}
 
 	// With all builtins.
-	c.handler = &mockInputHandler{response: InputResponse{Value: "ok"}}
+	c.inputHandler = &mockInputHandler{response: InputResponse{Value: "ok"}}
 	c.planExecution = true
 	defs = c.CacheBuiltinToolDefs([]ToolDefinition{{Name: "existing"}})
 	if len(defs) != 3 { // existing + ask_user + execute_plan

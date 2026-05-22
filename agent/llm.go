@@ -40,7 +40,9 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 // Execute runs the tool-calling loop until the LLM produces a final text response.
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)
-	return a.ExecuteWithSpan(ctx, task, nil, "LLMAgent", "agent", a.buildLoopConfig)
+	return a.ExecuteWithSpan(ctx, task, nil, "LLMAgent", "agent", func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
+		return a.buildLoopConfig(ctx, task, ch, nil)
+	})
 }
 
 // ExecuteStream runs the tool-calling loop like Execute, but emits StreamEvent
@@ -49,35 +51,20 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, er
 // The channel is closed when streaming completes.
 func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
 	ctx = WithTaskContext(ctx, task)
-	return a.ExecuteWithSpan(ctx, task, ch, "LLMAgent", "agent", a.buildLoopConfig)
+	return a.ExecuteWithSpan(ctx, task, ch, "LLMAgent", "agent", func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
+		return a.buildLoopConfig(ctx, task, ch, nil)
+	})
 }
 
 // buildLoopConfig wires LLMAgent fields into a LoopConfig for runLoop.
-// Resolves dynamic prompt, model, and tools when configured.
-func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
-	prompt, provider := a.ResolvePromptAndProvider(ctx, task)
-	if a.activeSkillInstructions != "" {
-		prompt = prompt + "\n\n# Active Skills\n\n" + a.activeSkillInstructions
-	}
-
-	// Resolve tools: dynamic replaces static.
-	var toolDefs []ToolDefinition
-	var executeTool ToolExecFunc
-	var executeToolStream ToolExecStreamFunc
-	var isStreamingTool func(string) bool
-	if dynDefs, dynExec := a.ResolveDynamicTools(ctx, task); dynDefs != nil {
-		a.logger.Debug("using dynamic tools", "agent", a.name, "tool_count", len(dynDefs))
-		toolDefs = a.CacheBuiltinToolDefs(dynDefs)
-		executeTool = dynExec
-		isStreamingTool = func(string) bool { return false }
-	} else {
-		toolDefs = a.cachedToolDefs
-		executeTool = a.tools.Execute
-		executeToolStream = a.tools.ExecuteStream
-		isStreamingTool = a.tools.IsStreamingTool
-	}
-
-	return a.BaseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, a.makeDispatch(executeTool, executeToolStream, ch, toolDefs, isStreamingTool))
+// Used by both Execute / ExecuteStream (opts = nil → agent defaults) and
+// ExecuteWith / ExecuteStreamWith (opts != nil → per-call overrides).
+func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- StreamEvent, opts *RunOptions) LoopConfig {
+	cfg := a.ApplyRunOptions(opts)
+	prompt, provider := a.ResolvePromptAndProviderWith(ctx, task, cfg)
+	toolDefs, executeTool, executeToolStream, isStreamingTool := a.ResolveTools(ctx, task, nil)
+	dispatch := a.makeDispatch(executeTool, executeToolStream, ch, toolDefs, isStreamingTool, cfg)
+	return a.BaseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, dispatch, cfg, a.ResolveMem(opts))
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
@@ -85,7 +72,7 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 // and spawn_agent special cases via the shared DispatchBuiltins method.
 // When executeToolStream and ch are non-nil, tools implementing StreamingAnyTool
 // emit progress events during execution.
-func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition, isStreamingTool func(string) bool) DispatchFunc {
+func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition, isStreamingTool func(string) bool, cfg *Config) DispatchFunc {
 	return NewStandardDispatch(StandardDispatchConfig{
 		Builtins:          a.DispatchBuiltins,
 		SpawnHandler:      a.ExecuteSpawn,
@@ -93,9 +80,9 @@ func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream Tool
 		ExecuteToolStream: executeToolStream,
 		ResolvedToolDefs:  resolvedToolDefs,
 		StreamCh:          ch,
-		ResolvePolicy:     a.cfg().resolveToolPolicy,
+		ResolvePolicy:     cfg.resolveToolPolicy,
 		IsStreamingTool:   isStreamingTool,
-		Logger:            a.logger,
+		Logger:            cfg.logger,
 	})
 }
 
@@ -106,10 +93,9 @@ func (a *LLMAgent) ExecuteWith(ctx context.Context, task AgentTask, opts *RunOpt
 	if err := opts.Validate(); err != nil {
 		return AgentResult{}, err
 	}
-	effective := applyRunOptions(a.cfg(), opts)
 	ctx = WithTaskContext(ctx, task)
 	return a.ExecuteWithSpan(ctx, task, nil, "LLMAgent", "agent", func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
-		return a.buildLoopConfigFrom(ctx, task, ch, effective, opts)
+		return a.buildLoopConfig(ctx, task, ch, opts)
 	})
 }
 
@@ -122,128 +108,10 @@ func (a *LLMAgent) ExecuteStreamWith(ctx context.Context, task AgentTask, ch cha
 		close(ch)
 		return AgentResult{}, err
 	}
-	effective := applyRunOptions(a.cfg(), opts)
 	ctx = WithTaskContext(ctx, task)
 	return a.ExecuteWithSpan(ctx, task, ch, "LLMAgent", "agent", func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
-		return a.buildLoopConfigFrom(ctx, task, ch, effective, opts)
+		return a.buildLoopConfig(ctx, task, ch, opts)
 	})
-}
-
-// cfg snapshots the current AgentCore fields into a Config so that
-// applyRunOptions has a base to shallow-copy and override. Only the fields
-// that applyRunOptions may mutate need to be present; all others are ignored.
-func (a *LLMAgent) cfg() *Config {
-	var maxSteps int
-	if a.maxSteps != 0 {
-		maxSteps = a.maxSteps
-	}
-	return &Config{
-		prompt:              a.systemPrompt,
-		maxIter:             a.maxIter,
-		responseSchema:      a.responseSchema,
-		maxAttachmentBytes:  a.maxAttachmentBytes,
-		maxToolResultLen:    a.maxToolResultLen,
-		maxPlanSteps:        a.maxPlanSteps,
-		toolPolicies:        a.toolPolicies,
-		toolPolicyMatchers:  a.toolPolicyMatchers,
-		generationParams:    a.genParams,
-		tracer:              a.tracer,
-		logger:              a.logger,
-		inputHandler:        a.handler,
-		maxSteps:            &maxSteps,
-	}
-}
-
-// buildLoopConfigFrom builds a LoopConfig using an explicit cfg instead of
-// the AgentCore fields, enabling per-call RunOptions overrides. Fields that
-// are not overridable (suspend state, compressor instance) still come from
-// the AgentCore. opts is consulted for memory overrides; pass nil to use the
-// agent default.
-func (a *LLMAgent) buildLoopConfigFrom(ctx context.Context, task AgentTask, ch chan<- StreamEvent, cfg *Config, opts *RunOptions) LoopConfig {
-	// Resolve prompt: cfg.prompt takes precedence over dynamic prompt when
-	// a per-call Prompt override is set; otherwise fall back to normal resolution.
-	prompt := cfg.prompt
-	if a.dynamicPrompt != nil {
-		// Dynamic prompt overrides the base prompt; cfg.prompt may have been
-		// set by a RunOptions.Prompt override, in which case we skip dynamic.
-		if cfg.prompt == a.systemPrompt {
-			// No per-call prompt override — apply dynamic prompt as usual.
-			prompt = a.dynamicPrompt(ctx, task)
-		}
-	}
-
-	// Resolve provider: dynamic model override, if configured.
-	provider := a.provider
-	if a.dynamicModel != nil {
-		provider = a.dynamicModel(ctx, task)
-	}
-
-	// Append skill instructions.
-	if a.activeSkillInstructions != "" {
-		prompt = prompt + "\n\n# Active Skills\n\n" + a.activeSkillInstructions
-	}
-
-	// Resolve tools: dynamic replaces static.
-	var toolDefs []ToolDefinition
-	var executeTool ToolExecFunc
-	var executeToolStream ToolExecStreamFunc
-	var isStreamingTool func(string) bool
-	if dynDefs, dynExec := a.ResolveDynamicTools(ctx, task); dynDefs != nil {
-		a.logger.Debug("using dynamic tools", "agent", a.name, "tool_count", len(dynDefs))
-		toolDefs = a.CacheBuiltinToolDefs(dynDefs)
-		executeTool = dynExec
-		isStreamingTool = func(string) bool { return false }
-	} else {
-		toolDefs = a.cachedToolDefs
-		executeTool = a.tools.Execute
-		executeToolStream = a.tools.ExecuteStream
-		isStreamingTool = a.tools.IsStreamingTool
-	}
-
-	dispatch := a.makeDispatch(executeTool, executeToolStream, ch, toolDefs, isStreamingTool)
-
-	// Resolve memory orchestrator: per-call override takes precedence.
-	mem := &a.mem
-	if opts != nil && opts.Memory != nil {
-		mem = opts.Memory
-	}
-
-	maxSteps := 0
-	if cfg.maxSteps != nil {
-		maxSteps = *cfg.maxSteps
-	}
-	return LoopConfig{
-		name:                "agent:" + a.name,
-		provider:            provider,
-		tools:               toolDefs,
-		processors:          a.processors,
-		maxIter:             cfg.maxIter,
-		mem:                 mem,
-		inputHandler:        cfg.inputHandler,
-		dispatch:            dispatch,
-		systemPrompt:        prompt,
-		responseSchema:      cfg.responseSchema,
-		tracer:              cfg.tracer,
-		logger:              cfg.logger,
-		maxAttachmentBytes:  cfg.maxAttachmentBytes,
-		suspendCount:        &a.suspendCount,
-		suspendBytes:        &a.suspendBytes,
-		suspendMu:           &a.suspendMu,
-		maxSuspendSnapshots: a.maxSuspendSnapshots,
-		maxSuspendBytes:     a.maxSuspendBytes,
-		compressModel:       a.compressModel,
-		compressThreshold:   a.compressThreshold,
-		compressor:          a.compressor,
-		generationParams:    cfg.generationParams,
-		maxParallelDispatch: a.maxParallelDispatch,
-		maxToolResultLen:    cfg.maxToolResultLen,
-		maxPlanSteps:        cfg.maxPlanSteps,
-		toolResultStore:     a.toolResultStore,
-		maxSteps:            maxSteps,
-		prepareStep:         cfg.prepareStep,
-		onError:             cfg.onError,
-		onIterationComplete: cfg.onIterationComplete,
-	}
 }
 
 // compile-time checks

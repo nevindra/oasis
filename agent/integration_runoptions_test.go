@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -218,5 +219,52 @@ func TestIntegration_MultiTenantMemorySwap(t *testing.T) {
 	}
 	if total == 0 {
 		t.Errorf("total writes across all stores = 0, want > 0")
+	}
+}
+
+// --- Sources regression test ---
+//
+// sourcedTool implements core.Sourced. The agent loop is supposed to collect
+// these sources onto AgentResult.Sources via cfg.lookupTool. Before the
+// BaseLoopConfig unification, buildLoopConfigFrom omitted lookupTool, so
+// ExecuteWith / ExecuteStreamWith silently dropped sources. This test guards
+// against that drift returning.
+type sourcedTool struct {
+	srcs []core.Source
+	out  string
+}
+
+func (s *sourcedTool) Name() string { return "search" }
+func (s *sourcedTool) Definition() ToolDefinition {
+	return ToolDefinition{Name: "search", Description: "search", Parameters: []byte(`{"type":"object"}`)}
+}
+func (s *sourcedTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	return ToolResult{Content: []byte(`"` + s.out + `"`)}, nil
+}
+func (s *sourcedTool) Sources() []core.Source { return s.srcs }
+
+func TestExecuteWith_PopulatesSources(t *testing.T) {
+	tool := &sourcedTool{
+		srcs: []core.Source{{URL: "https://example.com", Title: "Example", Origin: "tool:search"}},
+		out:  "found",
+	}
+	provider := &scriptedProvider{
+		responses: []ChatResponse{
+			{ToolCalls: []ToolCall{{ID: "1", Name: "search", Args: []byte(`{}`)}}},
+			{Content: "done"},
+		},
+	}
+	a := NewLLMAgent("a", "d", provider, WithTools(tool))
+
+	prompt := "override"
+	result, err := a.ExecuteWith(context.Background(), AgentTask{Input: "q"}, &RunOptions{Prompt: &prompt})
+	if err != nil {
+		t.Fatalf("ExecuteWith: %v", err)
+	}
+	if len(result.Sources) != 1 {
+		t.Fatalf("Sources: want 1, got %d (result=%+v)", len(result.Sources), result.Sources)
+	}
+	if result.Sources[0].URL != "https://example.com" {
+		t.Errorf("Sources[0].URL: want https://example.com, got %q", result.Sources[0].URL)
 	}
 }

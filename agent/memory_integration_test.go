@@ -329,7 +329,8 @@ func TestLLMAgentUserMemory(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "I know you like Go"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithUserMemory(mem, emb),
+		WithEmbedding(emb),
+		WithUserMemory(mem),
 		WithPrompt("You are helpful"),
 	)
 
@@ -371,7 +372,8 @@ func TestLLMAgentSemanticRecall(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "combined answer"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
+		WithEmbedding(emb),
+		WithHistory(history.Store(store), history.CrossThreadSearch()),
 	)
 
 	task := AgentTask{
@@ -410,8 +412,9 @@ func TestLLMAgentAllMemoryTypes(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "full memory response"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
-		WithUserMemory(mem, emb),
+		WithEmbedding(emb),
+		WithHistory(history.Store(store), history.CrossThreadSearch()),
+		WithUserMemory(mem),
 		WithPrompt("base"),
 	)
 
@@ -495,7 +498,8 @@ func TestLLMAgentEmbedsPersisted(t *testing.T) {
 	}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
+		WithEmbedding(emb),
+		WithHistory(history.Store(store), history.CrossThreadSearch()),
 	)
 
 	task := AgentTask{
@@ -626,8 +630,9 @@ func TestExtractionPipelineExtractsFacts(t *testing.T) {
 	provider.extractionResp = &ChatResponse{Content: extractionResp}
 
 	agent := NewLLMAgent("test", "test", provider,
+		WithEmbedding(emb),
 		WithHistory(history.Store(store)),
-		WithUserMemory(mem, emb),
+		WithUserMemory(mem),
 	)
 
 	task := AgentTask{
@@ -659,8 +664,9 @@ func TestExtractionSkipsTrivialInput(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	agent := NewLLMAgent("test", "test", provider,
+		WithEmbedding(emb),
 		WithHistory(history.Store(store)),
-		WithUserMemory(mem, emb),
+		WithUserMemory(mem),
 	)
 
 	task := AgentTask{
@@ -702,8 +708,9 @@ func TestExtractionHandlesSupersedes(t *testing.T) {
 	provider.extractionResp = &ChatResponse{Content: extractionResp}
 
 	agent := NewLLMAgent("test", "test", provider,
+		WithEmbedding(emb),
 		WithHistory(history.Store(store)),
-		WithUserMemory(mem, emb),
+		WithUserMemory(mem),
 	)
 
 	task := AgentTask{
@@ -1156,7 +1163,8 @@ func TestCrossThreadRecallTrustFraming(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "answer"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
+		WithEmbedding(emb),
+		WithHistory(history.Store(store), history.CrossThreadSearch()),
 	)
 
 	task := AgentTask{
@@ -1194,7 +1202,8 @@ func TestCrossThreadRecallTruncatesContent(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
+		WithEmbedding(emb),
+		WithHistory(history.Store(store), history.CrossThreadSearch()),
 	)
 
 	task := AgentTask{
@@ -1234,7 +1243,8 @@ func TestCrossThreadRecallChatIDScoping(t *testing.T) {
 	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
 
 	agent := NewLLMAgent("test", "test", provider,
-		WithHistory(history.Store(store), history.CrossThreadSearch(emb)),
+		WithEmbedding(emb),
+		WithHistory(history.Store(store), history.CrossThreadSearch()),
 	)
 
 	task := AgentTask{

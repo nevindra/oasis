@@ -53,9 +53,10 @@ By default, `MaxTokens` drops the oldest messages first. This can lose important
 
 ```go
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithEmbedding(embedding),
     oasis.WithConversationMemory(store,
         oasis.MaxTokens(4000),
-        oasis.WithSemanticTrimming(embedding),
+        oasis.WithSemanticTrimming(),
     ),
 )
 ```
@@ -74,7 +75,7 @@ agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
 
 ```go
 // Keep the 5 most recent messages (default: 3)
-oasis.WithSemanticTrimming(embedding, oasis.KeepRecent(5))
+oasis.WithSemanticTrimming(oasis.KeepRecent(5))
 ```
 
 ### Embedding Reuse
@@ -83,10 +84,11 @@ When `CrossThreadSearch` is also enabled, the query embedding is computed once a
 
 ```go
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithEmbedding(embedding),
     oasis.WithConversationMemory(store,
         oasis.MaxTokens(4000),
-        oasis.CrossThreadSearch(embedding),
-        oasis.WithSemanticTrimming(embedding),  // reuses the same embedding
+        oasis.CrossThreadSearch(),
+        oasis.WithSemanticTrimming(),
     ),
 )
 ```
@@ -109,8 +111,9 @@ Search past conversations for relevant context:
 
 ```go
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithEmbedding(embedding),
     oasis.WithConversationMemory(store,
-        oasis.CrossThreadSearch(embedding),
+        oasis.CrossThreadSearch(),
     ),
 )
 ```
@@ -121,10 +124,10 @@ When the agent receives "What do you know about Go?", it embeds the query and se
 
 ```go
 // Higher threshold = more relevant but fewer results
-oasis.CrossThreadSearch(embedding, oasis.MinScore(0.75))
+oasis.CrossThreadSearch(oasis.MinScore(0.75))
 
 // Lower threshold = more results but noisier (default: 0.60)
-oasis.CrossThreadSearch(embedding, oasis.MinScore(0.50))
+oasis.CrossThreadSearch(oasis.MinScore(0.50))
 ```
 
 ## User Memory (Long-term Facts)
@@ -144,8 +147,9 @@ memoryStore.Init(ctx)
 
 
 agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    oasis.WithEmbedding(embedding),
     oasis.WithConversationMemory(store),  // required for write path
-    oasis.WithUserMemory(memoryStore, embedding),
+    oasis.WithUserMemory(memoryStore),
 )
 ```
 
@@ -161,12 +165,13 @@ All three memory layers together:
 ```go
 agent := oasis.NewLLMAgent("assistant", "Personal assistant", llm,
     oasis.WithTools(searchTool, scheduleTool),
+    oasis.WithEmbedding(embedding),
     oasis.WithConversationMemory(store,
         oasis.MaxTokens(4000),
-        oasis.CrossThreadSearch(embedding, oasis.MinScore(0.7)),
-        oasis.WithSemanticTrimming(embedding, oasis.KeepRecent(5)),
+        oasis.CrossThreadSearch(oasis.MinScore(0.7)),
+        oasis.WithSemanticTrimming(oasis.KeepRecent(5)),
     ),
-    oasis.WithUserMemory(memoryStore, embedding),
+    oasis.WithUserMemory(memoryStore),
     oasis.WithPrompt("You are a personal assistant. Use your memory of the user to give personalized responses."),
 )
 ```

@@ -927,8 +927,8 @@ func TestWithMaxIterOption(t *testing.T) {
 
 func TestWithPromptOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithPrompt("You are helpful.")})
-	if cfg.prompt != "You are helpful." {
-		t.Errorf("prompt = %q, want %q", cfg.prompt, "You are helpful.")
+	if cfg.systemPrompt != "You are helpful." {
+		t.Errorf("systemPrompt = %q, want %q", cfg.systemPrompt, "You are helpful.")
 	}
 }
 
@@ -975,52 +975,52 @@ func TestWithMaxAttachmentBytesOption(t *testing.T) {
 
 func TestWithTemperatureOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{Temperature: ptr(0.7)})})
-	if cfg.generationParams == nil {
-		t.Fatal("generationParams should not be nil")
+	if cfg.genParams == nil {
+		t.Fatal("genParams should not be nil")
 	}
-	if cfg.generationParams.Temperature == nil || *cfg.generationParams.Temperature != 0.7 {
-		t.Errorf("Temperature = %v, want 0.7", cfg.generationParams.Temperature)
+	if cfg.genParams.Temperature == nil || *cfg.genParams.Temperature != 0.7 {
+		t.Errorf("Temperature = %v, want 0.7", cfg.genParams.Temperature)
 	}
 }
 
 func TestWithTemperatureZero(t *testing.T) {
 	// 0.0 is a valid temperature — must not be conflated with "unset".
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{Temperature: ptr(0.0)})})
-	if cfg.generationParams == nil || cfg.generationParams.Temperature == nil {
+	if cfg.genParams == nil || cfg.genParams.Temperature == nil {
 		t.Fatal("Temperature should be set (pointer to 0.0)")
 	}
-	if *cfg.generationParams.Temperature != 0.0 {
-		t.Errorf("Temperature = %v, want 0.0", *cfg.generationParams.Temperature)
+	if *cfg.genParams.Temperature != 0.0 {
+		t.Errorf("Temperature = %v, want 0.0", *cfg.genParams.Temperature)
 	}
 }
 
 func TestWithTopPOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{TopP: ptr(0.95)})})
-	if cfg.generationParams == nil || cfg.generationParams.TopP == nil {
+	if cfg.genParams == nil || cfg.genParams.TopP == nil {
 		t.Fatal("TopP should be set")
 	}
-	if *cfg.generationParams.TopP != 0.95 {
-		t.Errorf("TopP = %v, want 0.95", *cfg.generationParams.TopP)
+	if *cfg.genParams.TopP != 0.95 {
+		t.Errorf("TopP = %v, want 0.95", *cfg.genParams.TopP)
 	}
 }
 
 func TestWithTopKOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{TopK: ptr(40)})})
-	if cfg.generationParams == nil || cfg.generationParams.TopK == nil {
+	if cfg.genParams == nil || cfg.genParams.TopK == nil {
 		t.Fatal("TopK should be set")
 	}
-	if *cfg.generationParams.TopK != 40 {
-		t.Errorf("TopK = %v, want 40", *cfg.generationParams.TopK)
+	if *cfg.genParams.TopK != 40 {
+		t.Errorf("TopK = %v, want 40", *cfg.genParams.TopK)
 	}
 }
 
 func TestWithMaxTokensOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{MaxTokens: ptr(2048)})})
-	if cfg.generationParams == nil || cfg.generationParams.MaxTokens == nil {
+	if cfg.genParams == nil || cfg.genParams.MaxTokens == nil {
 		t.Fatal("MaxTokens should be set")
 	}
-	if *cfg.generationParams.MaxTokens != 2048 {
-		t.Errorf("MaxTokens = %v, want 2048", *cfg.generationParams.MaxTokens)
+	if *cfg.genParams.MaxTokens != 2048 {
+		t.Errorf("MaxTokens = %v, want 2048", *cfg.genParams.MaxTokens)
 	}
 }
 
@@ -1034,27 +1034,27 @@ func TestGenerationParamsCompose(t *testing.T) {
 			MaxTokens:   ptr(1024),
 		}),
 	})
-	if cfg.generationParams == nil {
-		t.Fatal("generationParams should not be nil")
+	if cfg.genParams == nil {
+		t.Fatal("genParams should not be nil")
 	}
-	if *cfg.generationParams.Temperature != 0.5 {
-		t.Errorf("Temperature = %v, want 0.5", *cfg.generationParams.Temperature)
+	if *cfg.genParams.Temperature != 0.5 {
+		t.Errorf("Temperature = %v, want 0.5", *cfg.genParams.Temperature)
 	}
-	if *cfg.generationParams.TopP != 0.9 {
-		t.Errorf("TopP = %v, want 0.9", *cfg.generationParams.TopP)
+	if *cfg.genParams.TopP != 0.9 {
+		t.Errorf("TopP = %v, want 0.9", *cfg.genParams.TopP)
 	}
-	if *cfg.generationParams.TopK != 50 {
-		t.Errorf("TopK = %v, want 50", *cfg.generationParams.TopK)
+	if *cfg.genParams.TopK != 50 {
+		t.Errorf("TopK = %v, want 50", *cfg.genParams.TopK)
 	}
-	if *cfg.generationParams.MaxTokens != 1024 {
-		t.Errorf("MaxTokens = %v, want 1024", *cfg.generationParams.MaxTokens)
+	if *cfg.genParams.MaxTokens != 1024 {
+		t.Errorf("MaxTokens = %v, want 1024", *cfg.genParams.MaxTokens)
 	}
 }
 
 func TestGenerationParamsNilWhenUnset(t *testing.T) {
 	cfg := BuildConfig(nil)
-	if cfg.generationParams != nil {
-		t.Error("generationParams should be nil when no generation options are set")
+	if cfg.genParams != nil {
+		t.Error("genParams should be nil when no generation options are set")
 	}
 }
 
@@ -1325,36 +1325,29 @@ func (fakeMemoryStore) DeleteMatchingFacts(_ context.Context, _ string) error   
 func (fakeMemoryStore) DecayOldFacts(_ context.Context) error                                  { return nil }
 func (fakeMemoryStore) BuildContext(_ context.Context, _ []float32) (string, error)            { return "", nil }
 
-func TestBuildConfigPanicsOnConflictingEmbedding(t *testing.T) {
-	em1 := &fakeEmbeddingProvider{name: "em1"}
-	em2 := &fakeEmbeddingProvider{name: "em2"}
-	mem := &fakeMemoryStore{}
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for conflicting embedding providers, got nil")
-		}
-		if !strings.Contains(fmt.Sprint(r), "conflicting embedding providers") {
-			t.Errorf("expected 'conflicting embedding providers' in panic, got: %v", r)
-		}
-	}()
-
-	_ = BuildConfig([]AgentOption{
-		WithUserMemory(mem, em1),
-		WithHistory(history.CrossThreadSearch(em2)),
-	})
-}
-
-func TestBuildConfigAllowsMatchingEmbedding(t *testing.T) {
+// TestBuildConfigSharedEmbedding verifies the post-4B-a design: a single
+// agent-level WithEmbedding feeds both WithUserMemory and
+// history.CrossThreadSearch. The previous "conflicting providers" panic is
+// impossible by construction — there is only one embedding slot.
+func TestBuildConfigSharedEmbedding(t *testing.T) {
 	em := &fakeEmbeddingProvider{name: "em"}
 	mem := &fakeMemoryStore{}
 
-	// Must not panic.
-	_ = BuildConfig([]AgentOption{
-		WithUserMemory(mem, em),
-		WithHistory(history.CrossThreadSearch(em)),
+	cfg := BuildConfig([]AgentOption{
+		WithEmbedding(em),
+		WithUserMemory(mem),
+		WithHistory(history.CrossThreadSearch()),
 	})
+
+	if cfg.embedding != em {
+		t.Errorf("expected embedding %p, got %p", em, cfg.embedding)
+	}
+	if cfg.memory != mem {
+		t.Errorf("expected memory store wired")
+	}
+	if !cfg.crossThreadSearch {
+		t.Errorf("expected crossThreadSearch enabled")
+	}
 }
 
 // TestAgentResultStepsCapped verifies that WithMaxSteps(n) keeps at most n

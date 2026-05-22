@@ -16,11 +16,11 @@ func TestWithSubAgentSpawningDefaults(t *testing.T) {
 	if !cfg.spawnEnabled {
 		t.Fatal("spawnEnabled should be true")
 	}
-	if cfg.maxSpawnDepth != 1 {
-		t.Fatalf("maxSpawnDepth = %d, want 1", cfg.maxSpawnDepth)
+	if cfg.spawnDepthLimit != 1 {
+		t.Fatalf("maxSpawnDepth = %d, want 1", cfg.spawnDepthLimit)
 	}
-	if len(cfg.denySpawnTools) != 0 {
-		t.Fatalf("denySpawnTools = %v, want empty", cfg.denySpawnTools)
+	if len(cfg.deniedSpawnTools) != 0 {
+		t.Fatalf("denySpawnTools = %v, want empty", cfg.deniedSpawnTools)
 	}
 }
 
@@ -31,11 +31,11 @@ func TestWithSubAgentSpawningCustom(t *testing.T) {
 			DenySpawnTools("shell_exec", "file_write"),
 		),
 	})
-	if cfg.maxSpawnDepth != 3 {
-		t.Fatalf("maxSpawnDepth = %d, want 3", cfg.maxSpawnDepth)
+	if cfg.spawnDepthLimit != 3 {
+		t.Fatalf("maxSpawnDepth = %d, want 3", cfg.spawnDepthLimit)
 	}
-	if len(cfg.denySpawnTools) != 2 {
-		t.Fatalf("denySpawnTools len = %d, want 2", len(cfg.denySpawnTools))
+	if len(cfg.deniedSpawnTools) != 2 {
+		t.Fatalf("denySpawnTools len = %d, want 2", len(cfg.deniedSpawnTools))
 	}
 }
 
@@ -46,8 +46,8 @@ func TestDenySpawnToolsAccumulates(t *testing.T) {
 			DenySpawnTools("file_write"),
 		),
 	})
-	if len(cfg.denySpawnTools) != 2 {
-		t.Fatalf("denySpawnTools len = %d, want 2", len(cfg.denySpawnTools))
+	if len(cfg.deniedSpawnTools) != 2 {
+		t.Fatalf("denySpawnTools len = %d, want 2", len(cfg.deniedSpawnTools))
 	}
 }
 

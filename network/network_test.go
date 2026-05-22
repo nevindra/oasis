@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/nevindra/oasis/agent"
@@ -357,10 +356,11 @@ func TestNetwork_ExecuteWith_EmptySameAsExecute(t *testing.T) {
 	}
 }
 
-// TestNetwork_ExecuteWith_OverridesRejected verifies that ExecuteWith with
-// non-empty RunOptions returns an error (Network does not yet support propagating
-// overrides to subagents).
-func TestNetwork_ExecuteWith_OverridesRejected(t *testing.T) {
+// TestNetwork_ExecuteWith_AppliesOverrides verifies that ExecuteWith applies
+// router-level RunOptions overrides instead of rejecting them. RunOptions
+// are NOT propagated to subagents — that limitation is documented on the
+// method.
+func TestNetwork_ExecuteWith_AppliesOverrides(t *testing.T) {
 	sub := &stubAgent{
 		name: "worker",
 		desc: "Does work",
@@ -375,12 +375,24 @@ func TestNetwork_ExecuteWith_OverridesRejected(t *testing.T) {
 	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
 
 	maxIter := 3
-	_, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{MaxIter: &maxIter})
-	if err == nil {
-		t.Fatalf("ExecuteWith(MaxIter=3): expected error (Network does not support overrides yet)")
+	r, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{MaxIter: &maxIter})
+	if err != nil {
+		t.Fatalf("ExecuteWith(MaxIter=3): expected success now that overrides are applied, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "not yet supported") {
-		t.Errorf("error message should mention 'not yet supported', got: %v", err)
+	if r.Output != "ok" {
+		t.Errorf("Output: want %q, got %q", "ok", r.Output)
+	}
+}
+
+// TestNetwork_ExecuteWith_InvalidOverrideErrors verifies that ExecuteWith
+// still rejects invalid RunOptions values.
+func TestNetwork_ExecuteWith_InvalidOverrideErrors(t *testing.T) {
+	router := &mockProvider{name: "router", responses: []core.ChatResponse{{Content: "ok"}}}
+	net := NewNetwork("net", "test", router)
+	bad := 0 // MaxIter must be > 0
+	_, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{MaxIter: &bad})
+	if err == nil {
+		t.Fatalf("ExecuteWith with invalid MaxIter: expected validation error")
 	}
 }
 
@@ -426,9 +438,10 @@ func TestNetwork_ExecuteStreamWith_NilSameAsExecuteStream(t *testing.T) {
 	}
 }
 
-// TestNetwork_ExecuteStreamWith_OverridesRejected verifies that
-// ExecuteStreamWith with non-empty RunOptions returns an error and closes the channel.
-func TestNetwork_ExecuteStreamWith_OverridesRejected(t *testing.T) {
+// TestNetwork_ExecuteStreamWith_AppliesOverrides verifies that
+// ExecuteStreamWith applies router-level RunOptions and streams events through
+// the channel until close — no longer rejects overrides.
+func TestNetwork_ExecuteStreamWith_AppliesOverrides(t *testing.T) {
 	sub := &stubAgent{
 		name: "worker",
 		desc: "Does work",
@@ -444,15 +457,30 @@ func TestNetwork_ExecuteStreamWith_OverridesRejected(t *testing.T) {
 
 	ch := make(chan core.StreamEvent, 100)
 	maxIter := 3
-	_, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{MaxIter: &maxIter})
-	if err == nil {
-		t.Fatalf("ExecuteStreamWith(MaxIter=3): expected error")
+	r, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{MaxIter: &maxIter})
+	for range ch {
 	}
+	if err != nil {
+		t.Fatalf("ExecuteStreamWith(MaxIter=3): expected success, got %v", err)
+	}
+	if r.Output != "ok" {
+		t.Errorf("Output: want %q, got %q", "ok", r.Output)
+	}
+}
 
-	// Verify channel is closed
-	_, ok := <-ch
-	if ok {
-		t.Fatalf("channel should be closed on error")
+// TestNetwork_ExecuteStreamWith_InvalidOverrideClosesChannel verifies that
+// invalid RunOptions still close the channel and return a validation error.
+func TestNetwork_ExecuteStreamWith_InvalidOverrideClosesChannel(t *testing.T) {
+	router := &mockProvider{name: "router", responses: []core.ChatResponse{{Content: "ok"}}}
+	net := NewNetwork("net", "test", router)
+	ch := make(chan core.StreamEvent, 100)
+	bad := 0
+	_, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{MaxIter: &bad})
+	if err == nil {
+		t.Fatalf("ExecuteStreamWith with invalid MaxIter: expected validation error")
+	}
+	if _, ok := <-ch; ok {
+		t.Fatalf("channel should be closed on validation error")
 	}
 }
 

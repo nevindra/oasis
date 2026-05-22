@@ -20,65 +20,83 @@ const defaultMaxIter = 25
 // Both types embed this struct to eliminate field duplication.
 // New agent-level options only need to be wired here once.
 // This is an internal type; do not depend on stability.
+//
+// Config is embedded so that all option-set fields (systemPrompt, genParams,
+// spawnDepthLimit, etc.) promote directly onto AgentCore without a copy step.
+// The fields below are runtime-only: they are either computed during InitCore
+// (name, description, provider, tools, processors, mem, cachedToolDefs,
+// activeSkillInstructions, maxSteps, compressor) or mutated during execution
+// (suspendCount, suspendBytes, suspendMu) and therefore cannot live in Config.
+//
+// Why compressor is separate from Config.compactor:
+//   Config.compactor is the per-thread compactor (history compaction — reduces
+//   old conversation turns). AgentCore.compressor is the per-turn tool-result
+//   compressor (reduces oversized tool output mid-loop). Both satisfy the same
+//   Compactor interface, but they serve different purposes and are set on
+//   different lifecycles. InitCore copies cfg.compactor → c.compressor at build
+//   time; the runtime uses c.compressor directly.
+//
+// Why maxSteps is separate from Config.maxSteps (*int):
+//   Config.maxSteps is a pointer so BuildConfig can distinguish "explicitly set
+//   to 0 (unbounded)" from "not set (default 100)". Once InitCore dereferences
+//   it into AgentCore.maxSteps (value int), that distinction is no longer needed
+//   and pointer indirection in the hot loop is avoided.
 type AgentCore struct {
-	name             string
-	description      string
-	provider         Provider
-	tools            *ToolRegistry
-	processors       *ProcessorChain
-	systemPrompt     string
-	maxIter          int
-	handler          InputHandler
-	planExecution    bool
-	sandbox          core.Sandbox
-	responseSchema   *ResponseSchema
-	dynamicPrompt    PromptFunc
-	dynamicModel     ModelFunc
-	dynamicTools     ToolsFunc
-	tracer           Tracer
-	logger           *slog.Logger
-	mem              memory.AgentMemory
-	cachedToolDefs   []ToolDefinition
-	maxAttachmentBytes  int64
-	suspendCount        int64      // guarded by suspendMu
-	suspendBytes        int64      // guarded by suspendMu
-	suspendMu           sync.Mutex // guards suspendCount/suspendBytes (Phase 4 finding 4.1.g)
-	maxSuspendSnapshots int
-	maxSuspendBytes     int64
-	compressModel       ModelFunc
-	compressThreshold   int
-	compressor          Compactor
-	genParams           *GenerationParams
-	spawnEnabled        bool
-	spawnDepthLimit     int
-	deniedSpawnTools    []string
+	Config // embedded — option-set fields promote up
+
+	// Identity and runtime-wired dependencies (passed into InitCore; not in Config).
+	name        string
+	description string
+	provider    Provider
+
+	// Infrastructure built during InitCore (not option fields).
+	tools      *ToolRegistry
+	processors *ProcessorChain
+	mem        memory.AgentMemory
+
+	// Cached / computed at build time.
+	cachedToolDefs          []ToolDefinition
 	activeSkillInstructions string
-	maxParallelDispatch int
-	maxPlanSteps        int
-	maxToolResultLen    int
-	toolResultStore     core.ToolResultStore
-	toolPolicies        map[string]core.ToolPolicy
-	toolPolicyMatchers  []toolPolicyMatcher
-	maxSteps            int
-	prepareStep         PrepareStep         // optional; set via WithPrepareStep
-	onError             OnError             // optional; set via WithOnError
-	onIterationComplete OnIterationComplete // optional; set via WithOnIterationComplete
+	maxSteps                int // dereferenced from *Config.maxSteps in InitCore
+
+	// Suspension counters — mutated during execution, guarded by suspendMu.
+	// Live here (not Config) because they are runtime state, not configuration.
+	suspendCount int64
+	suspendBytes int64
+	suspendMu    sync.Mutex
+
+	// Why compressor is separate: see type comment above.
+	compressor Compactor
 }
 
-// initCore initializes shared fields on an AgentCore from the given config.
+// InitCore initializes shared fields on an AgentCore from the given config.
 // Called by NewLLMAgent and NewNetwork on the already-allocated parent struct.
 // Uses field-by-field assignment to avoid copying sync primitives in agentMemory.
+//
+// Field copies are intentionally minimal: Config is embedded in AgentCore so
+// most option-set fields promote directly. Only runtime-computed or
+// runtime-mutated fields need explicit assignment here.
 func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Config) {
+	c.Config = *cfg
 	c.name = name
 	c.description = description
 	c.provider = provider
 	c.tools = NewToolRegistry()
 	c.processors = NewProcessorChain()
-	c.systemPrompt = cfg.prompt
-	c.maxIter = defaultMaxIter
-	if cfg.maxIter > 0 {
-		c.maxIter = cfg.maxIter
+
+	// Default maxIter when not explicitly set.
+	if c.maxIter == 0 {
+		c.maxIter = defaultMaxIter
 	}
+
+	// Dereference *Config.maxSteps into a plain int for the runtime.
+	// See AgentCore type comment for why these are kept separate.
+	c.maxSteps = *cfg.maxSteps
+
+	// Alias: Config.compactor (per-thread history compaction) is reused as
+	// AgentCore.compressor (per-turn tool-result compression). They serve
+	// different purposes but share the same interface. See AgentCore type comment.
+	c.compressor = cfg.compactor
 
 	// Wire memory fields via Init to avoid accessing unexported fields across packages.
 	c.mem.Init(memory.AgentMemoryConfig{
@@ -138,36 +156,6 @@ func InitCore(c *AgentCore, name, description string, provider Provider, cfg *Co
 	for _, p := range cfg.postToolProcessors {
 		c.processors.AddPostTool(p)
 	}
-
-	c.handler = cfg.inputHandler
-	c.planExecution = cfg.planExecution
-	c.sandbox = cfg.sandbox
-	c.responseSchema = cfg.responseSchema
-	c.dynamicPrompt = cfg.dynamicPrompt
-	c.dynamicModel = cfg.dynamicModel
-	c.dynamicTools = cfg.dynamicTools
-	c.tracer = cfg.tracer
-	c.logger = cfg.logger
-	c.maxAttachmentBytes = cfg.maxAttachmentBytes
-	c.maxSuspendSnapshots = cfg.maxSuspendSnapshots
-	c.maxSuspendBytes = cfg.maxSuspendBytes
-	c.compressModel = cfg.compressModel
-	c.compressThreshold = cfg.compressThreshold
-	c.compressor = cfg.compactor // reuse the per-thread compactor for per-turn tool-result compression
-	c.genParams = cfg.generationParams
-	c.spawnEnabled = cfg.spawnEnabled
-	c.spawnDepthLimit = cfg.maxSpawnDepth
-	c.deniedSpawnTools = cfg.denySpawnTools
-	c.maxParallelDispatch = cfg.maxParallelDispatch
-	c.maxPlanSteps = cfg.maxPlanSteps
-	c.maxToolResultLen = cfg.maxToolResultLen
-	c.toolResultStore = cfg.toolResultStore
-	c.toolPolicies = cfg.toolPolicies
-	c.toolPolicyMatchers = cfg.toolPolicyMatchers
-	c.maxSteps = *cfg.maxSteps
-	c.prepareStep = cfg.prepareStep
-	c.onError = cfg.onError
-	c.onIterationComplete = cfg.onIterationComplete
 
 	// Build active skill instructions block.
 	if len(cfg.activeSkills) > 0 {
@@ -265,7 +253,7 @@ func withSpawnDepth(ctx context.Context, depth int) context.Context {
 // CacheBuiltinToolDefs appends built-in tool definitions (ask_user, execute_plan)
 // based on the agent's configuration.
 func (c *AgentCore) CacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition {
-	if c.handler != nil {
+	if c.inputHandler != nil {
 		defs = append(defs, askUserToolDef())
 	}
 	if c.planExecution {
@@ -280,15 +268,45 @@ func (c *AgentCore) CacheBuiltinToolDefs(defs []ToolDefinition) []ToolDefinition
 // ResolvePromptAndProvider returns the effective prompt and provider for this request.
 // Dynamic overrides take precedence over construction-time values.
 func (c *AgentCore) ResolvePromptAndProvider(ctx context.Context, task AgentTask) (string, Provider) {
-	prompt := c.systemPrompt
-	if c.dynamicPrompt != nil {
+	return c.ResolvePromptAndProviderWith(ctx, task, &c.Config)
+}
+
+// ResolvePromptAndProviderWith is the per-call variant of ResolvePromptAndProvider.
+// When cfg is the result of applyRunOptions over the agent's base Config, an
+// explicit Prompt override in RunOptions wins over the dynamicPrompt
+// resolver; without an override, the dynamic resolver is used as usual.
+// Skill instructions are appended to whichever prompt wins.
+func (c *AgentCore) ResolvePromptAndProviderWith(ctx context.Context, task AgentTask, cfg *Config) (string, Provider) {
+	prompt := cfg.systemPrompt
+	// Dynamic prompt applies only when there's no per-call override.
+	if cfg.systemPrompt == c.systemPrompt && c.dynamicPrompt != nil {
 		prompt = c.dynamicPrompt(ctx, task)
 	}
 	p := c.provider
 	if c.dynamicModel != nil {
 		p = c.dynamicModel(ctx, task)
 	}
+	if c.activeSkillInstructions != "" {
+		prompt = prompt + "\n\n# Active Skills\n\n" + c.activeSkillInstructions
+	}
 	return prompt, p
+}
+
+// ApplyRunOptions returns a Config snapshot with opts merged onto the agent's
+// base Config. Returns &c.Config unchanged when opts is nil or has no
+// overrides. Exposed for external subpackages (e.g. network) that need to
+// share the same RunOptions plumbing as LLMAgent.
+func (c *AgentCore) ApplyRunOptions(opts *RunOptions) *Config {
+	return applyRunOptions(&c.Config, opts)
+}
+
+// ResolveMem returns the memory orchestrator for a request. opts.Memory wins
+// when set, otherwise the agent's construction-time memory.
+func (c *AgentCore) ResolveMem(opts *RunOptions) *memory.AgentMemory {
+	if opts != nil && opts.Memory != nil {
+		return opts.Memory
+	}
+	return &c.mem
 }
 
 // ResolveDynamicTools returns tool definitions and an executor for a dynamic request.
@@ -313,41 +331,81 @@ func (c *AgentCore) ResolveDynamicTools(ctx context.Context, task AgentTask) ([]
 	return toolDefs, executeTool
 }
 
+// ResolveTools returns the tool definitions and executors for an iteration.
+// Picks the dynamic path when WithDynamicTools is configured, otherwise the
+// cached static path. prebuild, if non-nil, transforms the dynamic-tool
+// definitions before built-ins are appended — Network uses this to inject
+// agent_* delegation tool defs. Streaming-tool detection is reported via
+// isStream (always false on the dynamic path; agent's registry lookup on the
+// static path).
+func (c *AgentCore) ResolveTools(
+	ctx context.Context,
+	task AgentTask,
+	prebuild func([]ToolDefinition) []ToolDefinition,
+) (defs []ToolDefinition, exec ToolExecFunc, execStream ToolExecStreamFunc, isStream func(string) bool) {
+	if dynDefs, dynExec := c.ResolveDynamicTools(ctx, task); dynDefs != nil {
+		c.logger.Debug("using dynamic tools", "agent", c.name, "tool_count", len(dynDefs))
+		if prebuild != nil {
+			dynDefs = prebuild(dynDefs)
+		}
+		return c.CacheBuiltinToolDefs(dynDefs), dynExec, nil, func(string) bool { return false }
+	}
+	return c.cachedToolDefs, c.tools.Execute, c.tools.ExecuteStream, c.tools.IsStreamingTool
+}
+
 // BaseLoopConfig assembles a LoopConfig from resolved values.
-// Callers provide the name prefix, resolved prompt/provider/tools, and dispatch function.
-func (c *AgentCore) BaseLoopConfig(name, prompt string, provider Provider, tools []ToolDefinition, dispatch DispatchFunc) LoopConfig {
+// Callers provide the name prefix, resolved prompt/provider/tools, dispatch,
+// the effective Config (typically &c.Config, or the result of ApplyRunOptions
+// for per-call overrides), and the memory orchestrator (typically &c.mem, or
+// opts.Memory). Non-overridable runtime state (suspend counters, compressor,
+// processors, tool lookup) is sourced from c regardless of cfg.
+func (c *AgentCore) BaseLoopConfig(
+	name, prompt string,
+	provider Provider,
+	tools []ToolDefinition,
+	dispatch DispatchFunc,
+	cfg *Config,
+	mem *memory.AgentMemory,
+) LoopConfig {
+	maxSteps := 0
+	if cfg.maxSteps != nil {
+		maxSteps = *cfg.maxSteps
+	}
 	return LoopConfig{
-		name:                name,
-		provider:            provider,
-		tools:               tools,
-		processors:          c.processors,
-		maxIter:             c.maxIter,
-		mem:                 &c.mem,
-		inputHandler:        c.handler,
-		dispatch:            dispatch,
-		systemPrompt:        prompt,
-		responseSchema:      c.responseSchema,
-		tracer:              c.tracer,
-		logger:              c.logger,
-		maxAttachmentBytes:  c.maxAttachmentBytes,
-		suspendCount:        &c.suspendCount,
-		suspendBytes:        &c.suspendBytes,
-		suspendMu:           &c.suspendMu,
-		maxSuspendSnapshots: c.maxSuspendSnapshots,
-		maxSuspendBytes:     c.maxSuspendBytes,
-		compressModel:       c.compressModel,
-		compressThreshold:   c.compressThreshold,
-		compressor:          c.compressor,
-		generationParams:    c.genParams,
-		maxParallelDispatch: c.maxParallelDispatch,
-		maxToolResultLen:    c.maxToolResultLen,
-		maxPlanSteps:        c.maxPlanSteps,
-		toolResultStore:     c.toolResultStore,
-		maxSteps:            c.maxSteps,
-		prepareStep:         c.prepareStep,
-		onError:             c.onError,
-		onIterationComplete: c.onIterationComplete,
-		lookupTool:          c.tools.Lookup,
+		// identity / per-call wiring
+		name:         name,
+		provider:     provider,
+		tools:        tools,
+		dispatch:     dispatch,
+		systemPrompt: prompt,
+		// overridable config fields
+		maxIter:             cfg.maxIter,
+		inputHandler:        cfg.inputHandler,
+		responseSchema:      cfg.responseSchema,
+		tracer:              cfg.tracer,
+		logger:              cfg.logger,
+		maxAttachmentBytes:  cfg.maxAttachmentBytes,
+		maxSuspendSnapshots: cfg.maxSuspendSnapshots,
+		maxSuspendBytes:     cfg.maxSuspendBytes,
+		compressModel:       cfg.compressModel,
+		compressThreshold:   cfg.compressThreshold,
+		generationParams:    cfg.genParams,
+		maxParallelDispatch: cfg.maxParallelDispatch,
+		maxToolResultLen:    cfg.maxToolResultLen,
+		maxPlanSteps:        cfg.maxPlanSteps,
+		toolResultStore:     cfg.toolResultStore,
+		maxSteps:            maxSteps,
+		prepareStep:         cfg.prepareStep,
+		onError:             cfg.onError,
+		onIterationComplete: cfg.onIterationComplete,
+		// non-overridable runtime state
+		processors:   c.processors,
+		mem:          mem,
+		suspendCount: &c.suspendCount,
+		suspendBytes: &c.suspendBytes,
+		suspendMu:    &c.suspendMu,
+		compressor:   c.compressor,
+		lookupTool:   c.tools.Lookup,
 	}
 }
 
@@ -638,8 +696,8 @@ func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, tool
 // configuration drawn from the AgentCore fields. Returns (result, true) when
 // the call was handled; (zero, false) otherwise.
 func (c *AgentCore) DispatchBuiltins(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool) {
-	if tc.Name == "ask_user" && c.handler != nil {
-		content, err := executeAskUser(ctx, c.handler, c.name, tc)
+	if tc.Name == "ask_user" && c.inputHandler != nil {
+		content, err := executeAskUser(ctx, c.inputHandler, c.name, tc)
 		if err != nil {
 			return DispatchResult{Content: "error: " + err.Error(), IsError: true}, true
 		}

@@ -2,10 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 
 	"github.com/nevindra/oasis/core"
 )
@@ -56,7 +56,7 @@ func (t *readFullResultTool) Execute(ctx context.Context, in ReadFullResultIn) (
 		return ReadFullResultOut{}, err
 	}
 	// Unquote JSON string literals so the LLM sees plain text.
-	text := unquoteIfJSONString(raw)
+	text := rawMessageToString(json.RawMessage(raw))
 	runes := []rune(text)
 	total := len(runes)
 	offset := in.Offset
@@ -80,13 +80,3 @@ func (t *readFullResultTool) Execute(ctx context.Context, in ReadFullResultIn) (
 	return out, nil
 }
 
-// unquoteIfJSONString returns the unquoted string when raw is a JSON string
-// literal (starts with '"'). Otherwise it returns raw as-is (verbatim JSON).
-func unquoteIfJSONString(raw []byte) string {
-	if len(raw) >= 2 && raw[0] == '"' {
-		if s, err := strconv.Unquote(string(raw)); err == nil {
-			return s
-		}
-	}
-	return string(raw)
-}

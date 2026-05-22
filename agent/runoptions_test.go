@@ -119,37 +119,37 @@ func TestApplyRunOptions_MaxIterOverride(t *testing.T) {
 }
 
 func TestApplyRunOptions_PromptOverride(t *testing.T) {
-	base := &Config{prompt: "agent-default"}
+	base := &Config{systemPrompt: "agent-default"}
 	override := "call-override"
 	out := applyRunOptions(base, &RunOptions{Prompt: &override})
-	if out.prompt != "call-override" {
-		t.Fatalf("Prompt override: got %q, want %q", out.prompt, "call-override")
+	if out.systemPrompt != "call-override" {
+		t.Fatalf("Prompt override: got %q, want %q", out.systemPrompt, "call-override")
 	}
-	if base.prompt != "agent-default" {
-		t.Fatalf("Prompt override leaked into base: %q", base.prompt)
+	if base.systemPrompt != "agent-default" {
+		t.Fatalf("Prompt override leaked into base: %q", base.systemPrompt)
 	}
 }
 
 func TestApplyRunOptions_GenerationPartialMerge(t *testing.T) {
 	temp := 0.3
 	topP := 0.9
-	base := &Config{generationParams: &GenerationParams{Temperature: &temp, TopP: &topP}}
+	base := &Config{genParams: &GenerationParams{Temperature: &temp, TopP: &topP}}
 
 	newTemp := 0.7
 	out := applyRunOptions(base, &RunOptions{Generation: &Generation{Temperature: &newTemp}})
 
-	if out.generationParams == nil {
-		t.Fatalf("Generation partial: generationParams nil after override")
+	if out.genParams == nil {
+		t.Fatalf("Generation partial: genParams nil after override")
 	}
-	if out.generationParams.Temperature == nil || *out.generationParams.Temperature != 0.7 {
-		t.Fatalf("Generation partial: Temperature = %v, want 0.7", out.generationParams.Temperature)
+	if out.genParams.Temperature == nil || *out.genParams.Temperature != 0.7 {
+		t.Fatalf("Generation partial: Temperature = %v, want 0.7", out.genParams.Temperature)
 	}
-	if out.generationParams.TopP == nil || *out.generationParams.TopP != 0.9 {
-		t.Fatalf("Generation partial: TopP = %v, want 0.9 (preserved)", out.generationParams.TopP)
+	if out.genParams.TopP == nil || *out.genParams.TopP != 0.9 {
+		t.Fatalf("Generation partial: TopP = %v, want 0.9 (preserved)", out.genParams.TopP)
 	}
 	// Base must not be mutated
-	if base.generationParams.Temperature == nil || *base.generationParams.Temperature != 0.3 {
-		t.Fatalf("Generation partial: base mutated to %v, want 0.3", base.generationParams.Temperature)
+	if base.genParams.Temperature == nil || *base.genParams.Temperature != 0.3 {
+		t.Fatalf("Generation partial: base mutated to %v, want 0.3", base.genParams.Temperature)
 	}
 }
 

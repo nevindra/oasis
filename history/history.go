@@ -16,10 +16,9 @@ type Option func(*Config)
 type Config struct {
 	Store             core.Store
 	MaxHistory        int
-	MaxTokens         int   // history token budget
+	MaxTokens         int // history token budget
 	AutoTitle         bool
 	CrossThreadSearch bool
-	Embedding         core.EmbeddingProvider // shared with SemanticTrim if both enabled
 	MinScore          float32
 	Compactor         core.Compactor
 	CompactThreshold  float64
@@ -59,13 +58,10 @@ func AutoTitle() Option {
 }
 
 // CrossThreadSearch enables semantic recall across all conversation threads.
-// Requires an EmbeddingProvider passed as e. Use MinScore to tune the
-// similarity threshold (default 0.60). Requires Store.
-func CrossThreadSearch(e core.EmbeddingProvider) Option {
-	return func(c *Config) {
-		c.CrossThreadSearch = true
-		c.Embedding = e
-	}
+// Requires Store and the agent-level WithEmbedding option. Use MinScore to
+// tune the similarity threshold (default 0.60).
+func CrossThreadSearch() Option {
+	return func(c *Config) { c.CrossThreadSearch = true }
 }
 
 // MinScore sets the minimum cosine similarity score for CrossThreadSearch.
@@ -91,8 +87,9 @@ func Compaction(compactor core.Compactor, threshold float64) Option {
 // exceeds MaxHistory/MaxTokens, older messages are scored by cosine similarity
 // to the current query — lowest-scoring messages drop first. Requires Store.
 // KeepRecent preserves the N most recent messages regardless of score
-// (default 3). If CrossThreadSearch is also enabled, the same embedding
-// provider may be reused.
+// (default 3). SemanticTrim takes its own embedding so a smaller/faster model
+// can be used here while CrossThreadSearch and WithUserMemory share the
+// agent-level embedding set by WithEmbedding.
 func SemanticTrim(e core.EmbeddingProvider) Option {
 	return func(c *Config) {
 		c.SemanticTrimming = true

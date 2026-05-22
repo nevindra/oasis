@@ -21,8 +21,9 @@
 //			knowledge.New(store, embedding),
 //			search.New(),
 //		),
-//		oasis.WithHistory(history.Store(store), history.CrossThreadSearch(embedding)),
-//		oasis.WithUserMemory(memoryStore, embedding),
+//		oasis.WithEmbedding(embedding),
+//		oasis.WithHistory(history.Store(store), history.CrossThreadSearch()),
+//		oasis.WithUserMemory(memoryStore),
 //	)
 //
 //	result, err := agent.Execute(ctx, "What's the weather like?")

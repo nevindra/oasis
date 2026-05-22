@@ -55,7 +55,9 @@ func NewNetwork(name, description string, router core.Provider, opts ...agent.Ag
 // Execute runs the network's routing loop.
 func (n *Network) Execute(ctx context.Context, task agent.AgentTask) (agent.AgentResult, error) {
 	ctx = agent.WithTaskContext(ctx, task)
-	return n.ExecuteWithSpan(ctx, task, nil, "Network", "network", n.buildLoopConfig)
+	return n.ExecuteWithSpan(ctx, task, nil, "Network", "network", func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
+		return n.buildLoopConfig(ctx, task, ch, nil)
+	})
 }
 
 // ExecuteStream runs the network's routing loop like Execute, but emits
@@ -64,53 +66,51 @@ func (n *Network) Execute(ctx context.Context, task agent.AgentTask) (agent.Agen
 // The channel is closed when streaming completes.
 func (n *Network) ExecuteStream(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) (agent.AgentResult, error) {
 	ctx = agent.WithTaskContext(ctx, task)
-	return n.ExecuteWithSpan(ctx, task, ch, "Network", "network", n.buildLoopConfig)
+	return n.ExecuteWithSpan(ctx, task, ch, "Network", "network", func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
+		return n.buildLoopConfig(ctx, task, ch, nil)
+	})
 }
 
-// ExecuteWith runs the network like Execute. Network does not yet propagate
-// RunOptions to its subagents — calling with overrides set returns an error.
-// Pass nil opts (or use Execute) to call the network without overrides.
+// ExecuteWith runs the network like Execute and applies per-call RunOptions
+// to the network's router (Prompt, Generation, MaxIter, MaxSteps,
+// MaxPlanSteps, ResponseSchema, MaxAttachmentBytes, MaxToolResultLen, Hooks,
+// Tracer, Logger, Metadata, Memory). RunOptions are NOT propagated to
+// subagents — they keep the per-agent configuration they were constructed
+// with. To override a subagent, pass that agent's own ExecuteWith call site
+// or rebuild the subagent.
 func (n *Network) ExecuteWith(ctx context.Context, task core.AgentTask, opts *agent.RunOptions) (core.AgentResult, error) {
-	if opts != nil && opts.HasOverrides() {
-		return core.AgentResult{}, fmt.Errorf("network: ExecuteWith with overrides not yet supported (use Execute)")
+	if err := opts.Validate(); err != nil {
+		return core.AgentResult{}, err
 	}
-	return n.Execute(ctx, task)
+	ctx = agent.WithTaskContext(ctx, task)
+	return n.ExecuteWithSpan(ctx, task, nil, "Network", "network", func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
+		return n.buildLoopConfig(ctx, task, ch, opts)
+	})
 }
 
-// ExecuteStreamWith runs the network like ExecuteStream. RunOptions
-// propagation is not yet supported — non-empty overrides return an error.
+// ExecuteStreamWith runs the network like ExecuteStream and applies per-call
+// RunOptions to the network's router. See ExecuteWith for the propagation
+// caveat; this method also closes ch on validation error.
 func (n *Network) ExecuteStreamWith(ctx context.Context, task core.AgentTask, ch chan<- core.StreamEvent, opts *agent.RunOptions) (core.AgentResult, error) {
-	if opts != nil && opts.HasOverrides() {
-		close(ch) // StreamingAgent contract: must close ch
-		return core.AgentResult{}, fmt.Errorf("network: ExecuteStreamWith with overrides not yet supported (use ExecuteStream)")
+	if err := opts.Validate(); err != nil {
+		close(ch)
+		return core.AgentResult{}, err
 	}
-	return n.ExecuteStream(ctx, task, ch)
+	ctx = agent.WithTaskContext(ctx, task)
+	return n.ExecuteWithSpan(ctx, task, ch, "Network", "network", func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
+		return n.buildLoopConfig(ctx, task, ch, opts)
+	})
 }
 
 // buildLoopConfig wires Network fields into a LoopConfig for runLoop.
-// Resolves dynamic prompt, model, and tools when configured.
-// ch is passed through so makeDispatch can emit agent-start/finish events.
-func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
-	prompt, provider := n.ResolvePromptAndProvider(ctx, task)
-	if n.ActiveSkillInstructions() != "" {
-		prompt = prompt + "\n\n# Active Skills\n\n" + n.ActiveSkillInstructions()
-	}
-
-	// Resolve tools: dynamic replaces static.
-	var toolDefs []core.ToolDefinition
-	var executeTool agent.ToolExecFunc
-	var executeToolStream agent.ToolExecStreamFunc
-	if dynDefs, dynExec := n.ResolveDynamicTools(ctx, task); dynDefs != nil {
-		n.Logger().Debug("using dynamic tools", "network", n.Name(), "tool_count", len(dynDefs))
-		toolDefs = n.CacheBuiltinToolDefs(n.buildToolDefs(dynDefs))
-		executeTool = dynExec
-	} else {
-		toolDefs = n.CachedToolDefs()
-		executeTool = n.Tools().Execute
-		executeToolStream = n.Tools().ExecuteStream
-	}
-
-	return n.BaseLoopConfig("network:"+n.Name(), prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs))
+// Used by both Execute / ExecuteStream (opts = nil) and
+// ExecuteWith / ExecuteStreamWith (opts != nil). Resolves dynamic prompt,
+// model, and tools, and applies RunOptions overrides to the router config.
+func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent, opts *agent.RunOptions) agent.LoopConfig {
+	cfg := n.ApplyRunOptions(opts)
+	prompt, provider := n.ResolvePromptAndProviderWith(ctx, task, cfg)
+	toolDefs, executeTool, executeToolStream, _ := n.ResolveTools(ctx, task, n.buildToolDefs)
+	return n.BaseLoopConfig("network:"+n.Name(), prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs), cfg, n.ResolveMem(opts))
 }
 
 // makeDispatch returns a DispatchFunc that routes tool calls to subagents,
@@ -220,6 +220,8 @@ func (n *Network) buildToolDefs(toolDefs []core.ToolDefinition) []core.ToolDefin
 
 // compile-time checks
 var (
-	_ agent.Agent          = (*Network)(nil)
-	_ agent.StreamingAgent = (*Network)(nil)
+	_ agent.Agent                     = (*Network)(nil)
+	_ agent.StreamingAgent            = (*Network)(nil)
+	_ agent.AgentWithOptions          = (*Network)(nil)
+	_ agent.StreamingAgentWithOptions = (*Network)(nil)
 )
