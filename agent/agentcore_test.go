@@ -619,3 +619,20 @@ func TestExecuteStreamWith_NilEquivalentToExecuteStream(t *testing.T) {
 		t.Fatalf("ExecuteStream(%q) != ExecuteStreamWith(nil, %q)", r1.Output, r2.Output)
 	}
 }
+
+// TestAgentCore_LimitsGetterRoundTrips verifies that Limits() returns a copy
+// of the agent's current limits that callers can mutate and pass back via
+// RunOptions.Limits without affecting the agent.
+func TestAgentCore_LimitsGetterRoundTrips(t *testing.T) {
+	a := NewLLMAgent("t", "d", &mockProvider{name: "m", responses: []ChatResponse{{Content: "ok"}}},
+		WithLimits(Limits{MaxIter: 7, MaxAttachmentBytes: 1234}))
+	lim := a.Limits()
+	if lim.MaxIter != 7 || lim.MaxAttachmentBytes != 1234 {
+		t.Fatalf("Limits() did not reflect WithLimits: %+v", lim)
+	}
+	lim.MaxIter = 99
+	// Agent's internal state must be untouched.
+	if a.maxIter != 7 {
+		t.Fatalf("mutating returned Limits affected agent: maxIter=%d, want 7", a.maxIter)
+	}
+}

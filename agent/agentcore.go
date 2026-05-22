@@ -231,6 +231,30 @@ func (c *AgentCore) Generation() Generation {
 	return g
 }
 
+// Limits returns a copy of this agent's current resource budgets. Mutating
+// the returned struct does not affect the agent. Use this to construct a
+// RunOptions.Limits override that partially modifies the agent default:
+//
+//	lim := a.Limits()
+//	lim.MaxIter = 5
+//	result, err := a.ExecuteWith(ctx, task, &agent.RunOptions{Limits: &lim})
+func (c *AgentCore) Limits() Limits {
+	maxSteps := c.maxSteps
+	if maxSteps == 0 {
+		maxSteps = Unbounded
+	}
+	return Limits{
+		MaxIter:             c.maxIter,
+		MaxSteps:            maxSteps,
+		MaxPlanSteps:        c.maxPlanSteps,
+		MaxParallelDispatch: c.maxParallelDispatch,
+		MaxAttachmentBytes:  c.maxAttachmentBytes,
+		MaxToolResultLen:    c.maxToolResultLen,
+		MaxSuspendSnapshots: c.maxSuspendSnapshots,
+		MaxSuspendBytes:     c.maxSuspendBytes,
+	}
+}
+
 // --- Spawn depth tracking ---
 
 // spawnDepthKey is the context key for sub-agent nesting depth.
