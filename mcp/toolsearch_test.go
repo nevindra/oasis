@@ -65,7 +65,7 @@ func (f *fakeDeferredTool) Definition() oasis.ToolDefinition {
 	return d
 }
 func (f *fakeDeferredTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (oasis.ToolResult, error) {
-	return oasis.ToolResult{Content: "ok"}, nil
+	return oasis.ToolResult{Content: json.RawMessage("ok")}, nil
 }
 func (f *fakeDeferredTool) EnsureSchema(_ context.Context) error {
 	f.loadCount++
@@ -99,11 +99,11 @@ func TestToolSearch_Execute_HappyPath(t *testing.T) {
 	if res.Error != "" {
 		t.Fatalf("ToolResult.Error: %s", res.Error)
 	}
-	if !strings.Contains(res.Content, "mcp__gh__create_issue") {
-		t.Errorf("content: %s", res.Content)
+	if !strings.Contains(string(res.Content), "mcp__gh__create_issue") {
+		t.Errorf("content: %s", string(res.Content))
 	}
-	if !strings.Contains(res.Content, "inputSchema") {
-		t.Errorf("expected schema in response: %s", res.Content)
+	if !strings.Contains(string(res.Content), "inputSchema") {
+		t.Errorf("expected schema in response: %s", string(res.Content))
 	}
 }
 
@@ -132,7 +132,7 @@ func TestToolSearch_Execute_MaxResultsClamp(t *testing.T) {
 	} {
 		args, _ := json.Marshal(map[string]interface{}{"query": "tool", "max_results": tc.input})
 		res, _ := ts.ExecuteRaw(context.Background(), args)
-		n := strings.Count(res.Content, `"name":`)
+		n := strings.Count(string(res.Content), `"name":`)
 		if n != tc.want {
 			t.Errorf("max_results=%d: got %d tools, want %d", tc.input, n, tc.want)
 		}
@@ -162,8 +162,8 @@ func TestToolSearch_Execute_NoMatchesReturnsNote(t *testing.T) {
 	if res.Error != "" {
 		t.Errorf("should not error: %s", res.Error)
 	}
-	if !strings.Contains(res.Content, "No tools matched") {
-		t.Errorf("content: %s", res.Content)
+	if !strings.Contains(string(res.Content), "No tools matched") {
+		t.Errorf("content: %s", string(res.Content))
 	}
 }
 

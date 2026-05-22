@@ -12,6 +12,18 @@ import (
 	oasis "github.com/nevindra/oasis"
 )
 
+// decodeContent unwraps a tool result's JSON-encoded text content for assertion.
+// Tools built with oasis.TextResult store text as a JSON string literal so the
+// wire format is always valid JSON; tests inspect the decoded value, not the envelope.
+func decodeContent(t *testing.T, r oasis.ToolResult) string {
+	t.Helper()
+	var s string
+	if err := json.Unmarshal(r.Content, &s); err != nil {
+		t.Fatalf("Content not a JSON string: %v (raw=%s)", err, r.Content)
+	}
+	return s
+}
+
 // mockSandbox implements Sandbox for testing tool dispatch.
 type mockSandbox struct {
 	shellFn        func(ctx context.Context, req ShellRequest) (ShellResult, error)
@@ -199,8 +211,8 @@ func TestShellToolDispatch(t *testing.T) {
 				if captured.Cwd != "/tmp" {
 					t.Errorf("cwd = %q, want %q", captured.Cwd, "/tmp")
 				}
-				if result.Content != "hello world" {
-					t.Errorf("content = %q, want %q", result.Content, "hello world")
+				if decodeContent(t, result) != "hello world" {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), "hello world")
 				}
 				if result.Error != "" {
 					t.Errorf("unexpected error field: %q", result.Error)
@@ -232,8 +244,8 @@ func TestShellToolNonZeroExit(t *testing.T) {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				want := "exit code 1\nnot found"
-				if result.Content != want {
-					t.Errorf("content = %q, want %q", result.Content, want)
+				if decodeContent(t, result) != want {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), want)
 				}
 			}
 		_ = def
@@ -266,8 +278,8 @@ func TestExecuteCodeToolDispatch(t *testing.T) {
 				if captured.Language != "python" {
 					t.Errorf("language = %q, want %q", captured.Language, "python")
 				}
-				if result.Content != "42" {
-					t.Errorf("content = %q, want %q", result.Content, "42")
+				if decodeContent(t, result) != "42" {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), "42")
 				}
 			}
 		_ = def
@@ -422,8 +434,8 @@ func TestFileEditToolDispatch(t *testing.T) {
 				if captured.New != "print('hello world')" {
 					t.Errorf("new = %q, want %q", captured.New, "print('hello world')")
 				}
-				if result.Content != "edited /app/main.py" {
-					t.Errorf("content = %q, want %q", result.Content, "edited /app/main.py")
+				if decodeContent(t, result) != "edited /app/main.py" {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), "edited /app/main.py")
 				}
 				if result.Error != "" {
 					t.Errorf("unexpected error field: %q", result.Error)
@@ -491,8 +503,8 @@ func TestFileGlobToolDispatch(t *testing.T) {
 					t.Errorf("path = %q, want %q", captured.Path, "/app")
 				}
 				want := "/app/main.py\n/app/lib/utils.py"
-				if result.Content != want {
-					t.Errorf("content = %q, want %q", result.Content, want)
+				if decodeContent(t, result) != want {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), want)
 				}
 				if result.Error != "" {
 					t.Errorf("unexpected error field: %q", result.Error)
@@ -523,8 +535,8 @@ func TestFileGlobToolNoMatches(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if result.Content != "no files matched" {
-					t.Errorf("content = %q, want %q", result.Content, "no files matched")
+				if decodeContent(t, result) != "no files matched" {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), "no files matched")
 				}
 			}
 		_ = def
@@ -566,8 +578,8 @@ func TestFileGrepToolDispatch(t *testing.T) {
 					t.Errorf("glob = %q, want %q", captured.Glob, "*.py")
 				}
 				want := "/app/main.py:42: def main():\n/app/lib/utils.py:10: def main_helper():"
-				if result.Content != want {
-					t.Errorf("content = %q, want %q", result.Content, want)
+				if decodeContent(t, result) != want {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), want)
 				}
 				if result.Error != "" {
 					t.Errorf("unexpected error field: %q", result.Error)
@@ -598,8 +610,8 @@ func TestFileGrepToolNoMatches(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if result.Content != "no matches found" {
-					t.Errorf("content = %q, want %q", result.Content, "no matches found")
+				if decodeContent(t, result) != "no matches found" {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), "no matches found")
 				}
 			}
 		_ = def
@@ -638,11 +650,11 @@ func TestSnapshotToolDispatch(t *testing.T) {
 				if captured.Filter != "interactive" {
 					t.Errorf("filter = %q, want %q", captured.Filter, "interactive")
 				}
-				if !strings.Contains(result.Content, "[e0] link \"Home\"") {
-					t.Errorf("content missing e0 node: %q", result.Content)
+				if !strings.Contains(decodeContent(t, result), "[e0] link \"Home\"") {
+					t.Errorf("content missing e0 node: %q", decodeContent(t, result))
 				}
-				if !strings.Contains(result.Content, "[e1] button \"Submit\"") {
-					t.Errorf("content missing e1 node: %q", result.Content)
+				if !strings.Contains(decodeContent(t, result), "[e1] button \"Submit\"") {
+					t.Errorf("content missing e1 node: %q", decodeContent(t, result))
 				}
 				if result.Error != "" {
 					t.Errorf("unexpected error: %q", result.Error)
@@ -687,8 +699,8 @@ func TestPageTextToolDispatch(t *testing.T) {
 				if captured.MaxChars != 500 {
 					t.Errorf("max_chars = %d, want 500", captured.MaxChars)
 				}
-				if result.Content != "Welcome to Example." {
-					t.Errorf("content = %q, want %q", result.Content, "Welcome to Example.")
+				if decodeContent(t, result) != "Welcome to Example." {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), "Welcome to Example.")
 				}
 			}
 		_ = def
@@ -718,8 +730,8 @@ func TestExportPDFToolDispatch(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if !strings.Contains(result.Content, "13 bytes") {
-					t.Errorf("content = %q, want size info", result.Content)
+				if !strings.Contains(decodeContent(t, result), "13 bytes") {
+					t.Errorf("content = %q, want size info", decodeContent(t, result))
 				}
 			}
 		_ = def
@@ -755,8 +767,8 @@ func TestBrowserToolWithRef(t *testing.T) {
 				if captured.Type != "click" {
 					t.Errorf("type = %q, want %q", captured.Type, "click")
 				}
-				if result.Content != "clicked" {
-					t.Errorf("content = %q, want %q", result.Content, "clicked")
+				if decodeContent(t, result) != "clicked" {
+					t.Errorf("content = %q, want %q", decodeContent(t, result), "clicked")
 				}
 			}
 		_ = def
@@ -839,8 +851,8 @@ func TestDeliverFileToolDispatch(t *testing.T) {
 				}
 
 				// Verify tool result.
-				if !strings.Contains(result.Content, "delivered My Report.pdf") {
-					t.Errorf("result content = %q, want to contain %q", result.Content, "delivered My Report.pdf")
+				if !strings.Contains(decodeContent(t, result), "delivered My Report.pdf") {
+					t.Errorf("result content = %q, want to contain %q", decodeContent(t, result), "delivered My Report.pdf")
 				}
 				if result.Error != "" {
 					t.Errorf("unexpected error field: %q", result.Error)
@@ -899,8 +911,8 @@ func TestDeliverFileToolDefaultName(t *testing.T) {
 				if capturedName != "chart.png" {
 					t.Errorf("delivery name = %q, want %q", capturedName, "chart.png")
 				}
-				if !strings.Contains(result.Content, "delivered chart.png") {
-					t.Errorf("result content = %q, want to contain %q", result.Content, "delivered chart.png")
+				if !strings.Contains(decodeContent(t, result), "delivered chart.png") {
+					t.Errorf("result content = %q, want to contain %q", decodeContent(t, result), "delivered chart.png")
 				}
 			}
 		_ = def

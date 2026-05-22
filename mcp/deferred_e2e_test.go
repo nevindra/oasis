@@ -89,7 +89,7 @@ func TestE2E_ToolSearch_MaxResultsZero(t *testing.T) {
 	args, _ := json.Marshal(map[string]interface{}{"query": "things", "max_results": 0})
 	res, _ := ts.ExecuteRaw(context.Background(), args)
 
-	n := strings.Count(res.Content, `"name":`)
+	n := strings.Count(string(res.Content), `"name":`)
 	if n != 10 {
 		t.Errorf("expected 10 (default), got %d", n)
 	}

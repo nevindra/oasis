@@ -76,8 +76,8 @@ func TestE2E_T1_HappyPath(t *testing.T) {
 	if result.Error != "" {
 		t.Errorf("ToolResult.Error = %q, want empty", result.Error)
 	}
-	if !strings.Contains(result.Content, "hello") {
-		t.Errorf("content = %q, expected to contain 'hello'", result.Content)
+	if !strings.Contains(string(result.Content), "hello") {
+		t.Errorf("content = %q, expected to contain 'hello'", string(result.Content))
 	}
 
 	// A connected event must have been emitted.
