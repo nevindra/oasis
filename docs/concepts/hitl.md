@@ -82,3 +82,58 @@ Use it for prototypes, scripts, or dynamic-shape payloads where declaring a prot
 - The synchronous `WithToolApproval` gate is not protocol-aware; a redesigned async approval gate using protocols ships in spec #6.
 - `ask_user` deliberately stays free-form; it serves a different purpose.
 - Durable cross-process suspend/resume snapshots are not part of typed contracts; the persistence story is its own spec when the deployment scenario demands it.
+
+## Streaming suspends
+
+When a tool dispatch, workflow step, or processor suspends mid-run, Oasis emits a typed mid-stream event so UIs can render a "human, please decide" surface without waiting for the run to finish.
+
+Event ordering on a suspending run:
+
+```
+EventRunStart
+  EventIterationStart           (iter=0)
+    EventTextDelta / EventToolCallStart / ...
+    EventToolCallSuspended      ← OR EventStepSuspended OR EventProcessorSuspended
+  EventIterationFinish          (iter=0, FinishReason=FinishSuspended)
+EventRunFinish                  (FinishReason=FinishSuspended, Protocol=<tag>, SuspendPayload=<bytes>)
+[channel close]
+```
+
+Three event types, one per source:
+
+- `oasis.EventToolCallSuspended` — a tool's `ExecuteRaw`, a tool middleware, or a `PostToolProcessor` returned a `Suspend`-class error. Carries `ID` (tool call ID), `Name` (tool name), `Args` (tool arguments), `Protocol` (typed-protocol tag, empty for untyped suspend), and `SuspendPayload`.
+- `oasis.EventStepSuspended` — a workflow step's `Execute` returned a `Suspend`-class error. Carries `Name` (step name), `Protocol`, and `SuspendPayload`.
+- `oasis.EventProcessorSuspended` — a `PreLLM`, `PostLLM`, or `PostToolProcessor` returned a `Suspend`-class error. Carries `Content` set to `"pre"`, `"post"`, or `"post-tool"` as the kind discriminator, plus `Protocol` and `SuspendPayload`.
+
+The final `EventRunFinish` also carries `Protocol` and `SuspendPayload` when `FinishReason == FinishSuspended`, so consumers that only watch the lifecycle envelope still get the data.
+
+Convenience accessors are provided on both the sync and streaming paths:
+
+```go
+// Sync:
+res, err := agent.Execute(ctx, task)
+if res.Suspended() {
+    proto := res.SuspendedProtocol() // typed-protocol tag; "" for untyped
+    payload := res.SuspendPayload    // raw bytes to render to the human
+    // ...
+}
+
+// Streaming:
+stream := oasis.StartStream(ctx, agent, task)
+// ... consume stream.Events() ...
+if stream.Suspended() {
+    proto := stream.SuspendedProtocol()
+    payload := stream.SuspendPayload()
+    // ...
+}
+```
+
+To identify which iteration suspended without external bookkeeping, walk `AgentResult.Iterations` and check `iter.FinishReason`:
+
+```go
+for _, iter := range res.Iterations {
+    if iter.FinishReason == oasis.FinishSuspended {
+        // iter.Iter is the 0-indexed iteration number that paused
+    }
+}
+```

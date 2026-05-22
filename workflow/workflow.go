@@ -72,6 +72,7 @@ func (e *ErrSuspended) Error() string {
 // errSuspend is the internal sentinel for suspension.
 type errSuspend struct {
 	payload json.RawMessage
+	tag     string // empty for untyped Suspend; protocol name for typed suspends
 }
 
 func (e *errSuspend) Error() string { return "suspend" }

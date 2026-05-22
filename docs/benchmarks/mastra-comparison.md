@@ -251,13 +251,13 @@ The two frameworks have **near-identical primitive vocabularies** (agents, tools
 | **Multiple concurrent suspends**     | `suspendedPaths` tracks multiple suspended steps per run; nested workflow suspensions bubble through `__workflow_meta.path`        | Workflow: only the first suspended step per `Execute()` is surfaced; agent: budget-governed concurrent suspensions | Mastra |
 | **Approval UI / Clients**            | **First-class UI surface**: Studio approval cards (`tool-approval-buttons.tsx`); React hooks `useAgent()` with approve/decline; REST `POST /agents/:id/approve-tool-call`; client SDKs (JS, React); mastracode TUI dialog | DIY — implement `InputHandler` for your channel (Telegram, Slack, CLI readline, HTTP long-poll)                              | Mastra |
 | **Harness approval policy**          | Per-tool `deny` / `allow` / `ask`; session-grant / category-grant escalation; auto-resolution before prompting (`harness.ts:2371`) | N/A — caller implements policy                                                         | Mastra |
-| **Stream chunk integration**         | `tool-call-approval`, `tool-call-suspended` chunk types surface in stream; `output.status = 'suspended'`, `finishReason = 'suspended'` | Caller observes channel close; checks `errors.As(err, &suspended)` on return            | Mastra |
+| **Stream chunk integration**         | `tool-call-approval`, `tool-call-suspended` chunk types surface in stream; `output.status = 'suspended'`, `finishReason = 'suspended'` | `EventToolCallSuspended`, `EventStepSuspended`, `EventProcessorSuspended` emitted mid-stream before `EventIterationFinish`; `EventRunFinish` carries `Protocol` + `SuspendPayload` when `FinishReason == FinishSuspended`; `Stream.Suspended()` / `Stream.SuspendedProtocol()` accessors block on completion | Tie    |
 | **Constraints on LLM-initiated ask** | N/A                                                                                                                                 | `ask_user` blocked inside `execute_plan` steps and always blocked in sub-agents (`llm.go:177`, `agentcore.go:510`) | Oasis  |
 | **Resume data injection**            | Validated `resumeData` passed to step `execute()` as `params.resumeData`; tool execute receives `agent.resumeData`                  | Appended to message list as `UserMessage("Human input: "+string(data))` then loop re-runs | Mastra |
 | **Cross-suspend tracing**            | Tracing context persisted in snapshot — spans link across process restarts                                                          | Tracing resets on resume                                                               | Mastra |
-| **Observability of suspended state** | Studio shows suspended steps with `resumeSchema`; `workflow.listWorkflowRuns({status: 'suspended'})`                                | Span sets `workflow.status = "suspended"`; caller holds `ErrSuspended` reference       | Mastra |
+| **Observability of suspended state** | Studio shows suspended steps with `resumeSchema`; `workflow.listWorkflowRuns({status: 'suspended'})`                                | Span sets `workflow.status = "suspended"`; `IterationTrace.FinishReason` lets callers walk `AgentResult.Iterations` to identify the suspending iteration; `AgentResult.SuspendProtocol` carries the typed-protocol tag | Tie    |
 
-**Score: Mastra 13 — Oasis 5 — Tie 3**
+**Score: Mastra 11 — Oasis 5 — Tie 5**
 
 > The previous version of this doc said "Mastra: Workflow suspend/resume only" — that was significantly incomplete. Mastra has **four distinct HITL mechanisms**, the most important of which (tool approval gate with `requireApproval`/`requireToolApproval`, agent-level `approveToolCall()`/`declineToolCall()` API, and Studio approval cards UI) constitute a full second HITL path independent of workflow suspend. Conversely, **LLM-initiated pausing via `ask_user` is genuinely Oasis-unique** — Mastra's agent loop does not autonomously pause for human input; pausing in Mastra is always programmer- or framework-initiated.
 >
@@ -448,7 +448,7 @@ The two frameworks have **near-identical primitive vocabularies** (agents, tools
 | RAG Pipeline                  | 2       | 6     | 1   |
 | LLM Providers                 | 2       | 4     | 3   |
 | Streaming                     | 5       | 4     | 9   |
-| Human-in-the-Loop             | 13      | 5     | 3   |
+| Human-in-the-Loop             | 11      | 5     | 5   |
 | Processor / Guardrails        | 3       | 3     | 2   |
 | MCP Support                   | 4       | 3     | 1   |
 | Storage                       | 4       | 0     | 2   |
@@ -459,7 +459,7 @@ The two frameworks have **near-identical primitive vocabularies** (agents, tools
 | Deployment                    | 4       | 2     | 1   |
 | Developer Experience          | 7       | 4     | 4   |
 | Performance                   | 2       | 12    | 1   |
-| **Total**                     | **91**  | **70**| **58** |
+| **Total**                     | **89**  | **70**| **60** |
 
 > Scorecard history:
 > - **2026-02-21** (original): Mastra 23 / Oasis 48 / Tie 23 — understated mastra strengths.
@@ -489,6 +489,7 @@ The two frameworks have **near-identical primitive vocabularies** (agents, tools
 >   Cross-cutting infrastructure shipped alongside: native Gemini and OpenAI-compat providers populate `ChatResponse.FinishReason` and `ChatResponse.ProviderMeta`; `core.Sourced` opt-in interface (implemented by `HybridRetriever` and `GraphRetriever`) aggregates citations onto `AgentResult.Sources` automatically; `core.Warner` opt-in for providers and decorators.
 >   Mastra still leads on: raw event-type count (~70 vs 23), tool-args streaming envelope, `BackgroundTaskManager` event family, WebSocket transport (OpenAI Realtime), and the `tripwire` chunk with `processorId` + automatic retry semantics.
 > - **2026-05-22 (post typed HITL contracts)**: Mastra 91 / Oasis 70 / Tie 58 — HITL category dropped from Mastra 15/5/1 to Mastra 13/5/3 across two rows (Suspend payload typing, Resume data typing) via the typed `SuspendProtocol[Req, Resp]` shipped in spec #1 of the 6-spec HITL parity roadmap. The protocol value pins `Req`/`Resp` in one declaration; both the suspending site and the caller that resumes reference it; the compiler refuses to let either side disagree. Spec also adds a per-protocol `WithRenderResume` formatter so the LLM-visible resume message is natural language instead of raw JSON. `Agent`/`Workflow`/`Network` stay monomorphic. Untyped `Suspend(json.RawMessage)` and `(*ErrSuspended).Resume` are preserved as the escape hatch.
+> - **2026-05-22 (post HITL stream event parity)**: Mastra 89 / Oasis 70 / Tie 60 — HITL category dropped from Mastra 13/5/3 to Mastra 11/5/5 across two rows ("Stream chunk integration", "Observability of suspended state") via spec #2 of the 6-spec HITL parity roadmap. Oasis now emits `EventToolCallSuspended`, `EventStepSuspended`, and `EventProcessorSuspended` mid-stream (before `EventIterationFinish`) so UIs can render a "human, please decide" surface without waiting for the run to finish. `EventRunFinish` also carries `Protocol` and `SuspendPayload` when `FinishReason == FinishSuspended`. `IterationTrace.FinishReason` lets callers walk `AgentResult.Iterations` to identify the suspending iteration; `AgentResult.SuspendProtocol` carries the typed-protocol tag; `Stream.Suspended()` / `Stream.SuspendedProtocol()` and `AgentResult.Suspended()` / `AgentResult.SuspendedProtocol()` are convenience shorthands on both sync and streaming paths.
 
 ---
 

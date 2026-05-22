@@ -327,6 +327,20 @@ func (s *Stream) SuspendPayload() json.RawMessage {
 	return r.SuspendPayload
 }
 
+// Suspended blocks until completion and returns Result().Suspended().
+// Reports whether the run paused awaiting human input.
+func (s *Stream) Suspended() bool {
+	r, _ := s.Result()
+	return r.Suspended()
+}
+
+// SuspendedProtocol blocks until completion and returns Result().SuspendedProtocol().
+// Returns the typed protocol tag, or empty for untyped/non-suspended runs.
+func (s *Stream) SuspendedProtocol() string {
+	r, _ := s.Result()
+	return r.SuspendedProtocol()
+}
+
 // Iterations blocks until completion and returns Result().Iterations.
 func (s *Stream) Iterations() []core.IterationTrace {
 	r, _ := s.Result()

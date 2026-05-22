@@ -451,6 +451,18 @@ func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err e
 		w.logger.Info("step suspended", "workflow", w.name, "step", s.name)
 		if ch != nil {
 			select {
+			case ch <- core.StreamEvent{
+				Type:           core.EventStepSuspended,
+				Name:           s.name,
+				Protocol:       suspend.tag,
+				SuspendPayload: suspend.payload,
+				Duration:       duration,
+			}:
+			default:
+			}
+		}
+		if ch != nil {
+			select {
 			case ch <- core.StreamEvent{Type: core.EventStepFinish, Name: s.name, Content: "suspended", Duration: duration}:
 			default:
 			}

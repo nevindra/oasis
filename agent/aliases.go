@@ -86,6 +86,11 @@ const (
 	EventObjectDelta  = core.EventObjectDelta
 	EventObjectFinish = core.EventObjectFinish
 	EventElementDelta = core.EventElementDelta
+
+	// HITL suspend events.
+	EventToolCallSuspended  = core.EventToolCallSuspended
+	EventStepSuspended      = core.EventStepSuspended
+	EventProcessorSuspended = core.EventProcessorSuspended
 )
 
 // FinishReason aliases.

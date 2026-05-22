@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // --- Sequential execution tests ---
@@ -460,3 +462,76 @@ func TestWorkflowContextCancellation(t *testing.T) {
 	}
 }
 
+// --------------------------------------------------------------------------
+// B. EventStepSuspended fires when a step returns Suspend(...)
+// --------------------------------------------------------------------------
+
+func TestWorkflowStepSuspendedEventFires(t *testing.T) {
+	suspendPayload := []byte(`{"reason":"needs_approval"}`)
+
+	wf, err := NewWorkflow("suspend-stream", "step suspended event test",
+		Step("approval_step", func(_ context.Context, _ *WorkflowContext) error {
+			return Suspend(suspendPayload)
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ch := make(chan core.StreamEvent, 32)
+	_, wfErr := wf.ExecuteStream(context.Background(), AgentTask{Input: "go"}, ch)
+
+	var suspended *ErrSuspended
+	if !errors.As(wfErr, &suspended) {
+		t.Fatalf("expected *ErrSuspended, got %v", wfErr)
+	}
+
+	// Collect all events (channel already closed by ExecuteStream).
+	var evs []core.StreamEvent
+	for ev := range ch {
+		evs = append(evs, ev)
+	}
+
+	// Find EventStepSuspended.
+	var found *core.StreamEvent
+	for i := range evs {
+		if evs[i].Type == core.EventStepSuspended {
+			found = &evs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("EventStepSuspended not found in %d events", len(evs))
+	}
+	if found.Name != "approval_step" {
+		t.Errorf("EventStepSuspended.Name = %q, want %q", found.Name, "approval_step")
+	}
+	if string(found.SuspendPayload) != string(suspendPayload) {
+		t.Errorf("EventStepSuspended.SuspendPayload = %s, want %s", found.SuspendPayload, suspendPayload)
+	}
+	// Untyped Suspend — protocol tag must be empty.
+	if found.Protocol != "" {
+		t.Errorf("EventStepSuspended.Protocol = %q, want empty (untyped Suspend)", found.Protocol)
+	}
+
+	// EventStepSuspended must precede EventStepFinish for the same step.
+	suspIdx := -1
+	finishIdx := -1
+	for i, ev := range evs {
+		if ev.Type == core.EventStepSuspended && ev.Name == "approval_step" {
+			suspIdx = i
+		}
+		if ev.Type == core.EventStepFinish && ev.Name == "approval_step" {
+			finishIdx = i
+		}
+	}
+	if suspIdx < 0 {
+		t.Fatal("EventStepSuspended not found for approval_step")
+	}
+	if finishIdx < 0 {
+		t.Fatal("EventStepFinish not found for approval_step")
+	}
+	if !(suspIdx < finishIdx) {
+		t.Errorf("EventStepSuspended (%d) must come before EventStepFinish (%d)", suspIdx, finishIdx)
+	}
+}

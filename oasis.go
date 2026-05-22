@@ -622,21 +622,24 @@ type StreamEventType = core.StreamEventType
 type StreamEvent = core.StreamEvent
 
 const (
-	EventInputReceived   = core.EventInputReceived
-	EventProcessingStart = core.EventProcessingStart
-	EventTextDelta       = core.EventTextDelta
-	EventToolCallStart   = core.EventToolCallStart
-	EventToolCallResult  = core.EventToolCallResult
-	EventThinking        = core.EventThinking
-	EventAgentStart      = core.EventAgentStart
-	EventAgentFinish     = core.EventAgentFinish
-	EventToolCallDelta   = core.EventToolCallDelta
-	EventToolProgress    = core.EventToolProgress
-	EventStepStart       = core.EventStepStart
-	EventStepFinish      = core.EventStepFinish
-	EventStepProgress    = core.EventStepProgress
-	EventRoutingDecision = core.EventRoutingDecision
-	EventFileAttachment  = core.EventFileAttachment
+	EventInputReceived      = core.EventInputReceived
+	EventProcessingStart    = core.EventProcessingStart
+	EventTextDelta          = core.EventTextDelta
+	EventToolCallStart      = core.EventToolCallStart
+	EventToolCallResult     = core.EventToolCallResult
+	EventThinking           = core.EventThinking
+	EventAgentStart         = core.EventAgentStart
+	EventAgentFinish        = core.EventAgentFinish
+	EventToolCallDelta      = core.EventToolCallDelta
+	EventToolCallSuspended  = core.EventToolCallSuspended
+	EventToolProgress       = core.EventToolProgress
+	EventStepStart          = core.EventStepStart
+	EventStepFinish         = core.EventStepFinish
+	EventStepProgress       = core.EventStepProgress
+	EventStepSuspended      = core.EventStepSuspended
+	EventRoutingDecision    = core.EventRoutingDecision
+	EventFileAttachment     = core.EventFileAttachment
+	EventProcessorSuspended = core.EventProcessorSuspended
 
 	// Lifecycle envelope (Phase 2 streaming).
 	EventRunStart        = core.EventRunStart

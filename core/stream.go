@@ -118,6 +118,25 @@ const (
 	// top-level schema is a JSON array (e.g. []Item). Content / Object carry
 	// the just-completed element. Not emitted for nested arrays.
 	EventElementDelta StreamEventType = "element-delta"
+	// EventToolCallSuspended is emitted when a tool dispatch (the tool's
+	// ExecuteRaw call, a tool middleware, or a PostToolProcessor) returns a
+	// Suspend-class error. ID carries the tool call ID; Name carries the tool
+	// name; Args carries the tool's input arguments (same as the preceding
+	// EventToolCallStart); Protocol carries the typed protocol tag (empty for
+	// untyped Suspend); SuspendPayload carries the bytes from Suspend().
+	// No EventToolCallResult follows.
+	EventToolCallSuspended StreamEventType = "tool-call-suspended"
+	// EventStepSuspended is emitted when a workflow step's Execute returns
+	// a Suspend-class error. Name carries the step name; Protocol carries
+	// the typed protocol tag (empty for untyped Suspend); SuspendPayload
+	// carries the bytes from Suspend().
+	EventStepSuspended StreamEventType = "step-suspended"
+	// EventProcessorSuspended is emitted when a PreLLM, PostLLM, or PostTool
+	// processor returns a Suspend-class error. Name carries the processor's
+	// reflect.Type name; Protocol carries the typed protocol tag (empty for
+	// untyped Suspend); SuspendPayload carries the bytes from Suspend().
+	// Content carries the processor kind: "pre", "post", or "post-tool".
+	EventProcessorSuspended StreamEventType = "processor-suspended"
 )
 
 // FinishReason describes why an agent run ended. It is carried on
@@ -181,4 +200,16 @@ type StreamEvent struct {
 	// the final validated bytes on EventObjectFinish / EventElementDelta.
 	// Empty on all other event types.
 	Object json.RawMessage `json:"object,omitempty"`
+	// Protocol carries the typed SuspendProtocol's tag on EventToolCallSuspended,
+	// EventStepSuspended, EventProcessorSuspended, EventToolApprovalPending,
+	// and EventRunFinish (when FinishReason=FinishSuspended). Empty for events
+	// not related to a suspend, and for suspends made via the untyped
+	// Suspend(json.RawMessage) escape hatch.
+	Protocol string `json:"protocol,omitempty"`
+	// SuspendPayload carries the suspend payload bytes on the same set of
+	// events listed under Protocol. Nil for non-suspend events. Distinct from
+	// Args (which carries tool call arguments) to avoid semantic overload —
+	// EventToolCallSuspended carries both: Args is the proposed tool input,
+	// SuspendPayload is the human-facing context.
+	SuspendPayload json.RawMessage `json:"suspend_payload,omitempty"`
 }

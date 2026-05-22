@@ -178,6 +178,8 @@ func finalizeRun(ctx context.Context, ch chan<- StreamEvent, state *loopState, n
 		}
 		if reason == FinishSuspended {
 			ev.Content = string(result.SuspendPayload)
+			ev.Protocol = result.SuspendProtocol
+			ev.SuspendPayload = result.SuspendPayload
 		}
 		select {
 		case ch <- ev:
@@ -243,7 +245,18 @@ func forceSynthesis(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan
 	// PostProcessor hook.
 	if err := cfg.processors.RunPostLLM(synthCtx, &resp); err != nil {
 		if s := checkSuspendLoop(err, cfg, state.messages, task); s != nil {
-			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload}
+			if ch != nil {
+				select {
+				case ch <- StreamEvent{
+					Type:           EventProcessorSuspended,
+					Content:        "post",
+					Protocol:       s.tag,
+					SuspendPayload: s.Payload,
+				}:
+				case <-ctx.Done():
+				}
+			}
+			suspResult := AgentResult{Usage: state.totalUsage, Steps: state.steps, FinishReason: FinishSuspended, SuspendPayload: s.Payload, SuspendProtocol: s.tag, Iterations: state.iterations}
 			finalizeRun(ctx, ch, state, cfg.name, FinishSuspended, suspResult)
 			return suspResult, s
 		}

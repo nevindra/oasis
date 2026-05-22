@@ -6,6 +6,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **HITL stream event parity** (`docs/superpowers/specs/2026-05-22-hitl-stream-event-parity-design.md`).
+  - New `StreamEventType` constants for mid-stream suspension: `EventToolCallSuspended`, `EventStepSuspended`, `EventProcessorSuspended`. Emitted before the iteration finish event so UIs can render a "human, please decide" card in real time instead of waiting for `EventRunFinish`. Re-exported from `oasis.go`.
+  - New `StreamEvent` fields `Protocol string` and `SuspendPayload json.RawMessage`. Populated on the three new mid-stream events, on `EventRunFinish` when `FinishReason == FinishSuspended`, and reserved for future use on `EventToolApprovalPending`. Both use `omitempty` so existing JSON consumers see no shape change for non-suspend events.
+  - New `IterationTrace.FinishReason FinishReason` field. Lets callers walking `AgentResult.Iterations` identify the suspending iteration (or any other terminal reason) without external bookkeeping.
+  - New `AgentResult.SuspendProtocol string` field. Carries the typed protocol's tag for suspended runs; empty for untyped `Suspend(json.RawMessage)` callers.
+  - New convenience methods: `AgentResult.Suspended() bool`, `AgentResult.SuspendedProtocol() string`, `Stream.Suspended() bool`, `Stream.SuspendedProtocol() string`. Shorthands for `r.FinishReason == FinishSuspended` and `r.SuspendProtocol`. The `Stream` accessors block on completion (same semantics as the existing `SuspendPayload()` accessor).
+  - All additions are additive — no existing event type, field, or signature is removed or renamed. Spec #2 of 6 in the HITL parity roadmap.
+
 ### Breaking
 
 - **`AgentHandle.State()` no longer blocks.** Callers that read `Result()` after `State().IsTerminal()` must insert `h.Sync()` between the two. Migration hint: `grep -n 'State().IsTerminal' your-project/` and add `Sync()` calls. (finding 3.4)

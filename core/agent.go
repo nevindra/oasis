@@ -103,6 +103,10 @@ type AgentResult struct {
 	// SuspendPayload is set when FinishReason == FinishSuspended. Carries
 	// the payload from *ErrSuspended for caller convenience.
 	SuspendPayload json.RawMessage `json:"suspend_payload,omitempty"`
+	// SuspendProtocol is set when FinishReason == FinishSuspended. Carries
+	// the typed protocol's tag from *ErrSuspended.tag (see SuspendProtocol[Req, Resp]).
+	// Empty for suspends made via the untyped Suspend(json.RawMessage) escape hatch.
+	SuspendProtocol string `json:"suspend_protocol,omitempty"`
 	// Object is the final structured output when WithResponseSchema was
 	// configured. Nil when the schema was not set or the response did
 	// not validate.
@@ -164,6 +168,13 @@ type IterationTrace struct {
 	ToolCalls []ToolCallTrace `json:"tool_calls,omitempty"`
 	// Usage is the per-iteration token usage (excluding tool-side usage).
 	Usage Usage `json:"usage"`
+	// FinishReason is the reason this iteration ended. Carries
+	// FinishSuspended when a Suspend-class error fired during the iteration,
+	// FinishToolCalls when the iteration completed with tool calls pending,
+	// FinishStop when the model returned a natural end, etc. Empty only
+	// when the iteration is mid-run (during stream events). Mirrors the
+	// FinishReason emitted on EventIterationFinish.
+	FinishReason FinishReason `json:"finish_reason,omitempty"`
 }
 
 // LLMCallTrace records a single LLM model call. Nested inside
@@ -237,3 +248,11 @@ func (r AgentResult) StepByTool(name string) (StepTrace, bool) {
 	}
 	return StepTrace{}, false
 }
+
+// Suspended reports whether the run paused awaiting human input.
+// Shorthand for r.FinishReason == FinishSuspended.
+func (r AgentResult) Suspended() bool { return r.FinishReason == FinishSuspended }
+
+// SuspendedProtocol returns the typed protocol tag for a suspended run.
+// Empty for untyped suspends or runs that did not suspend.
+func (r AgentResult) SuspendedProtocol() string { return r.SuspendProtocol }
