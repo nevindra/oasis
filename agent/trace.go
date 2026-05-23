@@ -8,20 +8,6 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
-// spawnAgentName returns a slug for a spawned sub-agent, used in step traces.
-func spawnAgentName(args spawnAgentArgs) string {
-	if args.Name != "" {
-		return args.Name
-	}
-	name := TruncateStr(args.Task, 20)
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			return r
-		}
-		return '_'
-	}, name)
-}
-
 // appendStepBounded appends trace to steps, enforcing the max cap. When max <= 0
 // the slice grows without bound. When full, the oldest entry is dropped and the
 // newest takes its place (ring-buffer semantics via in-place copy).
@@ -62,13 +48,6 @@ func buildStepTrace(tc core.ToolCall, res toolExecResult) StepTrace {
 		}
 		if json.Unmarshal(tc.Args, &params) == nil && params.Task != "" {
 			input = params.Task
-		}
-	} else if tc.Name == "spawn_agent" {
-		traceType = "agent"
-		var params spawnAgentArgs
-		if json.Unmarshal(tc.Args, &params) == nil {
-			input = params.Task
-			name = spawnAgentName(params)
 		}
 	}
 

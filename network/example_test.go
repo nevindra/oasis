@@ -18,7 +18,7 @@ func ExampleNew() {
 
 	// Create the network — routerProvider drives routing decisions
 	net := network.New("coordinator", "Coordinates search and summarization",
-		routerProvider, agent.WithAgents(searchAgent, summarizeAgent))
+		routerProvider, searchAgent, summarizeAgent)
 
 	// Execute a task
 	task := agent.AgentTask{

@@ -74,12 +74,8 @@ func NewSuspendProtocol[Req, Resp any](name string) SuspendProtocol[Req, Resp] {
 	return agent.NewSuspendProtocol[Req, Resp](name)
 }
 
-var WithAgents = agent.WithAgents
 var WithPlanExecution = agent.WithPlanExecution
 var WithSandbox = agent.WithSandbox
-var WithSubAgentSpawning = agent.WithSubAgentSpawning
-var MaxSpawnDepth = agent.MaxSpawnDepth
-var DenySpawnTools = agent.DenySpawnTools
 var WithActiveSkills = agent.WithActiveSkills
 var WithSkills = agent.WithSkills
 var WithResponseSchema = agent.WithResponseSchema

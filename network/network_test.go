@@ -35,7 +35,7 @@ func TestNetworkPassesImagesToSubAgent(t *testing.T) {
 		},
 	}
 
-	net := New("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, sub)
 
 	images := []core.Attachment{
 		mustAttachmentBase64(t, "image/jpeg", "YWJjMTIz"),
@@ -72,10 +72,10 @@ func TestNetworkDynamicPrompt(t *testing.T) {
 		},
 	}
 
-	net := New("dynamic", "Dynamic", router,
-		agent.WithDynamicPrompt(func(_ context.Context, task agent.AgentTask) string {
+	net := NewWithOptions("dynamic", "Dynamic", router, nil,
+		WithRouter(agent.WithDynamicPrompt(func(_ context.Context, task agent.AgentTask) string {
 			return "router for " + task.UserID
-		}),
+		})),
 	)
 
 	net.Execute(context.Background(), agent.AgentTask{
@@ -106,7 +106,7 @@ func TestNetworkTaskFromContextInTool(t *testing.T) {
 		},
 	}
 
-	net := New("ctx", "Context test", router, agent.WithTools(ctxTool))
+	net := NewWithOptions("ctx", "Context test", router, nil, WithRouter(agent.WithTools(ctxTool)))
 	net.Execute(context.Background(), agent.AgentTask{
 		Input:  "test",
 		UserID: "user-99",
@@ -121,13 +121,13 @@ func TestNetworkDynamicModel(t *testing.T) {
 	routerA := &mockProvider{name: "router-a", responses: []core.ChatResponse{{Content: "from A"}}}
 	routerB := &mockProvider{name: "router-b", responses: []core.ChatResponse{{Content: "from B"}}}
 
-	net := New("dynamic", "Dynamic model", routerA,
-		agent.WithDynamicModel(func(_ context.Context, task agent.AgentTask) core.Provider {
+	net := NewWithOptions("dynamic", "Dynamic model", routerA, nil,
+		WithRouter(agent.WithDynamicModel(func(_ context.Context, task agent.AgentTask) core.Provider {
 			if task.Extra["tier"] == "pro" {
 				return routerB
 			}
 			return routerA
-		}),
+		})),
 	)
 
 	result, _ := net.Execute(context.Background(), agent.AgentTask{
@@ -217,8 +217,8 @@ func TestNetworkWithSkillsRegistersSkillTools(t *testing.T) {
 		responses: []core.ChatResponse{{Content: "ok"}},
 	}
 
-	net := New("skills-net", "test", provider,
-		agent.WithSkills(&stubSkillProvider{}),
+	net := NewWithOptions("skills-net", "test", provider, nil,
+		WithRouter(agent.WithSkills(&stubSkillProvider{})),
 	)
 
 	defs := net.Tools().AllDefinitions()
@@ -263,9 +263,7 @@ func BenchmarkNetworkBuildToolDefs(b *testing.B) {
 					fn:   func(task agent.AgentTask) (agent.AgentResult, error) { return agent.AgentResult{Output: "ok"}, nil },
 				}
 			}
-			opts := make([]agent.AgentOption, 0, 1)
-			opts = append(opts, agent.WithAgents(agents...))
-			net := New("bench", "bench", router, opts...)
+			net := New("bench", "bench", router, agents...)
 			toolDefs := []core.ToolDefinition{
 				{Name: "extra", Description: "extra tool", Parameters: json.RawMessage(`{}`)},
 			}
@@ -305,7 +303,7 @@ func TestNetwork_ExecuteWith_NilSameAsExecute(t *testing.T) {
 			{Content: "done"},
 		},
 	}
-	net := New("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, sub)
 
 	r1, err1 := net.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err1 != nil {
@@ -341,7 +339,7 @@ func TestNetwork_ExecuteWith_EmptySameAsExecute(t *testing.T) {
 			{Content: "done"},
 		},
 	}
-	net := New("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, sub)
 
 	r1, err1 := net.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err1 != nil {
@@ -375,7 +373,7 @@ func TestNetwork_ExecuteWith_AppliesOverrides(t *testing.T) {
 		name: "router",
 		responses: []core.ChatResponse{{Content: "ok"}},
 	}
-	net := New("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, sub)
 
 	r, err := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithOverrides(&agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}}))
 	if err != nil {
@@ -414,7 +412,7 @@ func TestNetwork_ExecuteStreamWith_NilSameAsExecuteStream(t *testing.T) {
 			{Content: "done"},
 		},
 	}
-	net := New("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, sub)
 
 	ch1 := make(chan core.StreamEvent, 100)
 	r1, err1 := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithStream(ch1))
@@ -454,7 +452,7 @@ func TestNetwork_ExecuteStreamWith_AppliesOverrides(t *testing.T) {
 		name: "router",
 		responses: []core.ChatResponse{{Content: "ok"}},
 	}
-	net := New("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, sub)
 
 	ch := make(chan core.StreamEvent, 100)
 	r, err := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithStream(ch), agent.WithOverrides(&agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}}))

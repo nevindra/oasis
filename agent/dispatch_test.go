@@ -19,9 +19,6 @@ func TestStandardDispatchOrder(t *testing.T) {
 			}
 			return agent.DispatchResult{}, false
 		},
-		SpawnHandler: func(_ context.Context, _ json.RawMessage, _ []core.ToolDefinition, _ agent.ToolExecFunc) agent.DispatchResult {
-			return result("spawn")
-		},
 		AgentRouter: func(_ context.Context, tc core.ToolCall) (agent.DispatchResult, bool) {
 			if tc.Name == "agent_x" {
 				return result("router"), true
@@ -41,7 +38,6 @@ func TestStandardDispatchOrder(t *testing.T) {
 		want string
 	}{
 		{"builtin_tool", "builtin"},
-		{"spawn_agent", "spawn"},
 		{"agent_x", "router"},
 		{"anything_else", "tool"},
 	}

@@ -6,7 +6,6 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -24,7 +23,7 @@ const defaultMaxIter = 25
 // Replaces the former AgentCore embedded struct.
 //
 // Config is embedded so that all option-set fields (SystemPrompt, GenParams,
-// SpawnDepthLimit, etc.) promote directly onto Runtime without a copy step.
+// etc.) promote directly onto Runtime without a copy step.
 // The fields below are runtime-only: they are either computed during Init
 // (name, description, provider, tools, processors, mem, etc.) or mutated
 // during execution (suspendCount, suspendBytes, suspendMu).
@@ -67,12 +66,6 @@ type Runtime struct {
 
 	// Compressor is the per-turn tool-result compressor.
 	Compressor core.Compactor
-
-	// NewAgentFunc is set by agent.New at construction time to allow
-	// ExecuteSpawn to create ephemeral sub-agents without importing the agent
-	// package (which would create a cycle). The function has the same signature
-	// as agent.New.
-	NewAgentFunc func(name, description string, provider core.Provider, opts ...AgentOption) core.Agent
 }
 
 // Init initializes shared fields on a Runtime from the given config.
@@ -222,22 +215,6 @@ func (c *Runtime) Limits() Limits { return LimitsFromConfig(&c.Config) }
 
 // --- Spawn depth tracking ---
 
-// spawnDepthKey is the context key for sub-agent nesting depth.
-type spawnDepthKey struct{}
-
-// SpawnDepth returns the current sub-agent nesting depth from ctx.
-func SpawnDepth(ctx context.Context) int {
-	if v, ok := ctx.Value(spawnDepthKey{}).(int); ok {
-		return v
-	}
-	return 0
-}
-
-// WithSpawnDepth returns a child context with the given spawn depth.
-func WithSpawnDepth(ctx context.Context, depth int) context.Context {
-	return context.WithValue(ctx, spawnDepthKey{}, depth)
-}
-
 // CacheBuiltinToolDefs appends built-in tool definitions based on config.
 // The implementations of the tool definitions themselves are in the agent package.
 func (c *Runtime) CacheBuiltinToolDefs(defs []core.ToolDefinition, inputHandlerDef, executePlanDef, spawnAgentDef *core.ToolDefinition) []core.ToolDefinition {
@@ -246,9 +223,6 @@ func (c *Runtime) CacheBuiltinToolDefs(defs []core.ToolDefinition, inputHandlerD
 	}
 	if c.PlanExecution && executePlanDef != nil {
 		defs = append(defs, *executePlanDef)
-	}
-	if c.SpawnEnabled && spawnAgentDef != nil {
-		defs = append(defs, *spawnAgentDef)
 	}
 	return defs
 }
@@ -437,101 +411,6 @@ func (c *Runtime) ExecuteWithSpan(
 	return result, err
 }
 
-// ExecuteSpawn handles a spawn_agent tool call.
-func (c *Runtime) ExecuteSpawn(ctx context.Context, args json.RawMessage, toolDefs []core.ToolDefinition, executeTool ToolExecFunc, ch chan<- core.StreamEvent,
-	executeAgentFn func(ctx context.Context, agent core.Agent, agentName string, task core.AgentTask, ch chan<- core.StreamEvent, logger *slog.Logger) (core.AgentResult, error),
-) DispatchResult {
-	if !c.SpawnEnabled {
-		return DispatchResult{Content: "error: unknown tool: spawn_agent", IsError: true}
-	}
-
-	var params spawnAgentArgs
-	if err := json.Unmarshal(args, &params); err != nil {
-		return DispatchResult{Content: "error: invalid spawn_agent args: " + err.Error(), IsError: true}
-	}
-	if params.Task == "" {
-		return DispatchResult{Content: "error: spawn_agent requires non-empty task", IsError: true}
-	}
-
-	// Check depth limit.
-	depth := SpawnDepth(ctx)
-	if depth >= c.SpawnDepthLimit {
-		return DispatchResult{Content: fmt.Sprintf("error: max spawn depth (%d) exceeded", c.SpawnDepthLimit), IsError: true}
-	}
-
-	name := spawnAgentName(params)
-
-	// Filter tool definitions: remove denied tools + ask_user.
-	childAtMaxDepth := depth+1 >= c.SpawnDepthLimit
-	deny := make(map[string]bool, len(c.DeniedSpawnTools)+2)
-	deny["ask_user"] = true
-	for _, n := range c.DeniedSpawnTools {
-		deny[n] = true
-	}
-	if childAtMaxDepth {
-		deny["spawn_agent"] = true
-	}
-	filteredDefs := make([]core.ToolDefinition, 0, len(toolDefs))
-	for _, d := range toolDefs {
-		if deny[d.Name] || strings.HasPrefix(d.Name, "agent_") {
-			continue
-		}
-		filteredDefs = append(filteredDefs, d)
-	}
-
-	// Build filtered executor that respects deny list.
-	filteredExec := func(ctx context.Context, toolName string, toolArgs json.RawMessage) (core.ToolResult, error) {
-		if deny[toolName] {
-			return core.ToolResult{Error: "tool " + toolName + " is not available to sub-agents"}, nil
-		}
-		return executeTool(ctx, toolName, toolArgs)
-	}
-
-	// Build ephemeral options. Wrap each definition as its own AnyTool.
-	subTools := make([]core.AnyTool, len(filteredDefs))
-	for i, d := range filteredDefs {
-		subTools[i] = &funcTool{def: d, exec: filteredExec}
-	}
-
-	// Use the injected NewAgentFunc to avoid importing agent (cycle prevention).
-	if c.NewAgentFunc == nil {
-		return DispatchResult{Content: "error: spawn_agent not configured (NewAgentFunc is nil)", IsError: true}
-	}
-
-	opts := []AgentOption{
-		WithPromptOption(subAgentPrompt),
-		WithToolsOption(subTools...),
-		WithLimitsOption(Limits{MaxIter: c.MaxIter}),
-		WithLoggerOption(c.Config.Logger),
-	}
-	if c.GenParams != nil {
-		opts = append(opts, WithGenerationOption(Generation{
-			Temperature: c.GenParams.Temperature,
-			TopP:        c.GenParams.TopP,
-			TopK:        c.GenParams.TopK,
-			MaxTokens:   c.GenParams.MaxTokens,
-		}))
-	}
-	if c.Tracer != nil {
-		opts = append(opts, WithTracerOption(c.Tracer))
-	}
-	if !childAtMaxDepth {
-		opts = append(opts, WithSubAgentSpawningOption(c.SpawnDepthLimit, c.DeniedSpawnTools))
-	}
-	if c.PlanExecution {
-		opts = append(opts, WithPlanExecutionOption())
-	}
-
-	child := c.NewAgentFunc("sub:"+name, "sub-agent: "+params.Task, c.provider, opts...)
-
-	childCtx := WithSpawnDepth(ctx, depth+1)
-	result, err := executeAgentFn(childCtx, child, name, core.AgentTask{Input: params.Task}, ch, c.Config.Logger)
-	if err != nil {
-		return DispatchResult{Content: "error: sub-agent failed: " + err.Error(), IsError: true}
-	}
-	return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
-}
-
 // DispatchBuiltins handles built-in tool calls (ask_user, execute_plan).
 // executePlanFn and executeAskUserFn are callbacks from agent to avoid cycles.
 func (c *Runtime) DispatchBuiltins(
@@ -554,26 +433,6 @@ func (c *Runtime) DispatchBuiltins(
 	return DispatchResult{}, false
 }
 
-// --- spawn_agent tool internals ---
-
-type spawnAgentArgs struct {
-	Task string `json:"task" describe:"Clear instruction for what the sub-agent should accomplish"`
-	Name string `json:"name,omitempty" describe:"Short label for this sub-agent (for logging). Auto-generated if omitted."`
-}
-
-func spawnAgentName(args spawnAgentArgs) string {
-	if args.Name != "" {
-		return args.Name
-	}
-	name := truncateStr(args.Task, 20)
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			return r
-		}
-		return '_'
-	}, name)
-}
-
 func truncateStr(s string, maxRunes int) string {
 	count := 0
 	for i := range s {
@@ -583,20 +442,6 @@ func truncateStr(s string, maxRunes int) string {
 		count++
 	}
 	return s
-}
-
-const subAgentPrompt = "You are a sub-agent. Complete the given task thoroughly and return the result. Be concise."
-
-// funcTool adapts a single ToolDefinition + executor into AnyTool.
-type funcTool struct {
-	def  core.ToolDefinition
-	exec ToolExecFunc
-}
-
-func (f *funcTool) Name() string                    { return f.def.Name }
-func (f *funcTool) Definition() core.ToolDefinition { return f.def }
-func (f *funcTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
-	return f.exec(ctx, f.def.Name, args)
 }
 
 // --- ApplyRunOptionsToConfig ---
@@ -622,9 +467,6 @@ func ApplyRunOptionsToConfig(base *Config, opts *RunOptions) *Config {
 
 	if opts.Tools != nil {
 		c.Tools = opts.Tools
-	}
-	if opts.Agents != nil {
-		c.Agents = opts.Agents
 	}
 	if opts.ActiveSkills != nil {
 		c.ActiveSkills = opts.ActiveSkills
@@ -698,77 +540,3 @@ func mergeGenerationParams(base *core.GenerationParams, override *Generation) *c
 	return out
 }
 
-// --- Minimal AgentOption constructors needed by ExecuteSpawn ---
-// These are internal to runtime only; the full set lives in agent/agent.go.
-
-// WithPromptOption sets the system prompt.
-func WithPromptOption(s string) AgentOption {
-	return func(c *Config) { c.SystemPrompt = s }
-}
-
-// WithToolsOption adds tools.
-func WithToolsOption(tools ...core.AnyTool) AgentOption {
-	return func(c *Config) { c.Tools = append(c.Tools, tools...) }
-}
-
-// WithLimitsOption sets resource limits.
-func WithLimitsOption(lim Limits) AgentOption {
-	return func(c *Config) { lim.ApplyTo(c) }
-}
-
-// WithLoggerOption sets the logger.
-func WithLoggerOption(l *slog.Logger) AgentOption {
-	return func(c *Config) { c.Logger = l }
-}
-
-// WithGenerationOption sets generation parameters.
-func WithGenerationOption(g Generation) AgentOption {
-	return func(c *Config) {
-		if c.GenParams == nil {
-			c.GenParams = &core.GenerationParams{}
-		}
-		if g.Temperature != nil {
-			v := *g.Temperature
-			c.GenParams.Temperature = &v
-		} else {
-			c.GenParams.Temperature = nil
-		}
-		if g.TopP != nil {
-			v := *g.TopP
-			c.GenParams.TopP = &v
-		} else {
-			c.GenParams.TopP = nil
-		}
-		if g.TopK != nil {
-			v := *g.TopK
-			c.GenParams.TopK = &v
-		} else {
-			c.GenParams.TopK = nil
-		}
-		if g.MaxTokens != nil {
-			v := *g.MaxTokens
-			c.GenParams.MaxTokens = &v
-		} else {
-			c.GenParams.MaxTokens = nil
-		}
-	}
-}
-
-// WithTracerOption sets the tracer.
-func WithTracerOption(t core.Tracer) AgentOption {
-	return func(c *Config) { c.Tracer = t }
-}
-
-// WithSubAgentSpawningOption enables spawn_agent with given depth and denied tools.
-func WithSubAgentSpawningOption(depthLimit int, deniedTools []string) AgentOption {
-	return func(c *Config) {
-		c.SpawnEnabled = true
-		c.SpawnDepthLimit = depthLimit
-		c.DeniedSpawnTools = append(c.DeniedSpawnTools, deniedTools...)
-	}
-}
-
-// WithPlanExecutionOption enables execute_plan.
-func WithPlanExecutionOption() AgentOption {
-	return func(c *Config) { c.PlanExecution = true }
-}

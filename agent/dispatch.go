@@ -59,7 +59,6 @@ type AgentRouter func(ctx context.Context, tc core.ToolCall) (DispatchResult, bo
 // StandardDispatchConfig is the configuration for NewStandardDispatch.
 type StandardDispatchConfig struct {
 	Builtins          func(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool)
-	SpawnHandler      func(ctx context.Context, args json.RawMessage, defs []core.ToolDefinition, exec ToolExecFunc) DispatchResult
 	AgentRouter       AgentRouter
 	ExecuteTool       ToolExecFunc
 	ExecuteToolStream ToolExecStreamFunc
@@ -79,7 +78,7 @@ type StandardDispatchConfig struct {
 }
 
 // NewStandardDispatch builds the recursive DispatchFunc.
-// Order: Builtins → spawn_agent → AgentRouter → (policy/streaming) → DispatchTool.
+// Order: Builtins → AgentRouter → (policy/streaming) → DispatchTool.
 func NewStandardDispatch(cfg StandardDispatchConfig) DispatchFunc {
 	// streamPolicyWarned tracks tool names for which a policy was registered
 	// but the tool resolved as streaming; we log a warning once per name.
@@ -91,9 +90,6 @@ func NewStandardDispatch(cfg StandardDispatchConfig) DispatchFunc {
 			if r, ok := cfg.Builtins(ctx, tc, dispatch); ok {
 				return r
 			}
-		}
-		if tc.Name == "spawn_agent" && cfg.SpawnHandler != nil {
-			return cfg.SpawnHandler(ctx, tc.Args, cfg.ResolvedToolDefs, cfg.ExecuteTool)
 		}
 		if cfg.AgentRouter != nil {
 			if r, ok := cfg.AgentRouter(ctx, tc); ok {

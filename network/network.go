@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nevindra/oasis/agent"
@@ -19,6 +20,20 @@ var agentToolParamSchema = json.RawMessage(
 	`{"type":"object","properties":{"task":{"type":"string","description":"The user's original message, copied verbatim. Do not paraphrase, translate, or summarize."}},"required":["task"]}`,
 )
 
+// Option configures a Network. Pass Option values to NewWithOptions.
+// Use WithRouter to forward agent.AgentOption values to the router LLM.
+type Option func(*Network)
+
+// WithRouter wraps agent.AgentOption values for the Network's router LLM.
+// Use this to give the router its own tools, memory, tracer, etc.
+//
+//	net := network.NewWithOptions("team", "...", routerP, []core.Agent{a, b},
+//	    network.WithRouter(agent.WithTracer(t), agent.WithMemory(...)),
+//	)
+func WithRouter(opts ...agent.AgentOption) Option {
+	return func(n *Network) { n.pendingRouterOpts = append(n.pendingRouterOpts, opts...) }
+}
+
 // Network is an Agent that coordinates subagents and tools via an LLM router.
 // The router sees subagents as callable tools ("agent_<name>") and decides
 // which primitives to invoke, in what order, and with what data.
@@ -26,30 +41,68 @@ var agentToolParamSchema = json.RawMessage(
 // when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
 type Network struct {
 	runtime.Runtime
+	mu               sync.RWMutex           // guards agents + sortedAgentNames
 	agents           map[string]agent.Agent // keyed by name
 	sortedAgentNames []string               // pre-sorted for deterministic tool ordering
+
+	// pendingRouterOpts is non-nil only between Option application and
+	// runtime.Init. Released to nil immediately after BuildConfig consumes it.
+	pendingRouterOpts []agent.AgentOption
+
+	// parallelDispatch controls per-iteration tool-call parallelism.
+	// Set via WithParallelDispatch; default (zero value) means ParallelDefault.
+	parallelDispatch ParallelDispatch
+
+	// supervisor is a network-wide SupervisorPolicy applied to every child.
+	// Per-child policies (supervisorPerChild) compose on top via Chain.
+	supervisor         SupervisorPolicy
+	supervisorPerChild map[string]SupervisorPolicy
+
+	// spawnPolicy is non-nil when WithDynamicSpawning is configured.
+	// It controls the spawn_agent tool injected into the router's tool list.
+	// spawnCount is incremented on each successful spawn; protected by n.mu.
+	spawnPolicy *SpawnPolicy
+	spawnCount  int
 }
 
-// New constructs a Network — a router LLM + child agents wired via
-// agent.WithAgents. Plan B will change this signature to accept children
-// as positional varargs; for now, the AgentOption-based signature is
-// preserved.
-func New(name, description string, router core.Provider, opts ...agent.AgentOption) *Network {
-	cfg := agent.BuildConfig(opts)
+// New constructs a Network — a router LLM coordinating one or more child
+// agents. Children are passed as positional varargs. For orchestration
+// policies (supervisors, parallel dispatch, dynamic spawning) or
+// router-side configuration (memory, tracer, tools), use NewWithOptions.
+func New(name, description string, router core.Provider, children ...core.Agent) *Network {
+	return NewWithOptions(name, description, router, children)
+}
+
+// NewWithOptions constructs a Network with explicit children and network-level
+// options. Children are passed as a slice; opts configure orchestration
+// policies and router-side settings via WithRouter.
+func NewWithOptions(name, description string, router core.Provider, children []core.Agent, opts ...Option) *Network {
 	n := &Network{
-		agents: make(map[string]agent.Agent),
+		agents: make(map[string]agent.Agent, len(children)),
+	}
+
+	// Apply options first — they may mutate Network fields BEFORE runtime init.
+	for _, opt := range opts {
+		if opt != nil {
+			opt(n)
+		}
+	}
+
+	// Build router's Config from any WithRouter-supplied opts, then init runtime.
+	cfg := agent.BuildConfig(n.pendingRouterOpts)
+	n.pendingRouterOpts = nil
+	// Apply parallelDispatch override AFTER BuildConfig so we can override the
+	// default (BuildConfig sets MaxParallelDispatch=10 when unset).
+	if n.parallelDispatch == ParallelDisabled {
+		cfg.MaxParallelDispatch = 1
 	}
 	runtime.Init(&n.Runtime, name, description, router, cfg)
 
-	// Wire spawn callback so ExecuteSpawn can create ephemeral sub-agents.
-	// Networks spawn LLMAgents (not Networks), just like LLMAgent does.
-	n.NewAgentFunc = func(childName, childDesc string, p core.Provider, opts ...agent.AgentOption) core.Agent {
-		return agent.New(childName, childDesc, p, opts...)
-	}
-
-	for _, a := range cfg.GetAgents() {
-		n.agents[a.Name()] = a
-		n.sortedAgentNames = append(n.sortedAgentNames, a.Name())
+	// Register children directly (no agent.WithAgents indirection).
+	// Each child is wrapped with any configured supervisor policies.
+	for _, ch := range children {
+		n.agents[ch.Name()] = n.wrapChild(ch)
+		n.sortedAgentNames = append(n.sortedAgentNames, ch.Name())
 	}
 	sort.Strings(n.sortedAgentNames)
 
@@ -63,6 +116,20 @@ func New(name, description string, router core.Provider, opts ...agent.AgentOpti
 	}
 
 	return n
+}
+
+// wrapChild applies the Network's supervisor policies to child before storing
+// it. The network-wide policy (WithSupervisor) wraps first; per-child policy
+// (WithSupervisorFor) wraps outermost. Used at construction and by AddAgent.
+func (n *Network) wrapChild(child core.Agent) core.Agent {
+	wrapped := child
+	if n.supervisor != nil {
+		wrapped = n.supervisor.Wrap(wrapped)
+	}
+	if perChild := n.supervisorPerChild[child.Name()]; perChild != nil {
+		wrapped = perChild.Wrap(wrapped)
+	}
+	return wrapped
 }
 
 // Execute runs the network's routing loop.
@@ -113,16 +180,17 @@ func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch 
 // implementing StreamingAnyTool emit progress events via executeToolStream.
 func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.StreamEvent, executeTool agent.ToolExecFunc, executeToolStream agent.ToolExecStreamFunc, resolvedToolDefs []core.ToolDefinition) agent.DispatchFunc {
 	agentRouter := func(ctx context.Context, tc core.ToolCall) (agent.DispatchResult, bool) {
+		if tc.Name == "spawn_agent" {
+			if n.spawnPolicy == nil {
+				return agent.DispatchResult{Content: "error: spawn_agent invoked without WithDynamicSpawning", IsError: true}, true
+			}
+			return n.dispatchSpawn(ctx, tc.Args), true
+		}
 		const prefix = "agent_"
 		if !strings.HasPrefix(tc.Name, prefix) {
 			return agent.DispatchResult{}, false
 		}
 		return n.dispatchAgent(ctx, tc, prefix, parentTask, ch), true
-	}
-	// Capture ch so spawn_agent forwards the child's stream events through
-	// the parent's channel when the parent is running under ExecuteStream.
-	spawnHandler := func(ctx context.Context, args json.RawMessage, defs []core.ToolDefinition, exec agent.ToolExecFunc) agent.DispatchResult {
-		return n.ExecuteSpawn(ctx, args, defs, exec, ch, agent.ExecuteAgent)
 	}
 	// Wrap DispatchBuiltins to inject ask_user and execute_plan callbacks,
 	// breaking the runtime→agent cycle.
@@ -131,7 +199,6 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 	}
 	return agent.NewStandardDispatch(agent.StandardDispatchConfig{
 		Builtins:          builtins,
-		SpawnHandler:      spawnHandler,
 		AgentRouter:       agentRouter,
 		ExecuteTool:       executeTool,
 		ExecuteToolStream: executeToolStream,
@@ -144,7 +211,9 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 // streaming events when ch is non-nil.
 func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPrefix string, parentTask agent.AgentTask, ch chan<- core.StreamEvent) agent.DispatchResult {
 	agentName := tc.Name[len(agentPrefix):]
+	n.mu.RLock()
 	sub, ok := n.agents[agentName]
+	n.mu.RUnlock()
 	if !ok {
 		return agent.DispatchResult{Content: fmt.Sprintf("error: unknown agent %q", agentName), IsError: true}
 	}
@@ -209,13 +278,24 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPref
 
 // buildToolDefs builds tool definitions from subagents and the given tool definitions.
 // Agent tools use pre-sorted names for deterministic ordering across calls.
+// When WithDynamicSpawning is enabled, a spawn_agent tool def is appended
+// after agent tools so the router LLM can create new child agents at runtime.
 func (n *Network) buildToolDefs(toolDefs []core.ToolDefinition) []core.ToolDefinition {
-	defs := make([]core.ToolDefinition, 0, len(n.sortedAgentNames)+len(toolDefs))
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	defs := make([]core.ToolDefinition, 0, len(n.sortedAgentNames)+len(toolDefs)+1)
 	for _, name := range n.sortedAgentNames {
 		defs = append(defs, core.ToolDefinition{
 			Name:        "agent_" + name,
 			Description: n.agents[name].Description(),
 			Parameters:  agentToolParamSchema,
+		})
+	}
+	if n.spawnPolicy != nil {
+		defs = append(defs, core.ToolDefinition{
+			Name:        "spawn_agent",
+			Description: "Dynamically create a new sub-agent to handle a specialized task. Provide name (unique), description, and system prompt.",
+			Parameters:  spawnAgentParamSchema,
 		})
 	}
 	defs = append(defs, toolDefs...)

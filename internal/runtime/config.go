@@ -19,9 +19,6 @@ type PromptFunc func(ctx context.Context, task core.AgentTask) string
 // ToolsFunc resolves the tool set per-request.
 type ToolsFunc func(ctx context.Context, task core.AgentTask) []core.AnyTool
 
-// SubAgentOption configures spawn_agent behavior.
-type SubAgentOption func(*Config)
-
 // DenyAction controls behavior when a human denies a tool approval request.
 type DenyAction int
 
@@ -70,7 +67,6 @@ type InputHandler interface {
 // access them through the alias in agent subfiles.
 type Config struct {
 	Tools               []core.AnyTool
-	Agents              []core.Agent
 	SystemPrompt        string
 	MaxIter             int
 	PreProcessors       []core.PreProcessor
@@ -106,9 +102,6 @@ type Config struct {
 	SemanticTrimming    bool
 	TrimmingEmbedding   core.EmbeddingProvider
 	KeepRecent          int
-	SpawnEnabled        bool
-	SpawnDepthLimit     int
-	DeniedSpawnTools    []string
 	ActiveSkills        []skills.Skill
 	SkillProvider       skills.SkillProvider
 
@@ -143,9 +136,6 @@ type Config struct {
 	// Metadata is shallow-merged with RunOptions.Metadata at run time.
 	Metadata map[string]any
 }
-
-// GetAgents returns the subagents registered via WithAgents.
-func (c *Config) GetAgents() []core.Agent { return c.Agents }
 
 // ResolveToolPolicy implements ServeMux-style policy lookup: exact-name first,
 // then matchers in registration order.
@@ -260,7 +250,6 @@ type RunOptions struct {
 	Limits *Limits
 
 	Tools        []core.AnyTool
-	Agents       []core.Agent
 	ActiveSkills []skills.Skill
 
 	PreProcessors      []core.PreProcessor
@@ -339,7 +328,6 @@ func (o *RunOptions) HasOverrides() bool {
 		o.ResponseSchema != nil ||
 		o.Limits != nil ||
 		o.Tools != nil ||
-		o.Agents != nil ||
 		o.ActiveSkills != nil ||
 		o.PreProcessors != nil ||
 		o.PostProcessors != nil ||

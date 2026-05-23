@@ -92,7 +92,7 @@ func runLoop(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<- core
 	// Detect whether the tool set includes agent_* delegation tools (Network).
 	hasAgentTools := false
 	for _, t := range cfg.Tools {
-		if strings.HasPrefix(t.Name, "agent_") || t.Name == "spawn_agent" {
+		if strings.HasPrefix(t.Name, "agent_") {
 			hasAgentTools = true
 			break
 		}

@@ -27,12 +27,6 @@ func New(name, description string, provider core.Provider, opts ...AgentOption) 
 	a := &LLMAgent{}
 	runtime.Init(&a.Runtime, name, description, provider, cfg)
 
-	// Wire the spawn callback so ExecuteSpawn can create sub-agents without
-	// importing agent (which would be a cycle).
-	a.NewAgentFunc = func(n, d string, p core.Provider, o ...AgentOption) Agent {
-		return New(n, d, p, o...)
-	}
-
 	// Auto-register read_full_result when a store is configured.
 	if cfg.ToolResultStore != nil {
 		a.Tools().Add(NewReadFullResultTool(cfg.ToolResultStore))
@@ -43,8 +37,7 @@ func New(name, description string, provider core.Provider, opts ...AgentOption) 
 	if !a.HasDynamicTools() {
 		askDef := askUserToolDef()
 		planDef := executePlanToolDef()
-		spawnDef := spawnAgentToolDef()
-		a.SetCachedToolDefs(a.CacheBuiltinToolDefs(a.Tools().AllDefinitions(), &askDef, &planDef, &spawnDef))
+		a.SetCachedToolDefs(a.CacheBuiltinToolDefs(a.Tools().AllDefinitions(), &askDef, &planDef, nil))
 	}
 
 	return a
@@ -94,23 +87,17 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 	prompt, provider := a.ResolvePromptAndProviderWith(ctx, task, cfg)
 	askDef := askUserToolDef()
 	planDef := executePlanToolDef()
-	spawnDef := spawnAgentToolDef()
-	toolDefs, executeTool, executeToolStream, isStreamingTool := a.ResolveTools(ctx, task, nil, &askDef, &planDef, &spawnDef)
+	toolDefs, executeTool, executeToolStream, isStreamingTool := a.ResolveTools(ctx, task, nil, &askDef, &planDef, nil)
 	dispatch := a.makeDispatch(executeTool, executeToolStream, ch, toolDefs, isStreamingTool, cfg)
 	return a.BaseLoopConfig("agent:"+a.Name(), prompt, provider, toolDefs, dispatch, cfg, a.ResolveMem(opts))
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
-// executor function and handles the ask_user, execute_plan,
-// and spawn_agent special cases via the shared DispatchBuiltins method.
+// executor function and handles the ask_user and execute_plan special cases
+// via the shared DispatchBuiltins method.
 // When executeToolStream and ch are non-nil, tools implementing StreamingAnyTool
 // emit progress events during execution.
 func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- core.StreamEvent, resolvedToolDefs []core.ToolDefinition, isStreamingTool func(string) bool, cfg *Config) DispatchFunc {
-	// Capture ch so spawn_agent forwards the child's stream events through
-	// the parent's channel when the parent is running under ExecuteStream.
-	spawnHandler := func(ctx context.Context, args json.RawMessage, defs []core.ToolDefinition, exec ToolExecFunc) DispatchResult {
-		return a.ExecuteSpawn(ctx, args, defs, exec, ch, executeAgentForSpawn)
-	}
 	// Wrap DispatchBuiltins to inject the ask_user and execute_plan callbacks,
 	// breaking the runtime→agent cycle.
 	builtins := func(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool) {
@@ -118,7 +105,6 @@ func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream Tool
 	}
 	return NewStandardDispatch(StandardDispatchConfig{
 		Builtins:          builtins,
-		SpawnHandler:      spawnHandler,
 		ExecuteTool:       executeTool,
 		ExecuteToolStream: executeToolStream,
 		ResolvedToolDefs:  resolvedToolDefs,
@@ -291,31 +277,6 @@ func executeAskUser(ctx context.Context, handler InputHandler, agentName string,
 		return "", err
 	}
 	return resp.Value, nil
-}
-
-// --- spawn_agent tool ---
-
-// spawnAgentArgs is the parsed arguments for the spawn_agent tool call.
-// Mirrors runtime.spawnAgentArgs; kept here so executePlanToolDef can derive
-// the schema without importing internal/runtime directly.
-type spawnAgentArgs struct {
-	Task string `json:"task" describe:"Clear instruction for what the sub-agent should accomplish"`
-	Name string `json:"name,omitempty" describe:"Short label for this sub-agent (for logging). Auto-generated if omitted."`
-}
-
-// spawnAgentToolDef returns the tool definition for the built-in spawn_agent tool.
-func spawnAgentToolDef() core.ToolDefinition {
-	return core.ToolDefinition{
-		Name:        "spawn_agent",
-		Description: "Spawn a sub-agent to handle a specific task autonomously. The sub-agent has access to the same tools as you. Use when a task is independent and can be delegated. Call spawn_agent multiple times in one response to run sub-agents in parallel.",
-		Parameters:  core.DeriveSchema[spawnAgentArgs](),
-	}
-}
-
-// executeAgentForSpawn is the callback injected into ExecuteSpawn so that
-// runtime can run a child agent without importing the agent package.
-func executeAgentForSpawn(ctx context.Context, child core.Agent, name string, task core.AgentTask, ch chan<- core.StreamEvent, logger *slog.Logger) (core.AgentResult, error) {
-	return ExecuteAgent(ctx, child, name, task, ch, logger)
 }
 
 // ExecuteAgent runs a and returns the result. When ch is non-nil, child events

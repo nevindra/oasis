@@ -32,9 +32,6 @@ type PromptFunc = runtime.PromptFunc
 // ToolsFunc resolves the tool set per-request.
 type ToolsFunc = runtime.ToolsFunc
 
-// SubAgentOption configures spawn_agent behavior.
-type SubAgentOption = runtime.SubAgentOption
-
 // Generation groups the LLM sampling and output parameters.
 type Generation = runtime.Generation
 
@@ -182,11 +179,6 @@ func WithGeneration(g Generation) AgentOption {
 	}
 }
 
-// WithAgents adds subagents to a Network. Ignored by LLMAgent.
-func WithAgents(agents ...Agent) AgentOption {
-	return func(c *Config) { c.Agents = append(c.Agents, agents...) }
-}
-
 // WithPlanExecution enables the built-in "execute_plan" tool.
 func WithPlanExecution() AgentOption {
 	return func(c *Config) { c.PlanExecution = true }
@@ -198,27 +190,6 @@ func WithSandbox(sb core.Sandbox, tools ...core.AnyTool) AgentOption {
 		c.Sandbox = sb
 		c.SandboxTools = tools
 	}
-}
-
-// WithSubAgentSpawning enables the built-in spawn_agent tool.
-func WithSubAgentSpawning(opts ...SubAgentOption) AgentOption {
-	return func(c *Config) {
-		c.SpawnEnabled = true
-		c.SpawnDepthLimit = 1
-		for _, o := range opts {
-			o(c)
-		}
-	}
-}
-
-// MaxSpawnDepth sets the maximum sub-agent nesting depth.
-func MaxSpawnDepth(n int) SubAgentOption {
-	return func(c *Config) { c.SpawnDepthLimit = n }
-}
-
-// DenySpawnTools prevents specific tools from being inherited by sub-agents.
-func DenySpawnTools(names ...string) SubAgentOption {
-	return func(c *Config) { c.DeniedSpawnTools = append(c.DeniedSpawnTools, names...) }
 }
 
 // WithActiveSkills pre-activates skills whose instructions are appended to
@@ -471,13 +442,3 @@ func TaskFromContext(ctx context.Context) (AgentTask, bool) {
 	return task, ok
 }
 
-// spawnDepth returns the current sub-agent nesting depth from ctx.
-// Package-level wrapper so tests and internal callers use the same call site.
-func spawnDepth(ctx context.Context) int {
-	return runtime.SpawnDepth(ctx)
-}
-
-// withSpawnDepth returns a child context with the given spawn depth.
-func withSpawnDepth(ctx context.Context, depth int) context.Context {
-	return runtime.WithSpawnDepth(ctx, depth)
-}
