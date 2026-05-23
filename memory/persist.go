@@ -13,6 +13,15 @@ import (
 // Prevents unbounded DB growth from very large user or assistant messages.
 const maxPersistContentLen = 50_000
 
+// persistBackpressureTimeout caps how long a turn waits for a persist slot
+// before dropping the message. The lightweight persist path runs only a DB
+// write, but it queues behind heavier full-persist goroutines (embedding +
+// fact extraction), which routinely take 5-15s on real embedding providers.
+// A too-small timeout here silently drops user/assistant messages under
+// normal load. 30s is generous enough to survive slow embedders while still
+// bounding memory in pathological cases.
+const persistBackpressureTimeout = 30 * time.Second
+
 // generateTitlePrompt is the system prompt for thread title generation.
 const generateTitlePrompt = `Generate a short title (max 8 words) for this conversation based on the user's message. Return ONLY the title text, nothing else. No quotes, no prefix.`
 
@@ -44,14 +53,16 @@ func (m *AgentMemory) PersistMessages(ctx context.Context, agentName string, tas
 	default:
 		m.logger.Warn("persist backpressure: falling back to lightweight persist (no embedding/extraction)", "agent", agentName, "thread_id", threadID)
 		fullPersist = false
-		// Block briefly for a slot — lightweight persist is fast (DB write only).
-		// If still unavailable after 2 seconds, drop to prevent goroutine pile-up.
-		t := time.NewTimer(2 * time.Second)
+		// Block for a slot — lightweight persist is fast (DB write only) but
+		// queues behind in-flight full-persist goroutines, which can take
+		// 5-15s on slow embedding providers. Drop only after a generous
+		// timeout to prevent silent message loss under normal load.
+		t := time.NewTimer(persistBackpressureTimeout)
 		select {
 		case m.sem <- struct{}{}:
 			t.Stop()
 		case <-t.C:
-			m.logger.Error("persist backpressure: dropping message persist (store unresponsive)", "agent", agentName, "thread_id", threadID)
+			m.logger.Error("persist backpressure: dropping message persist (store unresponsive)", "agent", agentName, "thread_id", threadID, "timeout", persistBackpressureTimeout)
 			return
 		}
 	}

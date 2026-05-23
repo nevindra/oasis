@@ -318,11 +318,14 @@ func (c *AgentCore) ResolveMem(opts *RunOptions) *memory.AgentMemory {
 	return &c.mem
 }
 
-// ResolveDynamicTools returns tool definitions and an executor for a dynamic request.
-// Returns nil, nil when dynamicTools is not configured (caller should use cached defs).
-func (c *AgentCore) ResolveDynamicTools(ctx context.Context, task AgentTask) ([]ToolDefinition, ToolExecFunc) {
+// ResolveDynamicTools returns tool definitions and executors for a dynamic request.
+// Returns nil, nil, nil when dynamicTools is not configured (caller should use
+// cached defs). The streaming executor routes to StreamingAnyTool.ExecuteStream
+// when the resolved tool implements that interface and ch is non-nil, falling
+// back to ExecuteRaw otherwise — matching ToolRegistry.ExecuteStream semantics.
+func (c *AgentCore) ResolveDynamicTools(ctx context.Context, task AgentTask) ([]ToolDefinition, ToolExecFunc, ToolExecStreamFunc) {
 	if c.dynamicTools == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	dynTools := c.dynamicTools(ctx, task)
 	var toolDefs []ToolDefinition
@@ -337,7 +340,19 @@ func (c *AgentCore) ResolveDynamicTools(ctx context.Context, task AgentTask) ([]
 		}
 		return ToolResult{Error: "unknown tool: " + name}, nil
 	}
-	return toolDefs, executeTool
+	executeToolStream := func(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+		t, ok := index[name]
+		if !ok {
+			return ToolResult{Error: "unknown tool: " + name}, nil
+		}
+		if ch != nil {
+			if st, ok := t.(StreamingAnyTool); ok {
+				return st.ExecuteStream(ctx, args, ch)
+			}
+		}
+		return t.ExecuteRaw(ctx, args)
+	}
+	return toolDefs, executeTool, executeToolStream
 }
 
 // ResolveTools returns the tool definitions and executors for an iteration.
@@ -345,19 +360,20 @@ func (c *AgentCore) ResolveDynamicTools(ctx context.Context, task AgentTask) ([]
 // cached static path. prebuild, if non-nil, transforms the dynamic-tool
 // definitions before built-ins are appended — Network uses this to inject
 // agent_* delegation tool defs. Streaming-tool detection is reported via
-// isStream (always false on the dynamic path; agent's registry lookup on the
-// static path).
+// isStream (always false on the dynamic path — streaming is handled by
+// dynExecStream which checks StreamingAnyTool at call time; registry lookup
+// on the static path).
 func (c *AgentCore) ResolveTools(
 	ctx context.Context,
 	task AgentTask,
 	prebuild func([]ToolDefinition) []ToolDefinition,
 ) (defs []ToolDefinition, exec ToolExecFunc, execStream ToolExecStreamFunc, isStream func(string) bool) {
-	if dynDefs, dynExec := c.ResolveDynamicTools(ctx, task); dynDefs != nil {
+	if dynDefs, dynExec, dynExecStream := c.ResolveDynamicTools(ctx, task); dynDefs != nil {
 		c.logger.Debug("using dynamic tools", "agent", c.name, "tool_count", len(dynDefs))
 		if prebuild != nil {
 			dynDefs = prebuild(dynDefs)
 		}
-		return c.CacheBuiltinToolDefs(dynDefs), dynExec, nil, func(string) bool { return false }
+		return c.CacheBuiltinToolDefs(dynDefs), dynExec, dynExecStream, func(string) bool { return false }
 	}
 	return c.cachedToolDefs, c.tools.Execute, c.tools.ExecuteStream, c.tools.IsStreamingTool
 }
@@ -599,7 +615,13 @@ func (c *AgentCore) HasDynamicTools() bool {
 // an error result matching the dispatch-tool fallback semantics for unknown tools.
 // Otherwise constructs an ephemeral LLMAgent with inherited tools (minus denied
 // ones), executes it, and returns the result.
-func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, toolDefs []ToolDefinition, executeTool ToolExecFunc) DispatchResult {
+//
+// When ch is non-nil and the spawned child implements StreamingAgent, the
+// child's events (text deltas, tool-call start/result, thinking, routing
+// decisions) are forwarded through ch. EventInputReceived is filtered so it
+// does not duplicate the parent's input event. Pass nil for non-streaming
+// parents.
+func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, toolDefs []ToolDefinition, executeTool ToolExecFunc, ch chan<- StreamEvent) DispatchResult {
 	if !c.spawnEnabled {
 		return DispatchResult{Content: "error: unknown tool: spawn_agent", IsError: true}
 	}
@@ -621,10 +643,12 @@ func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, tool
 	name := spawnAgentName(params)
 
 	// Filter tool definitions: remove denied tools + ask_user.
+	// agent_* tools from a Network router are always stripped — the child is an
+	// LLMAgent whose dispatch does not route the agent_ prefix, so inheriting
+	// those defs would waste tokens and produce "unknown tool" errors.
 	// When child will be at max depth, also strip spawn_agent.
 	childAtMaxDepth := depth+1 >= c.spawnDepthLimit
-	var filteredDefs []ToolDefinition
-	deny := make(map[string]bool, len(c.deniedSpawnTools)+1)
+	deny := make(map[string]bool, len(c.deniedSpawnTools)+2)
 	deny["ask_user"] = true
 	for _, n := range c.deniedSpawnTools {
 		deny[n] = true
@@ -632,10 +656,12 @@ func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, tool
 	if childAtMaxDepth {
 		deny["spawn_agent"] = true
 	}
+	filteredDefs := make([]ToolDefinition, 0, len(toolDefs))
 	for _, d := range toolDefs {
-		if !deny[d.Name] {
-			filteredDefs = append(filteredDefs, d)
+		if deny[d.Name] || strings.HasPrefix(d.Name, "agent_") {
+			continue
 		}
+		filteredDefs = append(filteredDefs, d)
 	}
 
 	// Build filtered executor that respects deny list.
@@ -658,12 +684,12 @@ func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, tool
 		WithLogger(c.logger),
 	}
 	if c.genParams != nil {
-		opts = append(opts, WithGeneration(Generation{
-			Temperature: c.genParams.Temperature,
-			TopP:        c.genParams.TopP,
-			TopK:        c.genParams.TopK,
-			MaxTokens:   c.genParams.MaxTokens,
-		}))
+		opts = append(opts, WithGeneration(Generation(*c.genParams)))
+	}
+	// Inherit tracer so child iterations, LLM calls, and tool dispatches
+	// appear under the parent's span.
+	if c.tracer != nil {
+		opts = append(opts, WithTracer(c.tracer))
 	}
 	// Enable spawning on child if it won't be at max depth.
 	if !childAtMaxDepth {
@@ -679,9 +705,11 @@ func (c *AgentCore) ExecuteSpawn(ctx context.Context, args json.RawMessage, tool
 
 	child := NewLLMAgent("sub:"+name, "sub-agent: "+params.Task, c.provider, opts...)
 
-	// Execute with incremented depth.
+	// Execute with incremented depth. When the parent is streaming, use
+	// ExecuteAgent to forward the child's events through the parent's channel
+	// (panic recovery + EventInputReceived filtering handled there).
 	childCtx := withSpawnDepth(ctx, depth+1)
-	result, err := child.Execute(childCtx, AgentTask{Input: params.Task})
+	result, err := ExecuteAgent(childCtx, child, name, AgentTask{Input: params.Task}, ch, c.logger)
 	if err != nil {
 		return DispatchResult{Content: "error: sub-agent failed: " + err.Error(), IsError: true}
 	}

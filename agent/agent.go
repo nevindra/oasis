@@ -339,7 +339,8 @@ type Generation struct {
 }
 
 // WithGeneration sets LLM sampling and output parameters in one call,
-// replacing the previous per-knob options.
+// replacing the previous per-knob options. Pointer fields are deep-copied so
+// later mutations to the caller's Generation values do not affect the agent.
 //
 //	oasis.WithGeneration(oasis.Generation{
 //	    Temperature: oasis.Ptr(0.5),
@@ -352,10 +353,31 @@ func WithGeneration(g Generation) AgentOption {
 		if c.genParams == nil {
 			c.genParams = &GenerationParams{}
 		}
-		c.genParams.Temperature = g.Temperature
-		c.genParams.TopP = g.TopP
-		c.genParams.TopK = g.TopK
-		c.genParams.MaxTokens = g.MaxTokens
+		// Deep-copy each pointer so the agent owns its values independently.
+		if g.Temperature != nil {
+			v := *g.Temperature
+			c.genParams.Temperature = &v
+		} else {
+			c.genParams.Temperature = nil
+		}
+		if g.TopP != nil {
+			v := *g.TopP
+			c.genParams.TopP = &v
+		} else {
+			c.genParams.TopP = nil
+		}
+		if g.TopK != nil {
+			v := *g.TopK
+			c.genParams.TopK = &v
+		} else {
+			c.genParams.TopK = nil
+		}
+		if g.MaxTokens != nil {
+			v := *g.MaxTokens
+			c.genParams.MaxTokens = &v
+		} else {
+			c.genParams.MaxTokens = nil
+		}
 	}
 }
 

@@ -107,11 +107,18 @@ func (m *AgentMemory) BuildMessages(ctx context.Context, agentName, systemPrompt
 	// Conversation history
 	if needsHistory {
 		if historyErr != nil {
-			m.logger.Error("load history failed", "agent", agentName, "error", historyErr)
+			m.logger.Error("load history failed; skipping cross-thread recall", "agent", agentName, "error", historyErr)
 		}
 		for _, msg := range history {
 			messages = append(messages, core.ChatMessage{Role: core.Role(msg.Role), Content: msg.Content})
 		}
+
+		// Why: when the store fails, we skip cross-thread recall entirely.
+		// Running recall on top of missing history would inject a
+		// misleading recall block without the conversation it is meant to
+		// reference. Better to degrade to a plain system+user turn and
+		// let the caller see the error in logs than to ship distorted context.
+		historyLoadFailed := needsHistory && historyErr != nil
 
 		// Token-based trimming: drop messages until budget is met.
 		if m.maxTokens > 0 && len(messages) > 0 {
@@ -139,7 +146,7 @@ func (m *AgentMemory) BuildMessages(ctx context.Context, agentName, systemPrompt
 		// excluding the current thread (already in history) and low-score results.
 		// User-scoped filtering (task.ChatID) is pushed into the store query so
 		// no per-result GetThread roundtrip is needed.
-		if m.crossThreadSearch && len(inputEmbedding) > 0 {
+		if !historyLoadFailed && m.crossThreadSearch && len(inputEmbedding) > 0 {
 			minScore := m.semanticMinScore
 			if minScore == 0 {
 				minScore = defaultSemanticRecallMinScore
@@ -172,7 +179,36 @@ func (m *AgentMemory) BuildMessages(ctx context.Context, agentName, systemPrompt
 	// Current user message, with optional multimodal attachments.
 	userMsg := core.ChatMessage{Role: core.RoleUser, Content: task.Input, Attachments: task.Attachments}
 	messages = append(messages, userMsg)
-	return messages
+
+	// Why: compaction, cross-thread recall, and a caller-supplied system prompt
+	// each emit their own role:"system" message. Several providers (Anthropic in
+	// particular) reject consecutive system messages. Merging them into a single
+	// block keeps wire format valid regardless of which features are enabled.
+	return mergeAdjacentSystemMessages(messages)
+}
+
+// mergeAdjacentSystemMessages concatenates runs of consecutive system messages
+// into a single system message, joined by a blank line. Non-system messages
+// and their ordering are unchanged.
+func mergeAdjacentSystemMessages(messages []core.ChatMessage) []core.ChatMessage {
+	if len(messages) < 2 {
+		return messages
+	}
+	out := make([]core.ChatMessage, 0, len(messages))
+	for _, m := range messages {
+		if len(out) > 0 && out[len(out)-1].Role == "system" && m.Role == "system" {
+			prev := out[len(out)-1]
+			if prev.Content == "" {
+				prev.Content = m.Content
+			} else if m.Content != "" {
+				prev.Content = prev.Content + "\n\n" + m.Content
+			}
+			out[len(out)-1] = prev
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // trimHistory trims history messages to fit within m.maxTokens.

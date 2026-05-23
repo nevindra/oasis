@@ -476,3 +476,162 @@ func TestSpawnAgentInvalidArgs(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "done")
 	}
 }
+
+// --- Fix #3: Spawn inherits parent Tracer ---
+
+// TestSpawnAgentInheritsParentTracer verifies that a spawned sub-agent runs
+// with the parent's tracer, so its iterations and LLM calls appear under the
+// parent's span tree.
+func TestSpawnAgentInheritsParentTracer(t *testing.T) {
+	tracer := &recordingTracer{}
+
+	provider := &syncMockProvider{
+		name: "test",
+		responses: []ChatResponse{
+			// Parent: spawn a child
+			{ToolCalls: []ToolCall{{
+				ID:   "1",
+				Name: "spawn_agent",
+				Args: json.RawMessage(`{"task":"do work","name":"worker"}`),
+			}}},
+			// Child: final answer
+			{Content: "child done"},
+			// Parent: final answer
+			{Content: "parent done"},
+		},
+	}
+
+	a := NewLLMAgent("parent", "test", provider,
+		WithTracer(tracer),
+		WithSubAgentSpawning(),
+	)
+	_, err := a.Execute(context.Background(), AgentTask{Input: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := tracer.names()
+	// Parent and child both go through ExecuteWithSpan, so we expect at least
+	// two "agent.execute" spans — one for the parent, one for the child.
+	count := 0
+	for _, n := range names {
+		if n == "agent.execute" {
+			count++
+		}
+	}
+	if count < 2 {
+		t.Errorf("expected at least 2 agent.execute spans (parent + child), got %d in %v", count, names)
+	}
+}
+
+// --- Fix #6: WithGeneration deep-copy ---
+
+// TestWithGenerationDeepCopy verifies that mutations to the caller's Generation
+// value after calling WithGeneration do not affect the agent's stored config.
+func TestWithGenerationDeepCopy(t *testing.T) {
+	temp := 0.5
+	g := Generation{Temperature: &temp}
+	cfg := BuildConfig([]AgentOption{WithGeneration(g)})
+
+	// Mutate the original pointer value.
+	*g.Temperature = 0.99
+
+	if cfg.genParams == nil {
+		t.Fatal("genParams should be set")
+	}
+	if cfg.genParams.Temperature == nil {
+		t.Fatal("Temperature should be set")
+	}
+	if *cfg.genParams.Temperature != 0.5 {
+		t.Errorf("stored Temperature = %v, want 0.5 (deep-copy should isolate from caller mutation)", *cfg.genParams.Temperature)
+	}
+}
+
+// --- Fix #8: Spawn forwards stream events ---
+
+// streamingCallbackProvider emits each non-tool response as an EventTextDelta
+// during ChatStream, so tests can verify child events reach the parent channel.
+type streamingCallbackProvider struct {
+	name   string
+	onChat func(ChatRequest) ChatResponse
+}
+
+func (p *streamingCallbackProvider) Name() string { return p.name }
+func (p *streamingCallbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+	defer close(ch)
+	resp := p.onChat(req)
+	if resp.Content != "" {
+		ch <- StreamEvent{Type: EventTextDelta, Content: resp.Content}
+	}
+	return resp, nil
+}
+
+// TestSpawnAgentStreamEventsForwarded verifies that when a parent agent runs
+// ExecuteStream and spawns a child, the child's EventTextDelta events reach
+// the parent's channel.
+func TestSpawnAgentStreamEventsForwarded(t *testing.T) {
+	var mu sync.Mutex
+	callIdx := 0
+
+	provider := &streamingCallbackProvider{
+		name: "test",
+		onChat: func(_ ChatRequest) ChatResponse {
+			mu.Lock()
+			idx := callIdx
+			callIdx++
+			mu.Unlock()
+
+			switch idx {
+			case 0:
+				// Parent: call spawn_agent.
+				return ChatResponse{ToolCalls: []ToolCall{{
+					ID:   "spawn_1",
+					Name: "spawn_agent",
+					Args: json.RawMessage(`{"task":"do work","name":"worker"}`),
+				}}}
+			case 1:
+				// Child: final answer with text content (emitted as EventTextDelta).
+				return ChatResponse{Content: "child result"}
+			default:
+				// Parent: synthesize final answer.
+				return ChatResponse{Content: "all done"}
+			}
+		},
+	}
+
+	a := NewLLMAgent("parent", "test", provider,
+		WithSubAgentSpawning(),
+	)
+
+	ch := make(chan StreamEvent, 64)
+	_, err := a.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain and count EventTextDelta events.
+	var textDeltas []string
+	for ev := range ch {
+		if ev.Type == EventTextDelta {
+			textDeltas = append(textDeltas, ev.Content)
+		}
+	}
+
+	// We expect at least "child result" from the child and "all done" from the parent.
+	foundChild := false
+	foundParent := false
+	for _, d := range textDeltas {
+		if d == "child result" {
+			foundChild = true
+		}
+		if d == "all done" {
+			foundParent = true
+		}
+	}
+	if !foundChild {
+		t.Errorf("child EventTextDelta %q not found in parent stream; got %v", "child result", textDeltas)
+	}
+	if !foundParent {
+		t.Errorf("parent EventTextDelta %q not found in stream; got %v", "all done", textDeltas)
+	}
+}

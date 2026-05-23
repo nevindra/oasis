@@ -172,8 +172,8 @@ func TestResolveDynamicToolsNil(t *testing.T) {
 	var c AgentCore
 	InitCore(&c, "a", "d", &mockProvider{name: "p"}, BuildConfig(nil))
 
-	defs, exec := c.ResolveDynamicTools(context.Background(), AgentTask{})
-	if defs != nil || exec != nil {
+	defs, exec, execStream := c.ResolveDynamicTools(context.Background(), AgentTask{})
+	if defs != nil || exec != nil || execStream != nil {
 		t.Error("expected nil when dynamicTools not set")
 	}
 }

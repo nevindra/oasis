@@ -125,9 +125,14 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 		}
 		return n.dispatchAgent(ctx, tc, prefix, parentTask, ch), true
 	}
+	// Capture ch so spawn_agent forwards the child's stream events through
+	// the parent's channel when the parent is running under ExecuteStream.
+	spawnHandler := func(ctx context.Context, args json.RawMessage, defs []core.ToolDefinition, exec agent.ToolExecFunc) agent.DispatchResult {
+		return n.ExecuteSpawn(ctx, args, defs, exec, ch)
+	}
 	return agent.NewStandardDispatch(agent.StandardDispatchConfig{
 		Builtins:          n.DispatchBuiltins,
-		SpawnHandler:      n.ExecuteSpawn,
+		SpawnHandler:      spawnHandler,
 		AgentRouter:       agentRouter,
 		ExecuteTool:       executeTool,
 		ExecuteToolStream: executeToolStream,
