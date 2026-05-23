@@ -9,18 +9,20 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nevindra/oasis/core"
 )
 
 func TestWithSubAgentSpawningDefaults(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithSubAgentSpawning()})
-	if !cfg.spawnEnabled {
-		t.Fatal("spawnEnabled should be true")
+	if !cfg.SpawnEnabled {
+		t.Fatal("SpawnEnabled should be true")
 	}
-	if cfg.spawnDepthLimit != 1 {
-		t.Fatalf("maxSpawnDepth = %d, want 1", cfg.spawnDepthLimit)
+	if cfg.SpawnDepthLimit != 1 {
+		t.Fatalf("SpawnDepthLimit = %d, want 1", cfg.SpawnDepthLimit)
 	}
-	if len(cfg.deniedSpawnTools) != 0 {
-		t.Fatalf("denySpawnTools = %v, want empty", cfg.deniedSpawnTools)
+	if len(cfg.DeniedSpawnTools) != 0 {
+		t.Fatalf("DeniedSpawnTools = %v, want empty", cfg.DeniedSpawnTools)
 	}
 }
 
@@ -31,11 +33,11 @@ func TestWithSubAgentSpawningCustom(t *testing.T) {
 			DenySpawnTools("shell_exec", "file_write"),
 		),
 	})
-	if cfg.spawnDepthLimit != 3 {
-		t.Fatalf("maxSpawnDepth = %d, want 3", cfg.spawnDepthLimit)
+	if cfg.SpawnDepthLimit != 3 {
+		t.Fatalf("SpawnDepthLimit = %d, want 3", cfg.SpawnDepthLimit)
 	}
-	if len(cfg.deniedSpawnTools) != 2 {
-		t.Fatalf("denySpawnTools len = %d, want 2", len(cfg.deniedSpawnTools))
+	if len(cfg.DeniedSpawnTools) != 2 {
+		t.Fatalf("DeniedSpawnTools len = %d, want 2", len(cfg.DeniedSpawnTools))
 	}
 }
 
@@ -46,8 +48,8 @@ func TestDenySpawnToolsAccumulates(t *testing.T) {
 			DenySpawnTools("file_write"),
 		),
 	})
-	if len(cfg.deniedSpawnTools) != 2 {
-		t.Fatalf("denySpawnTools len = %d, want 2", len(cfg.deniedSpawnTools))
+	if len(cfg.DeniedSpawnTools) != 2 {
+		t.Fatalf("DeniedSpawnTools len = %d, want 2", len(cfg.DeniedSpawnTools))
 	}
 }
 
@@ -67,23 +69,23 @@ func TestSpawnDepthContext(t *testing.T) {
 // safe for concurrent calls.
 type syncMockProvider struct {
 	name      string
-	responses []ChatResponse
+	responses []core.ChatResponse
 	mu        sync.Mutex
 	idx       int
 }
 
 func (m *syncMockProvider) Name() string { return m.name }
-func (m *syncMockProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (m *syncMockProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	resp := m.next()
-	ch <- StreamEvent{Type: EventTextDelta, Content: resp.Content}
+	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: resp.Content}
 	return resp, nil
 }
-func (m *syncMockProvider) next() ChatResponse {
+func (m *syncMockProvider) next() core.ChatResponse {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.idx >= len(m.responses) {
-		return ChatResponse{Content: "exhausted"}
+		return core.ChatResponse{Content: "exhausted"}
 	}
 	resp := m.responses[m.idx]
 	m.idx++
@@ -98,9 +100,9 @@ func TestSpawnAgentBasic(t *testing.T) {
 	// Response order: parent call 1 (spawn), child call (response), parent call 2 (final).
 	provider := &syncMockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// Parent call 1: LLM decides to spawn
-			{ToolCalls: []ToolCall{{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "spawn_agent",
 				Args: json.RawMessage(`{"task":"say hello","name":"greeter"}`),
@@ -112,7 +114,7 @@ func TestSpawnAgentBasic(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("parent", "test parent", provider,
+	agent := New("parent", "test parent", provider,
 		WithSubAgentSpawning(),
 	)
 
@@ -126,7 +128,7 @@ func TestSpawnAgentBasic(t *testing.T) {
 }
 
 func TestBuildStepTraceSpawnAgent(t *testing.T) {
-	tc := ToolCall{
+	tc := core.ToolCall{
 		ID:   "1",
 		Name: "spawn_agent",
 		Args: json.RawMessage(`{"task":"research topic X","name":"researcher"}`),
@@ -148,7 +150,7 @@ func TestBuildStepTraceSpawnAgent(t *testing.T) {
 }
 
 func TestBuildStepTraceSpawnAgentNoName(t *testing.T) {
-	tc := ToolCall{
+	tc := core.ToolCall{
 		ID:   "1",
 		Name: "spawn_agent",
 		Args: json.RawMessage(`{"task":"do something quick"}`),
@@ -166,12 +168,12 @@ func TestBuildStepTraceSpawnAgentNoName(t *testing.T) {
 func TestSpawnAgentBlockedInExecuteCode(t *testing.T) {
 	// Construct the safeDispatch wrapper as dispatchBuiltins does for execute_code.
 	innerCalled := false
-	dispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(ctx context.Context, tc core.ToolCall) DispatchResult {
 		innerCalled = true
 		return DispatchResult{Content: "ok"}
 	}
 
-	safeDispatchFn := func(ctx context.Context, tc ToolCall) DispatchResult {
+	safeDispatchFn := func(ctx context.Context, tc core.ToolCall) DispatchResult {
 		if tc.Name == "execute_plan" || tc.Name == "execute_code" || tc.Name == "spawn_agent" {
 			return DispatchResult{Content: "error: " + tc.Name + " cannot be called from within execute_code", IsError: true}
 		}
@@ -179,7 +181,7 @@ func TestSpawnAgentBlockedInExecuteCode(t *testing.T) {
 	}
 
 	// spawn_agent should be blocked.
-	result := safeDispatchFn(context.Background(), ToolCall{Name: "spawn_agent", Args: json.RawMessage(`{}`)})
+	result := safeDispatchFn(context.Background(), core.ToolCall{Name: "spawn_agent", Args: json.RawMessage(`{}`)})
 	if !result.IsError {
 		t.Fatal("spawn_agent should be blocked inside execute_code")
 	}
@@ -188,7 +190,7 @@ func TestSpawnAgentBlockedInExecuteCode(t *testing.T) {
 	}
 
 	// Regular tools should pass through.
-	result = safeDispatchFn(context.Background(), ToolCall{Name: "greet", Args: json.RawMessage(`{}`)})
+	result = safeDispatchFn(context.Background(), core.ToolCall{Name: "greet", Args: json.RawMessage(`{}`)})
 	if result.IsError {
 		t.Fatalf("regular tool should not be blocked: %s", result.Content)
 	}
@@ -204,9 +206,9 @@ func TestSpawnAgentDepthLimit(t *testing.T) {
 	// (depth=1 default), so it responds directly.
 	provider := &syncMockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// Parent: spawn a sub-agent
-			{ToolCalls: []ToolCall{{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "spawn_agent",
 				Args: json.RawMessage(`{"task":"spawn again","name":"child"}`),
@@ -218,7 +220,7 @@ func TestSpawnAgentDepthLimit(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("parent", "test", provider,
+	agent := New("parent", "test", provider,
 		WithSubAgentSpawning(), // default depth=1
 	)
 
@@ -234,15 +236,15 @@ func TestSpawnAgentDepthLimit(t *testing.T) {
 func TestSpawnAgentDepth2(t *testing.T) {
 	provider := &syncMockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// Parent: spawn child
-			{ToolCalls: []ToolCall{{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "spawn_agent",
 				Args: json.RawMessage(`{"task":"spawn grandchild","name":"child"}`),
 			}}},
 			// Child: spawn grandchild
-			{ToolCalls: []ToolCall{{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "2",
 				Name: "spawn_agent",
 				Args: json.RawMessage(`{"task":"do work","name":"grandchild"}`),
@@ -256,7 +258,7 @@ func TestSpawnAgentDepth2(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("parent", "test", provider,
+	agent := New("parent", "test", provider,
 		WithSubAgentSpawning(MaxSpawnDepth(2)),
 	)
 
@@ -274,11 +276,11 @@ func TestSpawnAgentDepth2(t *testing.T) {
 // syncCallbackProvider is a thread-safe provider that calls onChat for each request.
 type syncCallbackProvider struct {
 	name   string
-	onChat func(ChatRequest) ChatResponse
+	onChat func(core.ChatRequest) core.ChatResponse
 }
 
 func (p *syncCallbackProvider) Name() string { return p.name }
-func (p *syncCallbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (p *syncCallbackProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	resp := p.onChat(req)
 	return resp, nil
@@ -291,7 +293,7 @@ func TestSpawnAgentDenyTools(t *testing.T) {
 
 	provider := &syncCallbackProvider{
 		name: "test",
-		onChat: func(req ChatRequest) ChatResponse {
+		onChat: func(req core.ChatRequest) core.ChatResponse {
 			mu.Lock()
 			var names []string
 			for _, td := range req.Tools {
@@ -303,17 +305,17 @@ func TestSpawnAgentDenyTools(t *testing.T) {
 			mu.Unlock()
 
 			if idx == 0 {
-				return ChatResponse{ToolCalls: []ToolCall{{
+				return core.ChatResponse{ToolCalls: []core.ToolCall{{
 					ID:   "1",
 					Name: "spawn_agent",
 					Args: json.RawMessage(`{"task":"test","name":"worker"}`),
 				}}}
 			}
-			return ChatResponse{Content: "done"}
+			return core.ChatResponse{Content: "done"}
 		},
 	}
 
-	agent := NewLLMAgent("parent", "test", provider,
+	agent := New("parent", "test", provider,
 		WithTools(mockTool{}, mockToolCalc{}),
 		WithSubAgentSpawning(
 			DenySpawnTools("calc"),
@@ -364,37 +366,37 @@ func TestSpawnAgentParallel(t *testing.T) {
 
 	provider := &syncCallbackProvider{
 		name: "test",
-		onChat: func(req ChatRequest) ChatResponse {
+		onChat: func(req core.ChatRequest) core.ChatResponse {
 			mu.Lock()
 			idx := callIdx
 			callIdx++
 			mu.Unlock()
 
 			if idx == 0 {
-				var tcs []ToolCall
+				var tcs []core.ToolCall
 				for i := 0; i < numSpawns; i++ {
-					tcs = append(tcs, ToolCall{
+					tcs = append(tcs, core.ToolCall{
 						ID:   fmt.Sprintf("spawn_%d", i),
 						Name: "spawn_agent",
 						Args: json.RawMessage(fmt.Sprintf(`{"task":"task %d","name":"worker_%d"}`, i, i)),
 					})
 				}
-				return ChatResponse{ToolCalls: tcs}
+				return core.ChatResponse{ToolCalls: tcs}
 			}
 
 			// Sub-agent calls: signal started, block on barrier.
 			if idx >= 1 && idx <= numSpawns {
 				started <- struct{}{}
 				<-barrier
-				return ChatResponse{Content: fmt.Sprintf("result_%d", idx-1)}
+				return core.ChatResponse{Content: fmt.Sprintf("result_%d", idx-1)}
 			}
 
 			// Parent final response
-			return ChatResponse{Content: "all done"}
+			return core.ChatResponse{Content: "all done"}
 		},
 	}
 
-	agent := NewLLMAgent("parent", "test", provider,
+	agent := New("parent", "test", provider,
 		WithSubAgentSpawning(),
 	)
 
@@ -436,8 +438,8 @@ func TestSpawnAgentParallel(t *testing.T) {
 func TestSpawnAgentEmptyTask(t *testing.T) {
 	provider := &syncMockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "spawn_agent",
 				Args: json.RawMessage(`{"task":"","name":"worker"}`),
@@ -445,7 +447,7 @@ func TestSpawnAgentEmptyTask(t *testing.T) {
 			{Content: "done"},
 		},
 	}
-	agent := NewLLMAgent("parent", "test", provider, WithSubAgentSpawning())
+	agent := New("parent", "test", provider, WithSubAgentSpawning())
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -458,8 +460,8 @@ func TestSpawnAgentEmptyTask(t *testing.T) {
 func TestSpawnAgentInvalidArgs(t *testing.T) {
 	provider := &syncMockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "spawn_agent",
 				Args: json.RawMessage(`{invalid json`),
@@ -467,7 +469,7 @@ func TestSpawnAgentInvalidArgs(t *testing.T) {
 			{Content: "done"},
 		},
 	}
-	agent := NewLLMAgent("parent", "test", provider, WithSubAgentSpawning())
+	agent := New("parent", "test", provider, WithSubAgentSpawning())
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -487,9 +489,9 @@ func TestSpawnAgentInheritsParentTracer(t *testing.T) {
 
 	provider := &syncMockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// Parent: spawn a child
-			{ToolCalls: []ToolCall{{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "spawn_agent",
 				Args: json.RawMessage(`{"task":"do work","name":"worker"}`),
@@ -501,7 +503,7 @@ func TestSpawnAgentInheritsParentTracer(t *testing.T) {
 		},
 	}
 
-	a := NewLLMAgent("parent", "test", provider,
+	a := New("parent", "test", provider,
 		WithTracer(tracer),
 		WithSubAgentSpawning(),
 	)
@@ -536,14 +538,14 @@ func TestWithGenerationDeepCopy(t *testing.T) {
 	// Mutate the original pointer value.
 	*g.Temperature = 0.99
 
-	if cfg.genParams == nil {
-		t.Fatal("genParams should be set")
+	if cfg.GenParams == nil {
+		t.Fatal("GenParams should be set")
 	}
-	if cfg.genParams.Temperature == nil {
+	if cfg.GenParams.Temperature == nil {
 		t.Fatal("Temperature should be set")
 	}
-	if *cfg.genParams.Temperature != 0.5 {
-		t.Errorf("stored Temperature = %v, want 0.5 (deep-copy should isolate from caller mutation)", *cfg.genParams.Temperature)
+	if *cfg.GenParams.Temperature != 0.5 {
+		t.Errorf("stored Temperature = %v, want 0.5 (deep-copy should isolate from caller mutation)", *cfg.GenParams.Temperature)
 	}
 }
 
@@ -553,15 +555,15 @@ func TestWithGenerationDeepCopy(t *testing.T) {
 // during ChatStream, so tests can verify child events reach the parent channel.
 type streamingCallbackProvider struct {
 	name   string
-	onChat func(ChatRequest) ChatResponse
+	onChat func(core.ChatRequest) core.ChatResponse
 }
 
 func (p *streamingCallbackProvider) Name() string { return p.name }
-func (p *streamingCallbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (p *streamingCallbackProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	resp := p.onChat(req)
 	if resp.Content != "" {
-		ch <- StreamEvent{Type: EventTextDelta, Content: resp.Content}
+		ch <- core.StreamEvent{Type: core.EventTextDelta, Content: resp.Content}
 	}
 	return resp, nil
 }
@@ -575,7 +577,7 @@ func TestSpawnAgentStreamEventsForwarded(t *testing.T) {
 
 	provider := &streamingCallbackProvider{
 		name: "test",
-		onChat: func(_ ChatRequest) ChatResponse {
+		onChat: func(_ core.ChatRequest) core.ChatResponse {
 			mu.Lock()
 			idx := callIdx
 			callIdx++
@@ -584,27 +586,27 @@ func TestSpawnAgentStreamEventsForwarded(t *testing.T) {
 			switch idx {
 			case 0:
 				// Parent: call spawn_agent.
-				return ChatResponse{ToolCalls: []ToolCall{{
+				return core.ChatResponse{ToolCalls: []core.ToolCall{{
 					ID:   "spawn_1",
 					Name: "spawn_agent",
 					Args: json.RawMessage(`{"task":"do work","name":"worker"}`),
 				}}}
 			case 1:
 				// Child: final answer with text content (emitted as EventTextDelta).
-				return ChatResponse{Content: "child result"}
+				return core.ChatResponse{Content: "child result"}
 			default:
 				// Parent: synthesize final answer.
-				return ChatResponse{Content: "all done"}
+				return core.ChatResponse{Content: "all done"}
 			}
 		},
 	}
 
-	a := NewLLMAgent("parent", "test", provider,
+	a := New("parent", "test", provider,
 		WithSubAgentSpawning(),
 	)
 
-	ch := make(chan StreamEvent, 64)
-	_, err := a.ExecuteStream(context.Background(), AgentTask{Input: "test"}, ch)
+	ch := make(chan core.StreamEvent, 64)
+	_, err := a.Execute(context.Background(), AgentTask{Input: "test"}, core.WithStream(ch))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +614,7 @@ func TestSpawnAgentStreamEventsForwarded(t *testing.T) {
 	// Drain and count EventTextDelta events.
 	var textDeltas []string
 	for ev := range ch {
-		if ev.Type == EventTextDelta {
+		if ev.Type == core.EventTextDelta {
 			textDeltas = append(textDeltas, ev.Content)
 		}
 	}

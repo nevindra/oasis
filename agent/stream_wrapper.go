@@ -14,15 +14,13 @@ const (
 	defaultSubscriberBufSize = 32
 )
 
-// Stream is an opt-in wrapper around ExecuteStream that provides multi-reader
-// fan-out, bounded replay, blocking accessors, and event-typed callbacks.
+// Stream is an opt-in wrapper around the Subscribe API that provides
+// multi-reader fan-out, bounded replay, blocking accessors, and event-typed
+// callbacks.
 //
-// Construction via StartStream / StartStreamWith spawns one goroutine that
-// runs the underlying agent and dispatches events to every subscriber.
+// Construction via Subscribe spawns one goroutine that runs the underlying
+// agent and dispatches events to every subscriber.
 // Stream is safe for concurrent use by multiple goroutines.
-//
-// Zero overhead for callers that don't construct a Stream: ExecuteStream
-// remains the kernel API.
 type Stream struct {
 	mu          sync.Mutex
 	subscribers []*subscriber
@@ -42,45 +40,19 @@ type subscriber struct {
 	dropped  bool
 }
 
-// StartStream runs agent.ExecuteStream in a background goroutine and returns
-// a Stream that consumers may subscribe to or query for the final result.
-//
-// The Stream's lifecycle ends when ExecuteStream returns; at that point Done()
-// closes and Result() returns the captured AgentResult and error. Subscribers
-// receive the final events before their channels close.
-//
-// Use StartStreamWith to pass RunOptions (notably StreamReplayLimit).
-func StartStream(ctx context.Context, agent StreamingAgent, task AgentTask) *Stream {
-	return startStream(ctx, agent, task, nil)
+// Subscribe runs ag.Execute in a background goroutine with WithStream wired
+// up, and returns a Stream the caller may subscribe to or query for the
+// final result. Pass additional core.RunOption values to layer overrides
+// (e.g. agent.WithOverrides) or deadlines onto the call.
+func Subscribe(ctx context.Context, ag core.Agent, task AgentTask, opts ...core.RunOption) *Stream {
+	return startStream(ctx, ag, task, opts...)
 }
 
-// StartStreamWith is the RunOptions-aware constructor. Pass nil opts for
-// agent defaults. Honors opts.StreamReplayLimit if set; clamped to
-// [1, maxStreamReplayLimit].
-func StartStreamWith(ctx context.Context, agent StreamingAgentWithOptions, task AgentTask, opts *RunOptions) *Stream {
-	return startStream(ctx, &runOptsAdapter{agent: agent, opts: opts}, task, opts)
-}
-
-// runOptsAdapter lets startStream treat a StreamingAgentWithOptions like a
-// plain StreamingAgent for the inner ExecuteStream call.
-type runOptsAdapter struct {
-	agent StreamingAgentWithOptions
-	opts  *RunOptions
-}
-
-func (a *runOptsAdapter) Name() string        { return a.agent.Name() }
-func (a *runOptsAdapter) Description() string { return a.agent.Description() }
-func (a *runOptsAdapter) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
-	return a.agent.ExecuteWith(ctx, task, a.opts)
-}
-func (a *runOptsAdapter) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) (AgentResult, error) {
-	return a.agent.ExecuteStreamWith(ctx, task, ch, a.opts)
-}
-
-func startStream(ctx context.Context, agent StreamingAgent, task AgentTask, opts *RunOptions) *Stream {
+func startStream(ctx context.Context, agent core.Agent, task AgentTask, opts ...core.RunOption) *Stream {
 	limit := defaultStreamReplayLimit
-	if opts != nil && opts.StreamReplayLimit > 0 {
-		limit = opts.StreamReplayLimit
+	cfg := core.ApplyRunOptions(opts...)
+	if ro, ok := cfg.Overrides.(*RunOptions); ok && ro != nil && ro.StreamReplayLimit > 0 {
+		limit = ro.StreamReplayLimit
 		if limit > maxStreamReplayLimit {
 			limit = maxStreamReplayLimit
 		}
@@ -92,14 +64,14 @@ func startStream(ctx context.Context, agent StreamingAgent, task AgentTask, opts
 		done:        make(chan struct{}),
 	}
 
-	go s.run(ctx, agent, task)
+	go s.run(ctx, agent, task, opts...)
 
 	return s
 }
 
 // run drives the underlying agent and dispatches events. Closes Done when
-// ExecuteStream returns. Closes every subscriber's channel.
-func (s *Stream) run(ctx context.Context, agent StreamingAgent, task AgentTask) {
+// Execute returns. Closes every subscriber's channel.
+func (s *Stream) run(ctx context.Context, agent core.Agent, task AgentTask, opts ...core.RunOption) {
 	defer close(s.done)
 
 	ch := make(chan core.StreamEvent, defaultIterChBufSize)
@@ -110,7 +82,10 @@ func (s *Stream) run(ctx context.Context, agent StreamingAgent, task AgentTask) 
 	}
 	resCh := make(chan runResult, 1)
 	go func() {
-		r, err := agent.ExecuteStream(ctx, task, ch)
+		// Append WithStream to caller's options. Caller's options come first so
+		// explicit caller WithStream (rare) would be replaced.
+		callOpts := append(opts, core.WithStream(ch))
+		r, err := agent.Execute(ctx, task, callOpts...)
 		resCh <- runResult{r, err}
 	}()
 

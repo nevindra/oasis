@@ -12,29 +12,8 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
-// DispatchResult holds the result of a single tool or agent dispatch.
-type DispatchResult struct {
-	Content     string
-	Usage       Usage
-	Attachments []Attachment
-	// IsError signals that Content represents an error message rather than
-	// a successful tool result. This enables structural error detection
-	// without relying on string-prefix heuristics.
-	IsError bool
-}
-
-// DispatchFunc executes a single tool call and returns the result.
-// LLMAgent provides one that calls ToolRegistry.Execute + ask_user.
-// Network provides one that also routes to subagents via the agent_* prefix.
-type DispatchFunc func(ctx context.Context, tc ToolCall) DispatchResult
-
-// ToolExecFunc executes a tool by name. Abstracts ToolRegistry.Execute so
-// dispatch functions work without an intermediate registry allocation.
-type ToolExecFunc = func(ctx context.Context, name string, args json.RawMessage) (ToolResult, error)
-
-// ToolExecStreamFunc executes a tool with streaming progress support.
-// Abstracts ToolRegistry.ExecuteStream.
-type ToolExecStreamFunc = func(ctx context.Context, name string, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error)
+// DispatchResult, DispatchFunc, ToolExecFunc, ToolExecStreamFunc are defined in
+// internal/runtime and re-exported as type aliases in agent/agent.go.
 
 // rawMessageToString converts json.RawMessage to a string for DispatchResult.Content.
 // JSON string literals are unquoted so plain-text tools produce readable text.
@@ -50,7 +29,7 @@ func rawMessageToString(raw json.RawMessage) string {
 
 // toolResultToDispatch converts a ToolResult and error into a DispatchResult.
 // Centralizes the error-prefix convention used across all tool dispatch paths.
-func toolResultToDispatch(result ToolResult, err error) DispatchResult {
+func toolResultToDispatch(result core.ToolResult, err error) DispatchResult {
 	if err != nil {
 		return DispatchResult{Content: "error: " + err.Error(), IsError: true}
 	}
@@ -65,7 +44,7 @@ func toolResultToDispatch(result ToolResult, err error) DispatchResult {
 // it uses the streaming executor instead.
 // Shared by LLMAgent and Network for the common tool path.
 // Exported for network subpackage access.
-func DispatchTool(ctx context.Context, executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, name string, args json.RawMessage, ch chan<- StreamEvent) DispatchResult {
+func DispatchTool(ctx context.Context, executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, name string, args json.RawMessage, ch chan<- core.StreamEvent) DispatchResult {
 	if ch != nil && executeToolStream != nil {
 		return toolResultToDispatch(executeToolStream(ctx, name, args, ch))
 	}
@@ -75,17 +54,17 @@ func DispatchTool(ctx context.Context, executeTool ToolExecFunc, executeToolStre
 // AgentRouter is an optional hook between built-ins and standard tool dispatch.
 // Returning (result, true) short-circuits dispatch with that result.
 // Returning (_, false) falls through to regular tool dispatch.
-type AgentRouter func(ctx context.Context, tc ToolCall) (DispatchResult, bool)
+type AgentRouter func(ctx context.Context, tc core.ToolCall) (DispatchResult, bool)
 
 // StandardDispatchConfig is the configuration for NewStandardDispatch.
 type StandardDispatchConfig struct {
-	Builtins          func(ctx context.Context, tc ToolCall, dispatch DispatchFunc) (DispatchResult, bool)
-	SpawnHandler      func(ctx context.Context, args json.RawMessage, defs []ToolDefinition, exec ToolExecFunc) DispatchResult
+	Builtins          func(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool)
+	SpawnHandler      func(ctx context.Context, args json.RawMessage, defs []core.ToolDefinition, exec ToolExecFunc) DispatchResult
 	AgentRouter       AgentRouter
 	ExecuteTool       ToolExecFunc
 	ExecuteToolStream ToolExecStreamFunc
-	ResolvedToolDefs  []ToolDefinition
-	StreamCh          chan<- StreamEvent
+	ResolvedToolDefs  []core.ToolDefinition
+	StreamCh          chan<- core.StreamEvent
 	// ResolvePolicy returns the ToolPolicy for a tool name. nil = no policy
 	// lookup. Returning (_, false) means no policy applies (pass-through).
 	// LLMAgent passes a closure over Config.resolveToolPolicy.
@@ -107,7 +86,7 @@ func NewStandardDispatch(cfg StandardDispatchConfig) DispatchFunc {
 	var streamPolicyWarned sync.Map
 
 	var dispatch DispatchFunc
-	dispatch = func(ctx context.Context, tc ToolCall) DispatchResult {
+	dispatch = func(ctx context.Context, tc core.ToolCall) DispatchResult {
 		if cfg.Builtins != nil {
 			if r, ok := cfg.Builtins(ctx, tc, dispatch); ok {
 				return r
@@ -143,7 +122,7 @@ func NewStandardDispatch(cfg StandardDispatchConfig) DispatchFunc {
 		// Non-streaming path: apply policy if one is registered for this name.
 		if cfg.ResolvePolicy != nil {
 			if policy, ok := cfg.ResolvePolicy(tc.Name); ok {
-				return toolResultToDispatch(runWithPolicy(ctx, policy, func(c context.Context) (ToolResult, error) {
+				return toolResultToDispatch(runWithPolicy(ctx, policy, func(c context.Context) (core.ToolResult, error) {
 					return cfg.ExecuteTool(c, tc.Name, tc.Args)
 				}))
 			}
@@ -158,8 +137,8 @@ func NewStandardDispatch(cfg StandardDispatchConfig) DispatchFunc {
 // toolExecResult holds the result of a single parallel tool call.
 type toolExecResult struct {
 	content     string
-	usage       Usage
-	attachments []Attachment
+	usage       core.Usage
+	attachments []core.Attachment
 	duration    time.Duration
 	isError     bool
 }
@@ -175,7 +154,7 @@ type indexedResult struct {
 // tool panics, the panic is caught and converted to an error result instead
 // of crashing the process. Matches the recovery pattern used for subagent
 // dispatch in Network.makeDispatch.
-func safeDispatch(ctx context.Context, tc ToolCall, dispatch DispatchFunc) (dr DispatchResult) {
+func safeDispatch(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (dr DispatchResult) {
 	defer func() {
 		if p := recover(); p != nil {
 			dr = DispatchResult{Content: fmt.Sprintf("error: tool %q panic: %v", tc.Name, p), IsError: true}
@@ -193,7 +172,7 @@ func safeDispatch(ctx context.Context, tc ToolCall, dispatch DispatchFunc) (dr D
 // The collection loop is context-aware: if ctx is cancelled while tool calls
 // are still in-flight, the function returns immediately with context-error
 // results for incomplete calls instead of blocking indefinitely.
-func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFunc, maxWorkers int) []toolExecResult {
+func dispatchParallel(ctx context.Context, calls []core.ToolCall, dispatch DispatchFunc, maxWorkers int) []toolExecResult {
 	// Fast path: single call, no goroutine needed.
 	if len(calls) == 1 {
 		start := time.Now()
@@ -206,7 +185,7 @@ func dispatchParallel(ctx context.Context, calls []ToolCall, dispatch DispatchFu
 	// Work channel: each item is an (index, ToolCall) pair for workers to consume.
 	type workItem struct {
 		idx int
-		tc  ToolCall
+		tc  core.ToolCall
 	}
 	workCh := make(chan workItem, len(calls))
 	for i, tc := range calls {

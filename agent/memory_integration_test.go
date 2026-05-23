@@ -19,29 +19,29 @@ type stubStore struct{}
 
 func (s *stubStore) Init(_ context.Context) error  { return nil }
 func (s *stubStore) Close() error                   { return nil }
-func (s *stubStore) CreateThread(_ context.Context, _ Thread) error { return nil }
-func (s *stubStore) GetThread(_ context.Context, _ string) (Thread, error) { return Thread{}, nil }
-func (s *stubStore) ListThreads(_ context.Context, _ string, _ int) ([]Thread, error) { return nil, nil }
-func (s *stubStore) UpdateThread(_ context.Context, _ Thread) error { return nil }
+func (s *stubStore) CreateThread(_ context.Context, _ core.Thread) error { return nil }
+func (s *stubStore) GetThread(_ context.Context, _ string) (core.Thread, error) { return core.Thread{}, nil }
+func (s *stubStore) ListThreads(_ context.Context, _ string, _ int) ([]core.Thread, error) { return nil, nil }
+func (s *stubStore) UpdateThread(_ context.Context, _ core.Thread) error { return nil }
 func (s *stubStore) DeleteThread(_ context.Context, _ string) error { return nil }
-func (s *stubStore) StoreMessage(_ context.Context, _ Message) error { return nil }
-func (s *stubStore) GetMessages(_ context.Context, _ string, _ int) ([]Message, error) { return nil, nil }
-func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]ScoredMessage, error) { return nil, nil }
-func (s *stubStore) StoreDocument(_ context.Context, _ Document, _ []Chunk) error { return nil }
-func (s *stubStore) ListDocuments(_ context.Context, _ int) ([]Document, error)   { return nil, nil }
+func (s *stubStore) StoreMessage(_ context.Context, _ core.Message) error { return nil }
+func (s *stubStore) GetMessages(_ context.Context, _ string, _ int) ([]core.Message, error) { return nil, nil }
+func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]core.ScoredMessage, error) { return nil, nil }
+func (s *stubStore) StoreDocument(_ context.Context, _ core.Document, _ []core.Chunk) error { return nil }
+func (s *stubStore) ListDocuments(_ context.Context, _ int) ([]core.Document, error)   { return nil, nil }
 func (s *stubStore) DeleteDocument(_ context.Context, _ string) error             { return nil }
-func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int, _ ...ChunkFilter) ([]ScoredChunk, error) { return nil, nil }
-func (s *stubStore) GetChunksByIDs(_ context.Context, _ []string) ([]Chunk, error) { return nil, nil }
+func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int, _ ...core.ChunkFilter) ([]core.ScoredChunk, error) { return nil, nil }
+func (s *stubStore) GetChunksByIDs(_ context.Context, _ []string) ([]core.Chunk, error) { return nil, nil }
 func (s *stubStore) GetConfig(_ context.Context, _ string) (string, error) { return "", nil }
 func (s *stubStore) SetConfig(_ context.Context, _, _ string) error { return nil }
-func (s *stubStore) CreateScheduledAction(_ context.Context, _ ScheduledAction) error { return nil }
-func (s *stubStore) ListScheduledActions(_ context.Context) ([]ScheduledAction, error) { return nil, nil }
-func (s *stubStore) GetDueScheduledActions(_ context.Context, _ int64) ([]ScheduledAction, error) { return nil, nil }
-func (s *stubStore) UpdateScheduledAction(_ context.Context, _ ScheduledAction) error { return nil }
+func (s *stubStore) CreateScheduledAction(_ context.Context, _ core.ScheduledAction) error { return nil }
+func (s *stubStore) ListScheduledActions(_ context.Context) ([]core.ScheduledAction, error) { return nil, nil }
+func (s *stubStore) GetDueScheduledActions(_ context.Context, _ int64) ([]core.ScheduledAction, error) { return nil, nil }
+func (s *stubStore) UpdateScheduledAction(_ context.Context, _ core.ScheduledAction) error { return nil }
 func (s *stubStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ bool) error { return nil }
 func (s *stubStore) DeleteScheduledAction(_ context.Context, _ string) error { return nil }
 func (s *stubStore) DeleteAllScheduledActions(_ context.Context) (int, error) { return 0, nil }
-func (s *stubStore) FindScheduledActionsByDescription(_ context.Context, _ string) ([]ScheduledAction, error) { return nil, nil }
+func (s *stubStore) FindScheduledActionsByDescription(_ context.Context, _ string) ([]core.ScheduledAction, error) { return nil, nil }
 
 // memory.ItemStore methods (zero-valued no-ops).
 func (s *stubStore) Upsert(_ context.Context, _ memory.MemoryItem) error            { return nil }
@@ -62,28 +62,28 @@ var _ memory.Store = (*stubStore)(nil)
 type recordingStore struct {
 	stubStore
 	mu             sync.Mutex
-	history        []Message         // returned by GetMessages
-	related        []ScoredMessage   // returned by SearchMessages
-	stored         []Message         // recorded by StoreMessage
-	threads        map[string]Thread // tracked threads (for GetThread)
-	createdThreads []Thread          // recorded by CreateThread
-	updatedThreads []Thread          // recorded by UpdateThread
+	history        []core.Message         // returned by GetMessages
+	related        []core.ScoredMessage   // returned by SearchMessages
+	stored         []core.Message         // recorded by StoreMessage
+	threads        map[string]core.Thread // tracked threads (for GetThread)
+	createdThreads []core.Thread          // recorded by CreateThread
+	updatedThreads []core.Thread          // recorded by UpdateThread
 }
 
-func (s *recordingStore) GetMessages(_ context.Context, _ string, limit int) ([]Message, error) {
+func (s *recordingStore) GetMessages(_ context.Context, _ string, limit int) ([]core.Message, error) {
 	if limit > 0 && limit < len(s.history) {
 		return s.history[len(s.history)-limit:], nil
 	}
 	return s.history, nil
 }
 
-func (s *recordingStore) SearchMessages(_ context.Context, _ []float32, _ int, chatID string) ([]ScoredMessage, error) {
+func (s *recordingStore) SearchMessages(_ context.Context, _ []float32, _ int, chatID string) ([]core.ScoredMessage, error) {
 	if chatID == "" {
 		return s.related, nil
 	}
 	// Mirror real-store JOIN semantics: only return messages whose thread
 	// belongs to the given chat.
-	out := make([]ScoredMessage, 0, len(s.related))
+	out := make([]core.ScoredMessage, 0, len(s.related))
 	for _, r := range s.related {
 		t, ok := s.threads[r.ThreadID]
 		if !ok || t.ChatID != chatID {
@@ -94,25 +94,25 @@ func (s *recordingStore) SearchMessages(_ context.Context, _ []float32, _ int, c
 	return out, nil
 }
 
-func (s *recordingStore) StoreMessage(_ context.Context, msg Message) error {
+func (s *recordingStore) StoreMessage(_ context.Context, msg core.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stored = append(s.stored, msg)
 	return nil
 }
 
-func (s *recordingStore) CreateThread(_ context.Context, t Thread) error {
+func (s *recordingStore) CreateThread(_ context.Context, t core.Thread) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.threads == nil {
-		s.threads = make(map[string]Thread)
+		s.threads = make(map[string]core.Thread)
 	}
 	s.threads[t.ID] = t
 	s.createdThreads = append(s.createdThreads, t)
 	return nil
 }
 
-func (s *recordingStore) GetThread(_ context.Context, id string) (Thread, error) {
+func (s *recordingStore) GetThread(_ context.Context, id string) (core.Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.threads != nil {
@@ -120,10 +120,10 @@ func (s *recordingStore) GetThread(_ context.Context, id string) (Thread, error)
 			return t, nil
 		}
 	}
-	return Thread{}, fmt.Errorf("get thread: not found")
+	return core.Thread{}, fmt.Errorf("get thread: not found")
 }
 
-func (s *recordingStore) UpdateThread(_ context.Context, t Thread) error {
+func (s *recordingStore) UpdateThread(_ context.Context, t core.Thread) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updatedThreads = append(s.updatedThreads, t)
@@ -139,10 +139,10 @@ func (s *recordingStore) UpdateThread(_ context.Context, t Thread) error {
 	return nil
 }
 
-func (s *recordingStore) storedMessages() []Message {
+func (s *recordingStore) storedMessages() []core.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cp := make([]Message, len(s.stored))
+	cp := make([]core.Message, len(s.stored))
 	copy(cp, s.stored)
 	return cp
 }
@@ -166,9 +166,9 @@ func TestLLMAgentStatelessWithoutMemory(t *testing.T) {
 	// Without memory options, agent should behave exactly as before
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "hello"}},
+		responses: []core.ChatResponse{{Content: "hello"}},
 	}
-	agent := NewLLMAgent("test", "test", provider)
+	agent := New("test", "test", provider)
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestLLMAgentStatelessWithoutMemory(t *testing.T) {
 
 func TestLLMAgentConversationMemory(t *testing.T) {
 	store := &recordingStore{
-		history: []Message{
+		history: []core.Message{
 			{Role: "user", Content: "earlier question"},
 			{Role: "assistant", Content: "earlier answer"},
 		},
@@ -188,10 +188,10 @@ func TestLLMAgentConversationMemory(t *testing.T) {
 
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "response with history"}},
+		responses: []core.ChatResponse{{Content: "response with history"}},
 	}
 
-	agent := NewLLMAgent("test", "test", provider,
+	agent := New("test", "test", provider,
 		WithMemory(memory.WithStore(store)),
 		WithPrompt("You are helpful"),
 	)
@@ -239,7 +239,7 @@ type limitCapturingStore struct {
 	capturedLimit int
 }
 
-func (s *limitCapturingStore) GetMessages(_ context.Context, _ string, limit int) ([]Message, error) {
+func (s *limitCapturingStore) GetMessages(_ context.Context, _ string, limit int) ([]core.Message, error) {
 	s.capturedLimit = limit
 	return nil, nil
 }
@@ -258,14 +258,14 @@ func TestMaxHistoryOption(t *testing.T) {
 			store := &limitCapturingStore{}
 			provider := &mockProvider{
 				name:      "test",
-				responses: []ChatResponse{{Content: "ok"}},
+				responses: []core.ChatResponse{{Content: "ok"}},
 			}
 
 			memOpts := []memory.Option{memory.WithStore(store)}
 			if tt.opt != nil {
 				memOpts = append(memOpts, tt.opt)
 			}
-			agent := NewLLMAgent("test", "test", provider, WithMemory(memOpts...))
+			agent := New("test", "test", provider, WithMemory(memOpts...))
 
 			_, err := agent.Execute(context.Background(), AgentTask{
 				Input:   "hi",
@@ -283,15 +283,15 @@ func TestMaxHistoryOption(t *testing.T) {
 
 func TestLLMAgentNoThreadIDSkipsHistory(t *testing.T) {
 	store := &recordingStore{
-		history: []Message{{Role: "user", Content: "should not appear"}},
+		history: []core.Message{{Role: "user", Content: "should not appear"}},
 	}
 
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "ok"}},
+		responses: []core.ChatResponse{{Content: "ok"}},
 	}
 
-	agent := NewLLMAgent("test", "test", provider,
+	agent := New("test", "test", provider,
 		WithMemory(memory.WithStore(store)),
 	)
 
@@ -311,7 +311,7 @@ func TestLLMAgentNoThreadIDSkipsHistory(t *testing.T) {
 
 func TestAgentConversationMemoryPersists(t *testing.T) {
 	store := &recordingStore{
-		history: []Message{
+		history: []core.Message{
 			{Role: "user", Content: "earlier"},
 			{Role: "assistant", Content: "earlier reply"},
 		},
@@ -319,10 +319,10 @@ func TestAgentConversationMemoryPersists(t *testing.T) {
 
 	provider := &mockProvider{
 		name:      "router",
-		responses: []ChatResponse{{Content: "agent response"}},
+		responses: []core.ChatResponse{{Content: "agent response"}},
 	}
 
-	agent := NewLLMAgent("net", "test", provider,
+	agent := New("net", "test", provider,
 		WithMemory(memory.WithStore(store)),
 	)
 
@@ -347,14 +347,14 @@ func TestAgentConversationMemoryPersists(t *testing.T) {
 }
 
 func TestBuildMessagesImagesFromTask(t *testing.T) {
-	images := []Attachment{
+	images := []core.Attachment{
 		mustAttachmentBase64(t, "image/jpeg", "YWJjMTIz"),
 		mustAttachmentBase64(t, "application/pdf", "cGRmZGF0YQ=="),
 	}
 
-	provider := &capturingProvider{resp: ChatResponse{Content: "ok"}}
+	provider := &capturingProvider{resp: core.ChatResponse{Content: "ok"}}
 
-	agent := NewLLMAgent("test", "test", provider)
+	agent := New("test", "test", provider)
 	_, err := agent.Execute(context.Background(), AgentTask{
 		Input:       "analyze this",
 		Attachments: images,
@@ -386,34 +386,34 @@ func TestBuildMessagesImagesFromTask(t *testing.T) {
 // --- Helpers ---
 
 // capturingProvider records all ChatRequests for inspection.
-// Thread-safe: auto-extraction calls the provider from a background goroutine.
+// core.Thread-safe: auto-extraction calls the provider from a background goroutine.
 // If extractionResp is set, the second call returns it instead of resp.
 type capturingProvider struct {
-	resp           ChatResponse
-	extractionResp *ChatResponse // returned on 2nd+ call if non-nil
+	resp           core.ChatResponse
+	extractionResp *core.ChatResponse // returned on 2nd+ call if non-nil
 	mu             sync.Mutex
-	reqs           []ChatRequest
+	reqs           []core.ChatRequest
 }
 
 func (p *capturingProvider) Name() string { return "capturing" }
 
-func (p *capturingProvider) record(req ChatRequest) {
+func (p *capturingProvider) record(req core.ChatRequest) {
 	p.mu.Lock()
 	p.reqs = append(p.reqs, req)
 	p.mu.Unlock()
 }
 
 // firstCall returns the first captured request (the main LLM call, not extraction).
-func (p *capturingProvider) firstCall() ChatRequest {
+func (p *capturingProvider) firstCall() core.ChatRequest {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.reqs) == 0 {
-		return ChatRequest{}
+		return core.ChatRequest{}
 	}
 	return p.reqs[0]
 }
 
-func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (p *capturingProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	p.record(req)
 	if p.extractionResp != nil {
@@ -424,7 +424,7 @@ func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch ch
 			return *p.extractionResp, nil
 		}
 	}
-	ch <- StreamEvent{Type: EventTextDelta, Content: p.resp.Content}
+	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: p.resp.Content}
 	return p.resp, nil
 }
 
@@ -432,7 +432,7 @@ func (p *capturingProvider) ChatStream(_ context.Context, req ChatRequest, ch ch
 
 func TestCosineSimilarityIdentical(t *testing.T) {
 	a := []float32{1, 2, 3, 4}
-	sim := CosineSimilarity(a, a)
+	sim := core.CosineSimilarity(a, a)
 	if sim < 0.999 {
 		t.Errorf("identical vectors should have similarity ~1.0, got %f", sim)
 	}
@@ -441,7 +441,7 @@ func TestCosineSimilarityIdentical(t *testing.T) {
 func TestCosineSimilarityOrthogonal(t *testing.T) {
 	a := []float32{1, 0, 0, 0}
 	b := []float32{0, 1, 0, 0}
-	sim := CosineSimilarity(a, b)
+	sim := core.CosineSimilarity(a, b)
 	if sim > 0.001 {
 		t.Errorf("orthogonal vectors should have similarity ~0.0, got %f", sim)
 	}
@@ -450,7 +450,7 @@ func TestCosineSimilarityOrthogonal(t *testing.T) {
 func TestCosineSimilarityOpposite(t *testing.T) {
 	a := []float32{1, 2, 3}
 	b := []float32{-1, -2, -3}
-	sim := CosineSimilarity(a, b)
+	sim := core.CosineSimilarity(a, b)
 	if sim > -0.999 {
 		t.Errorf("opposite vectors should have similarity ~-1.0, got %f", sim)
 	}
@@ -459,14 +459,14 @@ func TestCosineSimilarityOpposite(t *testing.T) {
 func TestCosineSimilarityDifferentLength(t *testing.T) {
 	a := []float32{1, 2}
 	b := []float32{1, 2, 3}
-	sim := CosineSimilarity(a, b)
+	sim := core.CosineSimilarity(a, b)
 	if sim != 0 {
 		t.Errorf("different length vectors should return 0, got %f", sim)
 	}
 }
 
 func TestCosineSimilarityEmpty(t *testing.T) {
-	sim := CosineSimilarity([]float32{}, []float32{})
+	sim := core.CosineSimilarity([]float32{}, []float32{})
 	if sim != 0 {
 		t.Errorf("empty vectors should return 0, got %f", sim)
 	}
@@ -475,7 +475,7 @@ func TestCosineSimilarityEmpty(t *testing.T) {
 func TestCosineSimilarityZeroVector(t *testing.T) {
 	a := []float32{0, 0, 0}
 	b := []float32{1, 2, 3}
-	sim := CosineSimilarity(a, b)
+	sim := core.CosineSimilarity(a, b)
 	if sim != 0 {
 		t.Errorf("zero vector should return 0, got %f", sim)
 	}

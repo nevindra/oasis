@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
 )
 
@@ -37,18 +38,18 @@ func TestRunOptions_HasOverrides_NilIsFalse(t *testing.T) {
 
 
 func TestApplyRunOptions_NilNoChange(t *testing.T) {
-	base := &Config{maxIter: 10}
+	base := &Config{MaxIter: 10}
 	out := applyRunOptions(base, nil)
 	if out != base {
 		t.Fatalf("nil opts: applyRunOptions returned different config")
 	}
-	if out.maxIter != 10 {
-		t.Fatalf("nil opts: maxIter changed to %d", out.maxIter)
+	if out.MaxIter != 10 {
+		t.Fatalf("nil opts: MaxIter changed to %d", out.MaxIter)
 	}
 }
 
 func TestApplyRunOptions_EmptyNoChange(t *testing.T) {
-	base := &Config{maxIter: 10}
+	base := &Config{MaxIter: 10}
 	out := applyRunOptions(base, &RunOptions{})
 	if out != base {
 		t.Fatalf("empty opts: applyRunOptions returned different config")
@@ -57,37 +58,37 @@ func TestApplyRunOptions_EmptyNoChange(t *testing.T) {
 
 
 func TestApplyRunOptions_PromptOverride(t *testing.T) {
-	base := &Config{systemPrompt: "agent-default"}
+	base := &Config{SystemPrompt: "agent-default"}
 	override := "call-override"
 	out := applyRunOptions(base, &RunOptions{Prompt: &override})
-	if out.systemPrompt != "call-override" {
-		t.Fatalf("Prompt override: got %q, want %q", out.systemPrompt, "call-override")
+	if out.SystemPrompt != "call-override" {
+		t.Fatalf("Prompt override: got %q, want %q", out.SystemPrompt, "call-override")
 	}
-	if base.systemPrompt != "agent-default" {
-		t.Fatalf("Prompt override leaked into base: %q", base.systemPrompt)
+	if base.SystemPrompt != "agent-default" {
+		t.Fatalf("Prompt override leaked into base: %q", base.SystemPrompt)
 	}
 }
 
 func TestApplyRunOptions_GenerationPartialMerge(t *testing.T) {
 	temp := 0.3
 	topP := 0.9
-	base := &Config{genParams: &GenerationParams{Temperature: &temp, TopP: &topP}}
+	base := &Config{GenParams: &core.GenerationParams{Temperature: &temp, TopP: &topP}}
 
 	newTemp := 0.7
 	out := applyRunOptions(base, &RunOptions{Generation: &Generation{Temperature: &newTemp}})
 
-	if out.genParams == nil {
-		t.Fatalf("Generation partial: genParams nil after override")
+	if out.GenParams == nil {
+		t.Fatalf("Generation partial: GenParams nil after override")
 	}
-	if out.genParams.Temperature == nil || *out.genParams.Temperature != 0.7 {
-		t.Fatalf("Generation partial: Temperature = %v, want 0.7", out.genParams.Temperature)
+	if out.GenParams.Temperature == nil || *out.GenParams.Temperature != 0.7 {
+		t.Fatalf("Generation partial: Temperature = %v, want 0.7", out.GenParams.Temperature)
 	}
-	if out.genParams.TopP == nil || *out.genParams.TopP != 0.9 {
-		t.Fatalf("Generation partial: TopP = %v, want 0.9 (preserved)", out.genParams.TopP)
+	if out.GenParams.TopP == nil || *out.GenParams.TopP != 0.9 {
+		t.Fatalf("Generation partial: TopP = %v, want 0.9 (preserved)", out.GenParams.TopP)
 	}
 	// Base must not be mutated
-	if base.genParams.Temperature == nil || *base.genParams.Temperature != 0.3 {
-		t.Fatalf("Generation partial: base mutated to %v, want 0.3", base.genParams.Temperature)
+	if base.GenParams.Temperature == nil || *base.GenParams.Temperature != 0.3 {
+		t.Fatalf("Generation partial: base mutated to %v, want 0.3", base.GenParams.Temperature)
 	}
 }
 
@@ -95,32 +96,32 @@ func TestApplyRunOptions_HookPrecedence(t *testing.T) {
 	baseHook := func(ctx context.Context, iter int, ctrl *StepControl) error { return nil }
 	overrideHook := func(ctx context.Context, iter int, ctrl *StepControl) error { return nil }
 
-	base := &Config{prepareStep: baseHook}
+	base := &Config{PrepareStep: baseHook}
 	out := applyRunOptions(base, &RunOptions{PrepareStep: overrideHook})
 
-	if reflect.ValueOf(out.prepareStep).Pointer() != reflect.ValueOf(overrideHook).Pointer() {
+	if reflect.ValueOf(out.PrepareStep).Pointer() != reflect.ValueOf(overrideHook).Pointer() {
 		t.Fatalf("PrepareStep precedence: RunOptions hook did not win")
 	}
 }
 
 func TestApplyRunOptions_MetadataMerge(t *testing.T) {
-	base := &Config{metadata: map[string]any{"a": 1, "b": 2}}
+	base := &Config{Metadata: map[string]any{"a": 1, "b": 2}}
 	out := applyRunOptions(base, &RunOptions{Metadata: map[string]any{"b": 99, "c": 3}})
 
 	want := map[string]any{"a": 1, "b": 99, "c": 3}
-	if !reflect.DeepEqual(out.metadata, want) {
-		t.Fatalf("Metadata merge: got %v, want %v", out.metadata, want)
+	if !reflect.DeepEqual(out.Metadata, want) {
+		t.Fatalf("Metadata merge: got %v, want %v", out.Metadata, want)
 	}
 	// Base must not be mutated
-	if !reflect.DeepEqual(base.metadata, map[string]any{"a": 1, "b": 2}) {
-		t.Fatalf("Metadata merge: base mutated to %v", base.metadata)
+	if !reflect.DeepEqual(base.Metadata, map[string]any{"a": 1, "b": 2}) {
+		t.Fatalf("Metadata merge: base mutated to %v", base.Metadata)
 	}
 }
 
 func TestWithMetadata(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithMetadata(map[string]any{"key1": "v1", "key2": 2})})
-	if cfg.metadata["key1"] != "v1" || cfg.metadata["key2"] != 2 {
-		t.Fatalf("WithMetadata: cfg.metadata = %v, want {key1:v1, key2:2}", cfg.metadata)
+	if cfg.Metadata["key1"] != "v1" || cfg.Metadata["key2"] != 2 {
+		t.Fatalf("WithMetadata: cfg.Metadata = %v, want {key1:v1, key2:2}", cfg.Metadata)
 	}
 }
 
@@ -142,15 +143,15 @@ func TestRunOptions_MemoryOverride_PerCall(t *testing.T) {
 		Store: overrideStore,
 	})
 
-	a := NewLLMAgent("a", "d", &capturedRequestProvider{},
+	a := New("a", "d", &capturedRequestProvider{},
 		WithMemory(memory.WithStore(defaultStore)),
 	)
 
-	_, err := a.ExecuteWith(context.Background(),
+	_, err := a.Execute(context.Background(),
 		AgentTask{Input: "hello tenant", ThreadID: "tenant-acme"},
-		&RunOptions{Memory: overrideMem})
+		WithOverrides(&RunOptions{Memory: overrideMem}))
 	if err != nil {
-		t.Fatalf("ExecuteWith: %v", err)
+		t.Fatalf("Execute(WithOverrides): %v", err)
 	}
 
 	// Wait for background persist goroutines to complete.
@@ -195,11 +196,11 @@ func TestRunOptions_LimitsOverride(t *testing.T) {
 	base := BuildConfig([]AgentOption{WithLimits(Limits{MaxIter: 25, MaxAttachmentBytes: 1000})})
 	override := &Limits{MaxIter: 5, MaxAttachmentBytes: 2000}
 	eff := applyRunOptions(base, &RunOptions{Limits: override})
-	if eff.maxIter != 5 {
-		t.Fatalf("MaxIter not overridden: got %d", eff.maxIter)
+	if eff.MaxIter != 5 {
+		t.Fatalf("MaxIter not overridden: got %d", eff.MaxIter)
 	}
-	if eff.maxAttachmentBytes != 2000 {
-		t.Fatalf("MaxAttachmentBytes not overridden: got %d", eff.maxAttachmentBytes)
+	if eff.MaxAttachmentBytes != 2000 {
+		t.Fatalf("MaxAttachmentBytes not overridden: got %d", eff.MaxAttachmentBytes)
 	}
 }
 
@@ -210,8 +211,8 @@ func TestRunOptions_LimitsZeroFieldKeepsBase(t *testing.T) {
 	base := BuildConfig([]AgentOption{WithLimits(Limits{MaxIter: 25, MaxAttachmentBytes: 1000})})
 	// Override only MaxIter; MaxAttachmentBytes stays at base 1000.
 	eff := applyRunOptions(base, &RunOptions{Limits: &Limits{MaxIter: 5}})
-	if eff.maxIter != 5 || eff.maxAttachmentBytes != 1000 {
-		t.Fatalf("partial override broken: maxIter=%d maxAttachmentBytes=%d", eff.maxIter, eff.maxAttachmentBytes)
+	if eff.MaxIter != 5 || eff.MaxAttachmentBytes != 1000 {
+		t.Fatalf("partial override broken: MaxIter=%d MaxAttachmentBytes=%d", eff.MaxIter, eff.MaxAttachmentBytes)
 	}
 }
 

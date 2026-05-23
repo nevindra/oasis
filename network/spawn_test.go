@@ -79,7 +79,7 @@ func TestNetworkSpawnAgent(t *testing.T) {
 		},
 	}
 
-	net := NewNetwork("net", "test network", provider,
+	net := New("net", "test network", provider,
 		agent.WithSubAgentSpawning(),
 	)
 
@@ -129,8 +129,8 @@ func TestNetworkSpawnAgentStripsAgentTools(t *testing.T) {
 		},
 	}
 
-	worker := agent.NewLLMAgent("worker_agent", "does work", sharedProvider)
-	network := NewNetwork("net", "routes work", sharedProvider,
+	worker := agent.New("worker_agent", "does work", sharedProvider)
+	network := New("net", "routes work", sharedProvider,
 		agent.WithAgents(worker),
 		agent.WithTools(mockTool{}),
 		agent.WithSubAgentSpawning(),

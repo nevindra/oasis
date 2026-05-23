@@ -48,9 +48,9 @@ func TestReadFullResultUnknownID(t *testing.T) {
 		t.Fatalf("expected Go error to be propagated for unknown id, got nil")
 	}
 	if result.Error == "" {
-		t.Error("expected non-empty ToolResult.Error for unknown id")
+		t.Error("expected non-empty core.ToolResult.Error for unknown id")
 	}
 	if !strings.Contains(result.Error, "not found or expired") {
-		t.Errorf("unexpected ToolResult.Error: %q", result.Error)
+		t.Errorf("unexpected core.ToolResult.Error: %q", result.Error)
 	}
 }

@@ -8,16 +8,16 @@ import (
 	"github.com/nevindra/oasis/network"
 )
 
-// ExampleNewNetwork shows how to create a Network that routes tasks
+// ExampleNew shows how to create a Network that routes tasks
 // to multiple subagents via an LLM router provider.
-func ExampleNewNetwork() {
+func ExampleNew() {
 	// Create specialized subagents
 	var routerProvider core.Provider // typically: gemini.NewProvider(...) or similar
-	searchAgent := agent.NewLLMAgent("search", "Searches the web", routerProvider)
-	summarizeAgent := agent.NewLLMAgent("summarize", "Summarizes text", routerProvider)
+	searchAgent := agent.New("search", "Searches the web", routerProvider)
+	summarizeAgent := agent.New("summarize", "Summarizes text", routerProvider)
 
 	// Create the network — routerProvider drives routing decisions
-	net := network.NewNetwork("coordinator", "Coordinates search and summarization",
+	net := network.New("coordinator", "Coordinates search and summarization",
 		routerProvider, agent.WithAgents(searchAgent, summarizeAgent))
 
 	// Execute a task

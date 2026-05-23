@@ -45,14 +45,14 @@ func TestWithToolMiddleware_WrapsRegisteredTools(t *testing.T) {
 		return &mwWrapper{inner: inner, hit: &wrapperCalled}
 	}
 
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: &called}),
 		WithToolMiddleware(mw),
 	)
 
 	// Execute the registered tool via the registry — same code path the
 	// loop uses (a.tools.Execute -> ToolRegistry.Execute -> wrapped tool).
-	result, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	result, err := ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("tools.Execute err = %v", err)
 	}
@@ -69,10 +69,10 @@ func TestWithToolMiddleware_WrapsRegisteredTools(t *testing.T) {
 
 func TestWithToolMiddleware_NoMiddlewareIsNoop(t *testing.T) {
 	called := false
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: &called}),
 	)
-	_, execErr := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	_, execErr := ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 	if execErr != nil {
 		t.Fatalf("tools.Execute err = %v", execErr)
 	}
@@ -142,17 +142,17 @@ type spanCaptureTracer struct {
 
 type capturedSpan struct {
 	name  string
-	attrs []SpanAttr
+	attrs []core.SpanAttr
 }
 
 type capturedSpanRef struct{ parent *spanCaptureTracer }
 
-func (s *capturedSpanRef) SetAttr(attrs ...SpanAttr)          {}
-func (s *capturedSpanRef) Event(name string, attrs ...SpanAttr) {}
+func (s *capturedSpanRef) SetAttr(attrs ...core.SpanAttr)          {}
+func (s *capturedSpanRef) Event(name string, attrs ...core.SpanAttr) {}
 func (s *capturedSpanRef) Error(err error)                    {}
 func (s *capturedSpanRef) End()                               {}
 
-func (t *spanCaptureTracer) Start(ctx context.Context, name string, attrs ...SpanAttr) (context.Context, Span) {
+func (t *spanCaptureTracer) Start(ctx context.Context, name string, attrs ...core.SpanAttr) (context.Context, core.Span) {
 	t.mu.Lock()
 	t.spans = append(t.spans, capturedSpan{name: name, attrs: attrs})
 	t.mu.Unlock()
@@ -185,12 +185,12 @@ func TestOTelSpanMiddleware_EmitsSpanPerCall(t *testing.T) {
 func TestOTelSpanMiddleware_AutoApplied(t *testing.T) {
 	tracer := &spanCaptureTracer{}
 	called := new(bool)
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: called}),
 		WithTracer(tracer),
 	)
 
-	_, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	_, err := ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("tools.Execute err = %v", err)
 	}
@@ -202,11 +202,11 @@ func TestOTelSpanMiddleware_AutoApplied(t *testing.T) {
 
 func TestOTelSpanMiddleware_NotAutoAppliedWithoutTracer(t *testing.T) {
 	called := new(bool)
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: called}),
 	)
 	// No tracer → no OTel wrapper → tool runs normally without spans.
-	_, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	_, err := ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("tools.Execute err = %v", err)
 	}
@@ -218,12 +218,12 @@ func TestOTelSpanMiddleware_NotAutoAppliedWithoutTracer(t *testing.T) {
 func TestOTelSpanMiddleware_UserExplicitNotDoubleWrapped(t *testing.T) {
 	tracer := &spanCaptureTracer{}
 	called := new(bool)
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: called}),
 		WithTracer(tracer),
 		WithToolMiddleware(OTelSpanMiddleware(tracer)),
 	)
-	_, _ = ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	_, _ = ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 	// Only one span per tool call — auto-application must detect and skip.
 	if tracer.count() != 1 {
 		t.Errorf("spans = %d, want exactly 1 (auto-application must skip when user already provided)", tracer.count())

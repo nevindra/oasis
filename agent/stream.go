@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // The StreamEvent struct, StreamEventType, and Event* constants live in
 // github.com/nevindra/oasis/core and are re-exported as aliases in
 // types_aliases.go. The helpers below (ServeSSE, WriteSSEEvent) stay at root
-// because they depend on the StreamingAgent / AgentResult / AgentTask
+// because they depend on the Agent / AgentResult / AgentTask
 // abstractions that haven't moved out of the root package yet.
 
 // ServeSSE streams an agent's response as Server-Sent Events over HTTP.
@@ -33,7 +35,7 @@ import (
 //
 // Client disconnection propagates via ctx cancellation to the agent.
 // Callers typically pass r.Context() as ctx.
-func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, task AgentTask) (AgentResult, error) {
+func ServeSSE(ctx context.Context, w http.ResponseWriter, agent core.Agent, task AgentTask) (AgentResult, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -44,7 +46,7 @@ func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, 
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch := make(chan StreamEvent, 64)
+	ch := make(chan core.StreamEvent, 64)
 	safeClose := onceClose(ch)
 
 	type execResult struct {
@@ -65,7 +67,7 @@ func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, 
 				return
 			}
 		}()
-		r, err := agent.ExecuteStream(ctx, task, ch)
+		r, err := agent.Execute(ctx, task, core.WithStream(ch))
 		resultCh <- execResult{r, err}
 	}()
 
@@ -99,10 +101,10 @@ func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, 
 // the SSE data field, and flushes immediately. eventType is the SSE event
 // name (e.g. "text-delta", "done").
 //
-// Use this to compose custom SSE loops with [StreamingAgent.ExecuteStream]:
+// Use this to compose custom SSE loops with [core.Agent.Execute]:
 //
 //	ch := make(chan oasis.StreamEvent, 64)
-//	go agent.ExecuteStream(ctx, task, ch)
+//	go agent.Execute(ctx, task, core.WithStream(ch))
 //	for ev := range ch {
 //	    oasis.WriteSSEEvent(w, string(ev.Type), ev)
 //	}

@@ -51,7 +51,7 @@ func TestIterationSpanCreated(t *testing.T) {
 		close(ch)
 		return core.ChatResponse{Content: "ok", FinishReason: core.FinishStop}, nil
 	})
-	a := NewLLMAgent("t", "test", provider, WithTracer(tracer))
+	a := New("t", "test", provider, WithTracer(tracer))
 	_, _ = a.Execute(context.Background(), AgentTask{Input: "x"})
 
 	names := tracer.names()
@@ -77,7 +77,7 @@ func TestLLMGenerateSpanCreated(t *testing.T) {
 		close(ch)
 		return core.ChatResponse{Content: "ok", FinishReason: core.FinishStop}, nil
 	})
-	a := NewLLMAgent("t", "test", provider, WithTracer(tracer))
+	a := New("t", "test", provider, WithTracer(tracer))
 	_, _ = a.Execute(context.Background(), AgentTask{Input: "x"})
 
 	names := tracer.names()

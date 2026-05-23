@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
+	"github.com/nevindra/oasis/processor"
 	"github.com/nevindra/oasis/workflow"
 )
 
@@ -21,7 +23,7 @@ type suspendingProcessor struct {
 	payload     json.RawMessage
 }
 
-func (p *suspendingProcessor) PostLLM(_ context.Context, resp *ChatResponse) error {
+func (p *suspendingProcessor) PostLLM(_ context.Context, resp *core.ChatResponse) error {
 	for _, tc := range resp.ToolCalls {
 		if tc.Name == p.triggerTool {
 			return Suspend(p.payload)
@@ -35,7 +37,7 @@ type suspendingPreProcessor struct {
 	payload json.RawMessage
 }
 
-func (p *suspendingPreProcessor) PreLLM(_ context.Context, _ *ChatRequest) error {
+func (p *suspendingPreProcessor) PreLLM(_ context.Context, _ *core.ChatRequest) error {
 	return Suspend(p.payload)
 }
 
@@ -45,7 +47,7 @@ type suspendingPostToolProcessor struct {
 	payload     json.RawMessage
 }
 
-func (p *suspendingPostToolProcessor) PostTool(_ context.Context, call ToolCall, _ *ToolResult) error {
+func (p *suspendingPostToolProcessor) PostTool(_ context.Context, call core.ToolCall, _ *core.ToolResult) error {
 	if call.Name == p.triggerTool {
 		return Suspend(p.payload)
 	}
@@ -55,7 +57,7 @@ func (p *suspendingPostToolProcessor) PostTool(_ context.Context, call ToolCall,
 // suspendProcessor is a PostProcessor that returns Suspend on every call.
 type suspendProcessor struct{}
 
-func (suspendProcessor) PostLLM(_ context.Context, _ *ChatResponse) error {
+func (suspendProcessor) PostLLM(_ context.Context, _ *core.ChatResponse) error {
 	return Suspend(json.RawMessage(`{"action":"approve"}`))
 }
 
@@ -63,25 +65,25 @@ func (suspendProcessor) PostLLM(_ context.Context, _ *ChatResponse) error {
 
 func TestRunLoopPostProcessorSuspend(t *testing.T) {
 	provider := &mockProvider{
-		responses: []ChatResponse{
-			{Content: "", ToolCalls: []ToolCall{{ID: "1", Name: "dangerous_action", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{Content: "", ToolCalls: []core.ToolCall{{ID: "1", Name: "dangerous_action", Args: json.RawMessage(`{}`)}}},
 		},
 	}
 
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	chain.AddPost(&suspendingProcessor{
 		triggerTool: "dangerous_action",
 		payload:     json.RawMessage(`{"action": "approve_dangerous_action"}`),
 	})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		tools:      []ToolDefinition{{Name: "dangerous_action", Description: "test"}},
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
+		Name:       "test",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "dangerous_action", Description: "test"}},
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, tc core.ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
@@ -100,28 +102,28 @@ func TestRunLoopPostProcessorSuspend(t *testing.T) {
 
 func TestRunLoopSuspendResume(t *testing.T) {
 	provider := &mockProvider{
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// First call: LLM wants to call dangerous tool.
-			{Content: "", ToolCalls: []ToolCall{{ID: "1", Name: "delete", Args: json.RawMessage(`{}`)}}},
+			{Content: "", ToolCalls: []core.ToolCall{{ID: "1", Name: "delete", Args: json.RawMessage(`{}`)}}},
 			// After resume: LLM sees human input and responds.
 			{Content: "Action completed with approval"},
 		},
 	}
 
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	chain.AddPost(&suspendingProcessor{
 		triggerTool: "delete",
 		payload:     json.RawMessage(`{"confirm": "delete?"}`),
 	})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		tools:      []ToolDefinition{{Name: "delete", Description: "test"}},
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "deleted"} },
+		Name:       "test",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "delete", Description: "test"}},
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, tc core.ToolCall) DispatchResult { return DispatchResult{Content: "deleted"} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "delete item"}, nil)
@@ -142,25 +144,25 @@ func TestRunLoopSuspendResume(t *testing.T) {
 
 func TestRunLoopSuspendClosesStreamChannel(t *testing.T) {
 	provider := &mockProvider{
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "danger", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "danger", Args: json.RawMessage(`{}`)}}},
 		},
 	}
 
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	chain.AddPost(&suspendingProcessor{triggerTool: "danger", payload: json.RawMessage(`{}`)})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		tools:      []ToolDefinition{{Name: "danger", Description: "test"}},
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
+		Name:       "test",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "danger", Description: "test"}},
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, tc core.ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
 	}
 
-	ch := make(chan StreamEvent, 10)
+	ch := make(chan core.StreamEvent, 10)
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, ch)
 
 	var suspended *ErrSuspended
@@ -175,22 +177,22 @@ func TestRunLoopSuspendClosesStreamChannel(t *testing.T) {
 
 func TestRunLoopPreProcessorSuspend(t *testing.T) {
 	provider := &mockProvider{
-		responses: []ChatResponse{{Content: "should not reach"}},
+		responses: []core.ChatResponse{{Content: "should not reach"}},
 	}
 
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	chain.AddPre(&suspendingPreProcessor{
 		payload: json.RawMessage(`{"gate": "pre"}`),
 	})
 
 	cfg := LoopConfig{
-		name:       "test-pre",
-		provider:   provider,
-		tools:      []ToolDefinition{{Name: "some_tool", Description: "test"}},
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
+		Name:       "test-pre",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "some_tool", Description: "test"}},
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, tc core.ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
@@ -209,25 +211,25 @@ func TestRunLoopPreProcessorSuspend(t *testing.T) {
 
 func TestRunLoopPostToolProcessorSuspend(t *testing.T) {
 	provider := &mockProvider{
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "risky_tool", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "risky_tool", Args: json.RawMessage(`{}`)}}},
 		},
 	}
 
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	chain.AddPostTool(&suspendingPostToolProcessor{
 		triggerTool: "risky_tool",
 		payload:     json.RawMessage(`{"gate": "post_tool"}`),
 	})
 
 	cfg := LoopConfig{
-		name:       "test-posttool",
-		provider:   provider,
-		tools:      []ToolDefinition{{Name: "risky_tool", Description: "test"}},
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, tc ToolCall) DispatchResult { return DispatchResult{Content: "executed"} },
+		Name:       "test-posttool",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "risky_tool", Description: "test"}},
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, tc core.ToolCall) DispatchResult { return DispatchResult{Content: "executed"} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
@@ -330,14 +332,14 @@ func TestSuspendBudgetExceeded(t *testing.T) {
 	// the PostProcessor hook each time. The processor suspends every time.
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			{Content: "response1"},
 			{Content: "response2"},
 			{Content: "response3"},
 		},
 	}
 
-	agent := NewLLMAgent("suspender", "Suspends a lot", provider,
+	agent := New("suspender", "Suspends a lot", provider,
 		WithPostProcessors(suspendProcessor{}),
 		WithLimits(Limits{MaxSuspendSnapshots: 2, MaxSuspendBytes: 1 << 30}), // max 2 snapshots, generous byte limit
 	)
@@ -486,11 +488,11 @@ func TestSuspendSnapshotIsolation(t *testing.T) {
 	// We test this by constructing the scenario checkSuspendLoop handles:
 	// deep-copying messages with ToolCalls, Args, Metadata, and Attachments.
 
-	original := []ChatMessage{
+	original := []core.ChatMessage{
 		{
 			Role:    "assistant",
 			Content: "call tool",
-			ToolCalls: []ToolCall{
+			ToolCalls: []core.ToolCall{
 				{ID: "1", Name: "search", Args: json.RawMessage(`{"q":"test"}`)},
 			},
 			Metadata: json.RawMessage(`{"trace":"abc"}`),
@@ -498,18 +500,18 @@ func TestSuspendSnapshotIsolation(t *testing.T) {
 		{
 			Role:    "tool",
 			Content: "result data",
-			Attachments: []Attachment{
+			Attachments: []core.Attachment{
 				{MimeType: "image/png", Data: []byte{0xFF, 0xD8}},
 			},
 		},
 	}
 
 	// Simulate the deep-copy logic from checkSuspendLoop.
-	snapshot := make([]ChatMessage, len(original))
+	snapshot := make([]core.ChatMessage, len(original))
 	for i, m := range original {
 		snapshot[i] = m
 		if len(m.ToolCalls) > 0 {
-			snapshot[i].ToolCalls = make([]ToolCall, len(m.ToolCalls))
+			snapshot[i].ToolCalls = make([]core.ToolCall, len(m.ToolCalls))
 			for j, tc := range m.ToolCalls {
 				snapshot[i].ToolCalls[j] = tc
 				if len(tc.Args) > 0 {
@@ -519,7 +521,7 @@ func TestSuspendSnapshotIsolation(t *testing.T) {
 			}
 		}
 		if len(m.Attachments) > 0 {
-			snapshot[i].Attachments = make([]Attachment, len(m.Attachments))
+			snapshot[i].Attachments = make([]core.Attachment, len(m.Attachments))
 			copy(snapshot[i].Attachments, m.Attachments)
 		}
 		if len(m.Metadata) > 0 {
@@ -533,7 +535,7 @@ func TestSuspendSnapshotIsolation(t *testing.T) {
 	original[0].ToolCalls[0].Args = json.RawMessage(`{"q":"MUTATED"}`)
 	original[0].Metadata = json.RawMessage(`{"trace":"MUTATED"}`)
 	original[1].Content = "MUTATED RESULT"
-	original[1].Attachments = append(original[1].Attachments, Attachment{MimeType: "text/plain"})
+	original[1].Attachments = append(original[1].Attachments, core.Attachment{MimeType: "text/plain"})
 
 	// Verify snapshot is unaffected.
 	if snapshot[0].Content != "call tool" {
@@ -634,12 +636,12 @@ func TestResumeDataNilContext(t *testing.T) {
 // --- estimateSnapshotSize tests ---
 
 func TestEstimateSnapshotSize(t *testing.T) {
-	messages := []ChatMessage{
+	messages := []core.ChatMessage{
 		{Content: "hello"},                             // 5 bytes
 		{Content: "world", Metadata: json.RawMessage(`{"k":"v"}`)}, // 5 + 9 = 14
 		{
 			Content: "",
-			ToolCalls: []ToolCall{
+			ToolCalls: []core.ToolCall{
 				{Args: json.RawMessage(`{"a":1}`), Metadata: json.RawMessage(`{"b":2}`)}, // 7 + 7 = 14
 			},
 		},

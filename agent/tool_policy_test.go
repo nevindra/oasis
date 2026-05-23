@@ -16,9 +16,9 @@ import (
 
 func TestRunWithPolicy_SuccessFirstAttempt(t *testing.T) {
 	calls := 0
-	res, err := runWithPolicy(context.Background(), core.ToolPolicy{Retries: 3}, func(_ context.Context) (ToolResult, error) {
+	res, err := runWithPolicy(context.Background(), core.ToolPolicy{Retries: 3}, func(_ context.Context) (core.ToolResult, error) {
 		calls++
-		return ToolResult{Content: []byte(`"ok"`)}, nil
+		return core.ToolResult{Content: []byte(`"ok"`)}, nil
 	})
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
@@ -34,12 +34,12 @@ func TestRunWithPolicy_SuccessFirstAttempt(t *testing.T) {
 func TestRunWithPolicy_RetriesUntilSuccess(t *testing.T) {
 	var calls int32
 	res, err := runWithPolicy(context.Background(), core.ToolPolicy{Retries: 3, RetryDelay: 1 * time.Millisecond},
-		func(_ context.Context) (ToolResult, error) {
+		func(_ context.Context) (core.ToolResult, error) {
 			n := atomic.AddInt32(&calls, 1)
 			if n < 3 {
-				return ToolResult{}, core.RetryableError(errors.New("transient"))
+				return core.ToolResult{}, core.RetryableError(errors.New("transient"))
 			}
-			return ToolResult{Content: []byte(`"finally"`)}, nil
+			return core.ToolResult{Content: []byte(`"finally"`)}, nil
 		})
 	if err != nil {
 		t.Fatalf("err = %v, want nil after retries", err)
@@ -56,9 +56,9 @@ func TestRunWithPolicy_NonRetryableErrorReturnsImmediately(t *testing.T) {
 	var calls int32
 	plain := errors.New("not retryable")
 	_, err := runWithPolicy(context.Background(), core.ToolPolicy{Retries: 5, RetryDelay: 1 * time.Millisecond},
-		func(_ context.Context) (ToolResult, error) {
+		func(_ context.Context) (core.ToolResult, error) {
 			atomic.AddInt32(&calls, 1)
-			return ToolResult{}, plain
+			return core.ToolResult{}, plain
 		})
 	if !errors.Is(err, plain) {
 		t.Errorf("err = %v, want plain error", err)
@@ -71,9 +71,9 @@ func TestRunWithPolicy_NonRetryableErrorReturnsImmediately(t *testing.T) {
 func TestRunWithPolicy_ExhaustsRetries(t *testing.T) {
 	var calls int32
 	_, err := runWithPolicy(context.Background(), core.ToolPolicy{Retries: 2, RetryDelay: 1 * time.Millisecond},
-		func(_ context.Context) (ToolResult, error) {
+		func(_ context.Context) (core.ToolResult, error) {
 			atomic.AddInt32(&calls, 1)
-			return ToolResult{}, core.RetryableError(errors.New("always fails"))
+			return core.ToolResult{}, core.RetryableError(errors.New("always fails"))
 		})
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
@@ -86,13 +86,13 @@ func TestRunWithPolicy_ExhaustsRetries(t *testing.T) {
 func TestRunWithPolicy_TimeoutFires(t *testing.T) {
 	var calls int32
 	_, err := runWithPolicy(context.Background(), core.ToolPolicy{Timeout: 20 * time.Millisecond, Retries: 1, RetryDelay: 1 * time.Millisecond},
-		func(ctx context.Context) (ToolResult, error) {
+		func(ctx context.Context) (core.ToolResult, error) {
 			atomic.AddInt32(&calls, 1)
 			select {
 			case <-time.After(200 * time.Millisecond):
-				return ToolResult{}, nil
+				return core.ToolResult{}, nil
 			case <-ctx.Done():
-				return ToolResult{}, ctx.Err()
+				return core.ToolResult{}, ctx.Err()
 			}
 		})
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -111,8 +111,8 @@ func TestRunWithPolicy_ParentCancelAbortsBackoff(t *testing.T) {
 	}()
 	start := time.Now()
 	_, err := runWithPolicy(ctx, core.ToolPolicy{Retries: 5, RetryDelay: 500 * time.Millisecond},
-		func(_ context.Context) (ToolResult, error) {
-			return ToolResult{}, core.RetryableError(errors.New("retry me"))
+		func(_ context.Context) (core.ToolResult, error) {
+			return core.ToolResult{}, core.RetryableError(errors.New("retry me"))
 		})
 	dur := time.Since(start)
 	if !errors.Is(err, context.Canceled) {
@@ -127,9 +127,9 @@ func TestRunWithPolicy_ZeroPolicyIsPassthrough(t *testing.T) {
 	var calls int32
 	plain := errors.New("plain")
 	_, err := runWithPolicy(context.Background(), core.ToolPolicy{},
-		func(_ context.Context) (ToolResult, error) {
+		func(_ context.Context) (core.ToolResult, error) {
 			atomic.AddInt32(&calls, 1)
-			return ToolResult{}, plain
+			return core.ToolResult{}, plain
 		})
 	if !errors.Is(err, plain) {
 		t.Errorf("err = %v, want plain", err)
@@ -139,15 +139,15 @@ func TestRunWithPolicy_ZeroPolicyIsPassthrough(t *testing.T) {
 	}
 }
 
-// --- WithToolPolicy / resolveToolPolicy tests ---
+// --- WithToolPolicy / ResolveToolPolicy tests ---
 
 func TestWithToolPolicy_ExactName(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{
 		WithToolPolicy("foo", core.ToolPolicy{Timeout: 5 * time.Second}),
 	})
-	p, ok := cfg.resolveToolPolicy("foo")
+	p, ok := cfg.ResolveToolPolicy("foo")
 	if !ok || p.Timeout != 5*time.Second {
-		t.Errorf("resolveToolPolicy(foo) = (%v, %v), want (5s, true)", p, ok)
+		t.Errorf("ResolveToolPolicy(foo) = (%v, %v), want (5s, true)", p, ok)
 	}
 }
 
@@ -156,7 +156,7 @@ func TestWithToolPolicy_ExactOverwrites(t *testing.T) {
 		WithToolPolicy("foo", core.ToolPolicy{Timeout: 1 * time.Second}),
 		WithToolPolicy("foo", core.ToolPolicy{Timeout: 9 * time.Second}),
 	})
-	p, _ := cfg.resolveToolPolicy("foo")
+	p, _ := cfg.ResolveToolPolicy("foo")
 	if p.Timeout != 9*time.Second {
 		t.Errorf("Timeout = %v, want 9s (last-wins)", p.Timeout)
 	}
@@ -167,7 +167,7 @@ func TestWithToolPolicyMatch_Ordering(t *testing.T) {
 		WithToolPolicyMatch(func(n string) bool { return strings.HasPrefix(n, "mcp__") }, core.ToolPolicy{Timeout: 1 * time.Second}),
 		WithToolPolicyMatch(func(n string) bool { return strings.HasPrefix(n, "mcp__github") }, core.ToolPolicy{Timeout: 2 * time.Second}),
 	})
-	p, _ := cfg.resolveToolPolicy("mcp__github__issues")
+	p, _ := cfg.ResolveToolPolicy("mcp__github__issues")
 	if p.Timeout != 1*time.Second {
 		t.Errorf("Timeout = %v, want 1s (first-match-wins)", p.Timeout)
 	}
@@ -178,7 +178,7 @@ func TestResolvePolicy_ExactBeatsMatcher(t *testing.T) {
 		WithToolPolicyMatch(func(n string) bool { return true }, core.ToolPolicy{Timeout: 1 * time.Second}),
 		WithToolPolicy("special", core.ToolPolicy{Timeout: 7 * time.Second}),
 	})
-	p, _ := cfg.resolveToolPolicy("special")
+	p, _ := cfg.ResolveToolPolicy("special")
 	if p.Timeout != 7*time.Second {
 		t.Errorf("Timeout = %v, want 7s (exact beats matcher)", p.Timeout)
 	}
@@ -186,7 +186,7 @@ func TestResolvePolicy_ExactBeatsMatcher(t *testing.T) {
 
 func TestResolvePolicy_Unknown(t *testing.T) {
 	cfg := BuildConfig(nil)
-	if _, ok := cfg.resolveToolPolicy("nope"); ok {
+	if _, ok := cfg.ResolveToolPolicy("nope"); ok {
 		t.Error("resolveToolPolicy(nope) = ok=true, want false")
 	}
 }
@@ -197,27 +197,27 @@ func TestResolvePolicy_Unknown(t *testing.T) {
 type policyTestExec struct {
 	calls  int32
 	errFn  func(int32) error
-	result ToolResult
+	result core.ToolResult
 }
 
-func (p *policyTestExec) exec(_ context.Context, _ string, _ json.RawMessage) (ToolResult, error) {
+func (p *policyTestExec) exec(_ context.Context, _ string, _ json.RawMessage) (core.ToolResult, error) {
 	n := atomic.AddInt32(&p.calls, 1)
 	if p.errFn != nil {
 		if err := p.errFn(n); err != nil {
-			return ToolResult{}, err
+			return core.ToolResult{}, err
 		}
 	}
 	return p.result, nil
 }
 
-func (p *policyTestExec) execStream(_ context.Context, _ string, _ json.RawMessage, _ chan<- StreamEvent) (ToolResult, error) {
+func (p *policyTestExec) execStream(_ context.Context, _ string, _ json.RawMessage, _ chan<- core.StreamEvent) (core.ToolResult, error) {
 	atomic.AddInt32(&p.calls, 1)
 	return p.result, nil
 }
 
 func TestNewStandardDispatch_PolicyRetries(t *testing.T) {
 	p := &policyTestExec{
-		result: ToolResult{Content: []byte(`"done"`)},
+		result: core.ToolResult{Content: []byte(`"done"`)},
 		errFn: func(n int32) error {
 			if n < 3 {
 				return core.RetryableError(errors.New("transient"))
@@ -233,7 +233,7 @@ func TestNewStandardDispatch_PolicyRetries(t *testing.T) {
 		},
 	}
 	d := NewStandardDispatch(cfg)
-	dr := d(context.Background(), ToolCall{Name: "myTool", Args: json.RawMessage(`{}`)})
+	dr := d(context.Background(), core.ToolCall{Name: "myTool", Args: json.RawMessage(`{}`)})
 	if dr.IsError {
 		t.Fatalf("expected success after retries, got IsError; Content=%q", dr.Content)
 	}
@@ -243,18 +243,18 @@ func TestNewStandardDispatch_PolicyRetries(t *testing.T) {
 }
 
 func TestNewStandardDispatch_StreamingBypassesPolicy(t *testing.T) {
-	p := &policyTestExec{result: ToolResult{Content: []byte(`"streamed"`)}}
+	p := &policyTestExec{result: core.ToolResult{Content: []byte(`"streamed"`)}}
 	cfg := StandardDispatchConfig{
 		ExecuteTool:       p.exec,
 		ExecuteToolStream: p.execStream,
-		StreamCh:          make(chan StreamEvent, 1),
+		StreamCh:          make(chan core.StreamEvent, 1),
 		IsStreamingTool:   func(string) bool { return true },
 		ResolvePolicy: func(string) (core.ToolPolicy, bool) {
 			return core.ToolPolicy{Retries: 99}, true
 		},
 	}
 	d := NewStandardDispatch(cfg)
-	dr := d(context.Background(), ToolCall{Name: "stream", Args: json.RawMessage(`{}`)})
+	dr := d(context.Background(), core.ToolCall{Name: "stream", Args: json.RawMessage(`{}`)})
 	if dr.IsError {
 		t.Fatalf("unexpected IsError: %q", dr.Content)
 	}
@@ -264,14 +264,14 @@ func TestNewStandardDispatch_StreamingBypassesPolicy(t *testing.T) {
 }
 
 func TestNewStandardDispatch_NoPolicyPassthrough(t *testing.T) {
-	p := &policyTestExec{result: ToolResult{Content: []byte(`"plain"`)}}
+	p := &policyTestExec{result: core.ToolResult{Content: []byte(`"plain"`)}}
 	cfg := StandardDispatchConfig{
 		ExecuteTool:     p.exec,
 		IsStreamingTool: func(string) bool { return false },
 		ResolvePolicy:   func(string) (core.ToolPolicy, bool) { return core.ToolPolicy{}, false },
 	}
 	d := NewStandardDispatch(cfg)
-	dr := d(context.Background(), ToolCall{Name: "plain", Args: nil})
+	dr := d(context.Background(), core.ToolCall{Name: "plain", Args: nil})
 	if dr.IsError {
 		t.Fatalf("unexpected IsError: %q", dr.Content)
 	}

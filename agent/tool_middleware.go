@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/core"
 )
 
@@ -99,65 +100,10 @@ func (w *transformWrapper) ExecuteRaw(ctx context.Context, a json.RawMessage) (c
 // extra attributes) explicitly.
 //
 // When tracer is nil, returns a pass-through middleware.
-func OTelSpanMiddleware(tracer Tracer) core.ToolMiddleware {
-	if tracer == nil {
-		return func(t core.AnyTool) core.AnyTool { return t }
-	}
-	return func(inner core.AnyTool) core.AnyTool {
-		return &otelSpanWrapper{inner: inner, tracer: tracer}
-	}
-}
-
-type otelSpanWrapper struct {
-	inner  core.AnyTool
-	tracer Tracer
-}
-
-func (w *otelSpanWrapper) Name() string                    { return w.inner.Name() }
-func (w *otelSpanWrapper) Definition() core.ToolDefinition { return w.inner.Definition() }
-func (w *otelSpanWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
-	ctx, span := w.tracer.Start(ctx, "tool.execute",
-		StringAttr("tool.name", w.inner.Name()),
-		IntAttr("tool.args_bytes", len(args)),
-	)
-	defer span.End()
-	r, err := w.inner.ExecuteRaw(ctx, args)
-	if err != nil {
-		span.Error(err)
-	}
-	if r.Error != "" {
-		span.SetAttr(StringAttr("tool.error", r.Error))
-	}
-	return r, err
-}
-
-// hasOTelSpanMiddleware reports whether the chain already includes an
-// OTelSpanMiddleware. Used by the auto-wiring path in InitCore to avoid
-// double-spanning.
 //
-// Detection works by applying each middleware to a sentinel AnyTool and
-// checking whether the resulting wrapper is an *otelSpanWrapper. Function
-// values cannot be compared for equality in Go, so type-tagging the wrapper
-// is the only reliable approach.
-func hasOTelSpanMiddleware(mws []core.ToolMiddleware) bool {
-	sentinel := &otelDetectSentinel{}
-	for _, mw := range mws {
-		if mw == nil {
-			continue
-		}
-		wrapped := mw(sentinel)
-		if _, ok := wrapped.(*otelSpanWrapper); ok {
-			return true
-		}
-	}
-	return false
-}
-
-// otelDetectSentinel is a no-op core.AnyTool used only by hasOTelSpanMiddleware.
-type otelDetectSentinel struct{}
-
-func (*otelDetectSentinel) Name() string                    { return "" }
-func (*otelDetectSentinel) Definition() core.ToolDefinition { return core.ToolDefinition{} }
-func (*otelDetectSentinel) ExecuteRaw(context.Context, json.RawMessage) (core.ToolResult, error) {
-	return core.ToolResult{}, nil
+// Delegates to the runtime implementation so that auto-detection via
+// HasOTelSpanMiddleware works correctly regardless of which package's
+// constructor was used.
+func OTelSpanMiddleware(tracer core.Tracer) core.ToolMiddleware {
+	return runtime.OTelSpanMiddleware(tracer)
 }

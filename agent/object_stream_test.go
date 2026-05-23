@@ -27,10 +27,10 @@ func TestObjectDeltaEmitted(t *testing.T) {
 		},
 	})
 
-	a := NewLLMAgent("t", "test", provider, WithResponseSchema(schema))
+	a := New("t", "test", provider, WithResponseSchema(schema))
 
 	ch := make(chan core.StreamEvent, 64)
-	go func() { _, _ = a.ExecuteStream(context.Background(), AgentTask{Input: "x"}, ch) }()
+	go func() { _, _ = a.Execute(context.Background(), AgentTask{Input: "x"}, core.WithStream(ch)) }()
 
 	deltas, finish := 0, 0
 	for ev := range ch {
@@ -66,10 +66,10 @@ func TestElementDeltaForTopLevelArray(t *testing.T) {
 		Items: &core.SchemaObject{Type: "object"},
 	})
 
-	a := NewLLMAgent("t", "test", provider, WithResponseSchema(schema))
+	a := New("t", "test", provider, WithResponseSchema(schema))
 
 	ch := make(chan core.StreamEvent, 64)
-	go func() { _, _ = a.ExecuteStream(context.Background(), AgentTask{Input: "x"}, ch) }()
+	go func() { _, _ = a.Execute(context.Background(), AgentTask{Input: "x"}, core.WithStream(ch)) }()
 
 	elems := 0
 	for ev := range ch {

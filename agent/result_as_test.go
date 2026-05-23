@@ -52,8 +52,8 @@ func TestStreamObjectAsTyped(t *testing.T) {
 		},
 	})
 
-	a := NewLLMAgent("t", "test", provider, WithResponseSchema(schema))
-	stream := StartStream(context.Background(), a, AgentTask{Input: "x"})
+	a := New("t", "test", provider, WithResponseSchema(schema))
+	stream := Subscribe(context.Background(), a, AgentTask{Input: "x"})
 
 	var snapshots []Report
 	for partial := range StreamObjectAs[Report](stream) {

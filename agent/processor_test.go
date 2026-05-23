@@ -16,7 +16,7 @@ import (
 // uppercaseProcessor is a PostProcessor that prefixes the response content.
 type uppercaseProcessor struct{}
 
-func (p *uppercaseProcessor) PostLLM(_ context.Context, resp *ChatResponse) error {
+func (p *uppercaseProcessor) PostLLM(_ context.Context, resp *core.ChatResponse) error {
 	resp.Content = "[modified] " + resp.Content
 	return nil
 }
@@ -24,7 +24,7 @@ func (p *uppercaseProcessor) PostLLM(_ context.Context, resp *ChatResponse) erro
 // redactToolProcessor is a PostToolProcessor that prefixes tool results.
 type redactToolProcessor struct{}
 
-func (p *redactToolProcessor) PostTool(_ context.Context, _ ToolCall, result *ToolResult) error {
+func (p *redactToolProcessor) PostTool(_ context.Context, _ core.ToolCall, result *core.ToolResult) error {
 	result.Content = core.TextContent("[redacted] " + string(result.Content))
 	return nil
 }
@@ -34,16 +34,16 @@ type haltProcessor struct {
 	response string
 }
 
-func (p *haltProcessor) PreLLM(_ context.Context, _ *ChatRequest) error {
-	return &ErrHalt{Response: p.response}
+func (p *haltProcessor) PreLLM(_ context.Context, _ *core.ChatRequest) error {
+	return &core.ErrHalt{Response: p.response}
 }
 
-func (p *haltProcessor) PostLLM(_ context.Context, _ *ChatResponse) error {
-	return &ErrHalt{Response: p.response}
+func (p *haltProcessor) PostLLM(_ context.Context, _ *core.ChatResponse) error {
+	return &core.ErrHalt{Response: p.response}
 }
 
-func (p *haltProcessor) PostTool(_ context.Context, _ ToolCall, _ *ToolResult) error {
-	return &ErrHalt{Response: p.response}
+func (p *haltProcessor) PostTool(_ context.Context, _ core.ToolCall, _ *core.ToolResult) error {
+	return &core.ErrHalt{Response: p.response}
 }
 
 // errors used in defensive assertions below
@@ -52,10 +52,10 @@ var _ = errors.New
 func TestLLMAgentPreProcessorHalt(t *testing.T) {
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "should not reach"}},
+		responses: []core.ChatResponse{{Content: "should not reach"}},
 	}
 
-	agent := NewLLMAgent("guarded", "Guarded agent", provider,
+	agent := New("guarded", "Guarded agent", provider,
 		WithPreProcessors(&haltProcessor{response: "blocked by guardrail"}),
 	)
 
@@ -71,10 +71,10 @@ func TestLLMAgentPreProcessorHalt(t *testing.T) {
 func TestLLMAgentPostProcessorModifies(t *testing.T) {
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "raw response"}},
+		responses: []core.ChatResponse{{Content: "raw response"}},
 	}
 
-	agent := NewLLMAgent("modified", "Modified agent", provider,
+	agent := New("modified", "Modified agent", provider,
 		WithPostProcessors(&uppercaseProcessor{}),
 	)
 
@@ -90,13 +90,13 @@ func TestLLMAgentPostProcessorModifies(t *testing.T) {
 func TestLLMAgentPostToolProcessorModifies(t *testing.T) {
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
 			{Content: "done"},
 		},
 	}
 
-	agent := NewLLMAgent("redacted", "Redacted agent", provider,
+	agent := New("redacted", "Redacted agent", provider,
 		WithTools(mockTool{}),
 		WithPostToolProcessors(&redactToolProcessor{}),
 	)

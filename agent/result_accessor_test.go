@@ -14,7 +14,7 @@ func TestAgentResultFinishReasonNaturalStop(t *testing.T) {
 		close(ch)
 		return core.ChatResponse{Content: "done", FinishReason: core.FinishStop}, nil
 	})
-	a := NewLLMAgent("t", "test", provider)
+	a := New("t", "test", provider)
 	result, err := a.Execute(context.Background(), AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -43,7 +43,7 @@ func TestAgentResultWarningsAndProviderMeta(t *testing.T) {
 			ProviderMeta: json.RawMessage(`{"safety":"ok"}`),
 		}, nil
 	})
-	a := NewLLMAgent("t", "test", provider)
+	a := New("t", "test", provider)
 	result, err := a.Execute(context.Background(), AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -81,7 +81,7 @@ func TestAgentResultWarningsAccumulateAcrossIterations(t *testing.T) {
 	noop := newFnTool("noop", func(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
 		return core.ToolResult{Content: []byte(`"ok"`)}, nil
 	})
-	a := NewLLMAgent("t", "test", provider, WithTools(noop))
+	a := New("t", "test", provider, WithTools(noop))
 	result, err := a.Execute(context.Background(), AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -101,7 +101,7 @@ func TestAgentResultIterationsPopulated(t *testing.T) {
 			FinishReason: core.FinishStop,
 		}, nil
 	})
-	a := NewLLMAgent("t", "test", provider)
+	a := New("t", "test", provider)
 	result, _ := a.Execute(context.Background(), AgentTask{Input: "x"})
 	if len(result.Iterations) != 1 {
 		t.Fatalf("Iterations len = %d, want 1", len(result.Iterations))
@@ -133,11 +133,11 @@ func TestAgentResultFilesAggregated(t *testing.T) {
 		close(ch)
 		return core.ChatResponse{Content: "done", FinishReason: core.FinishStop}, nil
 	})
-	a := NewLLMAgent("t", "test", provider)
+	a := New("t", "test", provider)
 
-	// Use ExecuteStream so the event flows through the full channel path.
+	// Use Execute(WithStream) so the event flows through the full channel path.
 	ch := make(chan core.StreamEvent, 64)
-	result, err := a.ExecuteStream(context.Background(), AgentTask{Input: "x"}, ch)
+	result, err := a.Execute(context.Background(), AgentTask{Input: "x"}, core.WithStream(ch))
 	// Drain the channel so the goroutine doesn't block.
 	for range ch {
 	}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // --- stream forwarder benchmarks ---
@@ -16,12 +18,12 @@ import (
 // buffer-size change confirms the new size is workable; a regression alongside
 // other refactors flags an unintended slowdown in the streaming path.
 func BenchmarkIterChStreaming(b *testing.B) {
-	ev := StreamEvent{Type: EventTextDelta, Content: "delta chunk"}
+	ev := core.StreamEvent{Type: core.EventTextDelta, Content: "delta chunk"}
 	ctx := context.Background()
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
-		dest := make(chan StreamEvent, 256)
+		dest := make(chan core.StreamEvent, 256)
 		iterCh, wait := newStreamForwarder(ctx, dest, defaultIterChBufSize)
 		done := make(chan struct{})
 		go func() {
@@ -42,9 +44,9 @@ func BenchmarkIterChStreaming(b *testing.B) {
 // --- runeCount benchmarks ---
 
 func BenchmarkRuneCount_ASCII(b *testing.B) {
-	msgs := make([]ChatMessage, 20)
+	msgs := make([]core.ChatMessage, 20)
 	for i := range msgs {
-		msgs[i] = ChatMessage{Content: strings.Repeat("hello world ", 100)}
+		msgs[i] = core.ChatMessage{Content: strings.Repeat("hello world ", 100)}
 	}
 	b.ResetTimer()
 	for range b.N {
@@ -53,9 +55,9 @@ func BenchmarkRuneCount_ASCII(b *testing.B) {
 }
 
 func BenchmarkRuneCount_Multibyte(b *testing.B) {
-	msgs := make([]ChatMessage, 20)
+	msgs := make([]core.ChatMessage, 20)
 	for i := range msgs {
-		msgs[i] = ChatMessage{Content: strings.Repeat("日本語テスト ", 100)}
+		msgs[i] = core.ChatMessage{Content: strings.Repeat("日本語テスト ", 100)}
 	}
 	b.ResetTimer()
 	for range b.N {
@@ -99,10 +101,10 @@ func BenchmarkBuildRoutingSummary(b *testing.B) {
 // --- dispatchParallel benchmarks ---
 
 func BenchmarkDispatchParallel_Single(b *testing.B) {
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "ok"}
 	}
-	calls := []ToolCall{{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}}
+	calls := []core.ToolCall{{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}}
 	b.ResetTimer()
 	for range b.N {
 		dispatchParallel(context.Background(), calls, dispatch, 10)
@@ -110,12 +112,12 @@ func BenchmarkDispatchParallel_Single(b *testing.B) {
 }
 
 func BenchmarkDispatchParallel_Five(b *testing.B) {
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "ok"}
 	}
-	calls := make([]ToolCall, 5)
+	calls := make([]core.ToolCall, 5)
 	for i := range calls {
-		calls[i] = ToolCall{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}
+		calls[i] = core.ToolCall{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}
 	}
 	b.ResetTimer()
 	for range b.N {

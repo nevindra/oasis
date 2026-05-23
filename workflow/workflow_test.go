@@ -53,10 +53,10 @@ func TestWorkflowContextAddUsage(t *testing.T) {
 	}
 }
 
-// --- NewWorkflow validation tests ---
+// --- New validation tests ---
 
 func TestNewWorkflowDuplicateStep(t *testing.T) {
-	_, err := NewWorkflow("test", "test",
+	_, err := New("test", "test",
 		Step("a", func(_ context.Context, _ *WorkflowContext) error { return nil }),
 		Step("a", func(_ context.Context, _ *WorkflowContext) error { return nil }),
 	)
@@ -69,7 +69,7 @@ func TestNewWorkflowDuplicateStep(t *testing.T) {
 }
 
 func TestNewWorkflowUnknownDependency(t *testing.T) {
-	_, err := NewWorkflow("test", "test",
+	_, err := New("test", "test",
 		Step("a", func(_ context.Context, _ *WorkflowContext) error { return nil }),
 		Step("b", func(_ context.Context, _ *WorkflowContext) error { return nil }, After("c")),
 	)
@@ -82,7 +82,7 @@ func TestNewWorkflowUnknownDependency(t *testing.T) {
 }
 
 func TestNewWorkflowCycleDetection(t *testing.T) {
-	_, err := NewWorkflow("test", "test",
+	_, err := New("test", "test",
 		Step("a", func(_ context.Context, _ *WorkflowContext) error { return nil }, After("b")),
 		Step("b", func(_ context.Context, _ *WorkflowContext) error { return nil }, After("a")),
 	)
@@ -96,7 +96,7 @@ func TestNewWorkflowCycleDetection(t *testing.T) {
 
 func TestNewWorkflowThreeNodeCycle(t *testing.T) {
 	noop := func(_ context.Context, _ *WorkflowContext) error { return nil }
-	_, err := NewWorkflow("test", "test",
+	_, err := New("test", "test",
 		Step("a", noop, After("c")),
 		Step("b", noop, After("a")),
 		Step("c", noop, After("b")),
@@ -108,7 +108,7 @@ func TestNewWorkflowThreeNodeCycle(t *testing.T) {
 
 func TestNewWorkflowValidGraph(t *testing.T) {
 	noop := func(_ context.Context, _ *WorkflowContext) error { return nil }
-	wf, err := NewWorkflow("test", "test",
+	wf, err := New("test", "test",
 		Step("a", noop),
 		Step("b", noop, After("a")),
 		Step("c", noop, After("a")),
@@ -128,7 +128,7 @@ func TestNewWorkflowValidGraph(t *testing.T) {
 // --- Agent interface compliance ---
 
 func TestWorkflowImplementsAgent(t *testing.T) {
-	wf, err := NewWorkflow("test", "test",
+	wf, err := New("test", "test",
 		Step("a", func(_ context.Context, _ *WorkflowContext) error { return nil }),
 	)
 	if err != nil {
@@ -140,7 +140,7 @@ func TestWorkflowImplementsAgent(t *testing.T) {
 // --- Input propagation ---
 
 func TestWorkflowInputPropagation(t *testing.T) {
-	wf, err := NewWorkflow("input", "input test",
+	wf, err := New("input", "input test",
 		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("a.output", "input was: "+wCtx.Input())
 			return nil
@@ -162,7 +162,7 @@ func TestWorkflowInputPropagation(t *testing.T) {
 // --- Empty workflow ---
 
 func TestWorkflowEmptySteps(t *testing.T) {
-	wf, err := NewWorkflow("empty", "empty workflow")
+	wf, err := New("empty", "empty workflow")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,80 +335,71 @@ func TestWorkflowErrorUnwrap(t *testing.T) {
 	}
 }
 
-// --- ExecuteWith / ExecuteStreamWith tests ---
+// --- Execute overrides-rejected tests ---
 
-func TestWorkflow_ExecuteWith_NilSameAsExecute(t *testing.T) {
-	wf, err := NewWorkflow("test", "test",
+func TestWorkflow_Execute_TwiceGivesSameOutput(t *testing.T) {
+	wf, err := New("test", "test",
 		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("a.output", "result")
 			return nil
 		}),
 	)
 	if err != nil {
-		t.Fatalf("NewWorkflow: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 
 	r1, err := wf.Execute(context.Background(), AgentTask{Input: "x"})
 	if err != nil {
-		t.Fatalf("Execute: %v", err)
+		t.Fatalf("Execute (1st): %v", err)
 	}
-	r2, err := wf.ExecuteWith(context.Background(), AgentTask{Input: "x"}, nil)
+	r2, err := wf.Execute(context.Background(), AgentTask{Input: "x"})
 	if err != nil {
-		t.Fatalf("ExecuteWith(nil): %v", err)
+		t.Fatalf("Execute (2nd): %v", err)
 	}
 	if r1.Output != r2.Output {
-		t.Fatalf("Execute(%q) != ExecuteWith(nil, %q)", r1.Output, r2.Output)
+		t.Fatalf("Execute outputs differ: %q vs %q", r1.Output, r2.Output)
 	}
 }
 
-func TestWorkflow_ExecuteWith_OverridesRejected(t *testing.T) {
-	wf, err := NewWorkflow("test", "test",
+func TestWorkflow_Execute_OverridesRejected(t *testing.T) {
+	wf, err := New("test", "test",
 		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("a.output", "result")
 			return nil
 		}),
 	)
 	if err != nil {
-		t.Fatalf("NewWorkflow: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 
-	// Create a mock optionsWithOverrides that reports HasOverrides=true
-	mockOpts := &mockRunOptions{hasOverrides: true}
-	_, err = wf.ExecuteWith(context.Background(), AgentTask{Input: "x"}, mockOpts)
+	// Inject a non-nil Overrides value directly via a raw RunOption.
+	withStubOverrides := func(c *core.RunConfig) { c.Overrides = "stub" }
+	_, err = wf.Execute(context.Background(), AgentTask{Input: "x"}, withStubOverrides)
 	if err == nil {
-		t.Fatalf("ExecuteWith(overrides): expected error")
+		t.Fatalf("Execute(overrides): expected error")
 	}
 }
 
-func TestWorkflow_ExecuteStreamWith_OverridesRejected(t *testing.T) {
-	wf, err := NewWorkflow("test", "test",
+func TestWorkflow_Execute_StreamOverridesRejected(t *testing.T) {
+	wf, err := New("test", "test",
 		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("a.output", "result")
 			return nil
 		}),
 	)
 	if err != nil {
-		t.Fatalf("NewWorkflow: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 
 	ch := make(chan core.StreamEvent)
-	mockOpts := &mockRunOptions{hasOverrides: true}
-	_, err = wf.ExecuteStreamWith(context.Background(), AgentTask{Input: "x"}, ch, mockOpts)
+	withStubOverrides := func(c *core.RunConfig) { c.Overrides = "stub" }
+	_, err = wf.Execute(context.Background(), AgentTask{Input: "x"}, core.WithStream(ch), withStubOverrides)
 	if err == nil {
-		t.Fatalf("ExecuteStreamWith(overrides): expected error")
+		t.Fatalf("Execute(stream+overrides): expected error")
 	}
-	// Verify channel was closed
+	// Verify channel was closed (Execute closes it when overrides are rejected).
 	_, ok := <-ch
 	if ok {
-		t.Fatalf("ExecuteStreamWith(overrides): expected channel to be closed")
+		t.Fatalf("Execute(stream+overrides): expected channel to be closed")
 	}
-}
-
-// mockRunOptions is a test helper that implements optionsWithOverrides
-type mockRunOptions struct {
-	hasOverrides bool
-}
-
-func (m *mockRunOptions) HasOverrides() bool {
-	return m.hasOverrides
 }

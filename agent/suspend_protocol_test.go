@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
+	"github.com/nevindra/oasis/processor"
 )
 
 // TestUntypedSuspendHasEmptyTag verifies the existing untyped Suspend path
@@ -17,21 +19,21 @@ import (
 // future protocol additions accidentally tagging the untyped path.
 func TestUntypedSuspendHasEmptyTag(t *testing.T) {
 	provider := &mockProvider{
-		responses: []ChatResponse{{Content: "done"}},
+		responses: []core.ChatResponse{{Content: "done"}},
 	}
 
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	chain.AddPre(&suspendingPreProcessor{
 		payload: json.RawMessage(`{"prompt": "ok?"}`),
 	})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
@@ -50,7 +52,7 @@ type formattingProcessor struct {
 	format func(json.RawMessage) string
 }
 
-func (p *formattingProcessor) PostLLM(_ context.Context, _ *ChatResponse) error {
+func (p *formattingProcessor) PostLLM(_ context.Context, _ *core.ChatResponse) error {
 	return &errSuspend{
 		payload: json.RawMessage(`{"q":"approve?"}`),
 		tag:     p.tag,
@@ -61,16 +63,16 @@ func (p *formattingProcessor) PostLLM(_ context.Context, _ *ChatResponse) error 
 // TestSuspendFormatFnInjectsCustomMessage verifies that when errSuspend.format
 // is set, the resume closure uses it instead of the default "Human input: <bytes>".
 func TestSuspendFormatFnInjectsCustomMessage(t *testing.T) {
-	var captured []ChatMessage
+	var captured []core.ChatMessage
 	provider := &mockProvider{
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			{Content: "first"},  // before suspend
 			{Content: "second"}, // after resume — capture happens before this call
 		},
-		onChat: func(req *ChatRequest) { captured = append([]ChatMessage(nil), req.Messages...) },
+		onChat: func(req *core.ChatRequest) { captured = append([]core.ChatMessage(nil), req.Messages...) },
 	}
 
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	chain.AddPost(&formattingProcessor{
 		tag: "approve_v1",
 		format: func(data json.RawMessage) string {
@@ -79,12 +81,12 @@ func TestSuspendFormatFnInjectsCustomMessage(t *testing.T) {
 	})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
@@ -200,17 +202,17 @@ func TestPayloadFromReturnsTypedReq(t *testing.T) {
 	p := NewSuspendProtocol[apReq, apResp]("approve_transfer")
 
 	// Construct an ErrSuspended directly via the engine path.
-	provider := &mockProvider{responses: []ChatResponse{{Content: ""}}}
-	chain := NewProcessorChain()
+	provider := &mockProvider{responses: []core.ChatResponse{{Content: ""}}}
+	chain := processor.NewChain()
 	chain.AddPre(&typedSuspendingPreProcessor[apReq, apResp]{protocol: p, payload: apReq{Amount: 7500}})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
 	var suspended *ErrSuspended
@@ -240,17 +242,17 @@ func TestPayloadFromTagMismatch(t *testing.T) {
 	pB := NewSuspendProtocol[apReq, apResp]("protocol_B")
 
 	// Suspend via A, query via B.
-	provider := &mockProvider{responses: []ChatResponse{{Content: ""}}}
-	chain := NewProcessorChain()
+	provider := &mockProvider{responses: []core.ChatResponse{{Content: ""}}}
+	chain := processor.NewChain()
 	chain.AddPre(&typedSuspendingPreProcessor[apReq, apResp]{protocol: pA, payload: apReq{Amount: 1}})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
 	var suspended *ErrSuspended
@@ -277,24 +279,24 @@ func TestResumeAppliesRenderResume(t *testing.T) {
 			return "Human declined the transfer."
 		})
 
-	var captured []ChatMessage
+	var captured []core.ChatMessage
 	provider := &mockProvider{
-		responses: []ChatResponse{{Content: "first"}, {Content: "second"}},
-		onChat:    func(req *ChatRequest) { captured = append([]ChatMessage(nil), req.Messages...) },
+		responses: []core.ChatResponse{{Content: "first"}, {Content: "second"}},
+		onChat:    func(req *core.ChatRequest) { captured = append([]core.ChatMessage(nil), req.Messages...) },
 	}
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	// Use PostProcessor so the LLM call happens before suspension.
 	// onChat fires on each ChatStream call; captured will contain messages
 	// from the resumed run (second ChatStream call), including the formatted message.
 	chain.AddPost(&typedSuspendingPostProcessor[apReq, apResp]{protocol: p, payload: apReq{Amount: 100}})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
 	var suspended *ErrSuspended
@@ -327,17 +329,17 @@ func TestResumeTagMismatch(t *testing.T) {
 	// Use PostProcessor so that pA.Resume can complete successfully (the LLM
 	// call happens after the PostLLM suspension, so the resumed run reaches
 	// the LLM without re-suspending).
-	provider := &mockProvider{responses: []ChatResponse{{Content: ""}, {Content: "ok"}}}
-	chain := NewProcessorChain()
+	provider := &mockProvider{responses: []core.ChatResponse{{Content: ""}, {Content: "ok"}}}
+	chain := processor.NewChain()
 	chain.AddPost(&typedSuspendingPostProcessor[apReq, apResp]{protocol: pA, payload: apReq{Amount: 1}})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
 	var suspended *ErrSuspended
@@ -366,21 +368,21 @@ func TestResumeTagMismatch(t *testing.T) {
 func TestResumeStreamDeliversEvents(t *testing.T) {
 	p := NewSuspendProtocol[apReq, apResp]("approve_transfer")
 
-	provider := &mockProvider{responses: []ChatResponse{{Content: ""}, {Content: "done"}}}
-	chain := NewProcessorChain()
+	provider := &mockProvider{responses: []core.ChatResponse{{Content: ""}, {Content: "done"}}}
+	chain := processor.NewChain()
 	// Use PostProcessor so the resumed run reaches the LLM and the engine
 	// closes resumeCh after ResumeStream returns.
 	chain.AddPost(&typedSuspendingPostProcessor[apReq, apResp]{protocol: p, payload: apReq{Amount: 1}})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
-	ch := make(chan StreamEvent, 16)
+	ch := make(chan core.StreamEvent, 16)
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, ch)
 	// Drain the initial run's channel (runLoop already closed it).
 	for range ch {
@@ -390,7 +392,7 @@ func TestResumeStreamDeliversEvents(t *testing.T) {
 		t.Fatalf("expected ErrSuspended, got %v", err)
 	}
 
-	resumeCh := make(chan StreamEvent, 16)
+	resumeCh := make(chan core.StreamEvent, 16)
 	_, err = p.ResumeStream(suspended, context.Background(), apResp{Approved: true}, resumeCh)
 	// The PostProcessor fires again after the resumed LLM call, producing
 	// another *ErrSuspended. Accept that as OK — the key assertion is that
@@ -412,7 +414,7 @@ type typedSuspendingPreProcessor[Req, Resp any] struct {
 	payload  Req
 }
 
-func (p *typedSuspendingPreProcessor[Req, Resp]) PreLLM(_ context.Context, _ *ChatRequest) error {
+func (p *typedSuspendingPreProcessor[Req, Resp]) PreLLM(_ context.Context, _ *core.ChatRequest) error {
 	return p.protocol.Suspend(p.payload)
 }
 
@@ -424,24 +426,24 @@ type typedSuspendingPostProcessor[Req, Resp any] struct {
 	payload  Req
 }
 
-func (p *typedSuspendingPostProcessor[Req, Resp]) PostLLM(_ context.Context, _ *ChatResponse) error {
+func (p *typedSuspendingPostProcessor[Req, Resp]) PostLLM(_ context.Context, _ *core.ChatResponse) error {
 	return p.protocol.Suspend(p.payload)
 }
 
 func TestTypedSuspendRespectsTTL(t *testing.T) {
 	p := NewSuspendProtocol[apReq, apResp]("approve_transfer")
 
-	provider := &mockProvider{responses: []ChatResponse{{Content: ""}}}
-	chain := NewProcessorChain()
+	provider := &mockProvider{responses: []core.ChatResponse{{Content: ""}}}
+	chain := processor.NewChain()
 	chain.AddPre(&typedSuspendingPreProcessor[apReq, apResp]{protocol: p, payload: apReq{Amount: 1}})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
 	var suspended *ErrSuspended
@@ -468,20 +470,20 @@ func TestTypedSuspendRespectsBudget(t *testing.T) {
 	var count, bytesUsed int64
 	var mu sync.Mutex
 
-	provider := &mockProvider{responses: []ChatResponse{{Content: ""}, {Content: ""}, {Content: ""}}}
-	chain := NewProcessorChain()
+	provider := &mockProvider{responses: []core.ChatResponse{{Content: ""}, {Content: ""}, {Content: ""}}}
+	chain := processor.NewChain()
 	chain.AddPre(&typedSuspendingPreProcessor[apReq, apResp]{protocol: p, payload: apReq{Amount: 1}})
 
 	cfg := LoopConfig{
-		name:         "test",
-		provider:     provider,
-		processors:   chain,
-		Config:       Config{maxIter: 5, maxSuspendSnapshots: 1},
-		mem:          &memory.AgentMemory{},
-		dispatch:     func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
-		suspendCount: &count,
-		suspendBytes: &bytesUsed,
-		suspendMu:    &mu,
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:       Config{MaxIter: 5, MaxSuspendSnapshots: 1},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
+		SuspendCount: &count,
+		SuspendBytes: &bytesUsed,
+		SuspendMu:    &mu,
 	}
 
 	// First suspend lands inside the budget.
@@ -510,17 +512,17 @@ func TestTypedSuspendRespectsBudget(t *testing.T) {
 // TestPayloadFromOnUntypedSuspend ensures the runtime tag check rejects a
 // query via a protocol when the suspension came from the untyped path.
 func TestPayloadFromOnUntypedSuspend(t *testing.T) {
-	provider := &mockProvider{responses: []ChatResponse{{Content: ""}}}
-	chain := NewProcessorChain()
+	provider := &mockProvider{responses: []core.ChatResponse{{Content: ""}}}
+	chain := processor.NewChain()
 	chain.AddPre(&suspendingPreProcessor{payload: json.RawMessage(`{"Amount": 1}`)})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
 	var suspended *ErrSuspended
@@ -547,22 +549,22 @@ func TestUntypedResumeOnTypedSuspendStillFormats(t *testing.T) {
 	p := NewSuspendProtocol[apReq, apResp]("approve_transfer").
 		WithRenderResume(func(r apResp) string { return "FORMATTED" })
 
-	var captured []ChatMessage
+	var captured []core.ChatMessage
 	provider := &mockProvider{
-		responses: []ChatResponse{{Content: ""}, {Content: ""}},
-		onChat:    func(req *ChatRequest) { captured = append([]ChatMessage(nil), req.Messages...) },
+		responses: []core.ChatResponse{{Content: ""}, {Content: ""}},
+		onChat:    func(req *core.ChatRequest) { captured = append([]core.ChatMessage(nil), req.Messages...) },
 	}
-	chain := NewProcessorChain()
+	chain := processor.NewChain()
 	// Use PostProcessor so the resumed run reaches ChatStream (onChat fires).
 	chain.AddPost(&typedSuspendingPostProcessor[apReq, apResp]{protocol: p, payload: apReq{Amount: 1}})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
 	var suspended *ErrSuspended
@@ -592,18 +594,18 @@ func TestUntypedResumeOnTypedSuspendStillFormats(t *testing.T) {
 func TestResumeIsSingleUse(t *testing.T) {
 	p := NewSuspendProtocol[apReq, apResp]("approve_transfer")
 
-	provider := &mockProvider{responses: []ChatResponse{{Content: ""}, {Content: "done"}}}
-	chain := NewProcessorChain()
+	provider := &mockProvider{responses: []core.ChatResponse{{Content: ""}, {Content: "done"}}}
+	chain := processor.NewChain()
 	// Use PostProcessor: resumed run reaches LLM and returns successfully.
 	chain.AddPost(&typedSuspendingPostProcessor[apReq, apResp]{protocol: p, payload: apReq{Amount: 1}})
 
 	cfg := LoopConfig{
-		name:       "test",
-		provider:   provider,
-		processors: chain,
-		Config:     Config{maxIter: 5},
-		mem:        &memory.AgentMemory{},
-		dispatch:   func(_ context.Context, _ ToolCall) DispatchResult { return DispatchResult{} },
+		Name: "test",
+		Provider: provider,
+		Processors: chain,
+		Config:     Config{MaxIter: 5},
+		Mem: &memory.AgentMemory{},
+		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 	_, err := runLoop(context.Background(), cfg, AgentTask{Input: "go"}, nil)
 	var suspended *ErrSuspended

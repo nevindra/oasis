@@ -23,11 +23,11 @@ type barrierTool struct {
 
 func (b *barrierTool) Name() string { return b.name }
 
-func (b *barrierTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: b.name, Description: "barrier tool"}
+func (b *barrierTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: b.name, Description: "barrier tool"}
 }
 
-func (b *barrierTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (b *barrierTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	b.started <- struct{}{} // signal: I have started
 	<-b.barrier             // wait for release
 	return core.TextResult("done from " + b.name), nil
@@ -39,7 +39,7 @@ func TestLLMAgentParallelToolExecution(t *testing.T) {
 	started := make(chan struct{}, numTools)
 
 	// Create tools that share a barrier
-	var tools []AnyTool
+	var tools []core.AnyTool
 	for i := 0; i < numTools; i++ {
 		tools = append(tools, &barrierTool{
 			name:    fmt.Sprintf("tool_%d", i),
@@ -51,8 +51,8 @@ func TestLLMAgentParallelToolExecution(t *testing.T) {
 	// Provider returns all tool calls at once, then a final response
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{
 				{ID: "1", Name: "tool_0", Args: json.RawMessage(`{}`)},
 				{ID: "2", Name: "tool_1", Args: json.RawMessage(`{}`)},
 				{ID: "3", Name: "tool_2", Args: json.RawMessage(`{}`)},
@@ -61,7 +61,7 @@ func TestLLMAgentParallelToolExecution(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("parallel", "Tests parallel", provider, WithTools(tools...))
+	agent := New("parallel", "Tests parallel", provider, WithTools(tools...))
 
 	done := make(chan struct{})
 	var result AgentResult
@@ -105,8 +105,8 @@ func TestLLMAgentPlanExecution(t *testing.T) {
 	// Provider calls execute_plan with 3 steps, then synthesizes final response
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "execute_plan",
 				Args: json.RawMessage(`{"steps":[
@@ -119,7 +119,7 @@ func TestLLMAgentPlanExecution(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("planner", "Plans tool calls", provider,
+	agent := New("planner", "Plans tool calls", provider,
 		WithTools(mockTool{}),
 		WithPlanExecution(),
 	)
@@ -138,8 +138,8 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 	var capturedResult string
 	captureProvider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "execute_plan",
 				Args: json.RawMessage(`{"steps":[
@@ -151,7 +151,7 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("planner", "Plans", captureProvider,
+	agent := New("planner", "Plans", captureProvider,
 		WithTools(mockTool{}, mockToolCalc{}),
 		WithPlanExecution(),
 	)
@@ -164,8 +164,8 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 
 	// The plan result was fed back as a tool result message.
 	// We can verify the format by calling executePlan directly.
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
-		return DispatchResult{Content: "result_" + tc.Name, Usage: Usage{InputTokens: 10}}
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
+		return DispatchResult{Content: "result_" + tc.Name, Usage: core.Usage{InputTokens: 10}}
 	}
 	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[
 		{"tool":"greet","args":{}},
@@ -193,7 +193,7 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 
 func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 	// Verify that a failed step reports error without aborting other steps
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		if tc.Name == "fail" {
 			return DispatchResult{Content: "error: tool broken", IsError: true}
 		}
@@ -225,7 +225,7 @@ func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 }
 
 func TestLLMAgentPlanExecutionRecursionPrevented(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "should not reach"}
 	}
 
@@ -239,7 +239,7 @@ func TestLLMAgentPlanExecutionRecursionPrevented(t *testing.T) {
 }
 
 func TestLLMAgentPlanExecutionEmptySteps(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "should not reach"}
 	}
 
@@ -250,7 +250,7 @@ func TestLLMAgentPlanExecutionEmptySteps(t *testing.T) {
 }
 
 func TestLLMAgentPlanExecutionInvalidArgs(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "should not reach"}
 	}
 
@@ -264,8 +264,8 @@ func TestLLMAgentPlanExecutionNotEnabledIgnored(t *testing.T) {
 	// When WithPlanExecution is NOT set, execute_plan is treated as unknown tool
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "execute_plan",
 				Args: json.RawMessage(`{"steps":[{"tool":"greet","args":{}}]}`),
@@ -274,7 +274,7 @@ func TestLLMAgentPlanExecutionNotEnabledIgnored(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("nope", "No plan", provider,
+	agent := New("nope", "No plan", provider,
 		WithTools(mockTool{}),
 		// Note: WithPlanExecution() NOT set
 	)
@@ -300,7 +300,7 @@ func TestPlanExecutionMaxStepsCap(t *testing.T) {
 		Steps []json.RawMessage `json:"steps"`
 	}{Steps: steps})
 
-	dispatch := func(_ context.Context, _ ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, _ core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "should not reach"}
 	}
 
@@ -312,7 +312,7 @@ func TestPlanExecutionMaxStepsCap(t *testing.T) {
 
 func TestPlanExecutionBlocksAskUser(t *testing.T) {
 	// ask_user should be blocked from within execute_plan steps.
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		if tc.Name == "ask_user" {
 			return DispatchResult{Content: "error: ask_user cannot be called from within execute_plan", IsError: true}
 		}
@@ -346,7 +346,7 @@ func TestDispatchParallelContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	callCount := 0
-	dispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(ctx context.Context, tc core.ToolCall) DispatchResult {
 		callCount++
 		if tc.Name == "slow" {
 			// Simulate a slow tool — cancel the context and block.
@@ -357,7 +357,7 @@ func TestDispatchParallelContextCancellation(t *testing.T) {
 		return DispatchResult{Content: "fast result"}
 	}
 
-	calls := []ToolCall{
+	calls := []core.ToolCall{
 		{ID: "1", Name: "fast", Args: json.RawMessage(`{}`)},
 		{ID: "2", Name: "slow", Args: json.RawMessage(`{}`)},
 	}
@@ -381,11 +381,11 @@ func TestDispatchParallelContextCancellation(t *testing.T) {
 
 func TestDispatchParallelSingleCallNoGoroutine(t *testing.T) {
 	// Single call should take the fast path (inline, no goroutine).
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "single result"}
 	}
 
-	calls := []ToolCall{{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}}
+	calls := []core.ToolCall{{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}}
 	results := dispatchParallel(context.Background(), calls, dispatch, 10)
 
 	if len(results) != 1 {
@@ -398,14 +398,14 @@ func TestDispatchParallelSingleCallNoGoroutine(t *testing.T) {
 
 func TestDispatchParallelToolPanicRecovery(t *testing.T) {
 	// A tool that panics should be caught by safeDispatch.
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		if tc.Name == "panicker" {
 			panic("tool exploded")
 		}
 		return DispatchResult{Content: "ok"}
 	}
 
-	calls := []ToolCall{
+	calls := []core.ToolCall{
 		{ID: "1", Name: "safe", Args: json.RawMessage(`{}`)},
 		{ID: "2", Name: "panicker", Args: json.RawMessage(`{}`)},
 	}
@@ -444,28 +444,28 @@ func TestToolResultTruncationInLoop(t *testing.T) {
 	// Create a tool that returns a very large result.
 	largeTool := &largeTool{content: bigContent}
 
-	var capturedMessages []ChatMessage
+	var capturedMessages []core.ChatMessage
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "large", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "large", Args: json.RawMessage(`{}`)}}},
 			{Content: "done"},
 		},
 	}
 
 	// Use a callbackProvider to capture the second request's messages.
 	cbProvider := &sequentialCallbackProvider{
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "large", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "large", Args: json.RawMessage(`{}`)}}},
 			{Content: "done"},
 		},
-		onChat: func(req ChatRequest) {
+		onChat: func(req core.ChatRequest) {
 			capturedMessages = req.Messages
 		},
 	}
 	_ = provider // use cbProvider instead
 
-	agent := NewLLMAgent("truncator", "Tests truncation", cbProvider,
+	agent := New("truncator", "Tests truncation", cbProvider,
 		WithTools(largeTool),
 	)
 
@@ -478,7 +478,7 @@ func TestToolResultTruncationInLoop(t *testing.T) {
 	}
 
 	// Find the tool result message in the captured messages.
-	var toolResultMsg *ChatMessage
+	var toolResultMsg *core.ChatMessage
 	for i, m := range capturedMessages {
 		if m.ToolCallID == "1" {
 			toolResultMsg = &capturedMessages[i]
@@ -519,11 +519,11 @@ type largeTool struct {
 }
 
 func (l *largeTool) Name() string { return "large" }
-func (l *largeTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: "large", Description: "Returns large content"}
+func (l *largeTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "large", Description: "Returns large content"}
 }
 
-func (l *largeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (l *largeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult(l.content), nil
 }
 
@@ -559,8 +559,8 @@ func TestTruncateStr(t *testing.T) {
 // --- buildStepTrace tests ---
 
 func TestBuildStepTraceToolCall(t *testing.T) {
-	tc := ToolCall{ID: "1", Name: "web_search", Args: json.RawMessage(`{"query":"test"}`)}
-	res := toolExecResult{content: "found it", usage: Usage{InputTokens: 10}, duration: time.Second}
+	tc := core.ToolCall{ID: "1", Name: "web_search", Args: json.RawMessage(`{"query":"test"}`)}
+	res := toolExecResult{content: "found it", usage: core.Usage{InputTokens: 10}, duration: time.Second}
 
 	trace := buildStepTrace(tc, res)
 
@@ -579,7 +579,7 @@ func TestBuildStepTraceToolCall(t *testing.T) {
 }
 
 func TestBuildStepTraceAgentDelegation(t *testing.T) {
-	tc := ToolCall{ID: "1", Name: "agent_researcher", Args: json.RawMessage(`{"task":"find papers"}`)}
+	tc := core.ToolCall{ID: "1", Name: "agent_researcher", Args: json.RawMessage(`{"task":"find papers"}`)}
 	res := toolExecResult{content: "3 papers found"}
 
 	trace := buildStepTrace(tc, res)
@@ -601,22 +601,22 @@ func TestBuildStepTraceAgentDelegation(t *testing.T) {
 // Pinning this contract lets us safely replace 6 hand-rolled tails with the helper.
 func TestTerminateIteration_PinsContractFields(t *testing.T) {
 	state := &loopState{
-		totalUsage:       Usage{InputTokens: 7, OutputTokens: 11},
+		totalUsage:       core.Usage{InputTokens: 7, OutputTokens: 11},
 		steps:            []StepTrace{{Name: "x"}},
 		lastWarnings:     []string{"w"},
 		lastProviderMeta: json.RawMessage(`{"k":"v"}`),
-		files:            []Attachment{{MimeType: "text/plain"}},
-		iterations:       []IterationTrace{{Iter: 0}},
+		files:            []core.Attachment{{MimeType: "text/plain"}},
+		iterations:       []core.IterationTrace{{Iter: 0}},
 		sources:          []core.Source{{URL: "https://example.test"}},
 		safeCloseCh:      func() {},
 	}
-	cfg := LoopConfig{name: "test", Config: Config{logger: nopLogger}}
+	cfg := LoopConfig{Name: "test", Config: Config{Logger: nopLogger}}
 	extra := AgentResult{SuspendPayload: json.RawMessage(`"x"`), SuspendProtocol: "tag"}
-	res := terminateIteration(context.Background(), cfg, nil, state, FinishSuspended, extra, nil)
+	res := terminateIteration(context.Background(), cfg, nil, state, core.FinishSuspended, extra, nil)
 	if res.outcome != iterDone {
 		t.Fatalf("outcome = %v, want iterDone", res.outcome)
 	}
-	if res.final.FinishReason != FinishSuspended {
+	if res.final.FinishReason != core.FinishSuspended {
 		t.Fatalf("FinishReason = %v, want FinishSuspended", res.final.FinishReason)
 	}
 	if res.final.Usage != state.totalUsage {

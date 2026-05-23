@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync/atomic"
 	"time"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // AgentState represents the execution state of a spawned agent.
@@ -89,7 +91,7 @@ func Spawn(ctx context.Context, agent Agent, task AgentTask, opts ...SpawnOption
 
 	ctx, cancel := context.WithCancel(ctx)
 	h := &AgentHandle{
-		id:     NewID(),
+		id:     core.NewID(),
 		agent:  agent,
 		done:   make(chan struct{}),
 		cancel: cancel,

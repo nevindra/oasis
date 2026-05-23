@@ -12,7 +12,7 @@ import (
 
 func TestToolResultStoreDefaultAutoWired(t *testing.T) {
 	// An agent constructed without WithToolResultStore should have a non-nil store.
-	a := agent.NewLLMAgent("auto", "", &nopProvider{})
+	a := agent.New("auto", "", &nopProvider{})
 	store := agent.AgentToolResultStore(a)
 	if store == nil {
 		t.Fatal("expected non-nil default ToolResultStore; got nil")
@@ -41,7 +41,7 @@ func TestToolResultStoreDefaultAutoWired(t *testing.T) {
 
 func TestToolResultStoreExplicitNilDisables(t *testing.T) {
 	// Passing nil explicitly should disable the store and skip read_full_result.
-	a := agent.NewLLMAgent("disabled", "", &nopProvider{},
+	a := agent.New("disabled", "", &nopProvider{},
 		agent.WithToolResultStore(nil),
 	)
 	store := agent.AgentToolResultStore(a)
@@ -60,7 +60,7 @@ func TestToolResultStoreExplicitNilDisables(t *testing.T) {
 
 func TestToolResultStoreCustomImplementationUsed(t *testing.T) {
 	custom := &trackingStore{}
-	a := agent.NewLLMAgent("custom", "", &nopProvider{},
+	a := agent.New("custom", "", &nopProvider{},
 		agent.WithToolResultStore(custom),
 	)
 	store := agent.AgentToolResultStore(a)

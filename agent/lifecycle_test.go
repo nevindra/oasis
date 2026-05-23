@@ -32,8 +32,8 @@ type fnTool struct {
 }
 
 func (t *fnTool) Name() string { return t.name }
-func (t *fnTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: t.name, Description: t.name}
+func (t *fnTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: t.name, Description: t.name}
 }
 func (t *fnTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
 	return t.fn(ctx, args)
@@ -50,11 +50,11 @@ func TestLifecycleEnvelopeRunStart(t *testing.T) {
 		close(ch)
 		return core.ChatResponse{Content: "ok", FinishReason: core.FinishStop}, nil
 	})
-	a := NewLLMAgent("t", "test", provider)
+	a := New("t", "test", provider)
 
 	ch := make(chan core.StreamEvent, 64)
 	go func() {
-		_, _ = a.ExecuteStream(context.Background(), AgentTask{Input: "hello"}, ch)
+		_, _ = a.Execute(context.Background(), AgentTask{Input: "hello"}, core.WithStream(ch))
 	}()
 
 	got := []core.StreamEventType{}
@@ -105,10 +105,10 @@ func TestLifecycleEnvelopeIterations(t *testing.T) {
 	noop := newFnTool("noop", func(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
 		return core.ToolResult{Content: []byte(`"ok"`)}, nil
 	})
-	a := NewLLMAgent("t", "test", provider, WithTools(noop))
+	a := New("t", "test", provider, WithTools(noop))
 
 	ch := make(chan core.StreamEvent, 64)
-	go func() { _, _ = a.ExecuteStream(context.Background(), AgentTask{Input: "x"}, ch) }()
+	go func() { _, _ = a.Execute(context.Background(), AgentTask{Input: "x"}, core.WithStream(ch)) }()
 
 	starts, finishes := 0, 0
 	for ev := range ch {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // defaultIterChBufSize is the per-iteration StreamEvent forwarder buffer.
@@ -36,11 +38,11 @@ const defaultIterChBufSize = 64
 //
 // When dest is nil (non-streaming Execute path), returns (nil, func(){}) so
 // contextWithStreamSink can safely receive nil and skip sink registration.
-func newFileCapturingSink(ctx context.Context, dest chan<- StreamEvent, state *loopState) (chan StreamEvent, func()) {
+func newFileCapturingSink(ctx context.Context, dest chan<- core.StreamEvent, state *loopState) (chan core.StreamEvent, func()) {
 	if dest == nil {
 		return nil, func() {}
 	}
-	sinkCh := make(chan StreamEvent, defaultIterChBufSize)
+	sinkCh := make(chan core.StreamEvent, defaultIterChBufSize)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -64,8 +66,8 @@ func newFileCapturingSink(ctx context.Context, dest chan<- StreamEvent, state *l
 // newCapturingStreamForwarder is like newStreamForwarder but also captures
 // EventFileAttachment events into state.files. Used for provider streaming paths
 // where the provider may emit EventFileAttachment alongside text deltas.
-func newCapturingStreamForwarder(ctx context.Context, dest chan<- StreamEvent, bufSize int, state *loopState) (chan<- StreamEvent, func()) {
-	iterCh := make(chan StreamEvent, bufSize)
+func newCapturingStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int, state *loopState) (chan<- core.StreamEvent, func()) {
+	iterCh := make(chan core.StreamEvent, bufSize)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -89,18 +91,18 @@ func newCapturingStreamForwarder(ctx context.Context, dest chan<- StreamEvent, b
 // captureFileEvent checks whether ev is an EventFileAttachment and, if so,
 // decodes the file metadata from ev.Content and appends it to state.files.
 // The event Content carries a JSON object: {"name":"...","mime_type":"...","size":N,"url":"..."}.
-func captureFileEvent(ev StreamEvent, state *loopState) {
-	if ev.Type != EventFileAttachment {
+func captureFileEvent(ev core.StreamEvent, state *loopState) {
+	if ev.Type != core.EventFileAttachment {
 		return
 	}
-	var att Attachment
+	var att core.Attachment
 	if err := json.Unmarshal([]byte(ev.Content), &att); err == nil {
 		state.files = append(state.files, att)
 	}
 }
 
-func newStreamForwarder(ctx context.Context, dest chan<- StreamEvent, bufSize int) (chan<- StreamEvent, func()) {
-	iterCh := make(chan StreamEvent, bufSize)
+func newStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int) (chan<- core.StreamEvent, func()) {
+	iterCh := make(chan core.StreamEvent, bufSize)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {

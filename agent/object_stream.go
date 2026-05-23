@@ -19,7 +19,7 @@ import (
 //
 // When dest is nil (non-streaming Execute path), falls back to
 // newCapturingStreamForwarder (which no-ops on nil dest).
-func newObjectStreamForwarder(ctx context.Context, dest chan<- StreamEvent, bufSize int, state *loopState, schema *ResponseSchema) (chan<- StreamEvent, func()) {
+func newObjectStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int, state *loopState, schema *core.ResponseSchema) (chan<- core.StreamEvent, func()) {
 	if dest == nil || schema == nil {
 		return newCapturingStreamForwarder(ctx, dest, bufSize, state)
 	}
@@ -34,7 +34,7 @@ func newObjectStreamForwarder(ctx context.Context, dest chan<- StreamEvent, bufS
 		isArraySchema = probe.Type == "array"
 	}
 
-	iterCh := make(chan StreamEvent, bufSize)
+	iterCh := make(chan core.StreamEvent, bufSize)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -53,7 +53,7 @@ func newObjectStreamForwarder(ctx context.Context, dest chan<- StreamEvent, bufS
 			// Capture file attachments (same as newCapturingStreamForwarder).
 			captureFileEvent(ev, state)
 
-			if ev.Type == EventTextDelta {
+			if ev.Type == core.EventTextDelta {
 				buf = append(buf, ev.Content...)
 
 				if isArraySchema && elemTracker != nil {
@@ -61,7 +61,7 @@ func newObjectStreamForwarder(ctx context.Context, dest chan<- StreamEvent, bufS
 					newElems := elemTracker.feed(buf)
 					for _, elemBytes := range newElems {
 						select {
-						case dest <- StreamEvent{Type: EventElementDelta, Object: elemBytes}:
+						case dest <- core.StreamEvent{Type: core.EventElementDelta, Object: elemBytes}:
 						case <-ctx.Done():
 							// drain and exit
 							for range iterCh {
@@ -75,7 +75,7 @@ func newObjectStreamForwarder(ctx context.Context, dest chan<- StreamEvent, bufS
 				if snap, ok := core.PartialJSON(buf); ok && !bytes.Equal(snap, lastEmit) {
 					lastEmit = append(lastEmit[:0], snap...)
 					select {
-					case dest <- StreamEvent{Type: EventObjectDelta, Object: snap}:
+					case dest <- core.StreamEvent{Type: core.EventObjectDelta, Object: snap}:
 					case <-ctx.Done():
 						for range iterCh {
 						}
@@ -99,7 +99,7 @@ func newObjectStreamForwarder(ctx context.Context, dest chan<- StreamEvent, bufS
 
 // emitObjectFinish emits an EventObjectFinish event and populates result.Object
 // when the schema is configured and resp.Content is valid JSON.
-func emitObjectFinish(ctx context.Context, ch chan<- StreamEvent, schema *ResponseSchema, content string, result *AgentResult) {
+func emitObjectFinish(ctx context.Context, ch chan<- core.StreamEvent, schema *core.ResponseSchema, content string, result *AgentResult) {
 	if ch == nil || schema == nil || len(content) == 0 {
 		return
 	}
@@ -109,7 +109,7 @@ func emitObjectFinish(ctx context.Context, ch chan<- StreamEvent, schema *Respon
 	}
 	result.Object = b
 	select {
-	case ch <- StreamEvent{Type: EventObjectFinish, Object: b}:
+	case ch <- core.StreamEvent{Type: core.EventObjectFinish, Object: b}:
 	case <-ctx.Done():
 	}
 }

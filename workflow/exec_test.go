@@ -16,7 +16,7 @@ import (
 func TestWorkflowSequential(t *testing.T) {
 	var order []string
 
-	wf, err := NewWorkflow("seq", "sequential test",
+	wf, err := New("seq", "sequential test",
 		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
 			order = append(order, "a")
 			wCtx.Set("a.output", "from-a")
@@ -60,7 +60,7 @@ func TestWorkflowSequential(t *testing.T) {
 func TestWorkflowParallel(t *testing.T) {
 	var started atomic.Int32
 
-	wf, err := NewWorkflow("par", "parallel test",
+	wf, err := New("par", "parallel test",
 		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("a.output", "root")
 			return nil
@@ -102,7 +102,7 @@ func TestWorkflowParallel(t *testing.T) {
 // --- Conditional (When) tests ---
 
 func TestWorkflowConditionalBranch(t *testing.T) {
-	wf, err := NewWorkflow("cond", "conditional test",
+	wf, err := New("cond", "conditional test",
 		Step("init", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("type", "digital")
 			return nil
@@ -139,7 +139,7 @@ func TestWorkflowConditionalBranch(t *testing.T) {
 
 func TestWorkflowSkippedByConditionDoesNotCascadeFailure(t *testing.T) {
 	// When a step is skipped by When() condition, its dependents should still run.
-	wf, err := NewWorkflow("cond-cascade", "condition cascade test",
+	wf, err := New("cond-cascade", "condition cascade test",
 		Step("a", func(_ context.Context, _ *WorkflowContext) error { return nil }),
 		Step("b", func(_ context.Context, _ *WorkflowContext) error {
 			return nil
@@ -168,7 +168,7 @@ func TestWorkflowFailFast(t *testing.T) {
 	stepErr := errors.New("step b exploded")
 	cRan := false
 
-	wf, err := NewWorkflow("fail", "fail-fast test",
+	wf, err := New("fail", "fail-fast test",
 		Step("a", func(_ context.Context, _ *WorkflowContext) error { return nil }),
 		Step("b", func(_ context.Context, _ *WorkflowContext) error {
 			return stepErr
@@ -205,7 +205,7 @@ func TestWorkflowFailureCascadesThroughMultipleLevels(t *testing.T) {
 	dRan := false
 	cRan := false
 
-	wf, err := NewWorkflow("cascade", "failure cascade test",
+	wf, err := New("cascade", "failure cascade test",
 		Step("a", func(_ context.Context, _ *WorkflowContext) error { return nil }),
 		Step("b", func(_ context.Context, _ *WorkflowContext) error {
 			return errors.New("b failed")
@@ -242,7 +242,7 @@ func TestWorkflowFailureCascadesThroughMultipleLevels(t *testing.T) {
 func TestWorkflowRetry(t *testing.T) {
 	attempts := 0
 
-	wf, err := NewWorkflow("retry", "retry test",
+	wf, err := New("retry", "retry test",
 		Step("flaky", func(_ context.Context, wCtx *WorkflowContext) error {
 			attempts++
 			if attempts < 3 {
@@ -271,7 +271,7 @@ func TestWorkflowRetry(t *testing.T) {
 func TestWorkflowRetryExhausted(t *testing.T) {
 	attempts := 0
 
-	wf, err := NewWorkflow("retry-fail", "retry exhausted test",
+	wf, err := New("retry-fail", "retry exhausted test",
 		Step("always-fail", func(_ context.Context, _ *WorkflowContext) error {
 			attempts++
 			return errors.New("permanent error")
@@ -295,7 +295,7 @@ func TestWorkflowRetryExhausted(t *testing.T) {
 func TestWorkflowDefaultRetry(t *testing.T) {
 	attempts := 0
 
-	wf, err := NewWorkflow("default-retry", "default retry test",
+	wf, err := New("default-retry", "default retry test",
 		Step("flaky", func(_ context.Context, wCtx *WorkflowContext) error {
 			attempts++
 			if attempts < 2 {
@@ -327,7 +327,7 @@ func TestWorkflowDefaultRetry(t *testing.T) {
 func TestWorkflowOnFinishCallback(t *testing.T) {
 	var callbackResult WorkflowResult
 
-	wf, err := NewWorkflow("callback", "callback test",
+	wf, err := New("callback", "callback test",
 		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("a.output", "done")
 			return nil
@@ -354,7 +354,7 @@ func TestWorkflowOnErrorCallback(t *testing.T) {
 	var errorStep string
 	var errorErr error
 
-	wf, err := NewWorkflow("error-cb", "error callback test",
+	wf, err := New("error-cb", "error callback test",
 		Step("fail", func(_ context.Context, _ *WorkflowContext) error {
 			return errors.New("boom")
 		}),
@@ -378,7 +378,7 @@ func TestWorkflowOnErrorCallback(t *testing.T) {
 }
 
 func TestWorkflowCallbackPanicRecovery(t *testing.T) {
-	wf, err := NewWorkflow("panic-cb", "panic callback test",
+	wf, err := New("panic-cb", "panic callback test",
 		Step("a", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("a.output", "ok")
 			return nil
@@ -412,7 +412,7 @@ func TestWorkflowOutputTo(t *testing.T) {
 		},
 	}
 
-	wf, err := NewWorkflow("output-to", "output-to test",
+	wf, err := New("output-to", "output-to test",
 		AgentStep("a", agent, OutputTo("custom_key")),
 		Step("b", func(_ context.Context, wCtx *WorkflowContext) error {
 			v, ok := wCtx.Get("custom_key")
@@ -442,7 +442,7 @@ func TestWorkflowContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	bRan := false
 
-	wf, err := NewWorkflow("cancel", "cancellation test",
+	wf, err := New("cancel", "cancellation test",
 		Step("a", func(_ context.Context, _ *WorkflowContext) error {
 			cancel() // cancel context during step a
 			return nil
@@ -469,7 +469,7 @@ func TestWorkflowContextCancellation(t *testing.T) {
 func TestWorkflowStepSuspendedEventFires(t *testing.T) {
 	suspendPayload := []byte(`{"reason":"needs_approval"}`)
 
-	wf, err := NewWorkflow("suspend-stream", "step suspended event test",
+	wf, err := New("suspend-stream", "step suspended event test",
 		Step("approval_step", func(_ context.Context, _ *WorkflowContext) error {
 			return Suspend(suspendPayload)
 		}),
@@ -479,14 +479,14 @@ func TestWorkflowStepSuspendedEventFires(t *testing.T) {
 	}
 
 	ch := make(chan core.StreamEvent, 32)
-	_, wfErr := wf.ExecuteStream(context.Background(), AgentTask{Input: "go"}, ch)
+	_, wfErr := wf.Execute(context.Background(), AgentTask{Input: "go"}, core.WithStream(ch))
 
 	var suspended *ErrSuspended
 	if !errors.As(wfErr, &suspended) {
 		t.Fatalf("expected *ErrSuspended, got %v", wfErr)
 	}
 
-	// Collect all events (channel already closed by ExecuteStream).
+	// Collect all events (channel already closed by Execute).
 	var evs []core.StreamEvent
 	for ev := range ch {
 		evs = append(evs, ev)

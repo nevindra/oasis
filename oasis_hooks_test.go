@@ -37,26 +37,21 @@ func TestReExports_AgentOptions(t *testing.T) {
 	var _ oasis.AgentOption = oasis.WithMetadata(nil)
 }
 
-func TestReExports_Interfaces(t *testing.T) {
-	var _ oasis.AgentWithOptions
-	var _ oasis.StreamingAgentWithOptions
-}
+// nopAgent satisfies oasis.Agent with a fixed result.
+type nopAgent struct{}
 
-// nopStreamingAgent satisfies oasis.StreamingAgent with a fixed result.
-type nopStreamingAgent struct{}
-
-func (n *nopStreamingAgent) Name() string        { return "nop" }
-func (n *nopStreamingAgent) Description() string { return "" }
-func (n *nopStreamingAgent) Execute(ctx context.Context, task oasis.AgentTask) (oasis.AgentResult, error) {
-	return oasis.AgentResult{Output: "hi"}, nil
-}
-func (n *nopStreamingAgent) ExecuteStream(ctx context.Context, task oasis.AgentTask, ch chan<- core.StreamEvent) (oasis.AgentResult, error) {
-	close(ch)
+func (n *nopAgent) Name() string        { return "nop" }
+func (n *nopAgent) Description() string { return "" }
+func (n *nopAgent) Execute(_ context.Context, _ oasis.AgentTask, opts ...core.RunOption) (oasis.AgentResult, error) {
+	cfg := core.ApplyRunOptions(opts...)
+	if cfg.Stream != nil {
+		close(cfg.Stream)
+	}
 	return oasis.AgentResult{Output: "hi"}, nil
 }
 
-func TestOasis_StartStream(t *testing.T) {
-	s := oasis.StartStream(context.Background(), &nopStreamingAgent{}, oasis.AgentTask{})
+func TestOasis_Subscribe(t *testing.T) {
+	s := oasis.Subscribe(context.Background(), &nopAgent{}, oasis.AgentTask{})
 	if got := s.Text(); got != "hi" {
 		t.Errorf("Text() = %q, want %q", got, "hi")
 	}

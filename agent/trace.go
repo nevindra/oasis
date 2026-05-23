@@ -4,7 +4,23 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"github.com/nevindra/oasis/core"
 )
+
+// spawnAgentName returns a slug for a spawned sub-agent, used in step traces.
+func spawnAgentName(args spawnAgentArgs) string {
+	if args.Name != "" {
+		return args.Name
+	}
+	name := TruncateStr(args.Task, 20)
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '_'
+	}, name)
+}
 
 // appendStepBounded appends trace to steps, enforcing the max cap. When max <= 0
 // the slice grows without bound. When full, the oldest entry is dropped and the
@@ -21,8 +37,8 @@ func appendStepBounded(steps []StepTrace, trace StepTrace, max int) []StepTrace 
 // handleProcessorErrorWithSteps converts a processor error into an AgentResult.
 // ErrHalt produces a graceful result; other errors propagate as failures.
 // Any step traces collected before the error are preserved in the result.
-func handleProcessorErrorWithSteps(err error, usage Usage, steps []StepTrace) (AgentResult, error) {
-	var halt *ErrHalt
+func handleProcessorErrorWithSteps(err error, usage core.Usage, steps []StepTrace) (AgentResult, error) {
+	var halt *core.ErrHalt
 	if errors.As(err, &halt) {
 		return AgentResult{Output: halt.Response, Usage: usage, Steps: steps}, nil
 	}
@@ -32,7 +48,7 @@ func handleProcessorErrorWithSteps(err error, usage Usage, steps []StepTrace) (A
 // buildStepTrace creates a StepTrace from a tool call and its execution result.
 // Agent delegations (tool calls prefixed with "agent_") get Type "agent" and
 // the prefix stripped from Name. All other calls get Type "tool".
-func buildStepTrace(tc ToolCall, res toolExecResult) StepTrace {
+func buildStepTrace(tc core.ToolCall, res toolExecResult) StepTrace {
 	name := tc.Name
 	traceType := "tool"
 	input := string(tc.Args)

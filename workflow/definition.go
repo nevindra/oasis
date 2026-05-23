@@ -17,7 +17,7 @@ import (
 // condition nodes without branches, and cycles all produce errors.
 //
 // The returned Workflow uses the same DAG execution engine as compile-time
-// workflows built with NewWorkflow.
+// workflows built with New.
 func FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, error) {
 	if len(def.Nodes) == 0 {
 		return nil, fmt.Errorf("workflow definition %q: no nodes", def.Name)
@@ -98,7 +98,7 @@ func FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, 
 		opts = append(opts, generated...)
 	}
 
-	return NewWorkflow(def.Name, def.Description, opts...)
+	return New(def.Name, def.Description, opts...)
 }
 
 // nodeToWorkflowOptions converts a single NodeDefinition into one or more

@@ -8,7 +8,7 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
-// stubProvider is a test Provider that returns pre-configured results in order.
+// stubProvider is a test core.Provider that returns pre-configured results in order.
 // All three methods share the same result queue via a shared call counter.
 type stubProvider struct {
 	calls   int
@@ -16,7 +16,7 @@ type stubProvider struct {
 }
 
 type stubResult struct {
-	resp   ChatResponse
+	resp   core.ChatResponse
 	tokens []string // tokens written to ch in ChatStream
 	err    error
 }
@@ -32,26 +32,26 @@ func (s *stubProvider) next() stubResult {
 	return stubResult{}
 }
 
-func (s *stubProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (s *stubProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	r := s.next()
 	for _, tok := range r.tokens {
-		ch <- StreamEvent{Type: EventTextDelta, Content: tok}
+		ch <- core.StreamEvent{Type: core.EventTextDelta, Content: tok}
 	}
 	return r.resp, r.err
 }
 
-var _ Provider = (*stubProvider)(nil)
+var _ core.Provider = (*stubProvider)(nil)
 
 // --- Chat tests ---
 
 func TestWithRetry_Chat_SucceedsFirstAttempt(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{resp: ChatResponse{Content: "hello"}},
+		{resp: core.ChatResponse{Content: "hello"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	resp, err := core.Chat(context.Background(), p, ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,12 +65,12 @@ func TestWithRetry_Chat_SucceedsFirstAttempt(t *testing.T) {
 
 func TestWithRetry_Chat_RetriesOn503(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 503, Body: "unavailable"}},
-		{resp: ChatResponse{Content: "hello"}},
+		{err: &core.ErrHTTP{Status: 503, Body: "unavailable"}},
+		{resp: core.ChatResponse{Content: "hello"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	resp, err := core.Chat(context.Background(), p, ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,12 +84,12 @@ func TestWithRetry_Chat_RetriesOn503(t *testing.T) {
 
 func TestWithRetry_Chat_RetriesOn429(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 429, Body: "rate limited"}},
-		{resp: ChatResponse{Content: "ok"}},
+		{err: &core.ErrHTTP{Status: 429, Body: "rate limited"}},
+		{resp: core.ChatResponse{Content: "ok"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	_, err := core.Chat(context.Background(), p, ChatRequest{})
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -100,11 +100,11 @@ func TestWithRetry_Chat_RetriesOn429(t *testing.T) {
 
 func TestWithRetry_Chat_DoesNotRetryNonTransient(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 500, Body: "internal error"}},
+		{err: &core.ErrHTTP{Status: 500, Body: "internal error"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	_, err := core.Chat(context.Background(), p, ChatRequest{})
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -114,11 +114,11 @@ func TestWithRetry_Chat_DoesNotRetryNonTransient(t *testing.T) {
 }
 
 func TestWithRetry_Chat_ExhaustsMaxAttempts(t *testing.T) {
-	transient := stubResult{err: &ErrHTTP{Status: 503, Body: "unavailable"}}
+	transient := stubResult{err: &core.ErrHTTP{Status: 503, Body: "unavailable"}}
 	stub := &stubProvider{results: []stubResult{transient, transient, transient, transient}}
 	p := WithRetry(stub, RetryBaseDelay(0), RetryMaxAttempts(3))
 
-	_, err := core.Chat(context.Background(), p, ChatRequest{})
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected error after max attempts, got nil")
 	}
@@ -131,13 +131,13 @@ func TestWithRetry_Chat_ExhaustsMaxAttempts(t *testing.T) {
 
 func TestWithRetry_ChatWithToolsOnRequest_RetriesOn429(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 429}},
-		{resp: ChatResponse{Content: "done"}},
+		{err: &core.ErrHTTP{Status: 429}},
+		{resp: core.ChatResponse{Content: "done"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	_, err := core.Chat(context.Background(), p, ChatRequest{
-		Tools: []ToolDefinition{{Name: "test"}},
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{
+		Tools: []core.ToolDefinition{{Name: "test"}},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -151,13 +151,13 @@ func TestWithRetry_ChatWithToolsOnRequest_RetriesOn429(t *testing.T) {
 
 func TestWithRetry_ChatStream_RetriesOn503(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 503}},
-		{tokens: []string{"hel", "lo"}, resp: ChatResponse{Content: "hello"}},
+		{err: &core.ErrHTTP{Status: 503}},
+		{tokens: []string{"hel", "lo"}, resp: core.ChatResponse{Content: "hello"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	ch := make(chan StreamEvent, 8)
-	resp, err := p.ChatStream(context.Background(), ChatRequest{}, ch)
+	ch := make(chan core.StreamEvent, 8)
+	resp, err := p.ChatStream(context.Background(), core.ChatRequest{}, ch)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -179,12 +179,12 @@ func TestWithRetry_ChatStream_RetriesOn503(t *testing.T) {
 func TestWithRetry_ChatStream_NoRetryAfterTokensSent(t *testing.T) {
 	// Tokens sent before 503 — must not retry (can't unsend tokens).
 	stub := &stubProvider{results: []stubResult{
-		{tokens: []string{"partial"}, err: &ErrHTTP{Status: 503}},
+		{tokens: []string{"partial"}, err: &core.ErrHTTP{Status: 503}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
-	ch := make(chan StreamEvent, 8)
-	_, err := p.ChatStream(context.Background(), ChatRequest{}, ch)
+	ch := make(chan core.StreamEvent, 8)
+	_, err := p.ChatStream(context.Background(), core.ChatRequest{}, ch)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -199,13 +199,13 @@ func TestWithRetry_Chat_RespectsRetryAfter(t *testing.T) {
 	// Server says wait 100ms via Retry-After. Verify the retry waits at least that long
 	// even when base delay is 0.
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 429, Body: "rate limited", RetryAfter: 100 * time.Millisecond}},
-		{resp: ChatResponse{Content: "ok"}},
+		{err: &core.ErrHTTP{Status: 429, Body: "rate limited", RetryAfter: 100 * time.Millisecond}},
+		{resp: core.ChatResponse{Content: "ok"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
 	start := time.Now()
-	resp, err := core.Chat(context.Background(), p, ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -224,14 +224,14 @@ func TestWithRetry_Chat_RespectsRetryAfter(t *testing.T) {
 
 func TestWithRetry_ChatStream_RespectsRetryAfter(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
-		{tokens: []string{"ok"}, resp: ChatResponse{Content: "ok"}},
+		{err: &core.ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
+		{tokens: []string{"ok"}, resp: core.ChatResponse{Content: "ok"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0))
 
 	start := time.Now()
-	ch := make(chan StreamEvent, 8)
-	_, err := p.ChatStream(context.Background(), ChatRequest{}, ch)
+	ch := make(chan core.StreamEvent, 8)
+	_, err := p.ChatStream(context.Background(), core.ChatRequest{}, ch)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -248,13 +248,13 @@ func TestWithRetry_Chat_TimeoutExceeded(t *testing.T) {
 	// Two transient errors with 100ms Retry-After each. Timeout of 50ms should
 	// cause the retry loop to give up after the first attempt's wait.
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
-		{err: &ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
-		{resp: ChatResponse{Content: "ok"}},
+		{err: &core.ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
+		{err: &core.ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
+		{resp: core.ChatResponse{Content: "ok"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0), RetryTimeout(50*time.Millisecond))
 
-	_, err := core.Chat(context.Background(), p, ChatRequest{})
+	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err == nil {
 		t.Fatal("expected error due to timeout, got nil")
 	}
@@ -267,12 +267,12 @@ func TestWithRetry_Chat_TimeoutExceeded(t *testing.T) {
 func TestWithRetry_Chat_TimeoutAllowsSuccess(t *testing.T) {
 	// One transient error with no Retry-After, generous timeout — should succeed.
 	stub := &stubProvider{results: []stubResult{
-		{err: &ErrHTTP{Status: 503}},
-		{resp: ChatResponse{Content: "ok"}},
+		{err: &core.ErrHTTP{Status: 503}},
+		{resp: core.ChatResponse{Content: "ok"}},
 	}}
 	p := WithRetry(stub, RetryBaseDelay(0), RetryTimeout(5*time.Second))
 
-	resp, err := core.Chat(context.Background(), p, ChatRequest{})
+	resp, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -307,7 +307,7 @@ func (s *stubRetryEmbed) Embed(_ context.Context, texts []string) ([][]float32, 
 	return nil, nil
 }
 
-var _ EmbeddingProvider = (*stubRetryEmbed)(nil)
+var _ core.EmbeddingProvider = (*stubRetryEmbed)(nil)
 
 func TestWithEmbeddingRetry_SucceedsFirstAttempt(t *testing.T) {
 	vecs := [][]float32{{0.1, 0.2, 0.3}}
@@ -331,7 +331,7 @@ func TestWithEmbeddingRetry_SucceedsFirstAttempt(t *testing.T) {
 func TestWithEmbeddingRetry_RetriesOn429(t *testing.T) {
 	vecs := [][]float32{{0.1, 0.2, 0.3}}
 	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
-		{err: &ErrHTTP{Status: 429, Body: "rate limited"}},
+		{err: &core.ErrHTTP{Status: 429, Body: "rate limited"}},
 		{embeddings: vecs},
 	}}
 	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
@@ -351,7 +351,7 @@ func TestWithEmbeddingRetry_RetriesOn429(t *testing.T) {
 func TestWithEmbeddingRetry_RetriesOn503(t *testing.T) {
 	vecs := [][]float32{{0.1, 0.2, 0.3}}
 	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
-		{err: &ErrHTTP{Status: 503, Body: "unavailable"}},
+		{err: &core.ErrHTTP{Status: 503, Body: "unavailable"}},
 		{embeddings: vecs},
 	}}
 	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
@@ -367,7 +367,7 @@ func TestWithEmbeddingRetry_RetriesOn503(t *testing.T) {
 
 func TestWithEmbeddingRetry_DoesNotRetryNonTransient(t *testing.T) {
 	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
-		{err: &ErrHTTP{Status: 400, Body: "bad request"}},
+		{err: &core.ErrHTTP{Status: 400, Body: "bad request"}},
 	}}
 	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))
 
@@ -381,7 +381,7 @@ func TestWithEmbeddingRetry_DoesNotRetryNonTransient(t *testing.T) {
 }
 
 func TestWithEmbeddingRetry_ExhaustsMaxAttempts(t *testing.T) {
-	transient := stubRetryEmbedResult{err: &ErrHTTP{Status: 429, Body: "rate limited"}}
+	transient := stubRetryEmbedResult{err: &core.ErrHTTP{Status: 429, Body: "rate limited"}}
 	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{transient, transient, transient, transient}}
 	p := WithEmbeddingRetry(stub, RetryBaseDelay(0), RetryMaxAttempts(3))
 
@@ -397,7 +397,7 @@ func TestWithEmbeddingRetry_ExhaustsMaxAttempts(t *testing.T) {
 func TestWithEmbeddingRetry_RespectsRetryAfter(t *testing.T) {
 	vecs := [][]float32{{0.1, 0.2, 0.3}}
 	stub := &stubRetryEmbed{results: []stubRetryEmbedResult{
-		{err: &ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
+		{err: &core.ErrHTTP{Status: 429, RetryAfter: 100 * time.Millisecond}},
 		{embeddings: vecs},
 	}}
 	p := WithEmbeddingRetry(stub, RetryBaseDelay(0))

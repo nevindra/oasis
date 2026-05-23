@@ -16,7 +16,7 @@ type stubAgent struct {
 
 func (s *stubAgent) Name() string        { return s.name }
 func (s *stubAgent) Description() string { return s.desc }
-func (s *stubAgent) Execute(_ context.Context, task AgentTask) (AgentResult, error) {
+func (s *stubAgent) Execute(_ context.Context, task AgentTask, _ ...core.RunOption) (AgentResult, error) {
 	return s.fn(task)
 }
 

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // mockAgent is a test Agent with configurable behavior.
@@ -20,7 +22,7 @@ type mockAgent struct {
 
 func (m *mockAgent) Name() string        { return m.name }
 func (m *mockAgent) Description() string { return m.desc }
-func (m *mockAgent) Execute(ctx context.Context, _ AgentTask) (AgentResult, error) {
+func (m *mockAgent) Execute(ctx context.Context, _ AgentTask, _ ...RunOption) (AgentResult, error) {
 	if m.delay > 0 {
 		select {
 		case <-time.After(m.delay):
@@ -32,7 +34,7 @@ func (m *mockAgent) Execute(ctx context.Context, _ AgentTask) (AgentResult, erro
 }
 
 func TestSpawnSuccess(t *testing.T) {
-	want := AgentResult{Output: "done", Usage: Usage{InputTokens: 10, OutputTokens: 5}}
+	want := AgentResult{Output: "done", Usage: core.Usage{InputTokens: 10, OutputTokens: 5}}
 	agent := &mockAgent{name: "test", result: want}
 
 	h := Spawn(context.Background(), agent, AgentTask{Input: "go"})
@@ -337,7 +339,7 @@ type funcAgent struct {
 
 func (f *funcAgent) Name() string        { return f.name }
 func (f *funcAgent) Description() string { return "func agent" }
-func (f *funcAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+func (f *funcAgent) Execute(ctx context.Context, task AgentTask, _ ...RunOption) (AgentResult, error) {
 	return f.execute(ctx, task)
 }
 
@@ -348,4 +350,4 @@ type panicingAgent struct {
 
 func (p *panicingAgent) Name() string                                                { return p.name }
 func (p *panicingAgent) Description() string                                         { return "panics" }
-func (p *panicingAgent) Execute(_ context.Context, _ AgentTask) (AgentResult, error) { panic("agent on fire") }
+func (p *panicingAgent) Execute(_ context.Context, _ AgentTask, _ ...RunOption) (AgentResult, error) { panic("agent on fire") }

@@ -8,175 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevindra/oasis/memory"
+	"github.com/nevindra/oasis/core"
 )
 
 // ptrA is a local pointer helper for this test file (avoids import of oasis root pkg).
 func ptrA[T any](v T) *T { return &v }
-
-// --- initCore tests ---
-
-func TestInitCoreWiresAllFields(t *testing.T) {
-	cfg := BuildConfig([]AgentOption{
-		WithPrompt("test prompt"),
-		WithLimits(Limits{MaxIter: 42}),
-		WithGeneration(Generation{Temperature: ptrA(0.7)}),
-	})
-
-	var c AgentCore
-	p := &mockProvider{name: "test"}
-	InitCore(&c, "myagent", "does stuff", p, cfg)
-
-	if c.name != "myagent" {
-		t.Errorf("name = %q, want %q", c.name, "myagent")
-	}
-	if c.description != "does stuff" {
-		t.Errorf("description = %q, want %q", c.description, "does stuff")
-	}
-	if c.provider != p {
-		t.Error("provider not wired")
-	}
-	if c.systemPrompt != "test prompt" {
-		t.Errorf("systemPrompt = %q, want %q", c.systemPrompt, "test prompt")
-	}
-	if c.maxIter != 42 {
-		t.Errorf("maxIter = %d, want 42", c.maxIter)
-	}
-	if c.genParams == nil || c.genParams.Temperature == nil || *c.genParams.Temperature != 0.7 {
-		t.Error("generationParams.Temperature not wired")
-	}
-	if c.tools == nil {
-		t.Error("tools registry not initialized")
-	}
-	if c.processors == nil {
-		t.Error("processors chain not initialized")
-	}
-}
-
-func TestInitCoreDefaultMaxIter(t *testing.T) {
-	cfg := BuildConfig(nil)
-	var c AgentCore
-	InitCore(&c, "a", "d", &mockProvider{name: "p"}, cfg)
-
-	if c.maxIter != defaultMaxIter {
-		t.Errorf("maxIter = %d, want default %d", c.maxIter, defaultMaxIter)
-	}
-}
-
-func TestDefaultMaxIterIs25(t *testing.T) {
-	cfg := BuildConfig(nil)
-	var c AgentCore
-	InitCore(&c, "t", "", &mockProvider{name: "p"}, cfg)
-	if c.maxIter != 25 {
-		t.Errorf("expected defaultMaxIter 25, got %d", c.maxIter)
-	}
-}
-
-func TestInitCoreMemoryFieldsWired(t *testing.T) {
-	// Verifies that memory options wire through InitCore without panicking.
-	// Deep field verification is done via integration tests in memory_test.go.
-	store := &stubStore{}
-	cfg := BuildConfig([]AgentOption{
-		WithMemory(memory.WithStore(store), memory.WithMaxHistory(25), memory.WithMaxTokens(5000)),
-	})
-
-	var c AgentCore
-	// Should not panic.
-	InitCore(&c, "a", "d", &mockProvider{name: "p"}, cfg)
-	// Close should be safe after Init (even without any executions).
-	if err := c.mem.Close(); err != nil {
-		t.Errorf("mem.Close error: %v", err)
-	}
-}
-
-// --- Shared method tests ---
-
-func TestAgentCoreNameDescriptionClose(t *testing.T) {
-	var c AgentCore
-	InitCore(&c, "core", "core desc", &mockProvider{name: "p"}, BuildConfig(nil))
-
-	if c.Name() != "core" {
-		t.Errorf("Name() = %q, want %q", c.Name(), "core")
-	}
-	if c.Description() != "core desc" {
-		t.Errorf("Description() = %q, want %q", c.Description(), "core desc")
-	}
-	// Close should not panic on zero-state memory.
-	if err := c.Close(); err != nil {
-		t.Errorf("Close error: %v", err)
-	}
-}
-
-func TestCacheBuiltinToolDefs(t *testing.T) {
-	var c AgentCore
-	InitCore(&c, "a", "d", &mockProvider{name: "p"}, BuildConfig(nil))
-
-	// No builtins configured: should return input unchanged.
-	defs := c.CacheBuiltinToolDefs(nil)
-	if len(defs) != 0 {
-		t.Errorf("got %d defs, want 0", len(defs))
-	}
-
-	// With all builtins.
-	c.inputHandler = &mockInputHandler{response: InputResponse{Value: "ok"}}
-	c.planExecution = true
-	defs = c.CacheBuiltinToolDefs([]ToolDefinition{{Name: "existing"}})
-	if len(defs) != 3 { // existing + ask_user + execute_plan
-		t.Errorf("got %d defs, want 3", len(defs))
-	}
-	names := make(map[string]bool)
-	for _, d := range defs {
-		names[d.Name] = true
-	}
-	for _, want := range []string{"existing", "ask_user", "execute_plan"} {
-		if !names[want] {
-			t.Errorf("missing tool def %q", want)
-		}
-	}
-}
-
-func TestResolvePromptAndProvider(t *testing.T) {
-	base := &mockProvider{name: "base"}
-	override := &mockProvider{name: "override"}
-
-	var c AgentCore
-	InitCore(&c, "a", "d", base, BuildConfig([]AgentOption{
-		WithPrompt("static prompt"),
-	}))
-
-	task := AgentTask{Input: "test"}
-
-	// Static path.
-	prompt, prov := c.ResolvePromptAndProvider(context.Background(), task)
-	if prompt != "static prompt" {
-		t.Errorf("prompt = %q, want %q", prompt, "static prompt")
-	}
-	if prov != base {
-		t.Error("provider should be base")
-	}
-
-	// Dynamic overrides.
-	c.dynamicPrompt = func(_ context.Context, _ AgentTask) string { return "dynamic prompt" }
-	c.dynamicModel = func(_ context.Context, _ AgentTask) Provider { return override }
-
-	prompt, prov = c.ResolvePromptAndProvider(context.Background(), task)
-	if prompt != "dynamic prompt" {
-		t.Errorf("prompt = %q, want %q", prompt, "dynamic prompt")
-	}
-	if prov != override {
-		t.Error("provider should be override")
-	}
-}
-
-func TestResolveDynamicToolsNil(t *testing.T) {
-	var c AgentCore
-	InitCore(&c, "a", "d", &mockProvider{name: "p"}, BuildConfig(nil))
-
-	defs, exec, execStream := c.ResolveDynamicTools(context.Background(), AgentTask{})
-	if defs != nil || exec != nil || execStream != nil {
-		t.Error("expected nil when dynamicTools not set")
-	}
-}
 
 // --- executeAgent tests ---
 
@@ -225,14 +61,14 @@ func TestExecuteAgentStreamingDelegation(t *testing.T) {
 	streamer := &stubStreamingAgent{
 		name: "streamer",
 		desc: "test",
-		events: []StreamEvent{
-			{Type: EventTextDelta, Content: "a"},
-			{Type: EventTextDelta, Content: "b"},
+		events: []core.StreamEvent{
+			{Type: core.EventTextDelta, Content: "a"},
+			{Type: core.EventTextDelta, Content: "b"},
 		},
 		result: AgentResult{Output: "ab"},
 	}
 
-	ch := make(chan StreamEvent, 32)
+	ch := make(chan core.StreamEvent, 32)
 	go func() {
 		// Drain parent channel so forwarding doesn't block.
 		for range ch {
@@ -253,7 +89,7 @@ func TestExecuteAgentStreamingPanic(t *testing.T) {
 	// Use the panicStreamingAgent from stream_test.go.
 	panicker := &panicStreamingAgent{name: "crasher", desc: "test"}
 
-	ch := make(chan StreamEvent, 32)
+	ch := make(chan core.StreamEvent, 32)
 	go func() {
 		for range ch {
 		}
@@ -278,20 +114,20 @@ func TestForwardSubagentStreamFiltersInputReceived(t *testing.T) {
 	streamer := &stubStreamingAgent{
 		name: "sub",
 		desc: "test",
-		events: []StreamEvent{
-			{Type: EventInputReceived, Content: "should be filtered"},
+		events: []core.StreamEvent{
+			{Type: core.EventInputReceived, Content: "should be filtered"},
 			// New lifecycle envelope events should also be filtered.
-			{Type: EventRunStart, Content: "should be filtered"},
-			{Type: EventIterationStart, Name: "0"},
-			{Type: EventTextDelta, Content: "visible"},
-			{Type: EventIterationFinish, Name: "0"},
-			{Type: EventRunFinish, Content: "should be filtered"},
+			{Type: core.EventRunStart, Content: "should be filtered"},
+			{Type: core.EventIterationStart, Name: "0"},
+			{Type: core.EventTextDelta, Content: "visible"},
+			{Type: core.EventIterationFinish, Name: "0"},
+			{Type: core.EventRunFinish, Content: "should be filtered"},
 		},
 		result: AgentResult{Output: "done"},
 	}
 
-	ch := make(chan StreamEvent, 32)
-	var forwarded []StreamEvent
+	ch := make(chan core.StreamEvent, 32)
+	var forwarded []core.StreamEvent
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -313,17 +149,17 @@ func TestForwardSubagentStreamFiltersInputReceived(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "done")
 	}
 
-	// EventInputReceived and the new lifecycle envelope events should be filtered out.
+	// core.EventInputReceived and the new lifecycle envelope events should be filtered out.
 	for _, ev := range forwarded {
-		if ev.Type == EventInputReceived ||
-			ev.Type == EventRunStart || ev.Type == EventRunFinish ||
-			ev.Type == EventIterationStart || ev.Type == EventIterationFinish {
+		if ev.Type == core.EventInputReceived ||
+			ev.Type == core.EventRunStart || ev.Type == core.EventRunFinish ||
+			ev.Type == core.EventIterationStart || ev.Type == core.EventIterationFinish {
 			t.Errorf("envelope event %q should be filtered from forwarded events", ev.Type)
 		}
 	}
 	if len(forwarded) != 1 {
-		t.Errorf("forwarded %d events, want 1 (only text-delta); got: %v", len(forwarded), func() []StreamEventType {
-			types := make([]StreamEventType, len(forwarded))
+		t.Errorf("forwarded %d events, want 1 (only text-delta); got: %v", len(forwarded), func() []core.StreamEventType {
+			types := make([]core.StreamEventType, len(forwarded))
 			for i, e := range forwarded {
 				types[i] = e.Type
 			}
@@ -336,7 +172,7 @@ func TestForwardSubagentStreamContextCancellation(t *testing.T) {
 	// Subagent that blocks until context is cancelled.
 	blocker := &blockingStreamAgent{name: "blocker", desc: "test"}
 
-	ch := make(chan StreamEvent, 1) // Small buffer to force blocking.
+	ch := make(chan core.StreamEvent, 1) // Small buffer to force blocking.
 	go func() {
 		for range ch {
 		}
@@ -412,22 +248,22 @@ func TestForwardSubagentStreamDoubleCloseSafe(t *testing.T) {
 	// previously triggered the double-close when ch was passed directly.
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "streamed hello"}},
+		responses: []core.ChatResponse{{Content: "streamed hello"}},
 	}
-	a := NewLLMAgent("double-close-test", "regression", provider)
+	a := New("double-close-test", "regression", provider)
 
-	ch := make(chan StreamEvent, 64)
-	result, err := a.ExecuteStream(context.Background(), AgentTask{Input: "hi"}, ch)
+	ch := make(chan core.StreamEvent, 64)
+	result, err := a.Execute(context.Background(), AgentTask{Input: "hi"}, core.WithStream(ch))
 	if err != nil {
-		t.Fatalf("ExecuteStream error: %v", err)
+		t.Fatalf("Execute(WithStream) error: %v", err)
 	}
 	if result.Output != "streamed hello" {
 		t.Errorf("Output = %q, want %q", result.Output, "streamed hello")
 	}
 
 	// Drain to completion — any "close of closed channel" panic surfaces here
-	// (or inside ExecuteStream above) if the fix is absent.
-	var events []StreamEvent
+	// (or inside Execute above) if the fix is absent.
+	var events []core.StreamEvent
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -441,10 +277,10 @@ func TestForwardSubagentStreamDoubleCloseSafe(t *testing.T) {
 // --- startDrainTimeout tests ---
 
 func TestStartDrainTimeoutDrainsChannel(t *testing.T) {
-	ch := make(chan StreamEvent, 10)
+	ch := make(chan core.StreamEvent, 10)
 	// Send some events before starting drain.
-	ch <- StreamEvent{Type: EventTextDelta, Content: "a"}
-	ch <- StreamEvent{Type: EventTextDelta, Content: "b"}
+	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: "a"}
+	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: "b"}
 	close(ch)
 
 	closed := make(chan struct{})
@@ -471,10 +307,10 @@ func TestSafeAgentError(t *testing.T) {
 	}
 }
 
-// --- Embedded agentCore promotes methods ---
+// --- LLMAgent method-promotion tests (embedding runtime.Runtime) ---
 
-func TestLLMAgentEmbedsAgentCore(t *testing.T) {
-	a := NewLLMAgent("test", "desc", &mockProvider{name: "p"})
+func TestLLMAgentRuntimePromotion(t *testing.T) {
+	a := New("test", "desc", &mockProvider{name: "p"})
 	if a.Name() != "test" {
 		t.Errorf("Name() = %q, want %q", a.Name(), "test")
 	}
@@ -488,7 +324,7 @@ func TestLLMAgentEmbedsAgentCore(t *testing.T) {
 
 // --- test helpers (local to this file) ---
 
-// blockingStreamAgent implements StreamingAgent and blocks until context is cancelled.
+// blockingStreamAgent implements core.Agent and blocks until context is cancelled.
 type blockingStreamAgent struct {
 	name string
 	desc string
@@ -496,12 +332,11 @@ type blockingStreamAgent struct {
 
 func (b *blockingStreamAgent) Name() string        { return b.name }
 func (b *blockingStreamAgent) Description() string { return b.desc }
-func (b *blockingStreamAgent) Execute(ctx context.Context, _ AgentTask) (AgentResult, error) {
-	<-ctx.Done()
-	return AgentResult{}, ctx.Err()
-}
-func (b *blockingStreamAgent) ExecuteStream(ctx context.Context, _ AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
-	defer close(ch)
+func (b *blockingStreamAgent) Execute(ctx context.Context, _ AgentTask, opts ...RunOption) (AgentResult, error) {
+	rcfg := core.ApplyRunOptions(opts...)
+	if rcfg.Stream != nil {
+		defer close(rcfg.Stream)
+	}
 	<-ctx.Done()
 	return AgentResult{}, ctx.Err()
 }
@@ -510,7 +345,7 @@ func (b *blockingStreamAgent) ExecuteStream(ctx context.Context, _ AgentTask, ch
 
 func TestLLMAgent_Generation_ReturnsCopy(t *testing.T) {
 	temp := 0.5
-	a := NewLLMAgent("a", "d", &mockProvider{name: "test"}, WithGeneration(Generation{
+	a := New("a", "d", &mockProvider{name: "test"}, WithGeneration(Generation{
 		Temperature: &temp,
 	}))
 
@@ -531,22 +366,22 @@ func TestLLMAgent_Generation_ReturnsCopy(t *testing.T) {
 }
 
 func TestLLMAgent_Generation_UnsetReturnsEmpty(t *testing.T) {
-	a := NewLLMAgent("a", "d", &mockProvider{name: "test"})
+	a := New("a", "d", &mockProvider{name: "test"})
 	g := a.Generation()
 	if g.Temperature != nil || g.TopP != nil || g.TopK != nil || g.MaxTokens != nil {
 		t.Fatalf("Generation: unset returned %+v, want all-nil", g)
 	}
 }
 
-// --- ExecuteWith / ExecuteStreamWith tests ---
+// --- Execute with RunOptions tests ---
 
 // newExecuteTestAgent returns a minimal LLMAgent backed by a mock provider
 // that deterministically returns "ok" for every call.
 func newExecuteTestAgent(t *testing.T) *LLMAgent {
 	t.Helper()
-	return NewLLMAgent("test", "desc", &mockProvider{
+	return New("test", "desc", &mockProvider{
 		name:      "mock",
-		responses: []ChatResponse{{Content: "ok"}},
+		responses: []core.ChatResponse{{Content: "ok"}},
 	})
 }
 
@@ -556,14 +391,14 @@ func TestExecuteWith_NilEquivalentToExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// Fresh agent with same mock for second call.
+	// Fresh agent with same mock for second call; nil WithOverrides is a no-op.
 	a2 := newExecuteTestAgent(t)
-	r2, err := a2.ExecuteWith(context.Background(), AgentTask{Input: "hello"}, nil)
+	r2, err := a2.Execute(context.Background(), AgentTask{Input: "hello"}, WithOverrides(nil))
 	if err != nil {
-		t.Fatalf("ExecuteWith(nil): %v", err)
+		t.Fatalf("Execute(WithOverrides(nil)): %v", err)
 	}
 	if r1.Output != r2.Output {
-		t.Fatalf("Execute(%q) != ExecuteWith(nil, %q)", r1.Output, r2.Output)
+		t.Fatalf("Execute(%q) != Execute(WithOverrides(nil), %q)", r1.Output, r2.Output)
 	}
 }
 
@@ -574,57 +409,57 @@ func TestExecuteWith_EmptyEquivalentToExecute(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	a2 := newExecuteTestAgent(t)
-	r2, err := a2.ExecuteWith(context.Background(), AgentTask{Input: "hello"}, &RunOptions{})
+	r2, err := a2.Execute(context.Background(), AgentTask{Input: "hello"}, WithOverrides(&RunOptions{}))
 	if err != nil {
-		t.Fatalf("ExecuteWith(&{}): %v", err)
+		t.Fatalf("Execute(WithOverrides(&{})): %v", err)
 	}
 	if r1.Output != r2.Output {
-		t.Fatalf("Execute(%q) != ExecuteWith(&{}, %q)", r1.Output, r2.Output)
+		t.Fatalf("Execute(%q) != Execute(WithOverrides(&{}), %q)", r1.Output, r2.Output)
 	}
 }
 
 func TestExecuteWith_ValidationFails(t *testing.T) {
 	a := newExecuteTestAgent(t)
 	n := -1
-	_, err := a.ExecuteWith(context.Background(), AgentTask{Input: "x"}, &RunOptions{Limits: &Limits{MaxIter: n}})
+	_, err := a.Execute(context.Background(), AgentTask{Input: "x"}, WithOverrides(&RunOptions{Limits: &Limits{MaxIter: n}}))
 	if err == nil {
-		t.Fatalf("ExecuteWith(Limits.MaxIter=-1): err = nil, want validation error")
+		t.Fatalf("Execute(Limits.MaxIter=-1): err = nil, want validation error")
 	}
 	var roErr *RunOptionsError
 	if !errors.As(err, &roErr) {
-		t.Fatalf("ExecuteWith(Limits.MaxIter=-1): err is not *RunOptionsError: %v", err)
+		t.Fatalf("Execute(Limits.MaxIter=-1): err is not *RunOptionsError: %v", err)
 	}
 }
 
 func TestExecuteStreamWith_NilEquivalentToExecuteStream(t *testing.T) {
 	a := newExecuteTestAgent(t)
-	ch1 := make(chan StreamEvent, 32)
-	r1, err := a.ExecuteStream(context.Background(), AgentTask{Input: "hello"}, ch1)
+	ch1 := make(chan core.StreamEvent, 32)
+	r1, err := a.Execute(context.Background(), AgentTask{Input: "hello"}, core.WithStream(ch1))
 	if err != nil {
-		t.Fatalf("ExecuteStream: %v", err)
+		t.Fatalf("Execute(WithStream): %v", err)
 	}
 	for range ch1 {
 	}
 
 	a2 := newExecuteTestAgent(t)
-	ch2 := make(chan StreamEvent, 32)
-	r2, err := a2.ExecuteStreamWith(context.Background(), AgentTask{Input: "hello"}, ch2, nil)
+	ch2 := make(chan core.StreamEvent, 32)
+	r2, err := a2.Execute(context.Background(), AgentTask{Input: "hello"}, core.WithStream(ch2), WithOverrides(nil))
 	if err != nil {
-		t.Fatalf("ExecuteStreamWith(nil): %v", err)
+		t.Fatalf("Execute(WithStream, WithOverrides(nil)): %v", err)
 	}
 	for range ch2 {
 	}
 
 	if r1.Output != r2.Output {
-		t.Fatalf("ExecuteStream(%q) != ExecuteStreamWith(nil, %q)", r1.Output, r2.Output)
+		t.Fatalf("Execute(WithStream)(%q) != Execute(WithStream, WithOverrides(nil))(%q)", r1.Output, r2.Output)
 	}
 }
 
-// TestAgentCore_LimitsGetterRoundTrips verifies that Limits() returns a copy
+// TestRuntime_LimitsGetterRoundTrips verifies that Limits() returns a copy
 // of the agent's current limits that callers can mutate and pass back via
 // RunOptions.Limits without affecting the agent.
-func TestAgentCore_LimitsGetterRoundTrips(t *testing.T) {
-	a := NewLLMAgent("t", "d", &mockProvider{name: "m", responses: []ChatResponse{{Content: "ok"}}},
+func TestRuntime_LimitsGetterRoundTrips(t *testing.T) {
+	a := New("t", "d", &mockProvider{name: "m", responses: []core.ChatResponse{{Content: "ok"}}},
 		WithLimits(Limits{MaxIter: 7, MaxAttachmentBytes: 1234}))
 	lim := a.Limits()
 	if lim.MaxIter != 7 || lim.MaxAttachmentBytes != 1234 {
@@ -632,7 +467,7 @@ func TestAgentCore_LimitsGetterRoundTrips(t *testing.T) {
 	}
 	lim.MaxIter = 99
 	// Agent's internal state must be untouched.
-	if a.maxIter != 7 {
-		t.Fatalf("mutating returned Limits affected agent: maxIter=%d, want 7", a.maxIter)
+	if a.MaxIter != 7 {
+		t.Fatalf("mutating returned Limits affected agent: maxIter=%d, want 7", a.MaxIter)
 	}
 }

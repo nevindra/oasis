@@ -10,6 +10,7 @@ import (
 
 	"github.com/nevindra/oasis/agent"
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/internal/runtime"
 )
 
 // agentToolParamSchema is the shared parameter schema for all agent_* tool
@@ -24,20 +25,29 @@ var agentToolParamSchema = json.RawMessage(
 // Optionally supports conversation memory, user memory, and cross-thread search
 // when configured via WithConversationMemory, CrossThreadSearch, and WithUserMemory.
 type Network struct {
-	agent.AgentCore
+	runtime.Runtime
 	agents           map[string]agent.Agent // keyed by name
 	sortedAgentNames []string               // pre-sorted for deterministic tool ordering
 }
 
-// NewNetwork creates a Network with the given router provider and options.
-func NewNetwork(name, description string, router core.Provider, opts ...agent.AgentOption) *Network {
+// New constructs a Network — a router LLM + child agents wired via
+// agent.WithAgents. Plan B will change this signature to accept children
+// as positional varargs; for now, the AgentOption-based signature is
+// preserved.
+func New(name, description string, router core.Provider, opts ...agent.AgentOption) *Network {
 	cfg := agent.BuildConfig(opts)
 	n := &Network{
 		agents: make(map[string]agent.Agent),
 	}
-	agent.InitCore(&n.AgentCore, name, description, router, cfg)
+	runtime.Init(&n.Runtime, name, description, router, cfg)
 
-	for _, a := range cfg.Agents() {
+	// Wire spawn callback so ExecuteSpawn can create ephemeral sub-agents.
+	// Networks spawn LLMAgents (not Networks), just like LLMAgent does.
+	n.NewAgentFunc = func(childName, childDesc string, p core.Provider, opts ...agent.AgentOption) core.Agent {
+		return agent.New(childName, childDesc, p, opts...)
+	}
+
+	for _, a := range cfg.GetAgents() {
 		n.agents[a.Name()] = a
 		n.sortedAgentNames = append(n.sortedAgentNames, a.Name())
 	}
@@ -46,60 +56,43 @@ func NewNetwork(name, description string, router core.Provider, opts ...agent.Ag
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Includes agent tools + direct tools + built-in tools.
 	if !n.HasDynamicTools() {
-		n.SetCachedToolDefs(n.CacheBuiltinToolDefs(n.buildToolDefs(n.Tools().AllDefinitions())))
+		// Network does not register ask_user, execute_plan, or spawn_agent
+		// builtins (those are LLMAgent-only). Pass nil so CacheBuiltinToolDefs
+		// skips them.
+		n.SetCachedToolDefs(n.CacheBuiltinToolDefs(n.buildToolDefs(n.Tools().AllDefinitions()), nil, nil, nil))
 	}
 
 	return n
 }
 
 // Execute runs the network's routing loop.
-func (n *Network) Execute(ctx context.Context, task agent.AgentTask) (agent.AgentResult, error) {
-	ctx = agent.WithTaskContext(ctx, task)
-	return n.ExecuteWithSpan(ctx, task, nil, "Network", "network", func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
-		return n.buildLoopConfig(ctx, task, ch, nil)
-	})
-}
-
-// ExecuteStream runs the network's routing loop like Execute, but emits
-// StreamEvent values into ch throughout execution. Events include text deltas,
-// tool call start/result, and agent start/finish for subagent delegation.
-// The channel is closed when streaming completes.
-func (n *Network) ExecuteStream(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) (agent.AgentResult, error) {
-	ctx = agent.WithTaskContext(ctx, task)
-	return n.ExecuteWithSpan(ctx, task, ch, "Network", "network", func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
-		return n.buildLoopConfig(ctx, task, ch, nil)
-	})
-}
-
-// ExecuteWith runs the network like Execute and applies per-call RunOptions
-// to the network's router (Prompt, Generation, MaxIter, MaxSteps,
-// MaxPlanSteps, ResponseSchema, MaxAttachmentBytes, MaxToolResultLen, Hooks,
-// Tracer, Logger, Metadata, Memory). RunOptions are NOT propagated to
-// subagents — they keep the per-agent configuration they were constructed
-// with. To override a subagent, pass that agent's own ExecuteWith call site
-// or rebuild the subagent.
-func (n *Network) ExecuteWith(ctx context.Context, task core.AgentTask, opts *agent.RunOptions) (core.AgentResult, error) {
-	if err := opts.Validate(); err != nil {
-		return core.AgentResult{}, err
+// Optional RunOption values configure per-call behaviour (streaming, deadline, overrides).
+func (n *Network) Execute(ctx context.Context, task agent.AgentTask, opts ...core.RunOption) (agent.AgentResult, error) {
+	rcfg := core.ApplyRunOptions(opts...)
+	var ro *agent.RunOptions
+	if rcfg.Overrides != nil {
+		if v, ok := rcfg.Overrides.(*agent.RunOptions); ok {
+			ro = v
+		}
+	}
+	if err := ro.Validate(); err != nil {
+		if rcfg.Stream != nil {
+			close(rcfg.Stream)
+		}
+		return agent.AgentResult{}, err
+	}
+	if rcfg.Deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, rcfg.Deadline)
+		defer cancel()
 	}
 	ctx = agent.WithTaskContext(ctx, task)
-	return n.ExecuteWithSpan(ctx, task, nil, "Network", "network", func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
-		return n.buildLoopConfig(ctx, task, ch, opts)
-	})
-}
-
-// ExecuteStreamWith runs the network like ExecuteStream and applies per-call
-// RunOptions to the network's router. See ExecuteWith for the propagation
-// caveat; this method also closes ch on validation error.
-func (n *Network) ExecuteStreamWith(ctx context.Context, task core.AgentTask, ch chan<- core.StreamEvent, opts *agent.RunOptions) (core.AgentResult, error) {
-	if err := opts.Validate(); err != nil {
-		close(ch)
-		return core.AgentResult{}, err
-	}
-	ctx = agent.WithTaskContext(ctx, task)
-	return n.ExecuteWithSpan(ctx, task, ch, "Network", "network", func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
-		return n.buildLoopConfig(ctx, task, ch, opts)
-	})
+	return n.ExecuteWithSpan(ctx, task, rcfg.Stream, "Network", "network",
+		func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) agent.LoopConfig {
+			return n.buildLoopConfig(ctx, task, ch, ro)
+		},
+		agent.RunLoop,
+	)
 }
 
 // buildLoopConfig wires Network fields into a LoopConfig for runLoop.
@@ -109,7 +102,8 @@ func (n *Network) ExecuteStreamWith(ctx context.Context, task core.AgentTask, ch
 func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent, opts *agent.RunOptions) agent.LoopConfig {
 	cfg := n.ApplyRunOptions(opts)
 	prompt, provider := n.ResolvePromptAndProviderWith(ctx, task, cfg)
-	toolDefs, executeTool, executeToolStream, _ := n.ResolveTools(ctx, task, n.buildToolDefs)
+	// Network does not use ask_user, execute_plan, or spawn_agent builtins.
+	toolDefs, executeTool, executeToolStream, _ := n.ResolveTools(ctx, task, n.buildToolDefs, nil, nil, nil)
 	return n.BaseLoopConfig("network:"+n.Name(), prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs), cfg, n.ResolveMem(opts))
 }
 
@@ -128,10 +122,15 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 	// Capture ch so spawn_agent forwards the child's stream events through
 	// the parent's channel when the parent is running under ExecuteStream.
 	spawnHandler := func(ctx context.Context, args json.RawMessage, defs []core.ToolDefinition, exec agent.ToolExecFunc) agent.DispatchResult {
-		return n.ExecuteSpawn(ctx, args, defs, exec, ch)
+		return n.ExecuteSpawn(ctx, args, defs, exec, ch, agent.ExecuteAgent)
+	}
+	// Wrap DispatchBuiltins to inject ask_user and execute_plan callbacks,
+	// breaking the runtime→agent cycle.
+	builtins := func(ctx context.Context, tc core.ToolCall, dispatch agent.DispatchFunc) (agent.DispatchResult, bool) {
+		return n.DispatchBuiltins(ctx, tc, dispatch, agent.ExecuteAskUser, agent.ExecutePlan)
 	}
 	return agent.NewStandardDispatch(agent.StandardDispatchConfig{
-		Builtins:          n.DispatchBuiltins,
+		Builtins:          builtins,
 		SpawnHandler:      spawnHandler,
 		AgentRouter:       agentRouter,
 		ExecuteTool:       executeTool,
@@ -161,7 +160,7 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPref
 
 	if ch != nil {
 		select {
-		case ch <- core.StreamEvent{Type: agent.EventAgentStart, Name: agentName, Content: params.Task}:
+		case ch <- core.StreamEvent{Type: core.EventAgentStart, Name: agentName, Content: params.Task}:
 		case <-ctx.Done():
 			return agent.DispatchResult{Content: ctx.Err().Error(), IsError: true}
 		}
@@ -187,7 +186,7 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, agentPref
 		}
 		select {
 		case ch <- core.StreamEvent{
-			Type:     agent.EventAgentFinish,
+			Type:     core.EventAgentFinish,
 			Name:     agentName,
 			Content:  output,
 			Usage:    result.Usage,
@@ -224,9 +223,4 @@ func (n *Network) buildToolDefs(toolDefs []core.ToolDefinition) []core.ToolDefin
 }
 
 // compile-time checks
-var (
-	_ agent.Agent                     = (*Network)(nil)
-	_ agent.StreamingAgent            = (*Network)(nil)
-	_ agent.AgentWithOptions          = (*Network)(nil)
-	_ agent.StreamingAgentWithOptions = (*Network)(nil)
-)
+var _ core.Agent = (*Network)(nil)

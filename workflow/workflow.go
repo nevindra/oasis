@@ -19,7 +19,6 @@ type AgentTask = core.AgentTask
 type AgentResult = core.AgentResult
 type StepTrace = core.StepTrace
 type Agent = core.Agent
-type StreamingAgent = core.StreamingAgent
 type Tracer = core.Tracer
 type Span = core.Span
 type SpanAttr = core.SpanAttr
@@ -34,12 +33,6 @@ type Usage = core.Usage
 func StringAttr(k, v string) SpanAttr     { return core.StringAttr(k, v) }
 func IntAttr(k string, v int) SpanAttr    { return core.IntAttr(k, v) }
 func Float64Attr(k string, v float64) SpanAttr { return core.Float64Attr(k, v) }
-
-// optionsWithOverrides is a local interface that workflow needs for stub checks.
-// It is satisfied by agent.RunOptions.
-type optionsWithOverrides interface {
-	HasOverrides() bool
-}
 
 // nopLogger discards all log output. Used when WithWorkflowLogger is not set.
 var nopLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -436,7 +429,7 @@ type stepConfig struct {
 	stepType stepType
 }
 
-// workflowConfig accumulates options passed to NewWorkflow.
+// workflowConfig accumulates options passed to New.
 type workflowConfig struct {
 	steps        []*stepConfig
 	onFinish     func(WorkflowResult)
@@ -660,12 +653,12 @@ const defaultLoopMaxIter = 10
 // Unlike Network (which uses an LLM to route between agents), Workflow follows
 // explicit step sequences and dependency edges defined at construction time.
 // Parallel execution emerges naturally when multiple steps share the same
-// predecessor. Workflow implements both Agent and StreamingAgent, enabling
-// recursive composition: Networks can contain Workflows, and Workflows can
-// contain Agents (LLMAgent, Network, or other Workflows).
+// predecessor. Workflow implements core.Agent, enabling recursive composition:
+// Networks can contain Workflows, and Workflows can contain Agents
+// (LLMAgent, Network, or other Workflows).
 //
-// ExecuteStream emits EventStepStart/EventStepFinish for each step,
-// and EventStepProgress during ForEach iterations.
+// Passing core.WithStream(ch) to Execute emits EventStepStart/EventStepFinish
+// for each step, and EventStepProgress during ForEach iterations.
 type Workflow struct {
 	name         string
 	description  string
@@ -684,8 +677,7 @@ type Workflow struct {
 
 // compile-time checks
 var (
-	_ Agent          = (*Workflow)(nil)
-	_ StreamingAgent = (*Workflow)(nil)
+	_ core.Agent = (*Workflow)(nil)
 )
 
 // Name returns the workflow's identifier.
@@ -695,7 +687,7 @@ func (w *Workflow) Name() string { return w.name }
 // Used by Network to generate tool definitions when a Workflow is used as a subagent.
 func (w *Workflow) Description() string { return w.description }
 
-// NewWorkflow creates a Workflow with the given name, description, and options.
+// New creates a Workflow with the given name, description, and options.
 // Step definitions and workflow-level options are passed as WorkflowOption values.
 // Returns an error if the step graph is invalid:
 //   - duplicate step names
@@ -704,7 +696,7 @@ func (w *Workflow) Description() string { return w.description }
 //
 // Logs a warning for unreachable steps (steps that are not roots and have no
 // incoming edges from reachable steps).
-func NewWorkflow(name, description string, opts ...WorkflowOption) (*Workflow, error) {
+func New(name, description string, opts ...WorkflowOption) (*Workflow, error) {
 	var cfg workflowConfig
 	for _, opt := range opts {
 		opt(&cfg)

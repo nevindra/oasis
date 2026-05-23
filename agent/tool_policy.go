@@ -17,19 +17,19 @@ import (
 //   - All retries exhaust on retryable error: (result, lastErr).
 //   - Non-retryable error: (result, err) on first attempt; no retries.
 //   - Parent ctx cancelled mid-backoff: (zeroResult, ctx.Err()).
-func runWithPolicy(parent context.Context, policy core.ToolPolicy, fn func(context.Context) (ToolResult, error)) (ToolResult, error) {
+func runWithPolicy(parent context.Context, policy core.ToolPolicy, fn func(context.Context) (core.ToolResult, error)) (core.ToolResult, error) {
 	retryOn := policy.RetryOn
 	if retryOn == nil {
 		retryOn = core.DefaultRetryOn
 	}
 
 	var (
-		result  ToolResult
+		result  core.ToolResult
 		lastErr error
 	)
 	for attempt := 0; attempt <= policy.Retries; attempt++ {
 		if err := parent.Err(); err != nil {
-			return ToolResult{}, err
+			return core.ToolResult{}, err
 		}
 
 		attemptCtx := parent
@@ -56,27 +56,10 @@ func runWithPolicy(parent context.Context, policy core.ToolPolicy, fn func(conte
 			case <-timer.C:
 			case <-parent.Done():
 				timer.Stop()
-				return ToolResult{}, parent.Err()
+				return core.ToolResult{}, parent.Err()
 			}
 		}
 	}
 	return result, lastErr
 }
 
-// resolveToolPolicy implements ServeMux-style policy lookup: exact-name
-// entry first, then matchers in registration order. Returns the policy
-// and true if any rule matched.
-func (c *Config) resolveToolPolicy(name string) (core.ToolPolicy, bool) {
-	if c == nil {
-		return core.ToolPolicy{}, false
-	}
-	if p, ok := c.toolPolicies[name]; ok {
-		return p, true
-	}
-	for _, m := range c.toolPolicyMatchers {
-		if m.match(name) {
-			return m.policy, true
-		}
-	}
-	return core.ToolPolicy{}, false
-}

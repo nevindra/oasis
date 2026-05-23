@@ -41,8 +41,8 @@ type AgentOption = agent.AgentOption
 // AgentHandle is the asynchronous handle returned by Spawn.
 type AgentHandle = agent.AgentHandle
 
-// NewLLMAgent constructs an LLMAgent with the given provider and options.
-var NewLLMAgent = agent.NewLLMAgent
+// NewLLMAgent constructs an LLMAgent. See agent.New for full documentation.
+var NewLLMAgent = agent.New
 
 // Spawn runs an Agent in the background and returns a handle.
 var Spawn = agent.Spawn
@@ -218,12 +218,6 @@ type IterationDecision = agent.IterationDecision
 // ErrorDecision is the return value of OnError.
 type ErrorDecision = agent.ErrorDecision
 
-// AgentWithOptions extends Agent with ExecuteWith for per-call overrides.
-type AgentWithOptions = agent.AgentWithOptions
-
-// StreamingAgentWithOptions extends StreamingAgent with ExecuteStreamWith.
-type StreamingAgentWithOptions = agent.StreamingAgentWithOptions
-
 // Continue is the default IterationDecision — proceed to next iteration.
 var Continue = agent.Continue
 
@@ -292,8 +286,8 @@ type ModelFunc = core.ModelFunc
 // an LLM router.
 type Network = network.Network
 
-// NewNetwork constructs a Network with the given router provider and options.
-var NewNetwork = network.NewNetwork
+// NewNetwork constructs a Network. See network.New for full documentation.
+var NewNetwork = network.New
 
 
 // --- Compaction ---
@@ -356,8 +350,8 @@ type WorkflowResult = workflow.WorkflowResult
 // WorkflowError is returned by Workflow.Execute when a step fails.
 type WorkflowError = workflow.WorkflowError
 
-// NewWorkflow constructs a workflow from the supplied options.
-var NewWorkflow = workflow.NewWorkflow
+// NewWorkflow constructs a Workflow. See workflow.New for full documentation.
+var NewWorkflow = workflow.New
 
 // Step registers a named step in the workflow.
 var Step = workflow.Step
@@ -398,7 +392,7 @@ var WithOnFinish = workflow.WithOnFinish
 //
 //	import "github.com/nevindra/oasis/network"
 //	...
-//	net := network.NewNetwork("coordinator", "...", router, oasis.WithAgents(...))
+//	net := network.New("coordinator", "...", router, oasis.WithAgents(...))
 
 // --- Memory ---
 
@@ -759,27 +753,22 @@ func ParseRetryAfter(value string) time.Duration { return core.ParseRetryAfter(v
 // --- Agent core types ---
 
 type Agent = core.Agent
-type StreamingAgent = core.StreamingAgent
 type AgentTask = core.AgentTask
 type AgentResult = core.AgentResult
 type StepTrace = core.StepTrace
+type RunOption = core.RunOption
 
 // --- Stream wrapper ---
 
-// Stream is an opt-in wrapper around StreamingAgent.ExecuteStream that
-// provides multi-reader fan-out, bounded replay, blocking accessors, and
-// event-typed callbacks. See agent.Stream for full documentation.
+// Stream is an opt-in wrapper around the Subscribe API that captures the
+// final result and forwards stream events to multiple subscribers.
 type Stream = agent.Stream
 
-// StartStream runs agent.ExecuteStream in a background goroutine and returns
-// a Stream that consumers may subscribe to or query for the final result.
-func StartStream(ctx context.Context, ag StreamingAgent, task AgentTask) *Stream {
-	return agent.StartStream(ctx, ag, task)
-}
-
-// StartStreamWith is the RunOptions-aware constructor for Stream.
-func StartStreamWith(ctx context.Context, ag StreamingAgentWithOptions, task AgentTask, opts *RunOptions) *Stream {
-	return agent.StartStreamWith(ctx, ag, task, opts)
+// Subscribe runs ag in a background goroutine with WithStream wired up, and
+// returns a Stream value the caller may subscribe to or query for the final
+// result. See agent.Subscribe for full documentation.
+func Subscribe(ctx context.Context, ag Agent, task AgentTask, opts ...RunOption) *Stream {
+	return agent.Subscribe(ctx, ag, task, opts...)
 }
 
 // --- Tracer types ---

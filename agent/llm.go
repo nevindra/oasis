@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
-	"strings"
+	"time"
 
+	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
 )
@@ -15,24 +17,34 @@ import (
 // Optionally supports conversation memory and cross-thread search when
 // configured via WithMemory and memory.WithSemanticRecall.
 type LLMAgent struct {
-	AgentCore
+	runtime.Runtime
 }
 
-// NewLLMAgent creates an LLMAgent with the given provider and options.
-func NewLLMAgent(name, description string, provider Provider, opts ...AgentOption) *LLMAgent {
+// New constructs an LLMAgent — a single-brain Agent with one provider and
+// zero or more tools. For multi-agent orchestration, use network.New.
+func New(name, description string, provider core.Provider, opts ...AgentOption) *LLMAgent {
 	cfg := BuildConfig(opts)
 	a := &LLMAgent{}
-	InitCore(&a.AgentCore, name, description, provider, cfg)
+	runtime.Init(&a.Runtime, name, description, provider, cfg)
+
+	// Wire the spawn callback so ExecuteSpawn can create sub-agents without
+	// importing agent (which would be a cycle).
+	a.NewAgentFunc = func(n, d string, p core.Provider, o ...AgentOption) Agent {
+		return New(n, d, p, o...)
+	}
 
 	// Auto-register read_full_result when a store is configured.
-	if cfg.toolResultStore != nil {
-		a.tools.Add(NewReadFullResultTool(cfg.toolResultStore))
+	if cfg.ToolResultStore != nil {
+		a.Tools().Add(NewReadFullResultTool(cfg.ToolResultStore))
 	}
 
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Avoids rebuilding the slice on every Execute call.
-	if a.dynamicTools == nil {
-		a.cachedToolDefs = a.CacheBuiltinToolDefs(a.tools.AllDefinitions())
+	if !a.HasDynamicTools() {
+		askDef := askUserToolDef()
+		planDef := executePlanToolDef()
+		spawnDef := spawnAgentToolDef()
+		a.SetCachedToolDefs(a.CacheBuiltinToolDefs(a.Tools().AllDefinitions(), &askDef, &planDef, &spawnDef))
 	}
 
 	return a
@@ -42,36 +54,50 @@ func NewLLMAgent(name, description string, provider Provider, opts ...AgentOptio
 // Forget, List, Get, Pin directly from application code. The returned pointer
 // is always non-nil; methods on a zero AgentMemory (when WithMemory was not
 // configured) safely no-op.
-func (a *LLMAgent) Memory() *memory.AgentMemory { return &a.mem }
+func (a *LLMAgent) Memory() *memory.AgentMemory { return a.Runtime.Memory() }
 
 // Execute runs the tool-calling loop until the LLM produces a final text response.
-func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+// Optional RunOption values configure per-call behaviour (streaming, deadline, overrides).
+func (a *LLMAgent) Execute(ctx context.Context, task AgentTask, opts ...core.RunOption) (AgentResult, error) {
+	rcfg := core.ApplyRunOptions(opts...)
+	var ro *RunOptions
+	if rcfg.Overrides != nil {
+		if v, ok := rcfg.Overrides.(*RunOptions); ok {
+			ro = v
+		}
+	}
+	if err := ro.Validate(); err != nil {
+		if rcfg.Stream != nil {
+			close(rcfg.Stream)
+		}
+		return AgentResult{}, err
+	}
+	if rcfg.Deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, rcfg.Deadline)
+		defer cancel()
+	}
 	ctx = WithTaskContext(ctx, task)
-	return a.ExecuteWithSpan(ctx, task, nil, "LLMAgent", "agent", func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
-		return a.buildLoopConfig(ctx, task, ch, nil)
-	})
-}
-
-// ExecuteStream runs the tool-calling loop like Execute, but emits StreamEvent
-// values into ch throughout execution. Events include text deltas during the
-// final LLM response and tool call start/result during tool iterations.
-// The channel is closed when streaming completes.
-func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
-	ctx = WithTaskContext(ctx, task)
-	return a.ExecuteWithSpan(ctx, task, ch, "LLMAgent", "agent", func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
-		return a.buildLoopConfig(ctx, task, ch, nil)
-	})
+	return a.ExecuteWithSpan(ctx, task, rcfg.Stream, "LLMAgent", "agent",
+		func(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) LoopConfig {
+			return a.buildLoopConfig(ctx, task, ch, ro)
+		},
+		runLoop,
+	)
 }
 
 // buildLoopConfig wires LLMAgent fields into a LoopConfig for runLoop.
 // Used by both Execute / ExecuteStream (opts = nil → agent defaults) and
 // ExecuteWith / ExecuteStreamWith (opts != nil → per-call overrides).
-func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- StreamEvent, opts *RunOptions) LoopConfig {
+func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent, opts *RunOptions) LoopConfig {
 	cfg := a.ApplyRunOptions(opts)
 	prompt, provider := a.ResolvePromptAndProviderWith(ctx, task, cfg)
-	toolDefs, executeTool, executeToolStream, isStreamingTool := a.ResolveTools(ctx, task, nil)
+	askDef := askUserToolDef()
+	planDef := executePlanToolDef()
+	spawnDef := spawnAgentToolDef()
+	toolDefs, executeTool, executeToolStream, isStreamingTool := a.ResolveTools(ctx, task, nil, &askDef, &planDef, &spawnDef)
 	dispatch := a.makeDispatch(executeTool, executeToolStream, ch, toolDefs, isStreamingTool, cfg)
-	return a.BaseLoopConfig("agent:"+a.name, prompt, provider, toolDefs, dispatch, cfg, a.ResolveMem(opts))
+	return a.BaseLoopConfig("agent:"+a.Name(), prompt, provider, toolDefs, dispatch, cfg, a.ResolveMem(opts))
 }
 
 // makeDispatch returns a DispatchFunc that executes tools via the given
@@ -79,68 +105,40 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 // and spawn_agent special cases via the shared DispatchBuiltins method.
 // When executeToolStream and ch are non-nil, tools implementing StreamingAnyTool
 // emit progress events during execution.
-func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- StreamEvent, resolvedToolDefs []ToolDefinition, isStreamingTool func(string) bool, cfg *Config) DispatchFunc {
+func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream ToolExecStreamFunc, ch chan<- core.StreamEvent, resolvedToolDefs []core.ToolDefinition, isStreamingTool func(string) bool, cfg *Config) DispatchFunc {
 	// Capture ch so spawn_agent forwards the child's stream events through
 	// the parent's channel when the parent is running under ExecuteStream.
-	spawnHandler := func(ctx context.Context, args json.RawMessage, defs []ToolDefinition, exec ToolExecFunc) DispatchResult {
-		return a.ExecuteSpawn(ctx, args, defs, exec, ch)
+	spawnHandler := func(ctx context.Context, args json.RawMessage, defs []core.ToolDefinition, exec ToolExecFunc) DispatchResult {
+		return a.ExecuteSpawn(ctx, args, defs, exec, ch, executeAgentForSpawn)
+	}
+	// Wrap DispatchBuiltins to inject the ask_user and execute_plan callbacks,
+	// breaking the runtime→agent cycle.
+	builtins := func(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool) {
+		return a.DispatchBuiltins(ctx, tc, dispatch, executeAskUser, executePlan)
 	}
 	return NewStandardDispatch(StandardDispatchConfig{
-		Builtins:          a.DispatchBuiltins,
+		Builtins:          builtins,
 		SpawnHandler:      spawnHandler,
 		ExecuteTool:       executeTool,
 		ExecuteToolStream: executeToolStream,
 		ResolvedToolDefs:  resolvedToolDefs,
 		StreamCh:          ch,
-		ResolvePolicy:     cfg.resolveToolPolicy,
+		ResolvePolicy:     cfg.ResolveToolPolicy,
 		IsStreamingTool:   isStreamingTool,
-		Logger:            cfg.logger,
+		Logger:            cfg.Logger,
 	})
 }
 
-// ExecuteWith runs the tool-calling loop like Execute but applies per-call
-// overrides from opts on top of the agent's base configuration. A nil opts
-// is equivalent to calling Execute directly.
-func (a *LLMAgent) ExecuteWith(ctx context.Context, task AgentTask, opts *RunOptions) (AgentResult, error) {
-	if err := opts.Validate(); err != nil {
-		return AgentResult{}, err
-	}
-	ctx = WithTaskContext(ctx, task)
-	return a.ExecuteWithSpan(ctx, task, nil, "LLMAgent", "agent", func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
-		return a.buildLoopConfig(ctx, task, ch, opts)
-	})
-}
-
-// ExecuteStreamWith runs the tool-calling loop like ExecuteStream but applies
-// per-call overrides from opts. A nil opts is equivalent to calling
-// ExecuteStream directly. The channel is closed when streaming completes
-// (including on validation error).
-func (a *LLMAgent) ExecuteStreamWith(ctx context.Context, task AgentTask, ch chan<- StreamEvent, opts *RunOptions) (AgentResult, error) {
-	if err := opts.Validate(); err != nil {
-		close(ch)
-		return AgentResult{}, err
-	}
-	ctx = WithTaskContext(ctx, task)
-	return a.ExecuteWithSpan(ctx, task, ch, "LLMAgent", "agent", func(ctx context.Context, task AgentTask, ch chan<- StreamEvent) LoopConfig {
-		return a.buildLoopConfig(ctx, task, ch, opts)
-	})
-}
-
-// compile-time checks
-var (
-	_ Agent                        = (*LLMAgent)(nil)
-	_ StreamingAgent               = (*LLMAgent)(nil)
-	_ AgentWithOptions             = (*LLMAgent)(nil)
-	_ StreamingAgentWithOptions    = (*LLMAgent)(nil)
-)
+// compile-time check
+var _ core.Agent = (*LLMAgent)(nil)
 
 // --- execute_plan tool ---
 
 // executePlanToolDef returns the tool definition for the built-in
 // execute_plan tool. The schema is derived from planArgs/planStep via
 // reflection — keeps the LLM-facing schema in sync with the Go types.
-func executePlanToolDef() ToolDefinition {
-	return ToolDefinition{
+func executePlanToolDef() core.ToolDefinition {
+	return core.ToolDefinition{
 		Name:        "execute_plan",
 		Description: "Execute multiple tool calls in a single batch without intermediate reasoning. Use when you need to call tools multiple times with known inputs upfront. All steps run in parallel. Returns structured results per step.",
 		Parameters:  core.DeriveSchema[planArgs](),
@@ -171,6 +169,14 @@ type planStepResult struct {
 // to prevent resource exhaustion from unbounded goroutine creation.
 const maxPlanSteps = 50
 
+// defaultMaxParallelDispatch is the fallback parallel-dispatch limit used by
+// executePlan when the caller passes 0 (no per-agent limit set).
+const defaultMaxParallelDispatch = 10
+
+// ExecutePlan is the exported alias for executePlan.
+// Network uses it as a callback to DispatchBuiltins.
+var ExecutePlan = executePlan
+
 // executePlan handles the execute_plan tool call by parsing steps,
 // executing them in parallel via the given dispatch function, and
 // returning aggregated results as JSON. Shared by LLMAgent and Network.
@@ -179,7 +185,7 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 		planStepsLimit = maxPlanSteps
 	}
 	if parallelLimit == 0 {
-		parallelLimit = maxParallelDispatch
+		parallelLimit = defaultMaxParallelDispatch
 	}
 	var params planArgs
 	if err := json.Unmarshal(args, &params); err != nil {
@@ -193,12 +199,12 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 	}
 
 	// Build tool calls, preventing recursion.
-	calls := make([]ToolCall, len(params.Steps))
+	calls := make([]core.ToolCall, len(params.Steps))
 	for i, step := range params.Steps {
 		if step.Tool == "execute_plan" {
 			return DispatchResult{Content: "error: execute_plan steps cannot call execute_plan", IsError: true}
 		}
-		calls[i] = ToolCall{
+		calls[i] = core.ToolCall{
 			ID:   "plan_step_" + strconv.Itoa(i),
 			Name: step.Tool,
 			Args: step.Args,
@@ -208,7 +214,7 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 	// Wrap dispatch to block ask_user inside parallel plan steps.
 	// Most InputHandler implementations aren't designed for concurrent
 	// invocation, and simultaneous user prompts are confusing.
-	safeDispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
+	safeDispatch := func(ctx context.Context, tc core.ToolCall) DispatchResult {
 		if tc.Name == "ask_user" {
 			return DispatchResult{Content: "error: ask_user cannot be called from within execute_plan", IsError: true}
 		}
@@ -219,8 +225,8 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 	results := dispatchParallel(ctx, calls, safeDispatch, parallelLimit)
 
 	// Aggregate results.
-	var totalUsage Usage
-	var allAttachments []Attachment
+	var totalUsage core.Usage
+	var allAttachments []core.Attachment
 	stepResults := make([]planStepResult, len(params.Steps))
 	for i, step := range params.Steps {
 		totalUsage.InputTokens += results[i].usage.InputTokens
@@ -246,8 +252,8 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 // --- ask_user tool ---
 
 // askUserToolDef returns the tool definition for the built-in ask_user tool.
-func askUserToolDef() ToolDefinition {
-	return ToolDefinition{
+func askUserToolDef() core.ToolDefinition {
+	return core.ToolDefinition{
 		Name:        "ask_user",
 		Description: "Ask the user a question when you need clarification, confirmation, or additional information to proceed.",
 		Parameters:  core.DeriveSchema[askUserArgs](),
@@ -260,9 +266,14 @@ type askUserArgs struct {
 	Options  []string `json:"options,omitempty" describe:"Optional suggested answers for the user to choose from"`
 }
 
+// ExecuteAskUser handles the ask_user special-case tool call.
+// Exported so the network package can use it as a callback to DispatchBuiltins
+// without importing agent's internal types directly.
+var ExecuteAskUser = executeAskUser
+
 // executeAskUser handles the ask_user special-case tool call.
 // Shared by both LLMAgent and Network dispatch functions.
-func executeAskUser(ctx context.Context, handler InputHandler, agentName string, tc ToolCall) (string, error) {
+func executeAskUser(ctx context.Context, handler InputHandler, agentName string, tc core.ToolCall) (string, error) {
 	var args askUserArgs
 	if err := json.Unmarshal(tc.Args, &args); err != nil {
 		return "", err
@@ -284,51 +295,123 @@ func executeAskUser(ctx context.Context, handler InputHandler, agentName string,
 
 // --- spawn_agent tool ---
 
+// spawnAgentArgs is the parsed arguments for the spawn_agent tool call.
+// Mirrors runtime.spawnAgentArgs; kept here so executePlanToolDef can derive
+// the schema without importing internal/runtime directly.
+type spawnAgentArgs struct {
+	Task string `json:"task" describe:"Clear instruction for what the sub-agent should accomplish"`
+	Name string `json:"name,omitempty" describe:"Short label for this sub-agent (for logging). Auto-generated if omitted."`
+}
+
 // spawnAgentToolDef returns the tool definition for the built-in spawn_agent tool.
-func spawnAgentToolDef() ToolDefinition {
-	return ToolDefinition{
+func spawnAgentToolDef() core.ToolDefinition {
+	return core.ToolDefinition{
 		Name:        "spawn_agent",
 		Description: "Spawn a sub-agent to handle a specific task autonomously. The sub-agent has access to the same tools as you. Use when a task is independent and can be delegated. Call spawn_agent multiple times in one response to run sub-agents in parallel.",
 		Parameters:  core.DeriveSchema[spawnAgentArgs](),
 	}
 }
 
-// funcTool adapts a single ToolDefinition + executor into AnyTool.
-// Used by spawn_agent to pass the parent's (possibly filtered) tools to the
-// ephemeral sub-agent without reconstructing a ToolRegistry. Each filtered
-// definition becomes one funcTool.
-type funcTool struct {
-	def  ToolDefinition
-	exec ToolExecFunc
+// executeAgentForSpawn is the callback injected into ExecuteSpawn so that
+// runtime can run a child agent without importing the agent package.
+func executeAgentForSpawn(ctx context.Context, child core.Agent, name string, task core.AgentTask, ch chan<- core.StreamEvent, logger *slog.Logger) (core.AgentResult, error) {
+	return ExecuteAgent(ctx, child, name, task, ch, logger)
 }
 
-func (f *funcTool) Name() string               { return f.def.Name }
-func (f *funcTool) Definition() ToolDefinition { return f.def }
-func (f *funcTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
-	return f.exec(ctx, f.def.Name, args)
-}
-
-// spawnAgentArgs is the parsed arguments for the spawn_agent tool call.
-type spawnAgentArgs struct {
-	Task string `json:"task" describe:"Clear instruction for what the sub-agent should accomplish"`
-	Name string `json:"name,omitempty" describe:"Short label for this sub-agent (for logging). Auto-generated if omitted."`
-}
-
-// spawnAgentName returns a short name for a sub-agent, derived from the
-// args.Name if provided or from the first 20 runes of the task (slugified).
-func spawnAgentName(args spawnAgentArgs) string {
-	if args.Name != "" {
-		return args.Name
+// ExecuteAgent runs a and returns the result. When ch is non-nil, child events
+// flow through the parent channel with envelope-event filtering via WithStream.
+// Panic recovery is included on both paths. logger may be nil.
+func ExecuteAgent(ctx context.Context, a core.Agent, agentName string, task core.AgentTask, ch chan<- core.StreamEvent, logger *slog.Logger) (result core.AgentResult, err error) {
+	if logger == nil {
+		logger = nopLogger
 	}
-	name := TruncateStr(args.Task, 20) // rune-safe truncation (reuses loop.go helper)
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			return r
+	if ch != nil {
+		logger.Debug("executing subagent (streaming)", "agent", agentName)
+		return forwardSubagentStream(ctx, a, agentName, task, ch, logger)
+	}
+	// Non-streaming path with panic recovery.
+	logger.Debug("executing subagent", "agent", agentName)
+	defer func() {
+		if p := recover(); p != nil {
+			logger.Error("subagent panic", "agent", agentName, "panic", fmt.Sprintf("%v", p))
+			result = core.AgentResult{}
+			err = fmt.Errorf("subagent %q panic: %v", agentName, p)
 		}
-		return '_'
-	}, name)
+	}()
+	return a.Execute(ctx, task)
 }
 
-// subAgentPrompt is the minimal system prompt given to spawned sub-agents.
-const subAgentPrompt = "You are a sub-agent. Complete the given task thoroughly and return the result. Be concise."
+// forwardSubagentStream runs a subagent with streaming, forwarding events to the
+// parent channel while filtering envelope events (EventInputReceived,
+// EventRunStart, EventRunFinish, EventIterationStart, EventIterationFinish).
+func forwardSubagentStream(
+	ctx context.Context,
+	a core.Agent,
+	agentName string,
+	task core.AgentTask,
+	ch chan<- core.StreamEvent,
+	logger *slog.Logger,
+) (AgentResult, error) {
+	subCh := make(chan core.StreamEvent, 64)
+	done := make(chan struct{})
+	safeCloseSubCh := onceClose(subCh)
+
+	go func() {
+		defer close(done)
+		for ev := range subCh {
+			if ev.Type == core.EventInputReceived ||
+				ev.Type == core.EventRunStart || ev.Type == core.EventRunFinish ||
+				ev.Type == core.EventIterationStart || ev.Type == core.EventIterationFinish {
+				continue
+			}
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				startDrainTimeout(subCh, safeCloseSubCh, logger, agentName)
+				return
+			}
+		}
+	}()
+
+	var result AgentResult
+	var err error
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				safeCloseSubCh()
+				result = AgentResult{}
+				err = fmt.Errorf("subagent %q panic: %v", agentName, p)
+			}
+		}()
+		result, err = a.Execute(ctx, task, core.WithStream(subCh))
+	}()
+
+	<-done
+	return result, err
+}
+
+// safeAgentError wraps a recovered panic value into an error with the agent name.
+func safeAgentError(agentName string, p any) error {
+	return fmt.Errorf("subagent %q panic: %v", agentName, p)
+}
+
+// startDrainTimeout drains ch in the background with a 60-second timeout.
+func startDrainTimeout(subCh <-chan core.StreamEvent, safeClose func(), logger *slog.Logger, agentName string) {
+	go func() {
+		timeout := time.NewTimer(60 * time.Second)
+		defer timeout.Stop()
+		for {
+			select {
+			case _, ok := <-subCh:
+				if !ok {
+					return
+				}
+			case <-timeout.C:
+				logger.Warn("subagent stream drain timed out, closing subCh", "agent", agentName)
+				safeClose()
+				return
+			}
+		}
+	}()
+}
 

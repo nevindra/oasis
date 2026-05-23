@@ -41,22 +41,36 @@ func (s *executionState) getResult(name string) (StepResult, bool) {
 // are launched concurrently. The first step failure cancels all in-flight steps
 // and marks downstream steps as StepSkipped.
 // Returns an AgentResult with the last successful step's output.
-func (w *Workflow) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
-	return w.execute(ctx, task, nil)
+// Optional RunOption values configure per-call behaviour (streaming, deadline).
+func (w *Workflow) Execute(ctx context.Context, task AgentTask, opts ...core.RunOption) (AgentResult, error) {
+	rcfg := core.ApplyRunOptions(opts...)
+	// Workflow does not propagate RunOptions to its steps yet — error on any non-stream override.
+	if rcfg.Overrides != nil {
+		if rcfg.Stream != nil {
+			close(rcfg.Stream)
+		}
+		return core.AgentResult{}, fmt.Errorf("workflow: per-call overrides not yet supported (Plan C)")
+	}
+	if rcfg.Deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, rcfg.Deadline)
+		defer cancel()
+	}
+	if rcfg.Stream != nil {
+		defer close(rcfg.Stream)
+		return w.executeStreamInternal(ctx, task, rcfg.Stream)
+	}
+	return w.executeInternal(ctx, task)
 }
 
-// ExecuteStream runs the workflow like Execute, but emits core.StreamEvent values
-// into ch throughout execution. Step start/finish events are emitted for each
-// step. When an AgentStep delegates to a StreamingAgent, that agent's events
-// are forwarded through ch. The channel is closed when streaming completes.
-func (w *Workflow) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) (AgentResult, error) {
-	defer close(ch)
-	return w.execute(ctx, task, ch)
+// executeInternal runs the workflow without streaming.
+func (w *Workflow) executeInternal(ctx context.Context, task AgentTask) (AgentResult, error) {
+	return w.executeStreamInternal(ctx, task, nil)
 }
 
-// execute is the shared implementation for Execute and ExecuteStream.
+// executeStreamInternal is the shared implementation for Execute and ExecuteStream.
 // When ch is non-nil, step-start/step-finish events are emitted.
-func (w *Workflow) execute(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) (AgentResult, error) {
+func (w *Workflow) executeStreamInternal(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) (AgentResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -594,23 +608,3 @@ func (w *Workflow) safeCallback(fn func()) {
 	fn()
 }
 
-// ExecuteWith runs the workflow like Execute, but with per-call RunOptions overrides.
-// Workflow does not yet propagate RunOptions to its steps — non-empty overrides return an error.
-// A nil opts is equivalent to Execute.
-func (w *Workflow) ExecuteWith(ctx context.Context, task core.AgentTask, opts optionsWithOverrides) (core.AgentResult, error) {
-	if opts != nil && opts.HasOverrides() {
-		return core.AgentResult{}, fmt.Errorf("workflow: ExecuteWith with overrides not yet supported (use Execute)")
-	}
-	return w.Execute(ctx, task)
-}
-
-// ExecuteStreamWith runs the workflow like ExecuteStream, but with per-call RunOptions overrides.
-// Workflow does not yet propagate RunOptions to its steps — non-empty overrides return an error.
-// A nil opts is equivalent to ExecuteStream.
-func (w *Workflow) ExecuteStreamWith(ctx context.Context, task core.AgentTask, ch chan<- core.StreamEvent, opts optionsWithOverrides) (core.AgentResult, error) {
-	if opts != nil && opts.HasOverrides() {
-		close(ch) // StreamingAgent contract: must close ch
-		return core.AgentResult{}, fmt.Errorf("workflow: ExecuteStreamWith with overrides not yet supported (use ExecuteStream)")
-	}
-	return w.ExecuteStream(ctx, task, ch)
-}

@@ -16,24 +16,9 @@ type Agent interface {
 	// Used by Network to generate tool definitions for the routing LLM.
 	Description() string
 	// Execute runs the agent on the given task and returns a result.
-	Execute(ctx context.Context, task AgentTask) (AgentResult, error)
-}
-
-// StreamingAgent is an optional capability for agents that support event streaming.
-// Check via type assertion: if sa, ok := agent.(StreamingAgent); ok { ... }
-//
-// Implemented by LLMAgent, Network, and Workflow.
-type StreamingAgent interface {
-	Agent
-	// ExecuteStream runs the agent like Execute, but emits StreamEvent values
-	// into ch throughout execution. Events include text deltas, tool call
-	// deltas/start/result/progress, agent start/finish (Networks), step
-	// start/finish/progress (Workflows), and routing decisions (Networks).
-	//
-	// Contract: implementations MUST close ch before returning. Callers
-	// (including ServeSSE) use `for ev := range ch` to consume events,
-	// which blocks until ch is closed. Failing to close ch causes a deadlock.
-	ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
+	// Optional RunOption values configure per-call behaviour (streaming,
+	// deadline, overrides). Zero options is equivalent to the old two-argument call.
+	Execute(ctx context.Context, task AgentTask, opts ...RunOption) (AgentResult, error)
 }
 
 // AgentTask is the input to an Agent.
