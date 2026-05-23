@@ -172,13 +172,6 @@ type WorkflowContext struct {
 	mu     sync.RWMutex
 }
 
-// NewWorkflowContext creates a WorkflowContext seeded with the given task.
-// Exposed for tests and integrations that need to drive context-aware helpers
-// (e.g. ResumeData) without running a full Workflow.
-func NewWorkflowContext(task AgentTask) *WorkflowContext {
-	return newWorkflowContext(task)
-}
-
 func newWorkflowContext(task AgentTask) *WorkflowContext {
 	v := make(map[string]any)
 	if task.Input != "" {
@@ -351,9 +344,6 @@ type WorkflowResult struct {
 	Status StepStatus
 	// Steps maps step name to its individual result.
 	Steps map[string]StepResult
-	// Context is the shared WorkflowContext after all steps have run.
-	// Callers can inspect final values set by steps.
-	Context *WorkflowContext
 	// Usage is the aggregate token usage from all AgentStep executions.
 	Usage core.Usage
 }
@@ -412,7 +402,7 @@ type stepConfig struct {
 	after      []string                   // dependency edges
 	when       func(*WorkflowContext) bool // conditional execution gate
 	inputFrom  string                      // AgentStep: context key for input
-	argsFrom   string                      // ToolStep: context key for args
+	argsFrom   string                      // tool call step: context key for args
 	outputTo   string                      // override default output key
 	retry      int                         // max retry count (0 = no retries)
 	retryDelay time.Duration               // delay between retries
@@ -465,15 +455,17 @@ func InputFrom(key string) StepOption {
 }
 
 // ArgsFrom sets the context key whose value becomes the tool arguments
-// for a ToolStep. The value should be json.RawMessage, a JSON string,
-// or any value that can be marshalled to JSON.
+// (json.RawMessage, a JSON string, or any JSON-serializable value).
+// Consumed by tool-calling steps (used internally by the YAML/JSON
+// definition path; also usable from custom StepFunc implementations).
 func ArgsFrom(key string) StepOption {
 	return func(c *stepConfig) { c.argsFrom = key }
 }
 
-// OutputTo overrides the default output key for AgentStep ("{name}.output")
-// or ToolStep ("{name}.result"). Has no effect on basic Step (which writes
-// to context explicitly via wCtx.Set).
+// OutputTo overrides the default output key written to the WorkflowContext
+// after a step completes. AgentStep defaults to "{name}.output"; tool-calling
+// steps default to "{name}.result". Has no effect on basic Step, which writes
+// to context explicitly via wCtx.Set.
 func OutputTo(key string) StepOption {
 	return func(c *stepConfig) { c.outputTo = key }
 }
@@ -521,7 +513,7 @@ func While(fn func(*WorkflowContext) bool) StepOption {
 
 // --- Workflow options ---
 
-// WorkflowOption configures a Workflow. Step definitions (Step, AgentStep, ToolStep,
+// WorkflowOption configures a Workflow. Step definitions (Step, AgentStep,
 // ForEach, DoUntil, DoWhile) and workflow-level settings (WithOnFinish, WithOnError,
 // WithDefaultRetry) both implement this type.
 type WorkflowOption func(*workflowConfig)
@@ -577,8 +569,8 @@ func buildStepConfig(name string, fn StepFunc, st stepType, opts []StepOption) *
 
 // Step defines a workflow step that runs a StepFunc.
 // The function receives the shared WorkflowContext and can read/write any keys.
-// Unlike AgentStep and ToolStep, a basic Step does not automatically write output
-// to context — the function is responsible for calling wCtx.Set() as needed.
+// Unlike AgentStep, a basic Step does not automatically write output to context —
+// the function is responsible for calling wCtx.Set() as needed.
 func Step(name string, fn StepFunc, opts ...StepOption) WorkflowOption {
 	return func(c *workflowConfig) {
 		c.steps = append(c.steps, buildStepConfig(name, fn, stepTypeBasic, opts))
@@ -598,14 +590,9 @@ func AgentStep(name string, agent Agent, opts ...StepOption) WorkflowOption {
 	}
 }
 
-// ToolStep defines a workflow step that calls a single tool by name.
-// Args are read from the context key specified by ArgsFrom(). If ArgsFrom is not set,
-// empty JSON object ({}) is used.
-// The tool result is written to context as "{name}.result" (or the key specified by OutputTo()).
-//
-// With atomic tools, one core.AnyTool is one operation; toolName is retained for
-// labelling/error messages but no longer dispatches sub-operations.
-func ToolStep(name string, tool core.AnyTool, toolName string, opts ...StepOption) WorkflowOption {
+// toolStepInternal builds a tool-call step for the YAML/JSON definition path.
+// Not exported: user-facing workflows should use AgentStep with a one-tool LLMAgent.
+func toolStepInternal(name string, tool core.AnyTool, toolName string, opts ...StepOption) WorkflowOption {
 	return func(c *workflowConfig) {
 		cfg := buildStepConfig(name, nil, stepTypeBasic, opts)
 		cfg.fn = toolStepFunc(tool, toolName, cfg)

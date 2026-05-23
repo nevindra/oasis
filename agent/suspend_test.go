@@ -295,26 +295,49 @@ func TestErrSuspendedResume(t *testing.T) {
 }
 
 func TestResumeDataNotPresent(t *testing.T) {
-	wCtx := workflow.NewWorkflowContext(AgentTask{Input: "test"})
-	data, ok := ResumeData(wCtx)
-	if ok {
+	var gotData json.RawMessage
+	var gotOK bool
+	wf, err := workflow.New("test", "test resume data not present",
+		workflow.Step("check", func(_ context.Context, wCtx *workflow.WorkflowContext) error {
+			gotData, gotOK = ResumeData(wCtx)
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wf.Execute(context.Background(), workflow.AgentTask{Input: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotOK {
 		t.Error("ResumeData should return false when no resume data")
 	}
-	if data != nil {
+	if gotData != nil {
 		t.Error("ResumeData should return nil when no resume data")
 	}
 }
 
 func TestResumeDataPresent(t *testing.T) {
-	wCtx := workflow.NewWorkflowContext(AgentTask{Input: "test"})
-	wCtx.Set("_resume_data", json.RawMessage(`{"approved": true}`))
-
-	data, ok := ResumeData(wCtx)
-	if !ok {
+	var gotData json.RawMessage
+	var gotOK bool
+	wf, err := workflow.New("test", "test resume data present",
+		workflow.Step("check", func(_ context.Context, wCtx *workflow.WorkflowContext) error {
+			wCtx.Set("_resume_data", json.RawMessage(`{"approved": true}`))
+			gotData, gotOK = ResumeData(wCtx)
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wf.Execute(context.Background(), workflow.AgentTask{Input: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if !gotOK {
 		t.Error("ResumeData should return true when resume data is set")
 	}
-	if string(data) != `{"approved": true}` {
-		t.Errorf("ResumeData = %s", data)
+	if string(gotData) != `{"approved": true}` {
+		t.Errorf("ResumeData = %s", gotData)
 	}
 }
 

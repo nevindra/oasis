@@ -355,9 +355,6 @@ var Step = workflow.Step
 // AgentStep delegates a step's work to the given Agent.
 var AgentStep = workflow.AgentStep
 
-// ToolStep invokes a tool as a workflow step.
-var ToolStep = workflow.ToolStep
-
 // ForEach iterates over a collection produced by an earlier step.
 var ForEach = workflow.ForEach
 

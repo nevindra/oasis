@@ -70,15 +70,15 @@ func TestWorkflowAgentStepInputFrom(t *testing.T) {
 	}
 }
 
-// --- ToolStep tests ---
+// --- toolStepInternal tests ---
 
-func TestWorkflowToolStep(t *testing.T) {
+func TestWorkflowToolStepInternal(t *testing.T) {
 	wf, err := New("tool-test", "tool step test",
 		Step("prepare", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("args", `{"name":"world"}`)
 			return nil
 		}),
-		ToolStep("greet", mockTool{}, "greet", After("prepare"), ArgsFrom("args")),
+		toolStepInternal("greet", mockTool{}, "greet", After("prepare"), ArgsFrom("args")),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -93,9 +93,9 @@ func TestWorkflowToolStep(t *testing.T) {
 	}
 }
 
-func TestWorkflowToolStepNoArgs(t *testing.T) {
+func TestWorkflowToolStepInternalNoArgs(t *testing.T) {
 	wf, err := New("tool-noargs", "tool no args test",
-		ToolStep("greet", mockTool{}, "greet"),
+		toolStepInternal("greet", mockTool{}, "greet"),
 	)
 	if err != nil {
 		t.Fatal(err)

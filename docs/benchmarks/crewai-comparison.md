@@ -43,7 +43,7 @@
 | **Pre-Execution Planning** | `planning=True` — AgentPlanner generates step-by-step plan injected into tasks | N/A | CrewAI |
 | **Runtime Definitions** | N/A | `FromDefinition` — JSON-serializable DAG compiled at runtime | Oasis |
 | **Plan Execution** | N/A | `WithPlanExecution()` — LLM batches tool calls via `execute_plan` | Oasis |
-| **Step Types** | Agent tasks only (sequential or manager-delegated) | `Step`, `AgentStep`, `ToolStep`, `ForEach`, `DoWhile`, `DoUntil` | Oasis |
+| **Step Types** | Agent tasks only (sequential or manager-delegated) | `Step`, `AgentStep`, `ForEach`, `DoWhile`, `DoUntil`; single-tool wrappers via `AgentStep` + `agent.WithTools(...)` | Oasis |
 | **Validation** | Pydantic output validation, guardrail functions/LLM-based | Construction-time (duplicate names, missing deps, cycle detection via Kahn's) | Oasis |
 
 **Score: CrewAI 1 — Oasis 9 — Tie 2**

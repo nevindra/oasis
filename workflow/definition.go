@@ -201,7 +201,7 @@ func buildToolNode(n NodeDefinition, after []string, reg DefinitionRegistry, whe
 	if len(after) > 0 {
 		baseOpts = append(baseOpts, After(after...))
 	}
-	return []WorkflowOption{ToolStep(n.ID, tool, toolName, baseOpts...)}, nil
+	return []WorkflowOption{toolStepInternal(n.ID, tool, toolName, baseOpts...)}, nil
 }
 
 // toolNodeBaseOpts builds the common StepOption set shared by all tool node variants.
@@ -252,7 +252,7 @@ func buildToolNodeTemplateArgs(n NodeDefinition, tool core.AnyTool, toolName str
 	copy(toolOpts, baseOpts)
 	toolOpts = append(toolOpts, After(resolverID), ArgsFrom(resolverID))
 
-	return []WorkflowOption{resolver, ToolStep(n.ID, tool, toolName, toolOpts...)}, nil
+	return []WorkflowOption{resolver, toolStepInternal(n.ID, tool, toolName, toolOpts...)}, nil
 }
 
 // buildToolNodeStaticArgs generates an arg-setter step (marshals static args)
@@ -286,7 +286,7 @@ func buildToolNodeStaticArgs(n NodeDefinition, tool core.AnyTool, toolName strin
 		toolOpts = append(toolOpts, Retry(n.Retry, time.Second))
 	}
 
-	return []WorkflowOption{setter, ToolStep(n.ID, tool, toolName, toolOpts...)}, nil
+	return []WorkflowOption{setter, toolStepInternal(n.ID, tool, toolName, toolOpts...)}, nil
 }
 
 // buildConditionNode generates a Step that evaluates the condition expression

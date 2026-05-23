@@ -53,10 +53,16 @@ Step definitions (return `WorkflowOption`):
 ```go
 oasis.Step(name string, fn StepFunc, opts ...StepOption)
 oasis.AgentStep(name string, agent Agent, opts ...StepOption)
-oasis.ToolStep(name string, tool Tool, toolName string, opts ...StepOption)
 oasis.ForEach(name string, fn StepFunc, opts ...StepOption)
 oasis.DoUntil(name string, fn StepFunc, opts ...StepOption)
 oasis.DoWhile(name string, fn StepFunc, opts ...StepOption)
+```
+
+To call a single tool from a workflow step, wrap it in a one-tool LLMAgent:
+
+```go
+fetcher := agent.New("fetcher", "Fetches URLs", provider, agent.WithTools(httpTool))
+oasis.AgentStep("fetch", fetcher)
 ```
 
 ## FromDefinition

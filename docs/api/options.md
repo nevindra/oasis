@@ -74,8 +74,7 @@ Configures individual workflow steps.
 | `After(steps ...string)` | All | Dependency edges |
 | `When(fn func(*WorkflowContext) bool)` | All | Condition gate: skip if false |
 | `InputFrom(key string)` | AgentStep | Context key for agent input |
-| `ArgsFrom(key string)` | ToolStep | Context key for tool JSON args |
-| `OutputTo(key string)` | AgentStep, ToolStep | Override default output key |
+| `OutputTo(key string)` | AgentStep | Override default output key |
 | `Retry(n int, delay time.Duration)` | All | Retry on failure |
 | `IterOver(key string)` | ForEach | Context key with `[]any` collection |
 | `Concurrency(n int)` | ForEach | Max parallel iterations (default 1) |

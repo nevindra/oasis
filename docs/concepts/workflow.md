@@ -69,13 +69,14 @@ oasis.AgentStep("research", researcher,
 
 AgentTask.Context and Attachments are propagated to the sub-agent.
 
-### ToolStep
+### Single-tool steps
 
-Calls a single tool function. Args from `ArgsFrom()`, result to `"{name}.result"`:
+Tool calls happen inside an LLMAgent — use `AgentStep` with `agent.WithTools(...)` for a single-tool wrapper:
 
 ```go
-oasis.ToolStep("search", searchTool, "web_search",
-    oasis.ArgsFrom("search_params"),
+searcher := agent.New("searcher", "Runs web searches", provider, agent.WithTools(searchTool))
+oasis.AgentStep("search", searcher,
+    oasis.InputFrom("search_params"),
     oasis.After("prepare"),
 )
 ```
@@ -194,7 +195,6 @@ input := wCtx.Input()         // original AgentTask.Input
 |-----------|-------------------|
 | Step | (writes explicitly via `wCtx.Set`) |
 | AgentStep | `"{name}.output"` |
-| ToolStep | `"{name}.result"` |
 
 Override with `OutputTo("custom_key")`.
 
@@ -288,8 +288,7 @@ outer, _ := oasis.NewWorkflow("outer", "Main pipeline",
 | `After(steps...)` | All | Dependency edges |
 | `When(fn)` | All | Condition gate |
 | `InputFrom(key)` | AgentStep | Context key for input |
-| `ArgsFrom(key)` | ToolStep | Context key for args |
-| `OutputTo(key)` | AgentStep, ToolStep | Override output key |
+| `OutputTo(key)` | AgentStep | Override output key |
 | `Retry(n, delay)` | All | Retry on failure |
 | `IterOver(key)` | ForEach | Collection key |
 | `Concurrency(n)` | ForEach | Max parallel (default 1) |

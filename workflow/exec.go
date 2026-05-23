@@ -203,10 +203,9 @@ func (w *Workflow) buildResult(state *executionState, task AgentTask, ch chan<- 
 	}
 
 	wfResult := WorkflowResult{
-		Status:  wfStatus,
-		Steps:   state.results,
-		Context: state.wCtx,
-		Usage:   totalUsage,
+		Status: wfStatus,
+		Steps:  state.results,
+		Usage:  totalUsage,
 	}
 
 	if w.onFinish != nil {
