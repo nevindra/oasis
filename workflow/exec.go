@@ -42,7 +42,7 @@ func (s *executionState) getResult(name string) (StepResult, bool) {
 // and marks downstream steps as StepSkipped.
 // Returns an AgentResult with the last successful step's output.
 // Optional RunOption values configure per-call behaviour (streaming, deadline).
-func (w *Workflow) Execute(ctx context.Context, task AgentTask, opts ...core.RunOption) (AgentResult, error) {
+func (w *Workflow) Execute(ctx context.Context, task core.AgentTask, opts ...core.RunOption) (core.AgentResult, error) {
 	rcfg := core.ApplyRunOptions(opts...)
 	// Workflow does not propagate RunOptions to its steps yet — error on any non-stream override.
 	if rcfg.Overrides != nil {
@@ -64,21 +64,21 @@ func (w *Workflow) Execute(ctx context.Context, task AgentTask, opts ...core.Run
 }
 
 // executeInternal runs the workflow without streaming.
-func (w *Workflow) executeInternal(ctx context.Context, task AgentTask) (AgentResult, error) {
+func (w *Workflow) executeInternal(ctx context.Context, task core.AgentTask) (core.AgentResult, error) {
 	return w.executeStreamInternal(ctx, task, nil)
 }
 
 // executeStreamInternal is the shared implementation for Execute and ExecuteStream.
 // When ch is non-nil, step-start/step-finish events are emitted.
-func (w *Workflow) executeStreamInternal(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) (AgentResult, error) {
+func (w *Workflow) executeStreamInternal(ctx context.Context, task core.AgentTask, ch chan<- core.StreamEvent) (core.AgentResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var span Span
+	var span core.Span
 	if w.tracer != nil {
 		ctx, span = w.tracer.Start(ctx, "workflow.execute",
-			StringAttr("workflow.name", w.name),
-			IntAttr("step_count", len(w.stepOrder)))
+			core.StringAttr("workflow.name", w.name),
+			core.IntAttr("step_count", len(w.stepOrder)))
 		defer span.End()
 	}
 
@@ -96,13 +96,13 @@ func (w *Workflow) executeStreamInternal(ctx context.Context, task AgentTask, ch
 		if err != nil {
 			var suspended *ErrSuspended
 			if errors.As(err, &suspended) {
-				span.SetAttr(StringAttr("workflow.status", "suspended"))
+				span.SetAttr(core.StringAttr("workflow.status", "suspended"))
 			} else {
 				span.Error(err)
-				span.SetAttr(StringAttr("workflow.status", "error"))
+				span.SetAttr(core.StringAttr("workflow.status", "error"))
 			}
 		} else {
-			span.SetAttr(StringAttr("workflow.status", "ok"))
+			span.SetAttr(core.StringAttr("workflow.status", "ok"))
 		}
 	}
 	return result, err
@@ -113,7 +113,7 @@ func (w *Workflow) executeStreamInternal(ctx context.Context, task AgentTask, ch
 // are pre-populated — steps that were skipped due to the suspension (failure-skipped)
 // will re-execute on resume. This is intentional: those steps never ran, so they
 // must run once the suspended step succeeds.
-func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedResults map[string]StepResult, contextValues map[string]any, data json.RawMessage, ch chan<- core.StreamEvent) (AgentResult, error) {
+func (w *Workflow) executeResume(ctx context.Context, task core.AgentTask, completedResults map[string]StepResult, contextValues map[string]any, data json.RawMessage, ch chan<- core.StreamEvent) (core.AgentResult, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -149,7 +149,7 @@ func (w *Workflow) executeResume(ctx context.Context, task AgentTask, completedR
 // buildResult converts execution state into an AgentResult after the DAG completes.
 // Handles suspension (returns ErrSuspended), failure (returns WorkflowError),
 // and success. Shared by Execute and executeResume.
-func (w *Workflow) buildResult(state *executionState, task AgentTask, ch chan<- core.StreamEvent) (AgentResult, error) {
+func (w *Workflow) buildResult(state *executionState, task core.AgentTask, ch chan<- core.StreamEvent) (core.AgentResult, error) {
 	// Check for suspension.
 	if state.suspendedStep != "" {
 		snapshotResults := make(map[string]StepResult)
@@ -166,13 +166,13 @@ func (w *Workflow) buildResult(state *executionState, task AgentTask, ch chan<- 
 		suspendedStep := state.suspendedStep
 		suspendPayload := state.suspendPayload
 
-		return AgentResult{}, &ErrSuspended{
+		return core.AgentResult{}, &ErrSuspended{
 			Step:    suspendedStep,
 			Payload: suspendPayload,
-			resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
+			resume: func(ctx context.Context, data json.RawMessage) (core.AgentResult, error) {
 				return w.executeResume(ctx, task, snapshotResults, snapshotValues, data, nil)
 			},
-			resumeStream: func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (AgentResult, error) {
+			resumeStream: func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (core.AgentResult, error) {
 				defer close(ch)
 				return w.executeResume(ctx, task, snapshotResults, snapshotValues, data, ch)
 			},
@@ -220,26 +220,26 @@ func (w *Workflow) buildResult(state *executionState, task AgentTask, ch chan<- 
 		if sr, ok := state.results[state.failedStep]; ok {
 			stepErr = sr.Error
 		}
-		return AgentResult{Output: lastOutput, Usage: totalUsage, Steps: steps}, &WorkflowError{
+		return core.AgentResult{Output: lastOutput, Usage: totalUsage, Steps: steps}, &WorkflowError{
 			StepName: state.failedStep,
 			Err:      stepErr,
 			Result:   wfResult,
 		}
 	}
 
-	return AgentResult{Output: lastOutput, Usage: totalUsage, Steps: steps}, nil
+	return core.AgentResult{Output: lastOutput, Usage: totalUsage, Steps: steps}, nil
 }
 
 // workflowStepsToTraces converts workflow StepResults into StepTrace entries
 // in the order defined by stepOrder. Skipped and pending steps are omitted.
-func workflowStepsToTraces(order []string, results map[string]StepResult) []StepTrace {
-	var traces []StepTrace
+func workflowStepsToTraces(order []string, results map[string]StepResult) []core.StepTrace {
+	var traces []core.StepTrace
 	for _, name := range order {
 		sr, ok := results[name]
 		if !ok || sr.Status == StepPending || sr.Status == StepSkipped {
 			continue
 		}
-		trace := StepTrace{
+		trace := core.StepTrace{
 			Name:     name,
 			Type:     "step",
 			Output:   truncateStr(sr.Output, 500),
@@ -376,16 +376,16 @@ func (w *Workflow) hasFailedUpstream(s *stepConfig, state *executionState) bool 
 func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *executionState, ch chan<- core.StreamEvent) {
 	start := time.Now()
 
-	var stepSpan Span
+	var stepSpan core.Span
 	if w.tracer != nil {
 		ctx, stepSpan = w.tracer.Start(ctx, "workflow.step",
-			StringAttr("step.name", s.name))
+			core.StringAttr("step.name", s.name))
 	}
 	endSpan := func(status string) {
 		if stepSpan != nil {
 			stepSpan.SetAttr(
-				StringAttr("step.status", status),
-				Float64Attr("step.duration_ms", float64(time.Since(start).Milliseconds())))
+				core.StringAttr("step.status", status),
+				core.Float64Attr("step.duration_ms", float64(time.Since(start).Milliseconds())))
 			stepSpan.End()
 		}
 	}
@@ -446,7 +446,7 @@ func (w *Workflow) executeStep(ctx context.Context, s *stepConfig, state *execut
 // recordStepOutcome records the final step result (suspend, failure, or success)
 // into the execution state. Handles span annotation, logging, onError callbacks,
 // and fail-fast cancellation for failures.
-func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err error, stepSpan Span, duration time.Duration, endSpan func(string), ch chan<- core.StreamEvent) {
+func (w *Workflow) recordStepOutcome(s *stepConfig, state *executionState, err error, stepSpan core.Span, duration time.Duration, endSpan func(string), ch chan<- core.StreamEvent) {
 	// Check for suspend (before error handling — suspend is not a failure).
 	var suspend *errSuspend
 	if errors.As(err, &suspend) {

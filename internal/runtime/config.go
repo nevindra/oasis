@@ -113,6 +113,12 @@ type Config struct {
 	// Tool middleware applied to every registered tool at build time.
 	ToolMiddleware []core.ToolMiddleware
 
+	// AgentMiddleware wraps the agent's Execute method. Applied lazily on
+	// first Execute call and cached. Set via agent.WithMiddleware.
+	// Stored as the underlying function type to avoid an import cycle between
+	// agent and runtime (agent.Middleware is defined as this function type).
+	AgentMiddleware []func(core.Agent) core.Agent
+
 	// Per-tool approval gates configured via WithToolApproval.
 	ToolApprovals []ApprovalConfig
 

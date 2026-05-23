@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"sync"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // RegistryOption configures a Registry at construction time.

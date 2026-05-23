@@ -426,33 +426,17 @@ func TestDispatchParallelToolPanicRecovery(t *testing.T) {
 	}
 }
 
-// --- Tool result truncation test ---
+// --- Tool result chunking test ---
 
-func TestToolResultTruncationInLoop(t *testing.T) {
-	// Verify that large tool results are truncated in the message history
-	// but the step trace retains the full content.
+func TestToolResultChunkedTransparently(t *testing.T) {
+	// Verify that large tool results are split into multiple tool-result messages
+	// (all with the same call ID) rather than being truncated with a hint.
 	bigContent := strings.Repeat("x", maxToolResultMessageLen+1000)
-	bigTool := &stubAgent{
-		name: "big",
-		desc: "Returns huge content",
-		fn: func(_ AgentTask) (AgentResult, error) {
-			return AgentResult{Output: bigContent}, nil
-		},
-	}
-	_ = bigTool // We test via the tool path, not agent path.
 
 	// Create a tool that returns a very large result.
 	largeTool := &largeTool{content: bigContent}
 
 	var capturedMessages []core.ChatMessage
-	provider := &mockProvider{
-		name: "test",
-		responses: []core.ChatResponse{
-			{ToolCalls: []core.ToolCall{{ID: "1", Name: "large", Args: json.RawMessage(`{}`)}}},
-			{Content: "done"},
-		},
-	}
-
 	// Use a callbackProvider to capture the second request's messages.
 	cbProvider := &sequentialCallbackProvider{
 		responses: []core.ChatResponse{
@@ -463,9 +447,8 @@ func TestToolResultTruncationInLoop(t *testing.T) {
 			capturedMessages = req.Messages
 		},
 	}
-	_ = provider // use cbProvider instead
 
-	agent := New("truncator", "Tests truncation", cbProvider,
+	agent := New("chunker", "Tests chunking", cbProvider,
 		WithTools(largeTool),
 	)
 
@@ -477,37 +460,47 @@ func TestToolResultTruncationInLoop(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "done")
 	}
 
-	// Find the tool result message in the captured messages.
-	var toolResultMsg *core.ChatMessage
-	for i, m := range capturedMessages {
+	// Collect all tool-result messages for call ID "1".
+	var toolResultMsgs []core.ChatMessage
+	for _, m := range capturedMessages {
 		if m.ToolCallID == "1" {
-			toolResultMsg = &capturedMessages[i]
-			break
+			toolResultMsgs = append(toolResultMsgs, m)
 		}
 	}
-	if toolResultMsg == nil {
-		t.Fatal("tool result message not found in captured messages")
+	if len(toolResultMsgs) < 2 {
+		t.Fatalf("expected >=2 tool-result chunks, got %d", len(toolResultMsgs))
 	}
 
-	// The message content should be truncated.
-	// +300 for the truncation marker (paging marker can be ~200 chars with id, legacy is shorter).
-	if len([]rune(toolResultMsg.Content)) > maxToolResultMessageLen+300 {
-		t.Errorf("tool result message len = %d runes, want <= %d (should be truncated)",
-			len([]rune(toolResultMsg.Content)), maxToolResultMessageLen+300)
-	}
-	// Default behaviour (store configured) emits a paging marker; legacy emits "[output truncated".
-	hasPaging := strings.Contains(toolResultMsg.Content, "Use read_full_result(id=")
-	hasLegacy := strings.Contains(toolResultMsg.Content, "[output truncated")
-	if !hasPaging && !hasLegacy {
-		t.Error("truncated message should contain a truncation marker (paging or legacy)")
+	// Each individual chunk must fit within the limit.
+	for i, m := range toolResultMsgs {
+		if len([]rune(m.Content)) > maxToolResultMessageLen {
+			t.Errorf("chunk %d: len = %d runes, want <= %d", i, len([]rune(m.Content)), maxToolResultMessageLen)
+		}
 	}
 
-	// Step trace should retain the full content.
+	// Reassembled content must equal the original.
+	var reassembled strings.Builder
+	for _, m := range toolResultMsgs {
+		reassembled.WriteString(m.Content)
+	}
+	if reassembled.String() != bigContent {
+		t.Error("reassembled chunks do not equal original content")
+	}
+
+	// No truncation hints or read_full_result markers in any chunk.
+	for i, m := range toolResultMsgs {
+		if strings.Contains(m.Content, "read_full_result") {
+			t.Errorf("chunk %d should not contain read_full_result hint", i)
+		}
+		if strings.Contains(m.Content, "[output truncated") {
+			t.Errorf("chunk %d should not contain truncation marker", i)
+		}
+	}
+
+	// Step trace should exist and have the right name.
 	if len(result.Steps) == 0 {
 		t.Fatal("expected at least one step trace")
 	}
-	// Step trace output is truncated to 500 chars by buildStepTrace, not maxToolResultMessageLen.
-	// Verify it exists and has content.
 	if result.Steps[0].Name != "large" {
 		t.Errorf("step name = %q, want %q", result.Steps[0].Name, "large")
 	}
@@ -629,5 +622,67 @@ func TestTerminateIteration_PinsContractFields(t *testing.T) {
 	}
 	if string(res.final.SuspendPayload) != `"x"` || res.final.SuspendProtocol != "tag" {
 		t.Fatalf("extra fields not merged: %+v", res.final)
+	}
+}
+
+// --- splitContentRunes unit tests ---
+
+func TestSplitContentRunes_FitsInOne(t *testing.T) {
+	chunks := splitContentRunes("hello", 100)
+	if len(chunks) != 1 || chunks[0] != "hello" {
+		t.Fatalf("expected single chunk %q, got %v", "hello", chunks)
+	}
+}
+
+func TestSplitContentRunes_ExactBoundary(t *testing.T) {
+	chunks := splitContentRunes("abcde", 5)
+	if len(chunks) != 1 || chunks[0] != "abcde" {
+		t.Fatalf("expected single chunk, got %v", chunks)
+	}
+}
+
+func TestSplitContentRunes_SplitsEvenly(t *testing.T) {
+	s := strings.Repeat("x", 200)
+	chunks := splitContentRunes(s, 100)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if chunks[0] != strings.Repeat("x", 100) || chunks[1] != strings.Repeat("x", 100) {
+		t.Error("chunks do not equal expected 100-x slices")
+	}
+}
+
+func TestSplitContentRunes_Reassembly(t *testing.T) {
+	original := strings.Repeat("abc", 70_000) // 210_000 runes
+	chunks := splitContentRunes(original, 100_000)
+	if len(chunks) < 2 {
+		t.Fatalf("expected >=2 chunks, got %d", len(chunks))
+	}
+	var reassembled strings.Builder
+	for _, c := range chunks {
+		reassembled.WriteString(c)
+	}
+	if reassembled.String() != original {
+		t.Error("reassembled string does not equal original")
+	}
+}
+
+func TestSplitContentRunes_MultibyteUTF8(t *testing.T) {
+	// 2-byte runes (é = U+00E9). Each rune is 2 bytes in UTF-8.
+	original := strings.Repeat("é", 5)
+	chunks := splitContentRunes(original, 3)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks for 5 runes with max=3, got %d", len(chunks))
+	}
+	if chunks[0] != strings.Repeat("é", 3) || chunks[1] != strings.Repeat("é", 2) {
+		t.Errorf("unexpected chunks: %v", chunks)
+	}
+	// Verify bytes are valid UTF-8 (no broken sequences).
+	for i, c := range chunks {
+		for j, r := range c {
+			if r == '�' {
+				t.Errorf("chunk %d position %d: replacement rune (broken UTF-8)", i, j)
+			}
+		}
 	}
 }

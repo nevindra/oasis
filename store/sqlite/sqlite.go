@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // IngestResult holds the outcome of an ingest operation.

@@ -52,6 +52,38 @@ func ExampleChainSkillProviders() {
 	// Output varies based on available skills
 }
 
+// ExampleFromDir demonstrates the preferred constructor for file-based providers.
+func ExampleFromDir() {
+	dir := os.TempDir()
+	skillDir := filepath.Join(dir, "fromdir-example", "my-skill")
+	os.MkdirAll(skillDir, 0o755)
+	defer os.RemoveAll(filepath.Join(dir, "fromdir-example"))
+
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+name: my-skill
+description: Example skill
+---
+Example instructions.
+`), 0o644)
+
+	provider := FromDir(filepath.Join(dir, "fromdir-example"))
+	summaries, _ := provider.Discover(context.Background())
+	fmt.Printf("%d skill(s) available\n", len(summaries))
+	// Output:
+	// 1 skill(s) available
+}
+
+// ExampleChain demonstrates the preferred constructor for chaining providers.
+func ExampleChain() {
+	provider := Chain(
+		FromDir(), // would search user directories
+		Builtin(),
+	)
+	summaries, _ := provider.Discover(context.Background())
+	fmt.Printf("Total skills available: %d\n", len(summaries))
+	// Output varies based on available skills
+}
+
 // ExampleActivateWithReferences demonstrates loading a skill with references.
 func ExampleActivateWithReferences() {
 	dir := os.TempDir()

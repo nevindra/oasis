@@ -6,7 +6,7 @@
 
 package catalog
 
-import oasis "github.com/nevindra/oasis"
+import oasis "github.com/nevindra/oasis/core"
 
 func init() {
 	generatedPlatforms = []oasis.Platform{

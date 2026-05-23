@@ -1,11 +1,15 @@
 // memory/item.go
 package memory
 
+import "github.com/nevindra/oasis/core"
+
 // Kind discriminates the role of a MemoryItem. The framework defines six
 // canonical kinds below, but Kind is an open string type — users may define
 // their own kinds (e.g. "decision", "hypothesis", "todo-event") and every
 // pipeline, tool, and filter operates on them identically.
-type Kind string
+//
+// Deprecated: use core.MemoryKind directly. Will be removed in next major.
+type Kind = core.MemoryKind
 
 const (
 	KindFact       Kind = "fact"       // semantic fact about user/world
@@ -17,7 +21,9 @@ const (
 )
 
 // ScopeKind is the partition kind for memory visibility.
-type ScopeKind string
+//
+// Deprecated: use core.MemoryScopeKind directly. Will be removed in next major.
+type ScopeKind = core.MemoryScopeKind
 
 const (
 	ScopeThread   ScopeKind = "thread"   // visible only inside one thread
@@ -28,21 +34,18 @@ const (
 
 // Scope anchors a MemoryItem to a specific instance of a ScopeKind.
 // Example: {Kind: ScopeResource, Ref: "user_123"}.
-type Scope struct {
-	Kind ScopeKind
-	Ref  string
-}
+//
+// Deprecated: use core.MemoryScope directly. Will be removed in next major.
+type Scope = core.MemoryScope
 
 // Scoped is shorthand for Scope{Kind: k, Ref: ref}.
 func Scoped(k ScopeKind, ref string) Scope { return Scope{Kind: k, Ref: ref} }
 
 // Source records provenance — where this MemoryItem came from. Powers
 // "where did I learn this" queries and forgetting by source.
-type Source struct {
-	Kind    string // "message" | "tool" | "user" | "agent" | "extraction"
-	Ref     string // foreign key (message ID, tool call ID, etc.) — may be empty
-	AgentID string // which agent created or extracted this
-}
+//
+// Deprecated: use core.MemorySource directly. Will be removed in next major.
+type Source = core.MemorySource
 
 // MemoryItem is the universal record type for all memory layers.
 // One struct, discriminated by Kind, covering facts, notes, events,
@@ -52,23 +55,12 @@ type Source struct {
 // structured data, they JSON-encode it into Content and decode on read —
 // the framework intentionally has no Data field, complying with Oasis's
 // "no any at the boundary" rule.
-type MemoryItem struct {
-	ID        string
-	Kind      Kind
-	Content   string    // canonical text; used for embedding + display + LLM consumption
-	Scope     Scope
-	Source    Source
-	Pinned    bool      // pinned items are always included in retrieval
-	Tags      []string  // arbitrary labels for filtering
-	Embedding []float32 // optional; backfilled by Embedder ingest processor when absent
-	CreatedAt int64     // unix seconds
-	UpdatedAt int64
-	ExpiresAt int64     // 0 = never
-}
+//
+// Deprecated: use core.MemoryItem directly. Will be removed in next major.
+type MemoryItem = core.MemoryItem
 
 // ScoredItem is a MemoryItem paired with a similarity score, returned
 // from semantic search.
-type ScoredItem struct {
-	Item  MemoryItem
-	Score float32 // cosine similarity, 0-1
-}
+//
+// Deprecated: use core.ScoredMemoryItem directly. Will be removed in next major.
+type ScoredItem = core.ScoredMemoryItem

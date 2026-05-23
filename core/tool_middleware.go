@@ -39,3 +39,24 @@ func ApplyToolMiddleware(t AnyTool, mws []ToolMiddleware) AnyTool {
 	}
 	return t
 }
+
+// ChainToolMiddleware composes tool middlewares using the same Chain shape
+// as provider.Chain and agent.Chain. Earlier arguments wrap further out.
+//
+//	t := core.ChainToolMiddleware(
+//	    logging.Tool(),  // outermost
+//	    timing.Tool(),
+//	    otel.Tool(),     // innermost — closest to the wrapped tool
+//	)(myTool)
+//
+// Equivalent to ApplyToolMiddleware(t, []ToolMiddleware{...}).
+func ChainToolMiddleware(mws ...ToolMiddleware) ToolMiddleware {
+	return func(t AnyTool) AnyTool {
+		for i := len(mws) - 1; i >= 0; i-- {
+			if mws[i] != nil {
+				t = mws[i](t)
+			}
+		}
+		return t
+	}
+}

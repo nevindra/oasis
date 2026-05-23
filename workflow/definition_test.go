@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // --- Expression evaluator tests ---
@@ -33,7 +35,7 @@ func TestEvalExpression(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wCtx := newWorkflowContext(AgentTask{})
+			wCtx := newWorkflowContext(core.AgentTask{})
 			for k, v := range tt.values {
 				wCtx.Set(k, v)
 			}
@@ -54,8 +56,8 @@ func TestFromDefinitionLLMNode(t *testing.T) {
 	agent := &stubAgent{
 		name: "writer",
 		desc: "Writes text",
-		fn: func(task AgentTask) (AgentResult, error) {
-			return AgentResult{Output: "wrote: " + task.Input}, nil
+		fn: func(task core.AgentTask) (core.AgentResult, error) {
+			return core.AgentResult{Output: "wrote: " + task.Input}, nil
 		},
 	}
 
@@ -69,7 +71,7 @@ func TestFromDefinitionLLMNode(t *testing.T) {
 	}
 
 	reg := DefinitionRegistry{
-		Agents: map[string]Agent{"writer": agent},
+		Agents: map[string]core.Agent{"writer": agent},
 	}
 
 	wf, err := FromDefinition(def, reg)
@@ -77,7 +79,7 @@ func TestFromDefinitionLLMNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "hello"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +101,7 @@ func TestFromDefinitionToolNode(t *testing.T) {
 	}
 
 	reg := DefinitionRegistry{
-		Tools: map[string]AnyTool{"greeter": tool},
+		Tools: map[string]core.AnyTool{"greeter": tool},
 	}
 
 	wf, err := FromDefinition(def, reg)
@@ -107,7 +109,7 @@ func TestFromDefinitionToolNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "test"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +134,7 @@ func TestFromDefinitionTemplateNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "test"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +165,7 @@ func TestFromDefinitionConditionBranching(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +196,7 @@ func TestFromDefinitionConditionFalseBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +232,7 @@ func TestFromDefinitionRegisteredCondition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,14 +274,14 @@ func TestFromDefinitionValidationErrors(t *testing.T) {
 			WorkflowDefinition{Name: "bad-agent", Nodes: []NodeDefinition{
 				{ID: "a", Type: NodeLLM, Agent: "missing"},
 			}},
-			DefinitionRegistry{Agents: map[string]Agent{}},
+			DefinitionRegistry{Agents: map[string]core.Agent{}},
 		},
 		{
 			"unknown tool",
 			WorkflowDefinition{Name: "bad-tool", Nodes: []NodeDefinition{
 				{ID: "a", Type: NodeTool, Tool: "missing"},
 			}},
-			DefinitionRegistry{Tools: map[string]AnyTool{}},
+			DefinitionRegistry{Tools: map[string]core.AnyTool{}},
 		},
 		{
 			"condition no branches",
@@ -323,7 +325,7 @@ func TestFromDefinitionToolWithTemplateArgs(t *testing.T) {
 	}
 
 	reg := DefinitionRegistry{
-		Tools: map[string]AnyTool{"echo": echoTool},
+		Tools: map[string]core.AnyTool{"echo": echoTool},
 	}
 
 	wf, err := FromDefinition(def, reg)
@@ -331,7 +333,7 @@ func TestFromDefinitionToolWithTemplateArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "test"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,10 +347,10 @@ func TestFromDefinitionToolWithTemplateArgs(t *testing.T) {
 type argEchoTool struct{}
 
 func (a *argEchoTool) Name() string { return "echo_args" }
-func (a *argEchoTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: "echo_args", Description: "Echoes args"}
+func (a *argEchoTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "echo_args", Description: "Echoes args"}
 }
 
-func (a *argEchoTool) ExecuteRaw(_ context.Context, args json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: args}, nil
+func (a *argEchoTool) ExecuteRaw(_ context.Context, args json.RawMessage) (core.ToolResult, error) {
+	return core.ToolResult{Content: args}, nil
 }

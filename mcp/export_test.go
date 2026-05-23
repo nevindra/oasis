@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // NewTestRegistry builds a Registry with a stderr logger. Used by mcp_test

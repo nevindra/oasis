@@ -6,9 +6,10 @@ import (
 	"github.com/nevindra/oasis"
 )
 
+// TestUmbrellaReExportsSuspendProtocol asserts that the curated [oasis] umbrella
+// re-exports the typed HITL primitives. If any reference fails to resolve, the
+// umbrella is missing the re-export.
 func TestUmbrellaReExportsSuspendProtocol(t *testing.T) {
-	// Compilation alone is the assertion — if any of these references
-	// fail to resolve, the umbrella is missing the re-export.
 	type req struct{ X int }
 	type resp struct{ Y int }
 
@@ -16,6 +17,5 @@ func TestUmbrellaReExportsSuspendProtocol(t *testing.T) {
 	if p.Name() != "test" {
 		t.Errorf("Name() = %q, want %q", p.Name(), "test")
 	}
-	_ = oasis.Suspend
 	var _ *oasis.ErrSuspended
 }

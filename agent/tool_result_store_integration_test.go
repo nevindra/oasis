@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/agent"
 	"github.com/nevindra/oasis/core"
 )
 
@@ -70,65 +70,84 @@ func newToolCallThenTextProvider(toolName string) *sequentialProvider {
 	}
 }
 
-func TestOversizeToolResultStored(t *testing.T) {
+func TestOversizeToolResultChunked(t *testing.T) {
+	// Verify that an oversize tool result is split into multiple tool-result
+	// messages (transparent chunking) and the store receives the full payload.
 	bigOutput := strings.Repeat("x", 200_000)
 	tool := newFakeTool("big_tool", bigOutput)
 	provider := newToolCallThenTextProvider("big_tool")
 
 	store := core.NewInMemoryToolResultStore()
-	a := oasis.NewLLMAgent("test", "", provider,
-		oasis.WithTools(tool),
-		oasis.WithToolResultStore(store),
-		oasis.WithLimits(oasis.Limits{MaxToolResultLen: 100_000}),
+	a := agent.New("test", "", provider,
+		agent.WithTools(tool),
+		agent.WithToolResultStore(store),
+		agent.WithLimits(agent.Limits{MaxToolResultLen: 100_000}),
 	)
 
-	_, err := a.Execute(context.Background(), oasis.AgentTask{Input: "go"})
+	_, err := a.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The second LLM call should have received a message containing the paging marker.
 	if len(provider.captured) < 2 {
 		t.Fatalf("expected at least 2 LLM calls, got %d", len(provider.captured))
 	}
 	secondReq := provider.captured[1]
-	foundMarker := false
+
+	// Collect all tool-result messages for the tool call.
+	var toolMsgs []core.ChatMessage
 	for _, msg := range secondReq.Messages {
-		if strings.Contains(msg.Content, "Use read_full_result(id=") {
-			foundMarker = true
-			break
+		if msg.ToolCallID == "tc1" {
+			toolMsgs = append(toolMsgs, msg)
 		}
 	}
-	if !foundMarker {
-		t.Error("expected paging marker in tool result message sent to LLM, got none")
+	if len(toolMsgs) < 2 {
+		t.Fatalf("expected >=2 tool-result chunks, got %d", len(toolMsgs))
+	}
+
+	// No read_full_result hints in any chunk.
+	for i, msg := range toolMsgs {
+		if strings.Contains(msg.Content, "read_full_result") {
+			t.Errorf("chunk %d should not contain read_full_result hint", i)
+		}
+	}
+
+	// Reassembled content equals original.
+	var reassembled strings.Builder
+	for _, msg := range toolMsgs {
+		reassembled.WriteString(msg.Content)
+	}
+	if reassembled.String() != bigOutput {
+		t.Error("reassembled chunks do not equal original content")
 	}
 }
 
-func TestNoStoreFallsBackToLegacyMarker(t *testing.T) {
+func TestOversizeToolResultNoStoreStillChunks(t *testing.T) {
+	// Without a store, chunking still applies transparently.
 	bigOutput := strings.Repeat("y", 200_000)
 	tool := newFakeTool("big_tool", bigOutput)
 	provider := newToolCallThenTextProvider("big_tool")
 
-	a := oasis.NewLLMAgent("test", "", provider,
-		oasis.WithTools(tool),
-		oasis.WithToolResultStore(nil), // explicit opt-out
-		oasis.WithLimits(oasis.Limits{MaxToolResultLen: 100_000}),
+	a := agent.New("test", "", provider,
+		agent.WithTools(tool),
+		agent.WithToolResultStore(nil), // explicit opt-out
+		agent.WithLimits(agent.Limits{MaxToolResultLen: 100_000}),
 	)
 
-	_, _ = a.Execute(context.Background(), oasis.AgentTask{Input: "go"})
+	_, _ = a.Execute(context.Background(), core.AgentTask{Input: "go"})
 
 	if len(provider.captured) < 2 {
 		t.Fatalf("expected at least 2 LLM calls, got %d", len(provider.captured))
 	}
 	secondReq := provider.captured[1]
-	foundLegacy := false
+
+	var toolMsgs []core.ChatMessage
 	for _, msg := range secondReq.Messages {
-		if strings.Contains(msg.Content, "[output truncated") {
-			foundLegacy = true
-			break
+		if msg.ToolCallID == "tc1" {
+			toolMsgs = append(toolMsgs, msg)
 		}
 	}
-	if !foundLegacy {
-		t.Error("expected legacy truncation marker when store is nil")
+	if len(toolMsgs) < 2 {
+		t.Fatalf("expected >=2 tool-result chunks even without store, got %d", len(toolMsgs))
 	}
 }

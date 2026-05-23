@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // --- Updated existing tests (4th arg: cachedTokens) ---

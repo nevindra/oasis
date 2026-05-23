@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // StoreMessage inserts or replaces a message.

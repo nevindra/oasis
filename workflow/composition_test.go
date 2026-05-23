@@ -149,7 +149,7 @@ func TestNetworkInWorkflow(t *testing.T) {
 		t.Fatalf("workflow.New: %v", err)
 	}
 
-	res, err := wf.Execute(context.Background(), workflow.AgentTask{Input: "write a paper"})
+	res, err := wf.Execute(context.Background(), core.AgentTask{Input: "write a paper"})
 	if err != nil {
 		t.Fatalf("workflow.Execute: %v", err)
 	}

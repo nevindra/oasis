@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 func TestExtractCrossDocumentEdges(t *testing.T) {

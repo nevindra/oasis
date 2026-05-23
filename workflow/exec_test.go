@@ -39,7 +39,7 @@ func TestWorkflowSequential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "start"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "start"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestWorkflowParallel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestWorkflowConditionalBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "order"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "order"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestWorkflowSkippedByConditionDoesNotCascadeFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "test"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestWorkflowFailFast(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "fail"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "fail"})
 
 	var wfErr *WorkflowError
 	if !errors.As(err, &wfErr) {
@@ -223,7 +223,7 @@ func TestWorkflowFailureCascadesThroughMultipleLevels(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "test"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "test"})
 
 	var wfErr *WorkflowError
 	if !errors.As(err, &wfErr) {
@@ -256,7 +256,7 @@ func TestWorkflowRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestWorkflowRetryExhausted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	// 1 initial + 2 retries = 3.
 	if attempts != 3 {
 		t.Errorf("attempts = %d, want 3", attempts)
@@ -310,7 +310,7 @@ func TestWorkflowDefaultRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestWorkflowOnFinishCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wf.Execute(context.Background(), AgentTask{Input: "go"})
+	wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 
 	if callbackResult.Status != StepSuccess {
 		t.Errorf("callback status = %q, want %q", callbackResult.Status, StepSuccess)
@@ -367,7 +367,7 @@ func TestWorkflowOnErrorCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wf.Execute(context.Background(), AgentTask{Input: "go"})
+	wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 
 	if errorStep != "fail" {
 		t.Errorf("onError step = %q, want %q", errorStep, "fail")
@@ -392,7 +392,7 @@ func TestWorkflowCallbackPanicRecovery(t *testing.T) {
 	}
 
 	// Should not panic.
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,8 +407,8 @@ func TestWorkflowOutputTo(t *testing.T) {
 	agent := &stubAgent{
 		name: "echo",
 		desc: "Echoes input",
-		fn: func(task AgentTask) (AgentResult, error) {
-			return AgentResult{Output: task.Input}, nil
+		fn: func(task core.AgentTask) (core.AgentResult, error) {
+			return core.AgentResult{Output: task.Input}, nil
 		},
 	}
 
@@ -427,7 +427,7 @@ func TestWorkflowOutputTo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "hello"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestWorkflowContextCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wf.Execute(ctx, AgentTask{Input: "go"})
+	wf.Execute(ctx, core.AgentTask{Input: "go"})
 	if bRan {
 		t.Error("step b should not have run after context cancellation")
 	}
@@ -479,7 +479,7 @@ func TestWorkflowStepSuspendedEventFires(t *testing.T) {
 	}
 
 	ch := make(chan core.StreamEvent, 32)
-	_, wfErr := wf.Execute(context.Background(), AgentTask{Input: "go"}, core.WithStream(ch))
+	_, wfErr := wf.Execute(context.Background(), core.AgentTask{Input: "go"}, core.WithStream(ch))
 
 	var suspended *ErrSuspended
 	if !errors.As(wfErr, &suspended) {

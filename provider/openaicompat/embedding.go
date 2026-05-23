@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // EmbedRequest is the OpenAI-compatible embedding request body.

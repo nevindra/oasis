@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"

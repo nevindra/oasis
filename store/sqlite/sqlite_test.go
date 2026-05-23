@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 func testStore(t *testing.T) *Store {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // BuildBody converts oasis ChatMessages and a model name into an OpenAI-format ChatRequest.

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // CreateThread inserts a new thread.

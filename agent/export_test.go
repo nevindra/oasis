@@ -9,3 +9,6 @@ var TestCompressMessages = compressMessages
 func AgentToolResultStore(a *LLMAgent) core.ToolResultStore {
 	return a.ToolResultStore
 }
+
+// SplitContentRunes exposes the internal chunking helper for unit tests.
+var SplitContentRunes = splitContentRunes

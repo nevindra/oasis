@@ -9,7 +9,7 @@ import (
 //   - <cwd>/.agents/skills/ (project-level)
 //   - ~/.agents/skills/ (user-level)
 //
-// Directories that do not exist are included — FileSkillProvider handles
+// Directories that do not exist are included — FromDir handles
 // missing directories gracefully.
 func DefaultSkillDirs() []string {
 	var dirs []string

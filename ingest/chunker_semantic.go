@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // SemanticChunker splits text at semantic boundaries detected by embedding

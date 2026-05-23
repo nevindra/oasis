@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // embedImageChunks creates separate image chunks from extracted page metadata

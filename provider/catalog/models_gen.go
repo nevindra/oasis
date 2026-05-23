@@ -6,7 +6,7 @@
 
 package catalog
 
-import oasis "github.com/nevindra/oasis"
+import oasis "github.com/nevindra/oasis/core"
 
 // staticModels is the pre-compiled model registry.
 // Updated by: go generate ./provider/catalog/...

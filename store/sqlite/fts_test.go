@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 func TestSearchChunksKeyword(t *testing.T) {

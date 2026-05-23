@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // checkpointStoreOf returns the CheckpointStore from ing.store if available, or nil.

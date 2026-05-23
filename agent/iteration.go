@@ -431,33 +431,31 @@ func runIteration(ctx context.Context, cfg LoopConfig, task AgentTask, ch chan<-
 			endIter(reason)
 			return terminateIteration(ctx, cfg, ch, state, reason, res, retErr)
 		}
-		// Truncate large tool results.
+		// Chunk large tool results transparently.
+		// Why: instead of hinting the LLM to call read_full_result, split the
+		// content into multiple sequential tool-result messages (all sharing the
+		// same call ID). The LLM sees them as one logical result without needing
+		// to issue a follow-up tool call. ToolResultStore still receives the full
+		// payload for post-hoc inspection.
 		content := string(result.Content)
 		maxLen := cfg.MaxToolResultLen
 		if maxLen == 0 {
 			maxLen = maxToolResultMessageLen
 		}
-		msgContent := content
-		if utf8.RuneCountInString(content) > maxLen {
-			inline := TruncateStr(content, maxLen)
-			total := utf8.RuneCountInString(content)
-			if cfg.ToolResultStore != nil {
-				id, putErr := cfg.ToolResultStore.Put(iterCtx, result.Content)
-				if putErr == nil {
-					msgContent = inline + fmt.Sprintf(
-						"\n\n[truncated at %d runes of %d total. Use read_full_result(id=%q, offset=%d, length=50000) for more]",
-						maxLen, total, id, maxLen)
-				} else {
-					cfg.Logger.Warn("tool result store put failed, falling back to legacy marker",
-						"agent", cfg.Name, "error", putErr)
-					msgContent = inline + "\n\n[output truncated — original was longer]"
-				}
-			} else {
-				msgContent = inline + "\n\n[output truncated — original was longer]"
+		if cfg.ToolResultStore != nil {
+			if _, putErr := cfg.ToolResultStore.Put(iterCtx, result.Content); putErr != nil {
+				cfg.Logger.Warn("tool result store put failed", "agent", cfg.Name, "error", putErr)
 			}
 		}
-		state.messages = append(state.messages, core.ToolResultMessage(tc.ID, msgContent))
-		state.messageRuneCount += utf8.RuneCountInString(msgContent)
+		if utf8.RuneCountInString(content) > maxLen {
+			for _, chunk := range splitContentRunes(content, maxLen) {
+				state.messages = append(state.messages, core.ToolResultMessage(tc.ID, chunk))
+				state.messageRuneCount += utf8.RuneCountInString(chunk)
+			}
+		} else {
+			state.messages = append(state.messages, core.ToolResultMessage(tc.ID, content))
+			state.messageRuneCount += utf8.RuneCountInString(content)
+		}
 
 		if strings.HasPrefix(tc.Name, "agent_") {
 			state.lastAgentOutput = string(result.Content)
@@ -685,4 +683,25 @@ func terminateIteration(ctx context.Context, cfg LoopConfig, ch chan<- core.Stre
 	}
 	finalizeRun(ctx, ch, state, cfg.Name, reason, result)
 	return iterationResult{outcome: iterDone, final: result, err: err}
+}
+
+// splitContentRunes splits s into chunks of at most maxRunes runes each.
+// Splitting is rune-safe: chunks never break in the middle of a multi-byte
+// UTF-8 sequence. If s fits within maxRunes, a single-element slice is
+// returned. maxRunes must be > 0.
+func splitContentRunes(s string, maxRunes int) []string {
+	runes := []rune(s)
+	total := len(runes)
+	if total <= maxRunes {
+		return []string{s}
+	}
+	chunks := make([]string, 0, (total+maxRunes-1)/maxRunes)
+	for i := 0; i < total; i += maxRunes {
+		end := i + maxRunes
+		if end > total {
+			end = total
+		}
+		chunks = append(chunks, string(runes[i:end]))
+	}
+	return chunks
 }

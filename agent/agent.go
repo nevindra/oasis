@@ -136,6 +136,28 @@ func WithToolMiddleware(mws ...core.ToolMiddleware) AgentOption {
 	}
 }
 
+// WithMiddleware applies one or more Middlewares to the agent's outer surface.
+// Middlewares wrap the agent's Execute method and see every call, including
+// those made by Network when this agent is a child agent.
+//
+// Middlewares are applied lazily on the first Execute call and the wrapped
+// chain is cached — subsequent calls reuse the same wrapper without
+// rebuilding. Earlier arguments in mws wrap further out: Chain(a, b) gives
+// a wrapping b wrapping the raw agent.
+func WithMiddleware(mws ...Middleware) AgentOption {
+	return func(c *Config) {
+		for _, mw := range mws {
+			// Why: Middleware is func(core.Agent) core.Agent; the Config field
+			// uses the same underlying type to avoid an import cycle (runtime cannot
+			// import agent). Direct append works because named func types are
+			// assignable to their underlying type.
+			if mw != nil {
+				c.AgentMiddleware = append(c.AgentMiddleware, mw)
+			}
+		}
+	}
+}
+
 // WithPrompt sets the system prompt for the agent or network router.
 func WithPrompt(s string) AgentOption {
 	return func(c *Config) { c.SystemPrompt = s }

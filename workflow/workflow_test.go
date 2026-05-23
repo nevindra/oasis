@@ -11,7 +11,7 @@ import (
 // --- WorkflowContext tests ---
 
 func TestWorkflowContextGetSet(t *testing.T) {
-	ctx := newWorkflowContext(AgentTask{Input: "hello"})
+	ctx := newWorkflowContext(core.AgentTask{Input: "hello"})
 
 	if ctx.Input() != "hello" {
 		t.Errorf("Input() = %q, want %q", ctx.Input(), "hello")
@@ -39,15 +39,15 @@ func TestWorkflowContextGetSet(t *testing.T) {
 }
 
 func TestWorkflowContextAddUsage(t *testing.T) {
-	ctx := newWorkflowContext(AgentTask{})
-	ctx.addUsage(Usage{InputTokens: 10, OutputTokens: 5})
-	ctx.addUsage(Usage{InputTokens: 20, OutputTokens: 15})
+	ctx := newWorkflowContext(core.AgentTask{})
+	ctx.addUsage(core.Usage{InputTokens: 10, OutputTokens: 5})
+	ctx.addUsage(core.Usage{InputTokens: 20, OutputTokens: 15})
 
 	v, ok := ctx.Get("_usage")
 	if !ok {
 		t.Fatal("expected _usage in context")
 	}
-	u := v.(Usage)
+	u := v.(core.Usage)
 	if u.InputTokens != 30 || u.OutputTokens != 20 {
 		t.Errorf("usage = %+v, want {InputTokens:30 OutputTokens:20}", u)
 	}
@@ -134,7 +134,7 @@ func TestWorkflowImplementsAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var _ Agent = wf
+	var _ core.Agent = wf
 }
 
 // --- Input propagation ---
@@ -150,7 +150,7 @@ func TestWorkflowInputPropagation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "hello world"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "hello world"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestWorkflowEmptySteps(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestWorkflowContextResolve(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wCtx := newWorkflowContext(AgentTask{})
+			wCtx := newWorkflowContext(core.AgentTask{})
 			for k, v := range tt.values {
 				wCtx.Set(k, v)
 			}
@@ -211,7 +211,7 @@ func TestWorkflowContextResolve(t *testing.T) {
 }
 
 func TestWorkflowContextResolveJSON(t *testing.T) {
-	wCtx := newWorkflowContext(AgentTask{})
+	wCtx := newWorkflowContext(core.AgentTask{})
 	wCtx.Set("name", "Alice")
 	wCtx.Set("data", map[string]any{"x": 1, "y": 2})
 
@@ -268,7 +268,7 @@ func TestStringifyValue(t *testing.T) {
 // --- newWorkflowContext tests ---
 
 func TestNewWorkflowContextSetsInput(t *testing.T) {
-	wCtx := newWorkflowContext(AgentTask{Input: "test input"})
+	wCtx := newWorkflowContext(core.AgentTask{Input: "test input"})
 
 	if wCtx.Input() != "test input" {
 		t.Errorf("Input() = %q, want %q", wCtx.Input(), "test input")
@@ -282,7 +282,7 @@ func TestNewWorkflowContextSetsInput(t *testing.T) {
 }
 
 func TestNewWorkflowContextEmptyInput(t *testing.T) {
-	wCtx := newWorkflowContext(AgentTask{})
+	wCtx := newWorkflowContext(core.AgentTask{})
 
 	if wCtx.Input() != "" {
 		t.Errorf("Input() = %q, want empty", wCtx.Input())
@@ -298,7 +298,7 @@ func TestNewWorkflowContextEmptyInput(t *testing.T) {
 // --- ResolveJSON edge case ---
 
 func TestResolveJSONMarshalError(t *testing.T) {
-	wCtx := newWorkflowContext(AgentTask{})
+	wCtx := newWorkflowContext(core.AgentTask{})
 	// json.Marshal cannot marshal channels.
 	wCtx.Set("bad", make(chan int))
 
@@ -348,11 +348,11 @@ func TestWorkflow_Execute_TwiceGivesSameOutput(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	r1, err := wf.Execute(context.Background(), AgentTask{Input: "x"})
+	r1, err := wf.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute (1st): %v", err)
 	}
-	r2, err := wf.Execute(context.Background(), AgentTask{Input: "x"})
+	r2, err := wf.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute (2nd): %v", err)
 	}
@@ -374,7 +374,7 @@ func TestWorkflow_Execute_OverridesRejected(t *testing.T) {
 
 	// Inject a non-nil Overrides value directly via a raw RunOption.
 	withStubOverrides := func(c *core.RunConfig) { c.Overrides = "stub" }
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "x"}, withStubOverrides)
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "x"}, withStubOverrides)
 	if err == nil {
 		t.Fatalf("Execute(overrides): expected error")
 	}
@@ -393,7 +393,7 @@ func TestWorkflow_Execute_StreamOverridesRejected(t *testing.T) {
 
 	ch := make(chan core.StreamEvent)
 	withStubOverrides := func(c *core.RunConfig) { c.Overrides = "stub" }
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "x"}, core.WithStream(ch), withStubOverrides)
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "x"}, core.WithStream(ch), withStubOverrides)
 	if err == nil {
 		t.Fatalf("Execute(stream+overrides): expected error")
 	}

@@ -15,21 +15,21 @@ import (
 var ErrToolResultNotFound = errors.New("tool result not found or expired")
 
 // ToolResultStore holds full tool results when their content exceeds the
-// inline budget set by WithMaxToolResultLen. The LLM retrieves slices via
-// the auto-registered read_full_result built-in tool.
+// inline budget set by WithMaxToolResultLen. The framework writes to the store
+// for post-hoc inspection; oversize results are split into multiple sequential
+// tool-result messages to the LLM (transparent chunking — no LLM-visible hints).
 //
 // Implementations must be safe for concurrent use. The default in-memory
 // implementation (NewInMemoryToolResultStore) is bounded by total bytes
 // and per-entry TTL with LRU eviction.
 type ToolResultStore interface {
-	// Put stores the full content and returns an opaque id. The id is
-	// embedded in the truncation marker handed to the LLM.
+	// Put stores the full content and returns an opaque id for post-hoc
+	// inspection. The id is not surfaced to the LLM.
 	Put(ctx context.Context, content json.RawMessage) (id string, err error)
 
 	// Get returns a byte slice of the stored content starting at offset bytes,
 	// up to length bytes. total is the full byte length of the stored content.
-	// offset and length are in bytes; rune-safe alignment is the caller's
-	// responsibility (read_full_result handles it for LLM-facing output).
+	// offset and length are in bytes.
 	// Returns ErrToolResultNotFound if the id is unknown or expired.
 	// If offset >= total, returns empty content with no error.
 	Get(ctx context.Context, id string, offset, length int) (content json.RawMessage, total int, err error)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/provider"
 )
 
 // retryProvider wraps a Provider and automatically retries transient HTTP errors
@@ -56,6 +57,8 @@ func RetryLogger(l *slog.Logger) RetryOption {
 //	chatLLM = oasis.WithRetry(gemini.New(apiKey, model))
 //	chatLLM = oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryMaxAttempts(5))
 //	chatLLM = oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryTimeout(30*time.Second))
+//
+// Deprecated: use RetryMiddleware with provider.Chain.
 func WithRetry(p core.Provider, opts ...RetryOption) core.Provider {
 	r := &retryProvider{
 		inner:       p,
@@ -271,6 +274,18 @@ func (r *retryEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][
 	return retryCall(ctx, r.maxAttempts, r.baseDelay, r.inner.Name(), r.logger, func() ([][]float32, error) {
 		return r.inner.Embed(ctx, texts)
 	})
+}
+
+// RetryMiddleware returns a provider.Middleware that adds retry behavior with
+// the supplied options. Use with provider.Chain:
+//
+//	p := provider.Chain(agent.RetryMiddleware(agent.RetryMaxAttempts(3)))(base)
+//
+// Equivalent to WithRetry but composable via provider.Chain.
+func RetryMiddleware(opts ...RetryOption) provider.Middleware {
+	return func(p core.Provider) core.Provider {
+		return WithRetry(p, opts...)
+	}
 }
 
 // compile-time checks

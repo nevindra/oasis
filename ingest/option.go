@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // Option configures an Ingestor.

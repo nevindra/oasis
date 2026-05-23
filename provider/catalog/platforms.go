@@ -2,7 +2,7 @@
 
 package catalog
 
-import oasis "github.com/nevindra/oasis"
+import oasis "github.com/nevindra/oasis/core"
 
 // protocolOverrides maps provider names that don't use OpenAI-compatible protocol.
 var protocolOverrides = map[string]oasis.Protocol{

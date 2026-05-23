@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // modelLister fetches and normalizes model lists from a provider API.

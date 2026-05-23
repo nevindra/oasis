@@ -3,7 +3,7 @@ package openaicompat
 import (
 	"encoding/json"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // mapOpenAIFinishReason converts an OpenAI finish_reason string to an

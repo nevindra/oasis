@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
-	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/memory"
 )
 
@@ -18,6 +19,13 @@ import (
 // configured via WithMemory and memory.WithSemanticRecall.
 type LLMAgent struct {
 	runtime.Runtime
+
+	// wrapped is the lazily-built middleware chain around executeRaw.
+	// wrappedOnce ensures the chain is built exactly once even under concurrent
+	// Execute calls. Both are zero-value safe: when no middlewares are set,
+	// Execute delegates directly to executeRaw without touching these fields.
+	wrapped     core.Agent
+	wrappedOnce sync.Once
 }
 
 // New constructs an LLMAgent — a single-brain Agent with one provider and
@@ -26,11 +34,6 @@ func New(name, description string, provider core.Provider, opts ...AgentOption) 
 	cfg := BuildConfig(opts)
 	a := &LLMAgent{}
 	runtime.Init(&a.Runtime, name, description, provider, cfg)
-
-	// Auto-register read_full_result when a store is configured.
-	if cfg.ToolResultStore != nil {
-		a.Tools().Add(NewReadFullResultTool(cfg.ToolResultStore))
-	}
 
 	// Pre-compute tool definitions for the non-dynamic path.
 	// Avoids rebuilding the slice on every Execute call.
@@ -51,7 +54,27 @@ func (a *LLMAgent) Memory() *memory.AgentMemory { return a.Runtime.Memory() }
 
 // Execute runs the tool-calling loop until the LLM produces a final text response.
 // Optional RunOption values configure per-call behaviour (streaming, deadline, overrides).
+// When WithMiddleware was used at construction time, the registered middlewares
+// wrap this call. The chain is built lazily on the first Execute call and cached.
 func (a *LLMAgent) Execute(ctx context.Context, task AgentTask, opts ...core.RunOption) (AgentResult, error) {
+	if len(a.AgentMiddleware) == 0 {
+		return a.executeRaw(ctx, task, opts...)
+	}
+	// Why: build the wrapped chain once and cache it. sync.Once ensures
+	// concurrent Execute calls don't race on construction.
+	a.wrappedOnce.Do(func() {
+		var inner core.Agent = (*executeRawProxy)(a)
+		for i := len(a.AgentMiddleware) - 1; i >= 0; i-- {
+			inner = a.AgentMiddleware[i](inner)
+		}
+		a.wrapped = inner
+	})
+	return a.wrapped.Execute(ctx, task, opts...)
+}
+
+// executeRaw is the real implementation of Execute without middleware wrapping.
+// Middleware wrappers call back into this via executeRawProxy.
+func (a *LLMAgent) executeRaw(ctx context.Context, task AgentTask, opts ...core.RunOption) (AgentResult, error) {
 	rcfg := core.ApplyRunOptions(opts...)
 	var ro *RunOptions
 	if rcfg.Overrides != nil {
@@ -77,6 +100,17 @@ func (a *LLMAgent) Execute(ctx context.Context, task AgentTask, opts ...core.Run
 		},
 		runLoop,
 	)
+}
+
+// executeRawProxy wraps *LLMAgent so middleware sees a core.Agent interface
+// that calls executeRaw rather than Execute (which would recurse through
+// the middleware chain again).
+type executeRawProxy LLMAgent
+
+func (p *executeRawProxy) Name() string        { return (*LLMAgent)(p).Name() }
+func (p *executeRawProxy) Description() string { return (*LLMAgent)(p).Description() }
+func (p *executeRawProxy) Execute(ctx context.Context, task AgentTask, opts ...core.RunOption) (AgentResult, error) {
+	return (*LLMAgent)(p).executeRaw(ctx, task, opts...)
 }
 
 // buildLoopConfig wires LLMAgent fields into a LoopConfig for runLoop.

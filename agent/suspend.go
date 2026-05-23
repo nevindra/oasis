@@ -49,16 +49,6 @@ type errSuspend struct {
 
 func (e *errSuspend) Error() string { return "suspend" }
 
-// Suspend returns an error that signals the workflow or network engine to
-// pause execution. The payload provides context for the human (what they
-// need to decide, what data to show).
-//
-// For typed payloads use SuspendProtocol.Suspend; this untyped form
-// remains as an escape hatch for prototypes and dynamic payloads.
-func Suspend(payload json.RawMessage) error {
-	return &errSuspend{payload: payload}
-}
-
 // ErrSuspended is returned by Execute() when a workflow step or network
 // processor suspends execution to await external input.
 // Inspect Payload for context, then call Resume() or ResumeStream() with

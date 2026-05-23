@@ -14,26 +14,6 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
-// Type aliases from core — workflow uses core types directly now.
-type AgentTask = core.AgentTask
-type AgentResult = core.AgentResult
-type StepTrace = core.StepTrace
-type Agent = core.Agent
-type Tracer = core.Tracer
-type Span = core.Span
-type SpanAttr = core.SpanAttr
-type AnyTool = core.AnyTool
-type ToolDefinition = core.ToolDefinition
-type ToolResult = core.ToolResult
-type ChatResponse = core.ChatResponse
-type ToolCall = core.ToolCall
-type Usage = core.Usage
-
-// StringAttr, IntAttr, Float64Attr delegate to core constructors.
-func StringAttr(k, v string) SpanAttr     { return core.StringAttr(k, v) }
-func IntAttr(k string, v int) SpanAttr    { return core.IntAttr(k, v) }
-func Float64Attr(k string, v float64) SpanAttr { return core.Float64Attr(k, v) }
-
 // nopLogger discards all log output. Used when WithWorkflowLogger is not set.
 var nopLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -50,8 +30,8 @@ func truncateStr(s string, n int) string {
 type ErrSuspended struct {
 	Step         string
 	Payload      json.RawMessage
-	resume       func(ctx context.Context, data json.RawMessage) (AgentResult, error)
-	resumeStream func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (AgentResult, error)
+	resume       func(ctx context.Context, data json.RawMessage) (core.AgentResult, error)
+	resumeStream func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (core.AgentResult, error)
 	mu           sync.Mutex
 	ttlTimer     *time.Timer
 	snapshotSize int64
@@ -133,7 +113,7 @@ type NodeDefinition struct {
 // Go objects. Pass to FromDefinition.
 type DefinitionRegistry struct {
 	// Agents maps names to Agent implementations (for LLM nodes).
-	Agents map[string]Agent
+	Agents map[string]core.Agent
 	// Tools maps names to AnyTool implementations (for Tool nodes).
 	// Each entry is one atomic tool — the map key is the registry name used
 	// in NodeDefinition.Tool and matches the tool's own Name().
@@ -168,11 +148,11 @@ func stringifyValue(v any) string {
 type WorkflowContext struct {
 	values map[string]any
 	input  string
-	task   AgentTask // original task (for propagating Context/Attachments to AgentSteps)
+	task   core.AgentTask // original task (for propagating Context/Attachments to AgentSteps)
 	mu     sync.RWMutex
 }
 
-func newWorkflowContext(task AgentTask) *WorkflowContext {
+func newWorkflowContext(task core.AgentTask) *WorkflowContext {
 	v := make(map[string]any)
 	if task.Input != "" {
 		v["input"] = task.Input
@@ -426,7 +406,7 @@ type workflowConfig struct {
 	onError      func(string, error)
 	defaultRetry int
 	defaultDelay time.Duration
-	tracer       Tracer
+	tracer       core.Tracer
 	logger       *slog.Logger
 }
 
@@ -542,7 +522,7 @@ func WithDefaultRetry(n int, delay time.Duration) WorkflowOption {
 
 // WithWorkflowTracer sets the tracer for the workflow. When set, the workflow
 // emits spans for execution and step lifecycle events.
-func WithWorkflowTracer(t Tracer) WorkflowOption {
+func WithWorkflowTracer(t core.Tracer) WorkflowOption {
 	return func(c *workflowConfig) { c.tracer = t }
 }
 
@@ -582,7 +562,7 @@ func Step(name string, fn StepFunc, opts ...StepOption) WorkflowOption {
 // or from WorkflowContext.Input() if InputFrom is not set.
 // Output is written to context as "{name}.output" (or the key specified by OutputTo()).
 // Token usage from the agent is accumulated into the workflow's total Usage.
-func AgentStep(name string, agent Agent, opts ...StepOption) WorkflowOption {
+func AgentStep(name string, agent core.Agent, opts ...StepOption) WorkflowOption {
 	return func(c *workflowConfig) {
 		cfg := buildStepConfig(name, nil, stepTypeBasic, opts)
 		cfg.fn = agentStepFunc(agent, cfg)
@@ -658,7 +638,7 @@ type Workflow struct {
 	onError      func(string, error)
 	defaultRetry int
 	defaultDelay time.Duration
-	tracer       Tracer
+	tracer       core.Tracer
 	logger       *slog.Logger
 }
 

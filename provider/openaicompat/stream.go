@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // StreamSSE reads an SSE stream from body, sends text-delta events to ch, and

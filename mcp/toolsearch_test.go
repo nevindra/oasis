@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/mcp"
 )
 

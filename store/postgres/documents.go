@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // --- Documents + Chunks ---

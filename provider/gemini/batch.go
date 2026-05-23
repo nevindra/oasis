@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 )
 
 // batchResponse is the top-level JSON returned by both create and get batch endpoints.
@@ -244,7 +245,7 @@ func (g *Gemini) doBatchRequest(ctx context.Context, url string, payload map[str
 func parseGeminiResponse(parsed geminiResponse) oasis.ChatResponse {
 	var content strings.Builder
 	var thinking strings.Builder
-	var toolCalls []oasis.ToolCall
+	var toolCalls []core.ToolCall
 
 	if len(parsed.Candidates) > 0 {
 		for _, part := range parsed.Candidates[0].Content.Parts {
@@ -258,7 +259,7 @@ func parseGeminiResponse(parsed geminiResponse) oasis.ChatResponse {
 				content.WriteString(*part.Text)
 			}
 			if part.FunctionCall != nil {
-				tc := oasis.ToolCall{
+				tc := core.ToolCall{
 					ID:   part.FunctionCall.Name,
 					Name: part.FunctionCall.Name,
 					Args: part.FunctionCall.Args,
@@ -274,7 +275,7 @@ func parseGeminiResponse(parsed geminiResponse) oasis.ChatResponse {
 		}
 	}
 
-	var usage oasis.Usage
+	var usage core.Usage
 	if parsed.UsageMetadata != nil {
 		usage.InputTokens = parsed.UsageMetadata.PromptTokenCount
 		usage.OutputTokens = parsed.UsageMetadata.CandidatesTokenCount

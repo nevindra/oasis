@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // buildSSE constructs a mock SSE stream from data lines.

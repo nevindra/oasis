@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // DocumentChunkLister is an optional Store capability for listing chunks

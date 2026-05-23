@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 const defaultToolCallTimeout = 60 * time.Second

@@ -11,12 +11,12 @@ import (
 type stubAgent struct {
 	name string
 	desc string
-	fn   func(AgentTask) (AgentResult, error)
+	fn   func(core.AgentTask) (core.AgentResult, error)
 }
 
 func (s *stubAgent) Name() string        { return s.name }
 func (s *stubAgent) Description() string { return s.desc }
-func (s *stubAgent) Execute(_ context.Context, task AgentTask, _ ...core.RunOption) (AgentResult, error) {
+func (s *stubAgent) Execute(_ context.Context, task core.AgentTask, _ ...core.RunOption) (core.AgentResult, error) {
 	return s.fn(task)
 }
 
@@ -24,9 +24,9 @@ func (s *stubAgent) Execute(_ context.Context, task AgentTask, _ ...core.RunOpti
 type mockTool struct{}
 
 func (m mockTool) Name() string { return "greet" }
-func (m mockTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: "greet", Description: "Say hello"}
+func (m mockTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "greet", Description: "Say hello"}
 }
-func (m mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (m mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult("hello from greet"), nil
 }

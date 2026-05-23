@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 type stubMCPClient struct {

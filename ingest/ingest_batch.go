@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // batchCheckpoint is the JSON payload stored in IngestCheckpoint.BatchData

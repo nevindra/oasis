@@ -145,7 +145,7 @@ func buildLLMNode(n NodeDefinition, after []string, reg DefinitionRegistry, when
 		return []WorkflowOption{
 			Step(n.ID, func(ctx context.Context, wCtx *WorkflowContext) error {
 				resolved := wCtx.Resolve(n.Input)
-				result, err := agent.Execute(ctx, AgentTask{Input: resolved})
+				result, err := agent.Execute(ctx, core.AgentTask{Input: resolved})
 				if err != nil {
 					return err
 				}
