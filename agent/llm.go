@@ -154,14 +154,22 @@ var _ core.Agent = (*LLMAgent)(nil)
 
 // --- execute_plan tool ---
 
+// Why: DeriveSchema is reflection-based. Cache the result at package init so
+// the dynamic-tools path (which bypasses LLMAgent.cachedToolDefs) doesn't
+// re-run reflection on every Execute call. The schemas of askUserArgs and
+// planArgs are structurally invariant — they never depend on runtime state.
+var (
+	askUserSchema    = core.DeriveSchema[askUserArgs]()
+	executePlanSchema = core.DeriveSchema[planArgs]()
+)
+
 // executePlanToolDef returns the tool definition for the built-in
-// execute_plan tool. The schema is derived from planArgs/planStep via
-// reflection — keeps the LLM-facing schema in sync with the Go types.
+// execute_plan tool. The schema is pre-derived at package init.
 func executePlanToolDef() core.ToolDefinition {
 	return core.ToolDefinition{
 		Name:        "execute_plan",
 		Description: "Execute multiple tool calls in a single batch without intermediate reasoning. Use when you need to call tools multiple times with known inputs upfront. All steps run in parallel. Returns structured results per step.",
-		Parameters:  core.DeriveSchema[planArgs](),
+		Parameters:  executePlanSchema,
 	}
 }
 
@@ -272,11 +280,12 @@ func executePlan(ctx context.Context, args json.RawMessage, dispatch DispatchFun
 // --- ask_user tool ---
 
 // askUserToolDef returns the tool definition for the built-in ask_user tool.
+// The schema is pre-derived at package init (see askUserSchema).
 func askUserToolDef() core.ToolDefinition {
 	return core.ToolDefinition{
 		Name:        "ask_user",
 		Description: "Ask the user a question when you need clarification, confirmation, or additional information to proceed.",
-		Parameters:  core.DeriveSchema[askUserArgs](),
+		Parameters:  askUserSchema,
 	}
 }
 
@@ -362,7 +371,12 @@ func forwardSubagentStream(
 			select {
 			case ch <- ev:
 			case <-ctx.Done():
-				startDrainTimeout(subCh, safeCloseSubCh, logger, agentName)
+				// Why: drain inline rather than spawning a second goroutine.
+				// The old startDrainTimeout left an orphan 60s goroutine
+				// per cancelled subagent stream with no shutdown path; this
+				// keeps the single forwarder goroutine and lets it exit
+				// cleanly when subCh closes (or the safety timeout fires).
+				drainSubCh(subCh, safeCloseSubCh, logger, agentName)
 				return
 			}
 		}
@@ -390,23 +404,24 @@ func safeAgentError(agentName string, p any) error {
 	return fmt.Errorf("subagent %q panic: %v", agentName, p)
 }
 
-// startDrainTimeout drains ch in the background with a 60-second timeout.
-func startDrainTimeout(subCh <-chan core.StreamEvent, safeClose func(), logger *slog.Logger, agentName string) {
-	go func() {
-		timeout := time.NewTimer(60 * time.Second)
-		defer timeout.Stop()
-		for {
-			select {
-			case _, ok := <-subCh:
-				if !ok {
-					return
-				}
-			case <-timeout.C:
-				logger.Warn("subagent stream drain timed out, closing subCh", "agent", agentName)
-				safeClose()
+// drainSubCh consumes remaining events from subCh until it closes or the
+// 60-second safety timeout fires. Called inline by the forwarder goroutine
+// after ctx cancellation so we don't leak a second goroutine per cancelled
+// subagent stream.
+func drainSubCh(subCh <-chan core.StreamEvent, safeClose func(), logger *slog.Logger, agentName string) {
+	timeout := time.NewTimer(60 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case _, ok := <-subCh:
+			if !ok {
 				return
 			}
+		case <-timeout.C:
+			logger.Warn("subagent stream drain timed out, closing subCh", "agent", agentName)
+			safeClose()
+			return
 		}
-	}()
+	}
 }
 

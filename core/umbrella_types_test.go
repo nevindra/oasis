@@ -111,11 +111,11 @@ func TestChunkFilterConstructors(t *testing.T) {
 		})
 	}
 
-	// Verify ByDocument value is []string
+	// Verify ByDocument value is StringsValue holding []string.
 	f := ByDocument("a", "b")
-	ids, ok := f.Value.([]string)
+	ids, ok := f.Value.(StringsValue)
 	if !ok {
-		t.Fatalf("ByDocument value type = %T, want []string", f.Value)
+		t.Fatalf("ByDocument value type = %T, want StringsValue", f.Value)
 	}
 	if len(ids) != 2 || ids[0] != "a" || ids[1] != "b" {
 		t.Errorf("ByDocument value = %v, want [a b]", ids)

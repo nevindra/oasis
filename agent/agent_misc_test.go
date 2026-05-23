@@ -274,27 +274,24 @@ func TestForwardSubagentStreamDoubleCloseSafe(t *testing.T) {
 	}
 }
 
-// --- startDrainTimeout tests ---
+// --- drainSubCh tests ---
 
-func TestStartDrainTimeoutDrainsChannel(t *testing.T) {
+func TestDrainSubChDrainsChannel(t *testing.T) {
 	ch := make(chan core.StreamEvent, 10)
-	// Send some events before starting drain.
 	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: "a"}
 	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: "b"}
 	close(ch)
 
-	closed := make(chan struct{})
-	safeClose := func() { close(closed) }
+	closed := false
+	safeClose := func() { closed = true }
 
-	startDrainTimeout(ch, safeClose, nopLogger, "test")
+	// drainSubCh now runs synchronously (no orphan goroutine). With the
+	// channel already closed it returns immediately without firing the
+	// safety timeout.
+	drainSubCh(ch, safeClose, nopLogger, "test")
 
-	// Channel is already closed, so drain should finish quickly
-	// without hitting the timeout (safeClose should NOT be called).
-	select {
-	case <-closed:
+	if closed {
 		t.Error("safeClose should not be called when channel closes normally")
-	case <-time.After(500 * time.Millisecond):
-		// Good — drain completed without timeout.
 	}
 }
 

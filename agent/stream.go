@@ -564,7 +564,6 @@ func (s *Stream) run(ctx context.Context, agent core.Agent, task AgentTask, opts
 
 func (s *Stream) dispatch(ev core.StreamEvent) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Append to replay ring buffer. Oldest events drop when full.
 	if len(s.replay) >= s.replayLimit {
@@ -573,20 +572,29 @@ func (s *Stream) dispatch(ev core.StreamEvent) {
 		s.replay = append(s.replay, ev)
 	}
 
-	// Fan out to subscribers. Collect drops to close after the loop so we
-	// don't mutate the loop's slice mid-iteration.
+	// Why: callback subscribers run user code that may block (DB write, HTTP
+	// call). Invoking them under s.mu would freeze every other subscriber and
+	// back-pressure the upstream provider channel. Collect them here, release
+	// the lock, and invoke after. Channel sends stay under the lock — they
+	// are non-blocking and cheap.
+	var callbacks []*subscriber
 	var dropped []*subscriber
 	for _, sub := range s.subscribers {
 		if sub.dropped {
 			continue
 		}
-		if !s.pushTo(sub, ev) {
+		if sub.callback != nil {
+			callbacks = append(callbacks, sub)
+			continue
+		}
+		select {
+		case sub.ch <- ev:
+		default:
 			sub.dropped = true
 			dropped = append(dropped, sub)
 		}
 	}
 
-	// Notify and close dropped subscribers.
 	for _, sub := range dropped {
 		warn := core.StreamEvent{Type: core.EventStreamWarning, Content: "subscriber-dropped"}
 		select {
@@ -595,27 +603,16 @@ func (s *Stream) dispatch(ev core.StreamEvent) {
 		}
 		close(sub.ch)
 	}
-}
+	s.mu.Unlock()
 
-// pushTo writes ev to sub.ch non-blockingly. Returns false if the channel is
-// full (slow subscriber). Callback subscribers are invoked synchronously and
-// always return true (callback panics are recovered).
-func (s *Stream) pushTo(sub *subscriber, ev core.StreamEvent) bool {
-	if sub.callback != nil {
+	for _, sub := range callbacks {
+		if sub.filter != "" && sub.filter != ev.Type {
+			continue
+		}
 		func() {
 			defer func() { _ = recover() }()
-			if sub.filter == "" || sub.filter == ev.Type {
-				sub.callback(ev)
-			}
+			sub.callback(ev)
 		}()
-		return true
-	}
-	// Channel subscriber.
-	select {
-	case sub.ch <- ev:
-		return true
-	default:
-		return false
 	}
 }
 

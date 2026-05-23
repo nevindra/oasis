@@ -98,12 +98,27 @@ func (r *retryProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch
 		}()
 
 		var tokensSent bool
+		// Why: never block the LLM token feed on a slow consumer. If ctx fires
+		// mid-stream we keep draining mid (so the inner provider goroutine can
+		// finish and close mid) but stop forwarding, then return ctx.Err.
+		ctxDone := false
 		for ev := range mid {
+			if ctxDone {
+				continue
+			}
 			tokensSent = true
-			ch <- ev
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				ctxDone = true
+			}
 		}
 		<-done
 
+		if ctxDone {
+			close(ch)
+			return core.ChatResponse{}, ctx.Err()
+		}
 		if streamErr == nil || !isTransient(streamErr) || tokensSent {
 			close(ch)
 			return resp, streamErr

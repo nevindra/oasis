@@ -99,6 +99,18 @@ func (n *Network) dispatchSpawn(ctx context.Context, args json.RawMessage) agent
 	n.spawnCount++
 	n.mu.Unlock()
 
+	// Why: spawnCount was incremented optimistically under the lock to keep the
+	// limit check race-free; refund the slot on any failure before AddAgent
+	// succeeds so a failing ChildBuilder doesn't permanently consume the cap.
+	success := false
+	defer func() {
+		if !success {
+			n.mu.Lock()
+			n.spawnCount--
+			n.mu.Unlock()
+		}
+	}()
+
 	var req SpawnRequest
 	if err := json.Unmarshal(args, &req); err != nil {
 		return agent.DispatchResult{Content: "error: parse spawn_agent args: " + err.Error(), IsError: true}
@@ -112,6 +124,7 @@ func (n *Network) dispatchSpawn(ctx context.Context, args json.RawMessage) agent
 		return agent.DispatchResult{Content: "error: " + err.Error(), IsError: true}
 	}
 
+	success = true
 	confirm := map[string]string{"spawned": req.Name, "agent_tool": "agent_" + req.Name}
 	body, _ := json.Marshal(confirm)
 	return agent.DispatchResult{Content: string(body)}

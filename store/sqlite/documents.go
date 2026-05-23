@@ -40,22 +40,22 @@ func buildChunkFilters(filters []oasis.ChunkFilter) (string, []any, bool) {
 		switch {
 		case f.Field == "document_id":
 			if f.Op == oasis.OpIn {
-				ids, ok := f.Value.([]string)
-				if !ok || len(ids) == 0 {
+				idsVal, ok := f.Value.(oasis.StringsValue)
+				if !ok || len(idsVal) == 0 {
 					continue
 				}
-				placeholders := make([]string, len(ids))
-				for i, id := range ids {
+				placeholders := make([]string, len(idsVal))
+				for i, id := range idsVal {
 					placeholders[i] = "?"
 					args = append(args, id)
 				}
 				clauses = append(clauses, "c.document_id IN ("+strings.Join(placeholders, ",")+")")
 			} else if f.Op == oasis.OpEq {
 				clauses = append(clauses, "c.document_id = ?")
-				args = append(args, f.Value)
+				args = append(args, f.Value.Raw())
 			} else if f.Op == oasis.OpNeq {
 				clauses = append(clauses, "c.document_id != ?")
-				args = append(args, f.Value)
+				args = append(args, f.Value.Raw())
 			}
 
 		case f.Field == "source":
@@ -64,16 +64,16 @@ func buildChunkFilters(filters []oasis.ChunkFilter) (string, []any, bool) {
 			}
 			needsDocJoin = true
 			clauses = append(clauses, "d.source = ?")
-			args = append(args, f.Value)
+			args = append(args, f.Value.Raw())
 
 		case f.Field == "created_at":
 			needsDocJoin = true
 			if f.Op == oasis.OpGt {
 				clauses = append(clauses, "d.created_at > ?")
-				args = append(args, f.Value)
+				args = append(args, f.Value.Raw())
 			} else if f.Op == oasis.OpLt {
 				clauses = append(clauses, "d.created_at < ?")
-				args = append(args, f.Value)
+				args = append(args, f.Value.Raw())
 			}
 
 		case strings.HasPrefix(f.Field, "meta."):
@@ -82,7 +82,7 @@ func buildChunkFilters(filters []oasis.ChunkFilter) (string, []any, bool) {
 				continue
 			}
 			clauses = append(clauses, "json_extract(c.metadata, '$."+key+"') = ?")
-			args = append(args, f.Value)
+			args = append(args, f.Value.Raw())
 		}
 	}
 

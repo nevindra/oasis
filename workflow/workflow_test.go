@@ -8,6 +8,13 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
+// stubOverrides is a local core.RunOverrides implementation used by the
+// "workflow rejects overrides" tests below. Workflow tests do not depend on
+// agent.RunOptions; any non-nil RunOverrides trips the rejection path.
+type stubOverrides struct{}
+
+func (stubOverrides) IsRunOverrides() {}
+
 // --- WorkflowContext tests ---
 
 func TestWorkflowContextGetSet(t *testing.T) {
@@ -373,7 +380,7 @@ func TestWorkflow_Execute_OverridesRejected(t *testing.T) {
 	}
 
 	// Inject a non-nil Overrides value directly via a raw RunOption.
-	withStubOverrides := func(c *core.RunConfig) { c.Overrides = "stub" }
+	withStubOverrides := func(c *core.RunConfig) { c.Overrides = stubOverrides{} }
 	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "x"}, withStubOverrides)
 	if err == nil {
 		t.Fatalf("Execute(overrides): expected error")
@@ -392,7 +399,7 @@ func TestWorkflow_Execute_StreamOverridesRejected(t *testing.T) {
 	}
 
 	ch := make(chan core.StreamEvent)
-	withStubOverrides := func(c *core.RunConfig) { c.Overrides = "stub" }
+	withStubOverrides := func(c *core.RunConfig) { c.Overrides = stubOverrides{} }
 	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "x"}, core.WithStream(ch), withStubOverrides)
 	if err == nil {
 		t.Fatalf("Execute(stream+overrides): expected error")

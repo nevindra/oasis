@@ -276,6 +276,11 @@ type RunOptions struct {
 	StreamReplayLimit int
 }
 
+// IsRunOverrides marks *RunOptions as a valid core.RunOverrides payload so
+// it can be carried in core.RunConfig.Overrides without going through an
+// untyped any boundary. The method has no behavior.
+func (*RunOptions) IsRunOverrides() {}
+
 // Validate checks RunOptions for invalid field values. nil is valid.
 func (o *RunOptions) Validate() error {
 	if o == nil {

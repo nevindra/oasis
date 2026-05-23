@@ -3,6 +3,18 @@ package core
 
 import "time"
 
+// RunOverrides marks a typed per-call overrides payload carried in
+// RunConfig.Overrides. The concrete type lives in the package that defines
+// the overrides (e.g. *agent.RunOptions implements RunOverrides). Callers
+// type-assert to the concrete type they expect; the marker keeps random
+// values out of the boundary at compile time.
+type RunOverrides interface {
+	// IsRunOverrides is a marker method. It has no behavior — its only
+	// purpose is to prevent unrelated types from being stored in
+	// RunConfig.Overrides.
+	IsRunOverrides()
+}
+
 // RunConfig holds per-call configuration accumulated from RunOption values.
 // Implementations of [Agent] inspect this struct after calling
 // [ApplyRunOptions] to decide which capabilities to enable for this Execute
@@ -17,10 +29,11 @@ type RunConfig struct {
 	// Tracer is the optional per-call tracer. Nil falls back to the
 	// agent's construction-time tracer.
 	Tracer Tracer
-	// Overrides is an opaque pointer to a *agent.RunOptions, populated by
-	// agent.WithOverrides. The core package cannot type this directly
-	// without importing agent (cycle), so implementations type-assert.
-	Overrides any
+	// Overrides is a typed per-call overrides payload (e.g. *agent.RunOptions).
+	// Populated by package-specific RunOption constructors like
+	// agent.WithOverrides. Implementations type-assert to the concrete type
+	// they expect; an unexpected type indicates a programming error.
+	Overrides RunOverrides
 }
 
 // RunOption configures a single Execute call. Built-in options live in this

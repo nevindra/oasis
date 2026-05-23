@@ -20,10 +20,11 @@ func (s *Store) StoreMessage(ctx context.Context, msg oasis.Message) error {
 	if len(msg.Embedding) > 0 {
 		embBlob = serializeEmbedding(msg.Embedding)
 	}
+	// Why: Metadata is already raw JSON bytes (json.RawMessage). Store as-is —
+	// no marshal/unmarshal round-trip and no place to swallow an error.
 	var metaJSON *string
 	if len(msg.Metadata) > 0 {
-		data, _ := json.Marshal(msg.Metadata)
-		v := string(data)
+		v := string(msg.Metadata)
 		metaJSON = &v
 	}
 
@@ -68,7 +69,7 @@ func (s *Store) GetMessages(ctx context.Context, threadID string, limit int) ([]
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 		if metaJSON.Valid {
-			_ = json.Unmarshal([]byte(metaJSON.String), &m.Metadata)
+			m.Metadata = json.RawMessage(metaJSON.String)
 		}
 		messages = append(messages, m)
 	}
@@ -126,7 +127,7 @@ func (s *Store) SearchMessages(ctx context.Context, embedding []float32, topK in
 		}
 		scanned++
 		if metaJSON.Valid {
-			_ = json.Unmarshal([]byte(metaJSON.String), &m.Metadata)
+			m.Metadata = json.RawMessage(metaJSON.String)
 		}
 		stored, err := deserializeEmbedding(embBlob)
 		if err != nil {

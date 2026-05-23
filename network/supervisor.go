@@ -62,6 +62,10 @@ type restartAgent struct {
 	max int
 }
 
+// Unwrap returns the wrapped child so topology and dispatch can see through
+// the supervisor layer (e.g. classify a wrapped Network as KindNetwork).
+func (r *restartAgent) Unwrap() core.Agent { return r.Agent }
+
 func (r *restartAgent) Execute(ctx context.Context, task core.AgentTask, opts ...core.RunOption) (core.AgentResult, error) {
 	var lastErr error
 	for attempt := 0; attempt <= r.max; attempt++ {
@@ -96,6 +100,11 @@ type fallbackAgent struct {
 
 func (f *fallbackAgent) Name() string        { return f.primary.Name() }
 func (f *fallbackAgent) Description() string { return f.primary.Description() }
+
+// Unwrap returns the primary agent so callers (topology, dispatch) can see
+// through the supervisor layer to the underlying child.
+func (f *fallbackAgent) Unwrap() core.Agent { return f.primary }
+
 func (f *fallbackAgent) Execute(ctx context.Context, task core.AgentTask, opts ...core.RunOption) (core.AgentResult, error) {
 	res, err := f.primary.Execute(ctx, task, opts...)
 	if err == nil {
@@ -144,24 +153,27 @@ func (q *quorumAgent) Execute(ctx context.Context, task core.AgentTask, opts ...
 		res core.AgentResult
 		err error
 	}
-	votes := make([]vote, len(q.members))
-	var wg sync.WaitGroup
-	wg.Add(len(q.members))
-	for i, m := range q.members {
-		i, m := i, m
+	// Buffered to len(members) so worker goroutines never block on send and
+	// can finish even after the caller returns on ctx.Done().
+	votes := make(chan vote, len(q.members))
+	for _, m := range q.members {
+		m := m
 		go func() {
-			defer wg.Done()
 			r, err := m.Execute(ctx, task, opts...)
-			votes[i] = vote{r, err}
+			votes <- vote{r, err}
 		}()
 	}
-	wg.Wait()
 	tally := map[string]int{}
-	for _, v := range votes {
-		if v.err != nil {
-			continue
+	for i := 0; i < len(q.members); i++ {
+		select {
+		case v := <-votes:
+			if v.err != nil {
+				continue
+			}
+			tally[v.res.Output]++
+		case <-ctx.Done():
+			return core.AgentResult{}, ctx.Err()
 		}
-		tally[v.res.Output]++
 	}
 	for out, count := range tally {
 		if count >= q.threshold {
@@ -197,6 +209,10 @@ type breakerAgent struct {
 	fails     int
 	openedAt  time.Time
 }
+
+// Unwrap returns the wrapped child so callers (topology, dispatch) can see
+// through the supervisor layer to the underlying agent.
+func (b *breakerAgent) Unwrap() core.Agent { return b.Agent }
 
 func (b *breakerAgent) Execute(ctx context.Context, task core.AgentTask, opts ...core.RunOption) (core.AgentResult, error) {
 	b.mu.Lock()

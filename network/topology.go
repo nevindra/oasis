@@ -75,15 +75,25 @@ func (n *Network) Topology() Topology {
 	return top
 }
 
-// classifyAgent uses type assertion to detect Network children. Anything
-// else falls back to KindLLMAgent (LLMAgent is the only other concrete kind
-// in this release). Workflow joins this set in Plan C.
+// classifyAgent uses type assertion to detect Network children. Walks through
+// supervisor wrappers (anything with Unwrap() core.Agent) so a Network wrapped
+// in restart/fallback/breaker is still classified as KindNetwork. Anything
+// else falls back to KindLLMAgent.
 func classifyAgent(a core.Agent) NodeKind {
-	if _, ok := a.(*Network); ok {
-		return KindNetwork
+	for a != nil {
+		if _, ok := a.(*Network); ok {
+			return KindNetwork
+		}
+		u, ok := a.(interface{ Unwrap() core.Agent })
+		if !ok {
+			break
+		}
+		inner := u.Unwrap()
+		if inner == nil || inner == a {
+			break
+		}
+		a = inner
 	}
-	// Anything else — LLMAgent or a test stub — is treated as llm-agent for
-	// topology purposes. Add explicit kinds (Workflow, etc.) as they appear.
 	return KindLLMAgent
 }
 

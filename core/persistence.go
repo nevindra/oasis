@@ -102,44 +102,77 @@ const (
 	OpNeq
 )
 
+// ChunkFilterValue is the typed value carried by a ChunkFilter. The concrete
+// types (StringValue, StringsValue, Int64Value) form a closed sum — stores
+// dispatch via Raw() (for direct SQL arg passing) or a type switch (when
+// they need the typed slice). The unexported marker keeps the set closed.
+type ChunkFilterValue interface {
+	isChunkFilterValue()
+	// Raw returns the unwrapped underlying value suitable for passing to
+	// database/sql args: string for StringValue, []string for StringsValue,
+	// int64 for Int64Value. Stores call this instead of type-asserting an
+	// untyped any.
+	Raw() any
+}
+
+// StringValue is a scalar string used by BySource, ByMeta, and ByExcludeDocument.
+type StringValue string
+
+func (StringValue) isChunkFilterValue() {}
+func (v StringValue) Raw() any          { return string(v) }
+
+// StringsValue is a string slice used by ByDocument (with OpIn).
+type StringsValue []string
+
+func (StringsValue) isChunkFilterValue() {}
+func (v StringsValue) Raw() any          { return []string(v) }
+
+// Int64Value is a scalar int64 used by CreatedAfter and CreatedBefore.
+type Int64Value int64
+
+func (Int64Value) isChunkFilterValue() {}
+func (v Int64Value) Raw() any          { return int64(v) }
+
 // ChunkFilter restricts which chunks are considered during vector search.
 // Field names: "document_id", "source", "created_at", or "meta.<key>" for
 // JSON metadata fields (e.g. "meta.section_heading", "meta.page_number").
+// Value is one of StringValue, StringsValue, or Int64Value — see the
+// constructors below for the canonical Op/Value pairings.
 type ChunkFilter struct {
 	Field string
 	Op    FilterOp
-	Value any
+	Value ChunkFilterValue
 }
 
 // ByDocument returns a filter matching chunks belonging to the given document IDs.
 func ByDocument(ids ...string) ChunkFilter {
-	return ChunkFilter{Field: "document_id", Op: OpIn, Value: ids}
+	return ChunkFilter{Field: "document_id", Op: OpIn, Value: StringsValue(ids)}
 }
 
 // BySource returns a filter matching chunks from documents with the given source.
 func BySource(source string) ChunkFilter {
-	return ChunkFilter{Field: "source", Op: OpEq, Value: source}
+	return ChunkFilter{Field: "source", Op: OpEq, Value: StringValue(source)}
 }
 
 // ByMeta returns a filter matching chunks where metadata key equals value.
 // Key corresponds to a ChunkMeta JSON field (e.g. "section_heading", "page_number").
 func ByMeta(key, value string) ChunkFilter {
-	return ChunkFilter{Field: "meta." + key, Op: OpEq, Value: value}
+	return ChunkFilter{Field: "meta." + key, Op: OpEq, Value: StringValue(value)}
 }
 
 // ByExcludeDocument returns a filter that excludes chunks belonging to the given document.
 func ByExcludeDocument(docID string) ChunkFilter {
-	return ChunkFilter{Field: "document_id", Op: OpNeq, Value: docID}
+	return ChunkFilter{Field: "document_id", Op: OpNeq, Value: StringValue(docID)}
 }
 
 // CreatedAfter returns a filter matching chunks from documents created after unix timestamp.
 func CreatedAfter(unix int64) ChunkFilter {
-	return ChunkFilter{Field: "created_at", Op: OpGt, Value: unix}
+	return ChunkFilter{Field: "created_at", Op: OpGt, Value: Int64Value(unix)}
 }
 
 // CreatedBefore returns a filter matching chunks from documents created before unix timestamp.
 func CreatedBefore(unix int64) ChunkFilter {
-	return ChunkFilter{Field: "created_at", Op: OpLt, Value: unix}
+	return ChunkFilter{Field: "created_at", Op: OpLt, Value: Int64Value(unix)}
 }
 
 type Thread struct {
@@ -151,14 +184,19 @@ type Thread struct {
 	UpdatedAt int64             `json:"updated_at"`
 }
 
+// Message is a persisted conversation message. Metadata is opaque JSON —
+// callers marshal their typed payload into the field and unmarshal it back
+// at read time. Storing raw JSON eliminates the unmarshal-then-remarshal
+// round-trip through map[string]any and surfaces corrupt blobs as caller
+// errors instead of silent nils.
 type Message struct {
-	ID        string         `json:"id"`
-	ThreadID  string         `json:"thread_id"`
-	Role      string         `json:"role"` // "user" or "assistant"
-	Content   string         `json:"content"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	Embedding []float32      `json:"-"`
-	CreatedAt int64          `json:"created_at"`
+	ID        string          `json:"id"`
+	ThreadID  string          `json:"thread_id"`
+	Role      string          `json:"role"` // "user" or "assistant"
+	Content   string          `json:"content"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	Embedding []float32       `json:"-"`
+	CreatedAt int64           `json:"created_at"`
 }
 
 // Scheduled action (DB record)
