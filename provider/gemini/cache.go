@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // CachedContent represents a Gemini cached content resource.

@@ -8,16 +8,22 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-shiori/go-readability"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/ingest"
 )
 
+// defaultFetchMaxChars is the default character cap applied to extracted
+// readable content. Callers may override via FetchInput.MaxChars.
+const defaultFetchMaxChars = 8000
+
 // FetchInput is the input payload for the http_fetch tool.
 type FetchInput struct {
-	URL string `json:"url" describe:"URL to fetch"`
+	URL      string `json:"url" describe:"URL to fetch"`
+	MaxChars int    `json:"max_chars,omitempty" describe:"Max characters to return (default 8000)"`
 }
 
 // Tool fetches URLs and extracts readable content. It implements
@@ -44,14 +50,27 @@ func (t *Tool) Definition() oasis.ToolMeta {
 }
 
 // Execute implements oasis.Tool. Returns the extracted, possibly-truncated
-// readable text for the given URL.
+// readable text for the given URL. Truncation happens at a UTF-8 rune
+// boundary so the returned string is always valid UTF-8.
 func (t *Tool) Execute(ctx context.Context, in FetchInput) (string, error) {
 	content, err := t.Fetch(ctx, in.URL)
 	if err != nil {
 		return "", err
 	}
-	if len(content) > 8000 {
-		content = content[:8000] + "\n... (truncated)"
+	limit := in.MaxChars
+	if limit <= 0 {
+		limit = defaultFetchMaxChars
+	}
+	// Walk forward counting runes; stop at the byte offset that holds `limit`
+	// runes. Allocation-free: no []rune slice, no scratch buffer.
+	byteOff, runes := 0, 0
+	for byteOff < len(content) && runes < limit {
+		_, size := utf8.DecodeRuneInString(content[byteOff:])
+		byteOff += size
+		runes++
+	}
+	if byteOff < len(content) {
+		content = content[:byteOff] + "\n... (truncated)"
 	}
 	return content, nil
 }

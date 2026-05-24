@@ -14,22 +14,22 @@ type dynProgressTool struct{}
 
 func (t dynProgressTool) Name() string { return "dyn_search" }
 
-func (t dynProgressTool) Definition() ToolDefinition {
-	return ToolDefinition{
+func (t dynProgressTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{
 		Name:        "dyn_search",
 		Description: "Dynamic search with progress",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
 	}
 }
 
-func (t dynProgressTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (t dynProgressTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult("found 2 results"), nil
 }
 
-func (t dynProgressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+func (t dynProgressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch chan<- core.StreamEvent) (core.ToolResult, error) {
 	for i := 1; i <= 2; i++ {
-		ch <- StreamEvent{
-			Type:    EventToolProgress,
+		ch <- core.StreamEvent{
+			Type:    core.EventToolProgress,
 			Name:    "dyn_search",
 			Content: fmt.Sprintf(`{"step":%d}`, i),
 		}
@@ -43,20 +43,20 @@ func (t dynProgressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch 
 func TestDynamicToolsStreamingToolEmitsProgress(t *testing.T) {
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "dyn_search", Args: json.RawMessage(`{"q":"test"}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "dyn_search", Args: json.RawMessage(`{"q":"test"}`)}}},
 			{Content: "done"},
 		},
 	}
 
-	agent := NewLLMAgent("dyn", "Dynamic streaming", provider,
-		WithDynamicTools(func(_ context.Context, _ AgentTask) []AnyTool {
-			return []AnyTool{dynProgressTool{}}
+	agent := New("dyn", "Dynamic streaming", provider,
+		WithDynamicTools(func(_ context.Context, _ AgentTask) []core.AnyTool {
+			return []core.AnyTool{dynProgressTool{}}
 		}),
 	)
 
-	ch := make(chan StreamEvent, 32)
-	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "search"}, ch)
+	ch := make(chan core.StreamEvent, 32)
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "search"}, core.WithStream(ch))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,9 +64,9 @@ func TestDynamicToolsStreamingToolEmitsProgress(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "done")
 	}
 
-	var progressEvents []StreamEvent
+	var progressEvents []core.StreamEvent
 	for ev := range ch {
-		if ev.Type == EventToolProgress {
+		if ev.Type == core.EventToolProgress {
 			progressEvents = append(progressEvents, ev)
 		}
 	}

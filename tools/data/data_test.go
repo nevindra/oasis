@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // oasisToolResult is a local alias for ergonomic access in tests.
@@ -187,15 +187,16 @@ func TestParseJSONL(t *testing.T) {
 	}
 }
 
-func TestParseJSONLSkipsMalformed(t *testing.T) {
-	out := call(t, "data_parse", map[string]any{
+func TestParseJSONLMalformedReturnsError(t *testing.T) {
+	got := callErr(t, "data_parse", map[string]any{
 		"content": "{\"a\":1}\nnot json\n{\"a\":3}",
 		"format":  "jsonl",
 	})
-
-	recs := records(out)
-	if len(recs) != 2 {
-		t.Fatalf("expected 2 records (skip malformed), got %d", len(recs))
+	if !strings.Contains(got, "malformed JSONL") {
+		t.Fatalf("expected malformed JSONL error, got %q", got)
+	}
+	if !strings.Contains(got, "line 2") {
+		t.Fatalf("expected line number in error, got %q", got)
 	}
 }
 
@@ -226,6 +227,16 @@ func TestParseEmptyContent(t *testing.T) {
 		"content": "",
 	})
 	if errMsg != "content is required" {
+		t.Errorf("unexpected error: %s", errMsg)
+	}
+}
+
+func TestParseJSON_WhitespaceOnlyContent(t *testing.T) {
+	errMsg := callErr(t, "data_parse", map[string]any{
+		"content": "   ",
+		"format":  "json",
+	})
+	if !strings.Contains(errMsg, "json content is empty") {
 		t.Errorf("unexpected error: %s", errMsg)
 	}
 }

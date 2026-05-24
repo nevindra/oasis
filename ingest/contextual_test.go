@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // mockContextProvider returns a canned context prefix for each chunk.

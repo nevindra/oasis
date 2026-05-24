@@ -59,42 +59,25 @@ func EraseStreaming[In, Out any](t StreamingTool[In, Out]) StreamingAnyTool {
 	inSchema := DeriveSchema[In]()
 	outSchema := deriveOutSchema[Out](t)
 	return &erasedStreamingTool[In, Out]{
-		tool: t,
-		def: ToolDefinition{
-			Name:         meta.Name,
-			Description:  meta.Description,
-			Parameters:   inSchema,
-			OutputSchema: outSchema,
+		erasedTool: erasedTool[In, Out]{
+			tool: t,
+			def: ToolDefinition{
+				Name:         meta.Name,
+				Description:  meta.Description,
+				Parameters:   inSchema,
+				OutputSchema: outSchema,
+			},
 		},
+		streamTool: t,
 	}
 }
 
+// erasedStreamingTool embeds erasedTool to inherit Name, Definition, and
+// ExecuteRaw. streamTool holds the streaming-typed reference so ExecuteStream
+// can call ExecuteStream without re-typing the embedded tool.
 type erasedStreamingTool[In, Out any] struct {
-	tool StreamingTool[In, Out]
-	def  ToolDefinition
-}
-
-func (e *erasedStreamingTool[In, Out]) Name() string               { return e.def.Name }
-func (e *erasedStreamingTool[In, Out]) Definition() ToolDefinition { return e.def }
-
-func (e *erasedStreamingTool[In, Out]) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
-	var in In
-	args = coerceArgs(args)
-	if err := json.Unmarshal(args, &in); err != nil {
-		return ToolResult{Error: "invalid args: " + err.Error()}, nil
-	}
-	out, err := e.tool.Execute(ctx, in)
-	if err != nil {
-		// Propagate the typed Go error so the dispatch policy wrapper can
-		// inspect it (Retryable, net.Error.Timeout(), context.DeadlineExceeded).
-		// ToolResult.Error remains populated for the LLM-visible string.
-		return ToolResult{Error: err.Error()}, err
-	}
-	body, err := json.Marshal(out)
-	if err != nil {
-		return ToolResult{Error: "marshal result: " + err.Error()}, nil
-	}
-	return ToolResult{Content: body}, nil
+	erasedTool[In, Out]
+	streamTool StreamingTool[In, Out]
 }
 
 func (e *erasedStreamingTool[In, Out]) ExecuteStream(ctx context.Context, args json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
@@ -103,7 +86,7 @@ func (e *erasedStreamingTool[In, Out]) ExecuteStream(ctx context.Context, args j
 	if err := json.Unmarshal(args, &in); err != nil {
 		return ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
-	out, err := e.tool.ExecuteStream(ctx, in, ch)
+	out, err := e.streamTool.ExecuteStream(ctx, in, ch)
 	if err != nil {
 		// Propagate the typed Go error so the dispatch policy wrapper can
 		// inspect it (Retryable, net.Error.Timeout(), context.DeadlineExceeded).

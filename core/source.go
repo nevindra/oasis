@@ -29,9 +29,9 @@ type Sourced interface {
 }
 
 // Warner is the opt-in capability for providers and provider decorators
-// that emit non-fatal warnings. Decorators like WithRetry or WithRateLimit
-// implement this to surface "fallback model used" or "throttling applied"
-// messages without writing to stderr.
+// that emit non-fatal warnings. Decorators like agent.RetryMiddleware or
+// ratelimit.RateLimitMiddleware implement this to surface "fallback model
+// used" or "throttling applied" messages without writing to stderr.
 type Warner interface {
 	Warnings() []string
 }

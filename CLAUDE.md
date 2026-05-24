@@ -8,14 +8,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Always read [docs/ENGINEERING.md](docs/ENGINEERING.md) before writing code** — coding standards, production engineering, performance rules, and things to never do.
 
-**Before modifying any component, find and read all related docs:**
+**Before modifying any component, find and read the docs for its topic.** Each topic folder contains the same three files: `index.md` (concept), `api.md` (reference), `examples.md` (recipes).
 
 | Changing...              | Start from                                                  |
 |--------------------------|-------------------------------------------------------------|
-| Framework primitive      | [docs/concepts/](docs/concepts/index.md)                    |
-| How-to / usage pattern   | [docs/guides/](docs/guides/index.md)                        |
-| Interface or type        | [docs/api/](docs/api/index.md)                              |
-| Config options           | [docs/configuration/](docs/configuration/index.md)          |
+| LLMAgent / streaming / scheduler | [docs/agent/](docs/agent/index.md)                  |
+| Multi-agent collaboration | [docs/network/](docs/network/index.md)                     |
+| Workflow / DAG           | [docs/workflow/](docs/workflow/index.md)                    |
+| Conversation history / facts / recall | [docs/memory/](docs/memory/index.md)            |
+| RAG / ingestion / retrieval | [docs/rag/](docs/rag/index.md)                           |
+| Skills                   | [docs/skills/](docs/skills/index.md)                        |
+| Tools (built-in / custom) | [docs/tools/](docs/tools/index.md)                         |
+| Sandbox                  | [docs/sandbox/](docs/sandbox/index.md)                      |
+| LLM providers            | [docs/providers/](docs/providers/index.md)                  |
+| Observability / tracing  | [docs/observability/](docs/observability/index.md)          |
+| Processors / guardrails / HITL | [docs/processors/](docs/processors/index.md)          |
+| Storage backends         | [docs/store/](docs/store/index.md)                          |
 | Getting started flow     | [docs/getting-started/](docs/getting-started/index.md)      |
 
 When your change affects multiple areas, search for all docs referencing the component name and update each one. Keep docs in sync with code.

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"

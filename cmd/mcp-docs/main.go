@@ -98,56 +98,67 @@ func main() {
 	}
 }
 
+// topicFolders lists every per-topic documentation directory in the new
+// topic-grouped layout. Each folder contains three files (index.md, api.md,
+// examples.md), exposed as oasis://<topic>/<file> resources.
+var topicFolders = []string{
+	"agent", "network", "workflow",
+	"memory", "rag", "skills",
+	"tools", "sandbox", "providers",
+	"observability", "processors", "store",
+}
+
+// fileKinds maps the canonical per-topic filenames to their description label.
+// Order is fixed so the resource list is stable across runs.
+var fileKinds = []struct {
+	file  string
+	label string
+}{
+	{"index.md", "Concept"},
+	{"api.md", "API Reference"},
+	{"examples.md", "Examples"},
+}
+
 // loadDocs reads all embedded documentation files and returns them as doc entries.
 func loadDocs() []docEntry {
 	var entries []docEntry
 
-	sections := []struct {
-		dir         string
-		uriPrefix   string
-		description string
-	}{
-		{"concepts", "oasis://concepts/", "Concept: "},
-		{"guides", "oasis://guides/", "Guide: "},
-		{"api", "oasis://api/", "API Reference: "},
-		{"configuration", "oasis://configuration/", "Configuration: "},
-		{"getting-started", "oasis://getting-started/", "Getting Started: "},
+	// Landing page.
+	if content, err := fs.ReadFile(docs.FS, "index.md"); err == nil {
+		entries = append(entries, docEntry{
+			uri:         "oasis://index",
+			name:        "Oasis Overview",
+			description: "Landing page — what Oasis is and where to go next",
+			content:     string(content),
+		})
 	}
 
-	for _, sec := range sections {
-		dirEntries, err := fs.ReadDir(docs.FS, sec.dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range dirEntries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			content, err := fs.ReadFile(docs.FS, path.Join(sec.dir, e.Name()))
+	// Getting started — a single index.md inside the folder.
+	if content, err := fs.ReadFile(docs.FS, "getting-started/index.md"); err == nil {
+		entries = append(entries, docEntry{
+			uri:         "oasis://getting-started",
+			name:        "Getting Started",
+			description: "Install Oasis and build your first agent",
+			content:     string(content),
+		})
+	}
+
+	// Per-topic resources: 12 topics × 3 files each.
+	for _, topic := range topicFolders {
+		title := toTitle(topic)
+		for _, kind := range fileKinds {
+			content, err := fs.ReadFile(docs.FS, path.Join(topic, kind.file))
 			if err != nil {
 				continue
 			}
-
-			slug := strings.TrimSuffix(e.Name(), ".md")
-			title := toTitle(slug)
-
+			slug := strings.TrimSuffix(kind.file, ".md")
 			entries = append(entries, docEntry{
-				uri:         sec.uriPrefix + slug,
-				name:        title,
-				description: sec.description + title,
+				uri:         "oasis://" + topic + "/" + slug,
+				name:        title + " — " + kind.label,
+				description: kind.label + ": " + title,
 				content:     string(content),
 			})
 		}
-	}
-
-	// Also include CONTRIBUTING.md as a top-level resource.
-	if content, err := fs.ReadFile(docs.FS, "CONTRIBUTING.md"); err == nil {
-		entries = append(entries, docEntry{
-			uri:         "oasis://contributing",
-			name:        "Contributing",
-			description: "Engineering principles and coding conventions",
-			content:     string(content),
-		})
 	}
 
 	return entries

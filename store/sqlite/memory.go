@@ -24,7 +24,7 @@ type ItemStore struct {
 	logger *slog.Logger
 }
 
-var _ memory.ItemStore = (*ItemStore)(nil)
+var _ core.MemoryItemStore = (*ItemStore)(nil)
 
 // NewItemStore constructs an ItemStore on the given *sql.DB. Use
 // Store.DB() so it shares the serialized connection.

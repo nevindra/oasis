@@ -1,6 +1,7 @@
 .env
 *.db
 docs/plans
+docs/internal/
 /bot_example
 /ix
 oasis.tomlix

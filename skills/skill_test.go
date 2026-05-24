@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+// mustWriter asserts that p implements SkillWriter, failing the test
+// immediately if it does not. Used in write-path tests where the provider is
+// always a fileSkillProvider and the assertion failing means a bug, not a
+// user-facing condition.
+func mustWriter(t *testing.T, p SkillProvider) SkillWriter {
+	t.Helper()
+	w, ok := p.(SkillWriter)
+	if !ok {
+		t.Fatalf("provider %T does not implement SkillWriter", p)
+	}
+	return w
+}
+
 // writeSkillFile writes a SKILL.md with the given content inside
 // <dir>/<name>/SKILL.md, creating the subdirectory if needed.
 func writeSkillFile(t *testing.T, dir, name, content string) {
@@ -360,7 +373,7 @@ func TestFileSkillProvider_CreateSkill(t *testing.T) {
 		References:   []string{"https://example.com"},
 	}
 
-	if err := p.CreateSkill(context.Background(), skill); err != nil {
+	if err := mustWriter(t, p).CreateSkill(context.Background(), skill); err != nil {
 		t.Fatalf("CreateSkill: %v", err)
 	}
 
@@ -402,11 +415,11 @@ func TestFileSkillProvider_CreateSkillAlreadyExists(t *testing.T) {
 	p := NewFileSkillProvider(dir)
 
 	skill := Skill{Name: "dup-skill", Description: "first"}
-	if err := p.CreateSkill(context.Background(), skill); err != nil {
+	if err := mustWriter(t, p).CreateSkill(context.Background(), skill); err != nil {
 		t.Fatalf("first CreateSkill: %v", err)
 	}
 
-	err := p.CreateSkill(context.Background(), Skill{Name: "dup-skill", Description: "second"})
+	err := mustWriter(t, p).CreateSkill(context.Background(), Skill{Name: "dup-skill", Description: "second"})
 	if err == nil {
 		t.Fatal("expected error for duplicate skill, got nil")
 	}
@@ -414,7 +427,7 @@ func TestFileSkillProvider_CreateSkillAlreadyExists(t *testing.T) {
 
 func TestFileSkillProvider_CreateSkillNoDirs(t *testing.T) {
 	p := NewFileSkillProvider() // no dirs
-	err := p.CreateSkill(context.Background(), Skill{Name: "test"})
+	err := mustWriter(t, p).CreateSkill(context.Background(), Skill{Name: "test"})
 	if err == nil {
 		t.Fatal("expected error with no dirs configured, got nil")
 	}
@@ -436,7 +449,7 @@ Original instructions.
 		Description:  "Updated description",
 		Instructions: "Updated instructions.",
 	}
-	if err := p.UpdateSkill(context.Background(), "updatable", updated); err != nil {
+	if err := mustWriter(t, p).UpdateSkill(context.Background(), "updatable", updated); err != nil {
 		t.Fatalf("UpdateSkill: %v", err)
 	}
 
@@ -456,7 +469,7 @@ Original instructions.
 func TestFileSkillProvider_UpdateSkillNotFound(t *testing.T) {
 	dir := t.TempDir()
 	p := NewFileSkillProvider(dir)
-	err := p.UpdateSkill(context.Background(), "ghost", Skill{Name: "ghost"})
+	err := mustWriter(t, p).UpdateSkill(context.Background(), "ghost", Skill{Name: "ghost"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent skill, got nil")
 	}
@@ -473,7 +486,7 @@ description: Will be gone
 Bye.
 `)
 
-	if err := p.DeleteSkill(context.Background(), "to-delete"); err != nil {
+	if err := mustWriter(t, p).DeleteSkill(context.Background(), "to-delete"); err != nil {
 		t.Fatalf("DeleteSkill: %v", err)
 	}
 
@@ -497,7 +510,7 @@ Bye.
 func TestFileSkillProvider_DeleteSkillNotFound(t *testing.T) {
 	dir := t.TempDir()
 	p := NewFileSkillProvider(dir)
-	err := p.DeleteSkill(context.Background(), "nonexistent")
+	err := mustWriter(t, p).DeleteSkill(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent skill, got nil")
 	}
@@ -599,7 +612,7 @@ func TestFileSkillProvider_CreateSkillNewFields(t *testing.T) {
 		},
 	}
 
-	if err := p.CreateSkill(context.Background(), skill); err != nil {
+	if err := mustWriter(t, p).CreateSkill(context.Background(), skill); err != nil {
 		t.Fatalf("CreateSkill: %v", err)
 	}
 

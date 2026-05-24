@@ -9,7 +9,7 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
-// emitterAgent is a test StreamingAgent that emits a fixed event sequence
+// emitterAgent is a test Agent that emits a fixed event sequence
 // then returns a known AgentResult.
 type emitterAgent struct {
 	events []core.StreamEvent
@@ -19,17 +19,18 @@ type emitterAgent struct {
 
 func (e *emitterAgent) Name() string        { return "emitter" }
 func (e *emitterAgent) Description() string { return "" }
-func (e *emitterAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
-	return e.final, nil
-}
-func (e *emitterAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) (AgentResult, error) {
-	defer close(ch)
+func (e *emitterAgent) Execute(ctx context.Context, task AgentTask, opts ...RunOption) (AgentResult, error) {
+	cfg := core.ApplyRunOptions(opts...)
+	if cfg.Stream == nil {
+		return e.final, nil
+	}
+	defer close(cfg.Stream)
 	if e.delay > 0 {
 		time.Sleep(e.delay)
 	}
 	for _, ev := range e.events {
 		select {
-		case ch <- ev:
+		case cfg.Stream <- ev:
 		case <-ctx.Done():
 			return AgentResult{}, ctx.Err()
 		}
@@ -37,7 +38,7 @@ func (e *emitterAgent) ExecuteStream(ctx context.Context, task AgentTask, ch cha
 	return e.final, nil
 }
 
-func TestStartStream_BlockingResult(t *testing.T) {
+func TestSubscribe_BlockingResult(t *testing.T) {
 	ag := &emitterAgent{
 		events: []core.StreamEvent{
 			{Type: core.EventTextDelta, Content: "hello "},
@@ -45,7 +46,7 @@ func TestStartStream_BlockingResult(t *testing.T) {
 		},
 		final: AgentResult{Output: "hello world"},
 	}
-	s := StartStream(context.Background(), ag, AgentTask{Input: "hi"})
+	s := Subscribe(context.Background(), ag, AgentTask{Input: "hi"})
 	res, err := s.Result()
 	if err != nil {
 		t.Fatalf("Result() err = %v", err)
@@ -58,9 +59,9 @@ func TestStartStream_BlockingResult(t *testing.T) {
 	}
 }
 
-func TestStartStream_DoneChannel(t *testing.T) {
+func TestSubscribe_DoneChannel(t *testing.T) {
 	ag := &emitterAgent{final: AgentResult{Output: "ok"}}
-	s := StartStream(context.Background(), ag, AgentTask{})
+	s := Subscribe(context.Background(), ag, AgentTask{})
 	select {
 	case <-s.Done():
 		// expected
@@ -78,7 +79,7 @@ func TestStream_Events_FanOut(t *testing.T) {
 		},
 		final: AgentResult{Output: "abc"},
 	}
-	s := StartStream(context.Background(), ag, AgentTask{})
+	s := Subscribe(context.Background(), ag, AgentTask{})
 
 	// Two parallel readers must both see all three events.
 	collect := func(ch <-chan core.StreamEvent) []string {
@@ -117,7 +118,7 @@ func TestStream_Events_LateReplay(t *testing.T) {
 		},
 		final: AgentResult{Output: "early"},
 	}
-	s := StartStream(context.Background(), ag, AgentTask{})
+	s := Subscribe(context.Background(), ag, AgentTask{})
 	// Wait for the agent to finish before subscribing — late subscriber.
 	<-s.Done()
 
@@ -143,7 +144,7 @@ func TestStream_OnTextDelta(t *testing.T) {
 		final:  AgentResult{Output: "xy"},
 		delay:  10 * time.Millisecond, // Ensure callback is registered before events start
 	}
-	s := StartStream(context.Background(), ag, AgentTask{})
+	s := Subscribe(context.Background(), ag, AgentTask{})
 
 	var got []string
 	s.OnTextDelta(func(chunk string) { got = append(got, chunk) })
@@ -164,7 +165,7 @@ func TestStream_OnReasoningDelta(t *testing.T) {
 		final:  AgentResult{Thinking: "think1think2"},
 		delay:  10 * time.Millisecond,
 	}
-	s := StartStream(context.Background(), ag, AgentTask{})
+	s := Subscribe(context.Background(), ag, AgentTask{})
 
 	var got []string
 	s.OnReasoningDelta(func(chunk string) { got = append(got, chunk) })
@@ -183,7 +184,7 @@ func TestStream_OnToolCall(t *testing.T) {
 		final:  AgentResult{},
 		delay:  10 * time.Millisecond,
 	}
-	s := StartStream(context.Background(), ag, AgentTask{})
+	s := Subscribe(context.Background(), ag, AgentTask{})
 
 	var seen []string
 	s.OnToolCall(func(tc core.ToolCall) { seen = append(seen, tc.Name) })
@@ -203,7 +204,7 @@ func TestStream_OnToolResult(t *testing.T) {
 		final:  AgentResult{},
 		delay:  10 * time.Millisecond,
 	}
-	s := StartStream(context.Background(), ag, AgentTask{})
+	s := Subscribe(context.Background(), ag, AgentTask{})
 
 	var got []string
 	s.OnToolResult(func(tr core.ToolResult) { got = append(got, string(tr.Content)) })
@@ -224,7 +225,7 @@ func TestStream_OnEvent(t *testing.T) {
 		final:  AgentResult{},
 		delay:  10 * time.Millisecond,
 	}
-	s := StartStream(context.Background(), ag, AgentTask{})
+	s := Subscribe(context.Background(), ag, AgentTask{})
 
 	var got []core.StreamEventType
 	s.OnEvent(func(ev core.StreamEvent) { got = append(got, ev.Type) })
@@ -271,7 +272,7 @@ func TestStreamBlockingAccessors(t *testing.T) {
 			},
 		},
 	}
-	s := StartStream(context.Background(), ag, AgentTask{Input: "x"})
+	s := Subscribe(context.Background(), ag, AgentTask{Input: "x"})
 
 	if s.FinishReason() != core.FinishStop {
 		t.Errorf("FinishReason = %q", s.FinishReason())

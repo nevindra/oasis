@@ -39,8 +39,8 @@ func TestTokenize(t *testing.T) {
 
 func TestSearchSingleTerm(t *testing.T) {
 	docs := []docEntry{
-		{uri: "oasis://concepts/network", name: "Network", content: "# Network\n\nA Network routes tasks to multiple agents."},
-		{uri: "oasis://concepts/tool", name: "Tool", content: "# Tool\n\nTools let agents interact with external systems."},
+		{uri: "oasis://network/index", name: "Network", content: "# Network\n\nA Network routes tasks to multiple agents."},
+		{uri: "oasis://tools/index", name: "Tool", content: "# Tool\n\nTools let agents interact with external systems."},
 	}
 
 	idx := newSearchIndex(docs)
@@ -49,16 +49,16 @@ func TestSearchSingleTerm(t *testing.T) {
 	if len(results) == 0 {
 		t.Fatal("expected results for 'network'")
 	}
-	if results[0].entry.uri != "oasis://concepts/network" {
-		t.Errorf("top result = %q, want oasis://concepts/network", results[0].entry.uri)
+	if results[0].entry.uri != "oasis://network/index" {
+		t.Errorf("top result = %q, want oasis://network/index", results[0].entry.uri)
 	}
 }
 
 func TestSearchMultiWord(t *testing.T) {
 	docs := []docEntry{
-		{uri: "oasis://concepts/network", name: "Network", content: "# Network\n\nA Network routes tasks to multiple agents.\nSupports multi-agent routing."},
-		{uri: "oasis://concepts/tool", name: "Tool", content: "# Tool\n\nTools let agents interact with external systems."},
-		{uri: "oasis://concepts/store", name: "Store", content: "# Store\n\nPersistent storage for conversations."},
+		{uri: "oasis://network/index", name: "Network", content: "# Network\n\nA Network routes tasks to multiple agents.\nSupports multi-agent routing."},
+		{uri: "oasis://tools/index", name: "Tool", content: "# Tool\n\nTools let agents interact with external systems."},
+		{uri: "oasis://store/index", name: "Store", content: "# Store\n\nPersistent storage for conversations."},
 	}
 
 	idx := newSearchIndex(docs)
@@ -68,14 +68,14 @@ func TestSearchMultiWord(t *testing.T) {
 		t.Fatal("expected results for 'network multi-agent routing'")
 	}
 	// Network doc should rank highest — it contains all query terms.
-	if results[0].entry.uri != "oasis://concepts/network" {
-		t.Errorf("top result = %q, want oasis://concepts/network", results[0].entry.uri)
+	if results[0].entry.uri != "oasis://network/index" {
+		t.Errorf("top result = %q, want oasis://network/index", results[0].entry.uri)
 	}
 }
 
 func TestSearchNoResults(t *testing.T) {
 	docs := []docEntry{
-		{uri: "oasis://concepts/tool", name: "Tool", content: "# Tool\n\nTools let agents interact with systems."},
+		{uri: "oasis://tools/index", name: "Tool", content: "# Tool\n\nTools let agents interact with systems."},
 	}
 
 	idx := newSearchIndex(docs)
@@ -158,7 +158,7 @@ func TestFormatResultsEmpty(t *testing.T) {
 
 func TestFormatResultsWithHits(t *testing.T) {
 	results := []searchResult{
-		{entry: docEntry{name: "Network", uri: "oasis://concepts/network"}, score: 5.0, snippet: "some snippet"},
+		{entry: docEntry{name: "Network", uri: "oasis://network/index"}, score: 5.0, snippet: "some snippet"},
 	}
 	out := formatResults("network", results)
 

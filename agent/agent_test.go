@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/skills"
 	"github.com/nevindra/oasis/memory"
 )
 
@@ -25,7 +26,7 @@ type stubAgent struct {
 
 func (s *stubAgent) Name() string        { return s.name }
 func (s *stubAgent) Description() string { return s.desc }
-func (s *stubAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
+func (s *stubAgent) Execute(_ context.Context, task AgentTask, _ ...RunOption) (AgentResult, error) {
 	return s.fn(task)
 }
 
@@ -60,27 +61,27 @@ func TestAgentInterface(t *testing.T) {
 	}
 }
 
-// mockProvider is a test Provider that returns canned responses.
+// mockProvider is a test core.Provider that returns canned responses.
 type mockProvider struct {
 	name      string
-	responses []ChatResponse // popped in order
+	responses []core.ChatResponse // popped in order
 	idx       int
-	onChat    func(*ChatRequest) // optional hook called at the start of each ChatStream
+	onChat    func(*core.ChatRequest) // optional hook called at the start of each ChatStream
 }
 
 func (m *mockProvider) Name() string { return m.name }
-func (m *mockProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (m *mockProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	if m.onChat != nil {
 		m.onChat(&req)
 	}
 	defer close(ch)
 	resp := m.next()
-	ch <- StreamEvent{Type: EventTextDelta, Content: resp.Content}
+	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: resp.Content}
 	return resp, nil
 }
-func (m *mockProvider) next() ChatResponse {
+func (m *mockProvider) next() core.ChatResponse {
 	if m.idx >= len(m.responses) {
-		return ChatResponse{Content: "exhausted"}
+		return core.ChatResponse{Content: "exhausted"}
 	}
 	resp := m.responses[m.idx]
 	m.idx++
@@ -90,12 +91,12 @@ func (m *mockProvider) next() ChatResponse {
 func TestLLMAgentNoTools(t *testing.T) {
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			{Content: "Hello! I'm your assistant."},
 		},
 	}
 
-	agent := NewLLMAgent("greeter", "A friendly greeter", provider)
+	agent := New("greeter", "A friendly greeter", provider)
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "Hi there"})
 	if err != nil {
 		t.Fatal(err)
@@ -108,15 +109,15 @@ func TestLLMAgentNoTools(t *testing.T) {
 func TestLLMAgentWithTools(t *testing.T) {
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// First response: call the greet tool
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{"name":"world"}`)}}},
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{"name":"world"}`)}}},
 			// Second response: final text using tool result
 			{Content: "The greeting is: hello world"},
 		},
 	}
 
-	agent := NewLLMAgent("tooluser", "Uses tools", provider,
+	agent := New("tooluser", "Uses tools", provider,
 		WithTools(mockTool{}),
 	)
 
@@ -130,18 +131,18 @@ func TestLLMAgentWithTools(t *testing.T) {
 }
 
 func TestLLMAgentMaxIterations(t *testing.T) {
-	// Provider always returns tool calls — should hit max iterations
+	// core.Provider always returns tool calls — should hit max iterations
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
-			{ToolCalls: []ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}}},
-			{ToolCalls: []ToolCall{{ID: "3", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{ToolCalls: []core.ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{ToolCalls: []core.ToolCall{{ID: "3", Name: "greet", Args: json.RawMessage(`{}`)}}},
 			{Content: "forced synthesis"}, // force-synthesis response
 		},
 	}
 
-	agent := NewLLMAgent("looper", "Loops forever", provider,
+	agent := New("looper", "Loops forever", provider,
 		WithTools(mockTool{}),
 		WithLimits(Limits{MaxIter: 3}),
 	)
@@ -157,7 +158,7 @@ func TestLLMAgentMaxIterations(t *testing.T) {
 }
 
 func TestLLMAgentInterfaceCompliance(t *testing.T) {
-	agent := NewLLMAgent("test", "test agent", &mockProvider{name: "test"})
+	agent := New("test", "test agent", &mockProvider{name: "test"})
 	var _ Agent = agent
 }
 
@@ -172,22 +173,22 @@ type errProvider struct {
 }
 
 func (p *errProvider) Name() string { return p.name }
-func (p *errProvider) ChatStream(_ context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (p *errProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
-	return ChatResponse{}, p.err
+	return core.ChatResponse{}, p.err
 }
 
 // ctxProvider returns the context's error (simulates context-aware provider).
 type ctxProvider struct{ name string }
 
 func (p *ctxProvider) Name() string { return p.name }
-func (p *ctxProvider) ChatStream(ctx context.Context, _ ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (p *ctxProvider) ChatStream(ctx context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
-	return ChatResponse{}, ctx.Err()
+	return core.ChatResponse{}, ctx.Err()
 }
 
 func TestLLMAgentProviderError(t *testing.T) {
-	agent := NewLLMAgent("broken", "Broken agent", &errProvider{
+	agent := New("broken", "Broken agent", &errProvider{
 		name: "fail",
 		err:  errors.New("api timeout"),
 	})
@@ -203,7 +204,7 @@ func TestLLMAgentProviderError(t *testing.T) {
 
 func TestLLMAgentProviderErrorWithTools(t *testing.T) {
 	// Chat with tools path (req.Tools is non-empty)
-	agent := NewLLMAgent("broken", "Broken agent", &errProvider{
+	agent := New("broken", "Broken agent", &errProvider{
 		name: "fail",
 		err:  errors.New("rate limited"),
 	}, WithTools(mockTool{}))
@@ -221,7 +222,7 @@ func TestLLMAgentContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before Execute
 
-	agent := NewLLMAgent("ctx", "Context test", &ctxProvider{name: "ctx"})
+	agent := New("ctx", "Context test", &ctxProvider{name: "ctx"})
 
 	_, err := agent.Execute(ctx, AgentTask{Input: "hello"})
 	if err == nil {
@@ -236,23 +237,23 @@ func TestLLMAgentUsageAccumulation(t *testing.T) {
 	// 2 tool-call rounds + 1 final text = 3 LLM calls, each with 100 input / 50 output
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			{
-				ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}},
-				Usage:     Usage{InputTokens: 100, OutputTokens: 50},
+				ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}},
+				Usage:     core.Usage{InputTokens: 100, OutputTokens: 50},
 			},
 			{
-				ToolCalls: []ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}},
-				Usage:     Usage{InputTokens: 100, OutputTokens: 50},
+				ToolCalls: []core.ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}},
+				Usage:     core.Usage{InputTokens: 100, OutputTokens: 50},
 			},
 			{
 				Content: "done",
-				Usage:   Usage{InputTokens: 100, OutputTokens: 50},
+				Usage:   core.Usage{InputTokens: 100, OutputTokens: 50},
 			},
 		},
 	}
 
-	agent := NewLLMAgent("counter", "Counts usage", provider, WithTools(mockTool{}))
+	agent := New("counter", "Counts usage", provider, WithTools(mockTool{}))
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
@@ -268,9 +269,9 @@ func TestLLMAgentUsageAccumulation(t *testing.T) {
 func TestLLMAgentEmptyInput(t *testing.T) {
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "ok"}},
+		responses: []core.ChatResponse{{Content: "ok"}},
 	}
-	agent := NewLLMAgent("empty", "Handles empty", provider)
+	agent := New("empty", "Handles empty", provider)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: ""})
 	if err != nil {
@@ -284,9 +285,9 @@ func TestLLMAgentEmptyInput(t *testing.T) {
 func TestLLMAgentWithSystemPrompt(t *testing.T) {
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "I am helpful"}},
+		responses: []core.ChatResponse{{Content: "I am helpful"}},
 	}
-	agent := NewLLMAgent("prompted", "Has system prompt", provider,
+	agent := New("prompted", "Has system prompt", provider,
 		WithPrompt("You are helpful"),
 	)
 
@@ -377,9 +378,9 @@ func TestLLMAgentAskUserToolAppearsWithHandler(t *testing.T) {
 	handler := &mockInputHandler{response: InputResponse{Value: "42"}}
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// LLM calls ask_user
-			{ToolCalls: []ToolCall{{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "ask_user",
 				Args: json.RawMessage(`{"question":"What is the answer?"}`),
@@ -389,7 +390,7 @@ func TestLLMAgentAskUserToolAppearsWithHandler(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("asker", "Asks questions", provider,
+	agent := New("asker", "Asks questions", provider,
 		WithInputHandler(handler),
 	)
 
@@ -414,8 +415,8 @@ func TestLLMAgentAskUserWithOptions(t *testing.T) {
 	handler := &mockInputHandler{response: InputResponse{Value: "Yes"}}
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "ask_user",
 				Args: json.RawMessage(`{"question":"Proceed?","options":["Yes","No"]}`),
@@ -424,7 +425,7 @@ func TestLLMAgentAskUserWithOptions(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("confirmer", "Confirms", provider,
+	agent := New("confirmer", "Confirms", provider,
 		WithInputHandler(handler),
 	)
 
@@ -449,8 +450,8 @@ func TestLLMAgentAskUserHandlerError(t *testing.T) {
 	handler := &mockInputHandler{err: errors.New("timeout")}
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "ask_user",
 				Args: json.RawMessage(`{"question":"hello?"}`),
@@ -459,7 +460,7 @@ func TestLLMAgentAskUserHandlerError(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("asker", "Asks", provider,
+	agent := New("asker", "Asks", provider,
 		WithInputHandler(handler),
 	)
 
@@ -477,8 +478,8 @@ func TestLLMAgentNoHandlerNoAskUser(t *testing.T) {
 	// LLM somehow calls ask_user anyway — should be treated as unknown tool.
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "ask_user",
 				Args: json.RawMessage(`{"question":"hello?"}`),
@@ -487,7 +488,7 @@ func TestLLMAgentNoHandlerNoAskUser(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("no-handler", "No handler", provider,
+	agent := New("no-handler", "No handler", provider,
 		WithTools(mockTool{}),
 	)
 
@@ -505,8 +506,8 @@ func TestLLMAgentAskUserMetadata(t *testing.T) {
 	handler := &mockInputHandler{response: InputResponse{Value: "ok"}}
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "ask_user",
 				Args: json.RawMessage(`{"question":"confirm?"}`),
@@ -515,7 +516,7 @@ func TestLLMAgentAskUserMetadata(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("meta-agent", "Tests metadata", provider,
+	agent := New("meta-agent", "Tests metadata", provider,
 		WithInputHandler(handler),
 	)
 
@@ -539,7 +540,7 @@ func TestProcessorAccessesInputHandler(t *testing.T) {
 
 	// Processor that uses InputHandlerFromContext to gate tool calls
 	gateHit := false
-	gate := &funcPostProcessor{fn: func(ctx context.Context, resp *ChatResponse) error {
+	gate := &funcPostProcessor{fn: func(ctx context.Context, resp *core.ChatResponse) error {
 		h, ok := InputHandlerFromContext(ctx)
 		if !ok {
 			return nil
@@ -566,16 +567,16 @@ func TestProcessorAccessesInputHandler(t *testing.T) {
 
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
 			{Content: "greeted successfully"},
 		},
 	}
 
-	agent := NewLLMAgent("gated", "Gated agent", provider,
+	agent := New("gated", "Gated agent", provider,
 		WithTools(mockTool{}),
 		WithInputHandler(handler),
-		WithPostProcessors(gate),
+		WithProcessors(Processors{Post: []core.PostProcessor{gate}}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "greet"})
@@ -592,10 +593,10 @@ func TestProcessorAccessesInputHandler(t *testing.T) {
 
 // funcPostProcessor is a test helper implementing PostProcessor via a function.
 type funcPostProcessor struct {
-	fn func(context.Context, *ChatResponse) error
+	fn func(context.Context, *core.ChatResponse) error
 }
 
-func (f *funcPostProcessor) PostLLM(ctx context.Context, resp *ChatResponse) error {
+func (f *funcPostProcessor) PostLLM(ctx context.Context, resp *core.ChatResponse) error {
 	return f.fn(ctx, resp)
 }
 
@@ -605,8 +606,8 @@ func TestLLMAgentDynamicPrompt(t *testing.T) {
 	var capturedPrompt string
 	provider := &callbackProvider{
 		name:     "test",
-		response: ChatResponse{Content: "ok"},
-		onChat: func(req ChatRequest) {
+		response: core.ChatResponse{Content: "ok"},
+		onChat: func(req core.ChatRequest) {
 			for _, m := range req.Messages {
 				if m.Role == "system" {
 					capturedPrompt = m.Content
@@ -615,7 +616,7 @@ func TestLLMAgentDynamicPrompt(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("dynamic", "Dynamic prompt", provider,
+	agent := New("dynamic", "Dynamic prompt", provider,
 		WithPrompt("static fallback"),
 		WithDynamicPrompt(func(_ context.Context, task AgentTask) string {
 			return "dynamic: " + task.UserID
@@ -636,8 +637,8 @@ func TestLLMAgentDynamicPromptFallback(t *testing.T) {
 	var capturedPrompt string
 	provider := &callbackProvider{
 		name:     "test",
-		response: ChatResponse{Content: "ok"},
-		onChat: func(req ChatRequest) {
+		response: core.ChatResponse{Content: "ok"},
+		onChat: func(req core.ChatRequest) {
 			for _, m := range req.Messages {
 				if m.Role == "system" {
 					capturedPrompt = m.Content
@@ -646,7 +647,7 @@ func TestLLMAgentDynamicPromptFallback(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("static", "Static prompt", provider,
+	agent := New("static", "Static prompt", provider,
 		WithPrompt("I am static"),
 	)
 
@@ -658,11 +659,11 @@ func TestLLMAgentDynamicPromptFallback(t *testing.T) {
 }
 
 func TestLLMAgentDynamicModel(t *testing.T) {
-	providerA := &mockProvider{name: "model-a", responses: []ChatResponse{{Content: "from A"}}}
-	providerB := &mockProvider{name: "model-b", responses: []ChatResponse{{Content: "from B"}}}
+	providerA := &mockProvider{name: "model-a", responses: []core.ChatResponse{{Content: "from A"}}}
+	providerB := &mockProvider{name: "model-b", responses: []core.ChatResponse{{Content: "from B"}}}
 
-	agent := NewLLMAgent("dynamic", "Dynamic model", providerA,
-		WithDynamicModel(func(_ context.Context, task AgentTask) Provider {
+	agent := New("dynamic", "Dynamic model", providerA,
+		WithDynamicModel(func(_ context.Context, task AgentTask) core.Provider {
 			if task.Extra["tier"] == "pro" {
 				return providerB
 			}
@@ -682,16 +683,16 @@ func TestLLMAgentDynamicModel(t *testing.T) {
 func TestLLMAgentDynamicTools(t *testing.T) {
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "calc", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "calc", Args: json.RawMessage(`{}`)}}},
 			{Content: "used calc"},
 		},
 	}
 
-	agent := NewLLMAgent("dynamic", "Dynamic tools", provider,
+	agent := New("dynamic", "Dynamic tools", provider,
 		WithTools(mockTool{}), // static: greet
-		WithDynamicTools(func(_ context.Context, task AgentTask) []AnyTool {
-			return []AnyTool{mockToolCalc{}}
+		WithDynamicTools(func(_ context.Context, task AgentTask) []core.AnyTool {
+			return []core.AnyTool{mockToolCalc{}}
 		}),
 	)
 
@@ -716,13 +717,13 @@ func TestLLMAgentTaskFromContextInTool(t *testing.T) {
 
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "ctx_reader", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "ctx_reader", Args: json.RawMessage(`{}`)}}},
 			{Content: "done"},
 		},
 	}
 
-	agent := NewLLMAgent("ctx", "Context test", provider, WithTools(ctxTool))
+	agent := New("ctx", "Context test", provider, WithTools(ctxTool))
 	agent.Execute(context.Background(), AgentTask{
 		Input:  "test",
 		UserID: "user-42",
@@ -767,10 +768,10 @@ func TestTaskFromContextMissing(t *testing.T) {
 type bigResultTool struct{}
 
 func (bigResultTool) Name() string { return "big" }
-func (bigResultTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: "big", Description: "Returns big content"}
+func (bigResultTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "big", Description: "Returns big content"}
 }
-func (bigResultTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (bigResultTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult(strings.Repeat("x", 500)), nil
 }
 
@@ -780,20 +781,20 @@ func TestContextCompression(t *testing.T) {
 
 	// Responses: 4 rounds of 2 tool calls each + 1 final text.
 	// Without compression, final call sees 1 + 4*(1 asst + 2 tool) = 13 messages.
-	responses := []ChatResponse{
-		{ToolCalls: []ToolCall{
+	responses := []core.ChatResponse{
+		{ToolCalls: []core.ToolCall{
 			{ID: "1a", Name: "big", Args: json.RawMessage(`{}`)},
 			{ID: "1b", Name: "big", Args: json.RawMessage(`{}`)},
 		}},
-		{ToolCalls: []ToolCall{
+		{ToolCalls: []core.ToolCall{
 			{ID: "2a", Name: "big", Args: json.RawMessage(`{}`)},
 			{ID: "2b", Name: "big", Args: json.RawMessage(`{}`)},
 		}},
-		{ToolCalls: []ToolCall{
+		{ToolCalls: []core.ToolCall{
 			{ID: "3a", Name: "big", Args: json.RawMessage(`{}`)},
 			{ID: "3b", Name: "big", Args: json.RawMessage(`{}`)},
 		}},
-		{ToolCalls: []ToolCall{
+		{ToolCalls: []core.ToolCall{
 			{ID: "4a", Name: "big", Args: json.RawMessage(`{}`)},
 			{ID: "4b", Name: "big", Args: json.RawMessage(`{}`)},
 		}},
@@ -803,15 +804,15 @@ func TestContextCompression(t *testing.T) {
 	trackingProvider := &sequentialCallbackProvider{
 		name:      "tracker",
 		responses: responses,
-		onChat: func(req ChatRequest) {
+		onChat: func(req core.ChatRequest) {
 			messageCounts = append(messageCounts, len(req.Messages))
 		},
 	}
 
 	// Separate compression provider — always returns a short summary.
-	compressResponses := make([]ChatResponse, 10)
+	compressResponses := make([]core.ChatResponse, 10)
 	for i := range compressResponses {
-		compressResponses[i] = ChatResponse{Content: "summary"}
+		compressResponses[i] = core.ChatResponse{Content: "summary"}
 	}
 	compressProvider := &mockProvider{
 		name:      "compress",
@@ -821,9 +822,9 @@ func TestContextCompression(t *testing.T) {
 	// Threshold of 1500 runes. With 500 runes per tool result and 2 calls
 	// per iteration (1000/iter), compression triggers after iteration 2
 	// (~2002 runes) and starts compressing old iterations from iteration 3.
-	agent := NewLLMAgent("compressor", "Tests compression", trackingProvider,
+	agent := New("compressor", "Tests compression", trackingProvider,
 		WithTools(bigResultTool{}),
-		WithMemory(memory.WithCompress(func(_ context.Context, _ AgentTask) Provider { return compressProvider }, 1500)),
+		WithMemory(memory.WithCompress(func(_ context.Context, _ AgentTask) core.Provider { return compressProvider }, 1500)),
 		WithLimits(Limits{MaxIter: 10}),
 	)
 
@@ -849,24 +850,24 @@ func TestContextCompression(t *testing.T) {
 // sequentialCallbackProvider returns different responses per call and runs a callback.
 type sequentialCallbackProvider struct {
 	name      string
-	responses []ChatResponse
+	responses []core.ChatResponse
 	idx       int
-	onChat    func(ChatRequest)
+	onChat    func(core.ChatRequest)
 }
 
 func (s *sequentialCallbackProvider) Name() string { return s.name }
-func (s *sequentialCallbackProvider) next(req ChatRequest) ChatResponse {
+func (s *sequentialCallbackProvider) next(req core.ChatRequest) core.ChatResponse {
 	if s.onChat != nil {
 		s.onChat(req)
 	}
 	if s.idx >= len(s.responses) {
-		return ChatResponse{Content: "exhausted"}
+		return core.ChatResponse{Content: "exhausted"}
 	}
 	resp := s.responses[s.idx]
 	s.idx++
 	return resp
 }
-func (s *sequentialCallbackProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (s *sequentialCallbackProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	return s.next(req), nil
 }
@@ -879,10 +880,10 @@ func TestLLMAgentCloseCompletes(t *testing.T) {
 	// persist goroutines, so Close should be a fast no-op.
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "hello"}},
+		responses: []core.ChatResponse{{Content: "hello"}},
 	}
 
-	agent := NewLLMAgent("drainer", "Tests drain", provider)
+	agent := New("drainer", "Tests drain", provider)
 
 	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
 	if err != nil {
@@ -910,49 +911,49 @@ func TestLLMAgentCloseCompletes(t *testing.T) {
 func TestBuildConfigDefaults(t *testing.T) {
 	cfg := BuildConfig(nil)
 
-	if cfg.logger == nil {
+	if cfg.Logger == nil {
 		t.Error("logger should default to nopLogger, not nil")
 	}
-	if cfg.maxIter != 0 {
-		t.Errorf("maxIter = %d, want 0 (buildConfig doesn't set defaults, constructors do)", cfg.maxIter)
+	if cfg.MaxIter != 0 {
+		t.Errorf("maxIter = %d, want 0 (buildConfig doesn't set defaults, constructors do)", cfg.MaxIter)
 	}
 }
 
 func TestWithMaxIterOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithLimits(Limits{MaxIter: 5})})
-	if cfg.maxIter != 5 {
-		t.Errorf("maxIter = %d, want 5", cfg.maxIter)
+	if cfg.MaxIter != 5 {
+		t.Errorf("maxIter = %d, want 5", cfg.MaxIter)
 	}
 }
 
 func TestWithPromptOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithPrompt("You are helpful.")})
-	if cfg.systemPrompt != "You are helpful." {
-		t.Errorf("systemPrompt = %q, want %q", cfg.systemPrompt, "You are helpful.")
+	if cfg.SystemPrompt != "You are helpful." {
+		t.Errorf("systemPrompt = %q, want %q", cfg.SystemPrompt, "You are helpful.")
 	}
 }
 
 func TestWithSuspendBudgetOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithLimits(Limits{MaxSuspendSnapshots: 5, MaxSuspendBytes: 1 << 20})})
-	if cfg.maxSuspendSnapshots != 5 {
-		t.Errorf("maxSuspendSnapshots = %d, want 5", cfg.maxSuspendSnapshots)
+	if cfg.MaxSuspendSnapshots != 5 {
+		t.Errorf("maxSuspendSnapshots = %d, want 5", cfg.MaxSuspendSnapshots)
 	}
-	if cfg.maxSuspendBytes != 1<<20 {
-		t.Errorf("maxSuspendBytes = %d, want %d", cfg.maxSuspendBytes, 1<<20)
+	if cfg.MaxSuspendBytes != 1<<20 {
+		t.Errorf("maxSuspendBytes = %d, want %d", cfg.MaxSuspendBytes, 1<<20)
 	}
 }
 
 func TestWithCompressThresholdOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithMemory(memory.WithCompress(nil, 100_000))})
-	if cfg.compressThreshold != 100_000 {
-		t.Errorf("compressThreshold = %d, want 100000", cfg.compressThreshold)
+	if cfg.CompressThreshold != 100_000 {
+		t.Errorf("compressThreshold = %d, want 100000", cfg.CompressThreshold)
 	}
 }
 
 func TestCompressThreshold_DefaultIsDisabled(t *testing.T) {
 	cfg := BuildConfig(nil)
-	if cfg.compressThreshold != 0 {
-		t.Errorf("default compressThreshold = %d, want 0 (meaning disabled)", cfg.compressThreshold)
+	if cfg.CompressThreshold != 0 {
+		t.Errorf("default compressThreshold = %d, want 0 (meaning disabled)", cfg.CompressThreshold)
 	}
 }
 
@@ -966,8 +967,8 @@ func TestCompressThreshold_ZeroDisablesInLoop(t *testing.T) {
 
 func TestWithMaxAttachmentBytesOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithLimits(Limits{MaxAttachmentBytes: 10 << 20})})
-	if cfg.maxAttachmentBytes != 10<<20 {
-		t.Errorf("maxAttachmentBytes = %d, want %d", cfg.maxAttachmentBytes, 10<<20)
+	if cfg.MaxAttachmentBytes != 10<<20 {
+		t.Errorf("maxAttachmentBytes = %d, want %d", cfg.MaxAttachmentBytes, 10<<20)
 	}
 }
 
@@ -975,52 +976,52 @@ func TestWithMaxAttachmentBytesOption(t *testing.T) {
 
 func TestWithTemperatureOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{Temperature: ptr(0.7)})})
-	if cfg.genParams == nil {
+	if cfg.GenParams == nil {
 		t.Fatal("genParams should not be nil")
 	}
-	if cfg.genParams.Temperature == nil || *cfg.genParams.Temperature != 0.7 {
-		t.Errorf("Temperature = %v, want 0.7", cfg.genParams.Temperature)
+	if cfg.GenParams.Temperature == nil || *cfg.GenParams.Temperature != 0.7 {
+		t.Errorf("Temperature = %v, want 0.7", cfg.GenParams.Temperature)
 	}
 }
 
 func TestWithTemperatureZero(t *testing.T) {
 	// 0.0 is a valid temperature — must not be conflated with "unset".
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{Temperature: ptr(0.0)})})
-	if cfg.genParams == nil || cfg.genParams.Temperature == nil {
+	if cfg.GenParams == nil || cfg.GenParams.Temperature == nil {
 		t.Fatal("Temperature should be set (pointer to 0.0)")
 	}
-	if *cfg.genParams.Temperature != 0.0 {
-		t.Errorf("Temperature = %v, want 0.0", *cfg.genParams.Temperature)
+	if *cfg.GenParams.Temperature != 0.0 {
+		t.Errorf("Temperature = %v, want 0.0", *cfg.GenParams.Temperature)
 	}
 }
 
 func TestWithTopPOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{TopP: ptr(0.95)})})
-	if cfg.genParams == nil || cfg.genParams.TopP == nil {
+	if cfg.GenParams == nil || cfg.GenParams.TopP == nil {
 		t.Fatal("TopP should be set")
 	}
-	if *cfg.genParams.TopP != 0.95 {
-		t.Errorf("TopP = %v, want 0.95", *cfg.genParams.TopP)
+	if *cfg.GenParams.TopP != 0.95 {
+		t.Errorf("TopP = %v, want 0.95", *cfg.GenParams.TopP)
 	}
 }
 
 func TestWithTopKOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{TopK: ptr(40)})})
-	if cfg.genParams == nil || cfg.genParams.TopK == nil {
+	if cfg.GenParams == nil || cfg.GenParams.TopK == nil {
 		t.Fatal("TopK should be set")
 	}
-	if *cfg.genParams.TopK != 40 {
-		t.Errorf("TopK = %v, want 40", *cfg.genParams.TopK)
+	if *cfg.GenParams.TopK != 40 {
+		t.Errorf("TopK = %v, want 40", *cfg.GenParams.TopK)
 	}
 }
 
 func TestWithMaxTokensOption(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithGeneration(Generation{MaxTokens: ptr(2048)})})
-	if cfg.genParams == nil || cfg.genParams.MaxTokens == nil {
+	if cfg.GenParams == nil || cfg.GenParams.MaxTokens == nil {
 		t.Fatal("MaxTokens should be set")
 	}
-	if *cfg.genParams.MaxTokens != 2048 {
-		t.Errorf("MaxTokens = %v, want 2048", *cfg.genParams.MaxTokens)
+	if *cfg.GenParams.MaxTokens != 2048 {
+		t.Errorf("MaxTokens = %v, want 2048", *cfg.GenParams.MaxTokens)
 	}
 }
 
@@ -1034,42 +1035,42 @@ func TestGenerationParamsCompose(t *testing.T) {
 			MaxTokens:   ptr(1024),
 		}),
 	})
-	if cfg.genParams == nil {
+	if cfg.GenParams == nil {
 		t.Fatal("genParams should not be nil")
 	}
-	if *cfg.genParams.Temperature != 0.5 {
-		t.Errorf("Temperature = %v, want 0.5", *cfg.genParams.Temperature)
+	if *cfg.GenParams.Temperature != 0.5 {
+		t.Errorf("Temperature = %v, want 0.5", *cfg.GenParams.Temperature)
 	}
-	if *cfg.genParams.TopP != 0.9 {
-		t.Errorf("TopP = %v, want 0.9", *cfg.genParams.TopP)
+	if *cfg.GenParams.TopP != 0.9 {
+		t.Errorf("TopP = %v, want 0.9", *cfg.GenParams.TopP)
 	}
-	if *cfg.genParams.TopK != 50 {
-		t.Errorf("TopK = %v, want 50", *cfg.genParams.TopK)
+	if *cfg.GenParams.TopK != 50 {
+		t.Errorf("TopK = %v, want 50", *cfg.GenParams.TopK)
 	}
-	if *cfg.genParams.MaxTokens != 1024 {
-		t.Errorf("MaxTokens = %v, want 1024", *cfg.genParams.MaxTokens)
+	if *cfg.GenParams.MaxTokens != 1024 {
+		t.Errorf("MaxTokens = %v, want 1024", *cfg.GenParams.MaxTokens)
 	}
 }
 
 func TestGenerationParamsNilWhenUnset(t *testing.T) {
 	cfg := BuildConfig(nil)
-	if cfg.genParams != nil {
+	if cfg.GenParams != nil {
 		t.Error("genParams should be nil when no generation options are set")
 	}
 }
 
 func TestGenerationParamsInjectedIntoRequest(t *testing.T) {
-	// Verify GenerationParams flows from agent options into ChatRequest.
-	var capturedReq ChatRequest
+	// Verify GenerationParams flows from agent options into core.ChatRequest.
+	var capturedReq core.ChatRequest
 	provider := &callbackProvider{
 		name:     "test",
-		response: ChatResponse{Content: "ok"},
-		onChat: func(req ChatRequest) {
+		response: core.ChatResponse{Content: "ok"},
+		onChat: func(req core.ChatRequest) {
 			capturedReq = req
 		},
 	}
 
-	agent := NewLLMAgent("gp-test", "Tests gen params", provider,
+	agent := New("gp-test", "Tests gen params", provider,
 		WithGeneration(Generation{Temperature: ptr(0.3), TopP: ptr(0.85)}),
 	)
 
@@ -1079,7 +1080,7 @@ func TestGenerationParamsInjectedIntoRequest(t *testing.T) {
 	}
 
 	if capturedReq.GenerationParams == nil {
-		t.Fatal("GenerationParams should be set in ChatRequest")
+		t.Fatal("GenerationParams should be set in core.ChatRequest")
 	}
 	if *capturedReq.GenerationParams.Temperature != 0.3 {
 		t.Errorf("Temperature = %v, want 0.3", *capturedReq.GenerationParams.Temperature)
@@ -1090,16 +1091,16 @@ func TestGenerationParamsInjectedIntoRequest(t *testing.T) {
 }
 
 func TestGenerationParamsNilInRequestWhenUnset(t *testing.T) {
-	var capturedReq ChatRequest
+	var capturedReq core.ChatRequest
 	provider := &callbackProvider{
 		name:     "test",
-		response: ChatResponse{Content: "ok"},
-		onChat: func(req ChatRequest) {
+		response: core.ChatResponse{Content: "ok"},
+		onChat: func(req core.ChatRequest) {
 			capturedReq = req
 		},
 	}
 
-	agent := NewLLMAgent("no-gp", "No gen params", provider)
+	agent := New("no-gp", "No gen params", provider)
 
 	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
 	if err != nil {
@@ -1113,18 +1114,18 @@ func TestGenerationParamsNilInRequestWhenUnset(t *testing.T) {
 
 func TestGenerationParamsWithTools(t *testing.T) {
 	// GenerationParams should be present when using Chat with tools path.
-	var capturedReq ChatRequest
+	var capturedReq core.ChatRequest
 	provider := &sequentialCallbackProvider{
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
 			{Content: "done"},
 		},
-		onChat: func(req ChatRequest) {
+		onChat: func(req core.ChatRequest) {
 			capturedReq = req
 		},
 	}
 
-	agent := NewLLMAgent("gp-tools", "Tests gen params with tools", provider,
+	agent := New("gp-tools", "Tests gen params with tools", provider,
 		WithTools(mockTool{}),
 		WithGeneration(Generation{Temperature: ptr(0.1)}),
 	)
@@ -1145,15 +1146,15 @@ func TestGenerationParamsWithTools(t *testing.T) {
 // --- Thinking visibility tests ---
 
 func TestThinkingInAgentResult(t *testing.T) {
-	// Provider returns thinking content — should appear in AgentResult.Thinking.
+	// core.Provider returns thinking content — should appear in AgentResult.Thinking.
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			{Content: "The answer is 42", Thinking: "Let me reason about this..."},
 		},
 	}
 
-	agent := NewLLMAgent("thinker", "Thinks", provider)
+	agent := New("thinker", "Thinks", provider)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "What is the answer?"})
 	if err != nil {
@@ -1170,10 +1171,10 @@ func TestThinkingInAgentResult(t *testing.T) {
 func TestThinkingEmptyWhenNotProvided(t *testing.T) {
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "hello"}},
+		responses: []core.ChatResponse{{Content: "hello"}},
 	}
 
-	agent := NewLLMAgent("no-think", "No thinking", provider)
+	agent := New("no-think", "No thinking", provider)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "hi"})
 	if err != nil {
@@ -1189,9 +1190,9 @@ func TestThinkingFromLastResponseInToolLoop(t *testing.T) {
 	// the most recent thinking content.
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			{
-				ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}},
+				ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}},
 				Thinking:  "First, I need to call a tool...",
 			},
 			{
@@ -1201,7 +1202,7 @@ func TestThinkingFromLastResponseInToolLoop(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("multi-think", "Multiple thinking", provider,
+	agent := New("multi-think", "Multiple thinking", provider,
 		WithTools(mockTool{}),
 	)
 
@@ -1218,15 +1219,15 @@ func TestThinkingFromForcedSynthesis(t *testing.T) {
 	// Thinking from the forced synthesis (max iterations) should be captured.
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
-			{ToolCalls: []ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}}},
-			{ToolCalls: []ToolCall{{ID: "3", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{ToolCalls: []core.ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{ToolCalls: []core.ToolCall{{ID: "3", Name: "greet", Args: json.RawMessage(`{}`)}}},
 			{Content: "synthesized", Thinking: "Forced to summarize."},
 		},
 	}
 
-	agent := NewLLMAgent("synth-think", "Synthesis thinking", provider,
+	agent := New("synth-think", "Synthesis thinking", provider,
 		WithTools(mockTool{}),
 		WithLimits(Limits{MaxIter: 3}),
 	)
@@ -1241,7 +1242,7 @@ func TestThinkingFromForcedSynthesis(t *testing.T) {
 }
 
 func TestWithActiveSkills(t *testing.T) {
-	sk := Skill{
+	sk := skills.Skill{
 		Name:         "test-skill",
 		Description:  "A test skill",
 		Instructions: "Always use blue color.",
@@ -1249,8 +1250,8 @@ func TestWithActiveSkills(t *testing.T) {
 
 	provider := &callbackProvider{
 		name:     "test",
-		response: ChatResponse{Content: "done"},
-		onChat: func(req ChatRequest) {
+		response: core.ChatResponse{Content: "done"},
+		onChat: func(req core.ChatRequest) {
 			if len(req.Messages) == 0 {
 				t.Fatal("expected messages")
 			}
@@ -1261,7 +1262,7 @@ func TestWithActiveSkills(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("test", "Base prompt.", provider,
+	agent := New("test", "Base prompt.", provider,
 		WithPrompt("Base prompt."),
 		WithActiveSkills(sk),
 	)
@@ -1275,29 +1276,29 @@ func TestWithActiveSkills(t *testing.T) {
 
 func TestWithMaxParallelDispatchSetsConfig(t *testing.T) {
 	c := BuildConfig([]AgentOption{WithLimits(Limits{MaxParallelDispatch: 3})})
-	if c.maxParallelDispatch != 3 {
-		t.Errorf("expected 3, got %d", c.maxParallelDispatch)
+	if c.MaxParallelDispatch != 3 {
+		t.Errorf("expected 3, got %d", c.MaxParallelDispatch)
 	}
 }
 
 func TestWithMaxPlanStepsSetsConfig(t *testing.T) {
 	c := BuildConfig([]AgentOption{WithLimits(Limits{MaxPlanSteps: 7})})
-	if c.maxPlanSteps != 7 {
-		t.Errorf("expected 7, got %d", c.maxPlanSteps)
+	if c.MaxPlanSteps != 7 {
+		t.Errorf("expected 7, got %d", c.MaxPlanSteps)
 	}
 }
 
 func TestWithMaxToolResultLenSetsConfig(t *testing.T) {
 	c := BuildConfig([]AgentOption{WithLimits(Limits{MaxToolResultLen: 50_000})})
-	if c.maxToolResultLen != 50_000 {
-		t.Errorf("expected 50000, got %d", c.maxToolResultLen)
+	if c.MaxToolResultLen != 50_000 {
+		t.Errorf("expected 50000, got %d", c.MaxToolResultLen)
 	}
 }
 
 func TestDefaultMaxParallelDispatch(t *testing.T) {
 	c := BuildConfig(nil)
-	if c.maxParallelDispatch != 10 {
-		t.Errorf("expected default 10, got %d", c.maxParallelDispatch)
+	if c.MaxParallelDispatch != 10 {
+		t.Errorf("expected default 10, got %d", c.MaxParallelDispatch)
 	}
 }
 
@@ -1326,10 +1327,10 @@ func TestBuildConfigSharedEmbedding(t *testing.T) {
 		WithMemory(memory.WithSemanticRecall()),
 	})
 
-	if cfg.embedding != em {
-		t.Errorf("expected embedding %p, got %p", em, cfg.embedding)
+	if cfg.Embedding != em {
+		t.Errorf("expected embedding %p, got %p", em, cfg.Embedding)
 	}
-	if !cfg.crossThreadSearch {
+	if !cfg.CrossThreadSearch {
 		t.Errorf("expected crossThreadSearch enabled")
 	}
 }
@@ -1339,16 +1340,16 @@ func TestBuildConfigSharedEmbedding(t *testing.T) {
 func TestAgentResultStepsCapped(t *testing.T) {
 	const cap = 3
 	// 5 tool calls, final text response.
-	responses := []ChatResponse{
-		{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
-		{ToolCalls: []ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}}},
-		{ToolCalls: []ToolCall{{ID: "3", Name: "greet", Args: json.RawMessage(`{}`)}}},
-		{ToolCalls: []ToolCall{{ID: "4", Name: "greet", Args: json.RawMessage(`{}`)}}},
-		{ToolCalls: []ToolCall{{ID: "5", Name: "greet", Args: json.RawMessage(`{}`)}}},
+	responses := []core.ChatResponse{
+		{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{ToolCalls: []core.ToolCall{{ID: "2", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{ToolCalls: []core.ToolCall{{ID: "3", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{ToolCalls: []core.ToolCall{{ID: "4", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		{ToolCalls: []core.ToolCall{{ID: "5", Name: "greet", Args: json.RawMessage(`{}`)}}},
 		{Content: "done"},
 	}
 	provider := &mockProvider{name: "test", responses: responses}
-	a := NewLLMAgent("capped", "step cap test", provider,
+	a := New("capped", "step cap test", provider,
 		WithTools(mockTool{}),
 		WithLimits(Limits{MaxSteps: cap}),
 	)
@@ -1364,13 +1365,13 @@ func TestAgentResultStepsCapped(t *testing.T) {
 // TestAgentResultStepsUnbounded verifies that WithMaxSteps(0) keeps all steps.
 func TestAgentResultStepsUnbounded(t *testing.T) {
 	const numCalls = 5
-	responses := make([]ChatResponse, numCalls+1)
+	responses := make([]core.ChatResponse, numCalls+1)
 	for i := range numCalls {
-		responses[i] = ChatResponse{ToolCalls: []ToolCall{{ID: fmt.Sprintf("%d", i+1), Name: "greet", Args: json.RawMessage(`{}`)}}}
+		responses[i] = core.ChatResponse{ToolCalls: []core.ToolCall{{ID: fmt.Sprintf("%d", i+1), Name: "greet", Args: json.RawMessage(`{}`)}}}
 	}
-	responses[numCalls] = ChatResponse{Content: "done"}
+	responses[numCalls] = core.ChatResponse{Content: "done"}
 	provider := &mockProvider{name: "test", responses: responses}
-	a := NewLLMAgent("unbounded", "step unbounded test", provider,
+	a := New("unbounded", "step unbounded test", provider,
 		WithTools(mockTool{}),
 		WithLimits(Limits{MaxSteps: Unbounded}),
 	)
@@ -1397,13 +1398,13 @@ func TestWithLimits_AppliesAllFields(t *testing.T) {
 		MaxSuspendBytes:     8765,
 	}
 	cfg := BuildConfig([]AgentOption{WithLimits(lim)})
-	if cfg.maxIter != 7 || cfg.maxPlanSteps != 13 || cfg.maxParallelDispatch != 3 ||
-		cfg.maxAttachmentBytes != 1234 || cfg.maxToolResultLen != 5678 ||
-		cfg.maxSuspendSnapshots != 9 || cfg.maxSuspendBytes != 8765 {
+	if cfg.MaxIter != 7 || cfg.MaxPlanSteps != 13 || cfg.MaxParallelDispatch != 3 ||
+		cfg.MaxAttachmentBytes != 1234 || cfg.MaxToolResultLen != 5678 ||
+		cfg.MaxSuspendSnapshots != 9 || cfg.MaxSuspendBytes != 8765 {
 		t.Fatalf("Limits not propagated: %+v", cfg)
 	}
-	if cfg.maxSteps == nil || *cfg.maxSteps != 42 {
-		t.Fatalf("MaxSteps not propagated: %v", cfg.maxSteps)
+	if cfg.MaxSteps == nil || *cfg.MaxSteps != 42 {
+		t.Fatalf("MaxSteps not propagated: %v", cfg.MaxSteps)
 	}
 }
 
@@ -1411,8 +1412,8 @@ func TestWithLimits_AppliesAllFields(t *testing.T) {
 // produces the "explicit unbounded" semantics that WithMaxSteps(0) used.
 func TestWithLimits_UnboundedMaxSteps(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{WithLimits(Limits{MaxSteps: Unbounded})})
-	if cfg.maxSteps == nil || *cfg.maxSteps != 0 {
-		t.Fatalf("Unbounded should set maxSteps to 0 (legacy unbounded sentinel): %v", cfg.maxSteps)
+	if cfg.MaxSteps == nil || *cfg.MaxSteps != 0 {
+		t.Fatalf("Unbounded should set maxSteps to 0 (legacy unbounded sentinel): %v", cfg.MaxSteps)
 	}
 }
 
@@ -1422,9 +1423,9 @@ func TestWithLimits_UnboundedMaxSteps(t *testing.T) {
 func TestWithLimits_ZeroFieldsUseDefaults(t *testing.T) {
 	base := BuildConfig(nil)
 	withZero := BuildConfig([]AgentOption{WithLimits(Limits{})})
-	if base.maxIter != withZero.maxIter ||
-		base.maxAttachmentBytes != withZero.maxAttachmentBytes ||
-		base.maxParallelDispatch != withZero.maxParallelDispatch {
+	if base.MaxIter != withZero.MaxIter ||
+		base.MaxAttachmentBytes != withZero.MaxAttachmentBytes ||
+		base.MaxParallelDispatch != withZero.MaxParallelDispatch {
 		t.Fatalf("Limits{} should be a no-op; base=%+v withZero=%+v", base, withZero)
 	}
 }

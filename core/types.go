@@ -111,10 +111,23 @@ func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{index: make(map[string]AnyTool)}
 }
 
-// Add registers a tool, indexed by t.Name().
+// Add registers a tool, indexed by t.Name(). If a tool with the same name is
+// already registered, it is replaced in place (preserving slice order) rather
+// than appended, so AllDefinitions never emits duplicate names.
 func (r *ToolRegistry) Add(t AnyTool) {
-	r.tools = append(r.tools, t)
-	r.index[t.Name()] = t
+	name := t.Name()
+	if old, exists := r.index[name]; exists {
+		// Find the old tool's position and overwrite it in place.
+		for i, existing := range r.tools {
+			if existing == old {
+				r.tools[i] = t
+				break
+			}
+		}
+	} else {
+		r.tools = append(r.tools, t)
+	}
+	r.index[name] = t
 }
 
 // Remove deletes a tool from the registry by name.
@@ -258,6 +271,12 @@ type ChatMessage struct {
 	ToolCalls   []ToolCall      `json:"tool_calls,omitempty"`
 	ToolCallID  string          `json:"tool_call_id,omitempty"`
 	Metadata    json.RawMessage `json:"metadata,omitempty"` // provider-specific (e.g. Gemini thoughtSignature)
+	// CacheCheckpoint signals that providers supporting ephemeral prompt
+	// caching should mark this message as a cache breakpoint. The provider
+	// caches all tokens up to and including this message. Providers without
+	// cache support ignore this field. Mutually composable with provider-
+	// specific markers (e.g. openaicompat.WithCacheControl).
+	CacheCheckpoint bool `json:"-"`
 }
 
 // Attachment represents binary content (image, PDF, audio, video, etc.) sent to a multimodal LLM.
@@ -381,17 +400,28 @@ type ChatResponse struct {
 	// otherwise FinishStop) when populating EventRunFinish and AgentResult.
 	FinishReason FinishReason `json:"finish_reason,omitempty"`
 	// Warnings are non-fatal provider notes (e.g. fallback used, parameter
-	// ignored). Decorator providers (WithRetry, WithRateLimit) may append.
+	// ignored). Decorator providers (RetryMiddleware, ratelimit) may append.
 	Warnings []string `json:"warnings,omitempty"`
 	// ProviderMeta carries provider-specific opaque metadata. Documented
 	// per provider package; consumers decode according to provider docs.
 	ProviderMeta json.RawMessage `json:"provider_meta,omitempty"`
 }
 
+// Usage reports token consumption for a single LLM call.
+//
+// CachedTokens counts input tokens that were served from the provider's prompt
+// cache — a cache hit. Both OpenAI (via prompt_tokens_details.cached_tokens)
+// and Anthropic (via cache_read_input_tokens) populate this field.
+//
+// CacheCreationTokens counts input tokens written into the provider's prompt
+// cache during this call — a cache-warming cost paid now to save tokens on
+// future calls. Populated by Anthropic (cache_creation_input_tokens) only;
+// OpenAI does not expose this metric.
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	CachedTokens int `json:"cached_tokens,omitempty"` // input tokens served from provider cache
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CachedTokens        int `json:"cached_tokens,omitempty"`         // tokens READ from cache (cache hit); both providers
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"` // tokens WRITTEN to cache (cache-warming cost); Anthropic only
 }
 
 type ToolDefinition struct {

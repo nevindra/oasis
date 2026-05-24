@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // StreamSSE reads an SSE stream from body, sends text-delta events to ch, and
@@ -73,9 +73,15 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 			if chunk.Usage != nil {
 				usage.InputTokens = chunk.Usage.PromptTokens
 				usage.OutputTokens = chunk.Usage.CompletionTokens
+				// OpenAI: cache hits nested under prompt_tokens_details.
 				if chunk.Usage.PromptTokensDetails != nil {
 					usage.CachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 				}
+				// Anthropic: cache hits and warming costs as top-level fields.
+				if chunk.Usage.CacheReadInputTokens > 0 && usage.CachedTokens == 0 {
+					usage.CachedTokens = chunk.Usage.CacheReadInputTokens
+				}
+				usage.CacheCreationTokens = chunk.Usage.CacheCreationInputTokens
 			}
 			continue
 		}
@@ -125,9 +131,15 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 		if chunk.Usage != nil {
 			usage.InputTokens = chunk.Usage.PromptTokens
 			usage.OutputTokens = chunk.Usage.CompletionTokens
+			// OpenAI: cache hits nested under prompt_tokens_details.
 			if chunk.Usage.PromptTokensDetails != nil {
 				usage.CachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 			}
+			// Anthropic: cache hits and warming costs as top-level fields.
+			if chunk.Usage.CacheReadInputTokens > 0 && usage.CachedTokens == 0 {
+				usage.CachedTokens = chunk.Usage.CacheReadInputTokens
+			}
+			usage.CacheCreationTokens = chunk.Usage.CacheCreationInputTokens
 		}
 	}
 

@@ -11,13 +11,6 @@ import (
 type StreamEventType string
 
 const (
-	// EventInputReceived signals that a task has been received by an agent.
-	// Name carries the agent name; Content carries the task input text.
-	EventInputReceived StreamEventType = "input-received"
-	// EventProcessingStart signals that the agent loop has begun processing
-	// (after memory/context loading, before the first LLM call).
-	// Name carries the loop identifier (e.g. "agent:name" or "network:name").
-	EventProcessingStart StreamEventType = "processing-start"
 	// EventTextDelta carries an incremental text chunk from the LLM.
 	EventTextDelta StreamEventType = "text-delta"
 	// EventToolCallStart signals a tool is about to be invoked.
@@ -92,8 +85,7 @@ const (
 	// EventToolCallStart appears only if the approval is granted.
 	EventToolApprovalPending StreamEventType = "tool-approval-pending"
 	// EventRunStart is the first event on every stream. Name carries the
-	// agent name; Content carries the task input. Replaces the deprecated
-	// EventInputReceived + EventProcessingStart pair.
+	// agent name; Content carries the task input.
 	EventRunStart StreamEventType = "run-start"
 	// EventRunFinish is the last event on every stream before channel close.
 	// FinishReason indicates why the run ended; Warnings, ProviderMeta carry

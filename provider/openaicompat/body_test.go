@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 func TestBuildBody_SystemMessages(t *testing.T) {
@@ -496,6 +496,118 @@ func TestBuildBody_NoOptions(t *testing.T) {
 	}
 	if req.Seed != nil {
 		t.Errorf("expected nil seed, got %v", req.Seed)
+	}
+}
+
+// --- CacheCheckpoint tests ---
+
+func TestBuildBody_CacheCheckpointStringContent(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{Role: "system", Content: "You are helpful.", CacheCheckpoint: true},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil)
+
+	msg := req.Messages[0]
+	blocks, ok := msg.Content.([]ContentBlock)
+	if !ok {
+		t.Fatalf("expected []ContentBlock for CacheCheckpoint string message, got %T", msg.Content)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(blocks))
+	}
+	if blocks[0].Type != "text" {
+		t.Errorf("expected block type 'text', got %q", blocks[0].Type)
+	}
+	if blocks[0].Text != "You are helpful." {
+		t.Errorf("expected text 'You are helpful.', got %q", blocks[0].Text)
+	}
+	if blocks[0].CacheControl == nil {
+		t.Fatal("expected CacheControl to be set on the text block")
+	}
+	if blocks[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("expected CacheControl.Type 'ephemeral', got %q", blocks[0].CacheControl.Type)
+	}
+}
+
+func TestBuildBody_CacheCheckpointBlockContent(t *testing.T) {
+	// Message with attachments already produces []ContentBlock; CacheCheckpoint
+	// should set cache_control on the LAST block only.
+	messages := []oasis.ChatMessage{
+		{
+			Role:    "user",
+			Content: "Describe this image",
+			Attachments: []oasis.Attachment{
+				{MimeType: "image/png", URL: "https://example.com/img.png"},
+			},
+			CacheCheckpoint: true,
+		},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil)
+
+	blocks, ok := req.Messages[0].Content.([]ContentBlock)
+	if !ok {
+		t.Fatalf("expected []ContentBlock, got %T", req.Messages[0].Content)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks (text + image), got %d", len(blocks))
+	}
+	// First block (text) must NOT have cache_control.
+	if blocks[0].CacheControl != nil {
+		t.Errorf("expected no CacheControl on first block, got %+v", blocks[0].CacheControl)
+	}
+	// Last block (image) must have cache_control.
+	if blocks[1].CacheControl == nil {
+		t.Fatal("expected CacheControl on last block, got nil")
+	}
+	if blocks[1].CacheControl.Type != "ephemeral" {
+		t.Errorf("expected CacheControl.Type 'ephemeral', got %q", blocks[1].CacheControl.Type)
+	}
+}
+
+func TestBuildBody_CacheCheckpointFalse(t *testing.T) {
+	messages := []oasis.ChatMessage{
+		{Role: "user", Content: "Hello", CacheCheckpoint: false},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil)
+
+	msg := req.Messages[0]
+	// Content should remain a plain string — no block promotion.
+	if _, ok := msg.Content.([]ContentBlock); ok {
+		t.Error("expected plain string content when CacheCheckpoint is false, got []ContentBlock")
+	}
+	if msg.Content != "Hello" {
+		t.Errorf("expected content 'Hello', got %v", msg.Content)
+	}
+}
+
+func TestBuildBody_CacheCheckpointComposesWithOption(t *testing.T) {
+	// CacheCheckpoint=true on index 0, plus WithCacheControl(0) for the same
+	// index. The result should have exactly one cache_control marker — not two.
+	messages := []oasis.ChatMessage{
+		{Role: "system", Content: "Be concise.", CacheCheckpoint: true},
+	}
+
+	req := BuildBody(messages, nil, "gpt-4o", nil, WithCacheControl(0))
+
+	blocks, ok := req.Messages[0].Content.([]ContentBlock)
+	if !ok {
+		t.Fatalf("expected []ContentBlock, got %T", req.Messages[0].Content)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(blocks))
+	}
+	if blocks[0].CacheControl == nil {
+		t.Fatal("expected CacheControl to be set")
+	}
+	if blocks[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("expected CacheControl.Type 'ephemeral', got %q", blocks[0].CacheControl.Type)
+	}
+	// Verify it's still a single block (no duplication).
+	if len(blocks) > 1 {
+		t.Errorf("expected exactly 1 block (idempotent), got %d", len(blocks))
 	}
 }
 

@@ -14,33 +14,6 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
-// Type aliases from core — workflow uses core types directly now.
-type AgentTask = core.AgentTask
-type AgentResult = core.AgentResult
-type StepTrace = core.StepTrace
-type Agent = core.Agent
-type StreamingAgent = core.StreamingAgent
-type Tracer = core.Tracer
-type Span = core.Span
-type SpanAttr = core.SpanAttr
-type AnyTool = core.AnyTool
-type ToolDefinition = core.ToolDefinition
-type ToolResult = core.ToolResult
-type ChatResponse = core.ChatResponse
-type ToolCall = core.ToolCall
-type Usage = core.Usage
-
-// StringAttr, IntAttr, Float64Attr delegate to core constructors.
-func StringAttr(k, v string) SpanAttr     { return core.StringAttr(k, v) }
-func IntAttr(k string, v int) SpanAttr    { return core.IntAttr(k, v) }
-func Float64Attr(k string, v float64) SpanAttr { return core.Float64Attr(k, v) }
-
-// optionsWithOverrides is a local interface that workflow needs for stub checks.
-// It is satisfied by agent.RunOptions.
-type optionsWithOverrides interface {
-	HasOverrides() bool
-}
-
 // nopLogger discards all log output. Used when WithWorkflowLogger is not set.
 var nopLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -57,8 +30,8 @@ func truncateStr(s string, n int) string {
 type ErrSuspended struct {
 	Step         string
 	Payload      json.RawMessage
-	resume       func(ctx context.Context, data json.RawMessage) (AgentResult, error)
-	resumeStream func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (AgentResult, error)
+	resume       func(ctx context.Context, data json.RawMessage) (core.AgentResult, error)
+	resumeStream func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (core.AgentResult, error)
 	mu           sync.Mutex
 	ttlTimer     *time.Timer
 	snapshotSize int64
@@ -140,7 +113,7 @@ type NodeDefinition struct {
 // Go objects. Pass to FromDefinition.
 type DefinitionRegistry struct {
 	// Agents maps names to Agent implementations (for LLM nodes).
-	Agents map[string]Agent
+	Agents map[string]core.Agent
 	// Tools maps names to AnyTool implementations (for Tool nodes).
 	// Each entry is one atomic tool — the map key is the registry name used
 	// in NodeDefinition.Tool and matches the tool's own Name().
@@ -175,18 +148,11 @@ func stringifyValue(v any) string {
 type WorkflowContext struct {
 	values map[string]any
 	input  string
-	task   AgentTask // original task (for propagating Context/Attachments to AgentSteps)
+	task   core.AgentTask // original task (for propagating Context/Attachments to AgentSteps)
 	mu     sync.RWMutex
 }
 
-// NewWorkflowContext creates a WorkflowContext seeded with the given task.
-// Exposed for tests and integrations that need to drive context-aware helpers
-// (e.g. ResumeData) without running a full Workflow.
-func NewWorkflowContext(task AgentTask) *WorkflowContext {
-	return newWorkflowContext(task)
-}
-
-func newWorkflowContext(task AgentTask) *WorkflowContext {
+func newWorkflowContext(task core.AgentTask) *WorkflowContext {
 	v := make(map[string]any)
 	if task.Input != "" {
 		v["input"] = task.Input
@@ -358,9 +324,6 @@ type WorkflowResult struct {
 	Status StepStatus
 	// Steps maps step name to its individual result.
 	Steps map[string]StepResult
-	// Context is the shared WorkflowContext after all steps have run.
-	// Callers can inspect final values set by steps.
-	Context *WorkflowContext
 	// Usage is the aggregate token usage from all AgentStep executions.
 	Usage core.Usage
 }
@@ -419,7 +382,7 @@ type stepConfig struct {
 	after      []string                   // dependency edges
 	when       func(*WorkflowContext) bool // conditional execution gate
 	inputFrom  string                      // AgentStep: context key for input
-	argsFrom   string                      // ToolStep: context key for args
+	argsFrom   string                      // tool call step: context key for args
 	outputTo   string                      // override default output key
 	retry      int                         // max retry count (0 = no retries)
 	retryDelay time.Duration               // delay between retries
@@ -436,14 +399,14 @@ type stepConfig struct {
 	stepType stepType
 }
 
-// workflowConfig accumulates options passed to NewWorkflow.
+// workflowConfig accumulates options passed to New.
 type workflowConfig struct {
 	steps        []*stepConfig
 	onFinish     func(WorkflowResult)
 	onError      func(string, error)
 	defaultRetry int
 	defaultDelay time.Duration
-	tracer       Tracer
+	tracer       core.Tracer
 	logger       *slog.Logger
 }
 
@@ -472,15 +435,17 @@ func InputFrom(key string) StepOption {
 }
 
 // ArgsFrom sets the context key whose value becomes the tool arguments
-// for a ToolStep. The value should be json.RawMessage, a JSON string,
-// or any value that can be marshalled to JSON.
+// (json.RawMessage, a JSON string, or any JSON-serializable value).
+// Consumed by tool-calling steps (used internally by the YAML/JSON
+// definition path; also usable from custom StepFunc implementations).
 func ArgsFrom(key string) StepOption {
 	return func(c *stepConfig) { c.argsFrom = key }
 }
 
-// OutputTo overrides the default output key for AgentStep ("{name}.output")
-// or ToolStep ("{name}.result"). Has no effect on basic Step (which writes
-// to context explicitly via wCtx.Set).
+// OutputTo overrides the default output key written to the WorkflowContext
+// after a step completes. AgentStep defaults to "{name}.output"; tool-calling
+// steps default to "{name}.result". Has no effect on basic Step, which writes
+// to context explicitly via wCtx.Set.
 func OutputTo(key string) StepOption {
 	return func(c *stepConfig) { c.outputTo = key }
 }
@@ -528,7 +493,7 @@ func While(fn func(*WorkflowContext) bool) StepOption {
 
 // --- Workflow options ---
 
-// WorkflowOption configures a Workflow. Step definitions (Step, AgentStep, ToolStep,
+// WorkflowOption configures a Workflow. Step definitions (Step, AgentStep,
 // ForEach, DoUntil, DoWhile) and workflow-level settings (WithOnFinish, WithOnError,
 // WithDefaultRetry) both implement this type.
 type WorkflowOption func(*workflowConfig)
@@ -557,7 +522,7 @@ func WithDefaultRetry(n int, delay time.Duration) WorkflowOption {
 
 // WithWorkflowTracer sets the tracer for the workflow. When set, the workflow
 // emits spans for execution and step lifecycle events.
-func WithWorkflowTracer(t Tracer) WorkflowOption {
+func WithWorkflowTracer(t core.Tracer) WorkflowOption {
 	return func(c *workflowConfig) { c.tracer = t }
 }
 
@@ -584,8 +549,8 @@ func buildStepConfig(name string, fn StepFunc, st stepType, opts []StepOption) *
 
 // Step defines a workflow step that runs a StepFunc.
 // The function receives the shared WorkflowContext and can read/write any keys.
-// Unlike AgentStep and ToolStep, a basic Step does not automatically write output
-// to context — the function is responsible for calling wCtx.Set() as needed.
+// Unlike AgentStep, a basic Step does not automatically write output to context —
+// the function is responsible for calling wCtx.Set() as needed.
 func Step(name string, fn StepFunc, opts ...StepOption) WorkflowOption {
 	return func(c *workflowConfig) {
 		c.steps = append(c.steps, buildStepConfig(name, fn, stepTypeBasic, opts))
@@ -597,7 +562,7 @@ func Step(name string, fn StepFunc, opts ...StepOption) WorkflowOption {
 // or from WorkflowContext.Input() if InputFrom is not set.
 // Output is written to context as "{name}.output" (or the key specified by OutputTo()).
 // Token usage from the agent is accumulated into the workflow's total Usage.
-func AgentStep(name string, agent Agent, opts ...StepOption) WorkflowOption {
+func AgentStep(name string, agent core.Agent, opts ...StepOption) WorkflowOption {
 	return func(c *workflowConfig) {
 		cfg := buildStepConfig(name, nil, stepTypeBasic, opts)
 		cfg.fn = agentStepFunc(agent, cfg)
@@ -605,14 +570,9 @@ func AgentStep(name string, agent Agent, opts ...StepOption) WorkflowOption {
 	}
 }
 
-// ToolStep defines a workflow step that calls a single tool by name.
-// Args are read from the context key specified by ArgsFrom(). If ArgsFrom is not set,
-// empty JSON object ({}) is used.
-// The tool result is written to context as "{name}.result" (or the key specified by OutputTo()).
-//
-// With atomic tools, one core.AnyTool is one operation; toolName is retained for
-// labelling/error messages but no longer dispatches sub-operations.
-func ToolStep(name string, tool core.AnyTool, toolName string, opts ...StepOption) WorkflowOption {
+// toolStepInternal builds a tool-call step for the YAML/JSON definition path.
+// Not exported: user-facing workflows should use AgentStep with a one-tool LLMAgent.
+func toolStepInternal(name string, tool core.AnyTool, toolName string, opts ...StepOption) WorkflowOption {
 	return func(c *workflowConfig) {
 		cfg := buildStepConfig(name, nil, stepTypeBasic, opts)
 		cfg.fn = toolStepFunc(tool, toolName, cfg)
@@ -660,12 +620,12 @@ const defaultLoopMaxIter = 10
 // Unlike Network (which uses an LLM to route between agents), Workflow follows
 // explicit step sequences and dependency edges defined at construction time.
 // Parallel execution emerges naturally when multiple steps share the same
-// predecessor. Workflow implements both Agent and StreamingAgent, enabling
-// recursive composition: Networks can contain Workflows, and Workflows can
-// contain Agents (LLMAgent, Network, or other Workflows).
+// predecessor. Workflow implements core.Agent, enabling recursive composition:
+// Networks can contain Workflows, and Workflows can contain Agents
+// (LLMAgent, Network, or other Workflows).
 //
-// ExecuteStream emits EventStepStart/EventStepFinish for each step,
-// and EventStepProgress during ForEach iterations.
+// Passing core.WithStream(ch) to Execute emits EventStepStart/EventStepFinish
+// for each step, and EventStepProgress during ForEach iterations.
 type Workflow struct {
 	name         string
 	description  string
@@ -678,14 +638,13 @@ type Workflow struct {
 	onError      func(string, error)
 	defaultRetry int
 	defaultDelay time.Duration
-	tracer       Tracer
+	tracer       core.Tracer
 	logger       *slog.Logger
 }
 
 // compile-time checks
 var (
-	_ Agent          = (*Workflow)(nil)
-	_ StreamingAgent = (*Workflow)(nil)
+	_ core.Agent = (*Workflow)(nil)
 )
 
 // Name returns the workflow's identifier.
@@ -695,7 +654,7 @@ func (w *Workflow) Name() string { return w.name }
 // Used by Network to generate tool definitions when a Workflow is used as a subagent.
 func (w *Workflow) Description() string { return w.description }
 
-// NewWorkflow creates a Workflow with the given name, description, and options.
+// New creates a Workflow with the given name, description, and options.
 // Step definitions and workflow-level options are passed as WorkflowOption values.
 // Returns an error if the step graph is invalid:
 //   - duplicate step names
@@ -704,7 +663,7 @@ func (w *Workflow) Description() string { return w.description }
 //
 // Logs a warning for unreachable steps (steps that are not roots and have no
 // incoming edges from reachable steps).
-func NewWorkflow(name, description string, opts ...WorkflowOption) (*Workflow, error) {
+func New(name, description string, opts ...WorkflowOption) (*Workflow, error) {
 	var cfg workflowConfig
 	for _, opt := range opts {
 		opt(&cfg)

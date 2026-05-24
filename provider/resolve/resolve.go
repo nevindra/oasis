@@ -3,7 +3,7 @@ package resolve
 import (
 	"fmt"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/provider/gemini"
 	"github.com/nevindra/oasis/provider/openaicompat"
 )

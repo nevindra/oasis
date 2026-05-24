@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // validRelations maps LLM-output relation strings to typed constants.

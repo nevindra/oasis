@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // --- AgentStep tests ---
@@ -14,22 +16,22 @@ func TestWorkflowAgentStep(t *testing.T) {
 	agent := &stubAgent{
 		name: "echo",
 		desc: "Echoes input",
-		fn: func(task AgentTask) (AgentResult, error) {
-			return AgentResult{
+		fn: func(task core.AgentTask) (core.AgentResult, error) {
+			return core.AgentResult{
 				Output: "agent says: " + task.Input,
-				Usage:  Usage{InputTokens: 10, OutputTokens: 5},
+				Usage:  core.Usage{InputTokens: 10, OutputTokens: 5},
 			}, nil
 		},
 	}
 
-	wf, err := NewWorkflow("agent-test", "agent step test",
+	wf, err := New("agent-test", "agent step test",
 		AgentStep("research", agent),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "hello"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,12 +47,12 @@ func TestWorkflowAgentStepInputFrom(t *testing.T) {
 	agent := &stubAgent{
 		name: "echo",
 		desc: "Echoes input",
-		fn: func(task AgentTask) (AgentResult, error) {
-			return AgentResult{Output: "got: " + task.Input}, nil
+		fn: func(task core.AgentTask) (core.AgentResult, error) {
+			return core.AgentResult{Output: "got: " + task.Input}, nil
 		},
 	}
 
-	wf, err := NewWorkflow("agent-input", "agent inputfrom test",
+	wf, err := New("agent-input", "agent inputfrom test",
 		Step("prepare", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("query", "custom input")
 			return nil
@@ -61,7 +63,7 @@ func TestWorkflowAgentStepInputFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "original"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "original"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,21 +72,21 @@ func TestWorkflowAgentStepInputFrom(t *testing.T) {
 	}
 }
 
-// --- ToolStep tests ---
+// --- toolStepInternal tests ---
 
-func TestWorkflowToolStep(t *testing.T) {
-	wf, err := NewWorkflow("tool-test", "tool step test",
+func TestWorkflowToolStepInternal(t *testing.T) {
+	wf, err := New("tool-test", "tool step test",
 		Step("prepare", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("args", `{"name":"world"}`)
 			return nil
 		}),
-		ToolStep("greet", mockTool{}, "greet", After("prepare"), ArgsFrom("args")),
+		toolStepInternal("greet", mockTool{}, "greet", After("prepare"), ArgsFrom("args")),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,15 +95,15 @@ func TestWorkflowToolStep(t *testing.T) {
 	}
 }
 
-func TestWorkflowToolStepNoArgs(t *testing.T) {
-	wf, err := NewWorkflow("tool-noargs", "tool no args test",
-		ToolStep("greet", mockTool{}, "greet"),
+func TestWorkflowToolStepInternalNoArgs(t *testing.T) {
+	wf, err := New("tool-noargs", "tool no args test",
+		toolStepInternal("greet", mockTool{}, "greet"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +115,7 @@ func TestWorkflowToolStepNoArgs(t *testing.T) {
 // --- ForEach tests ---
 
 func TestWorkflowForEachSequential(t *testing.T) {
-	wf, err := NewWorkflow("foreach-seq", "foreach sequential test",
+	wf, err := New("foreach-seq", "foreach sequential test",
 		Step("seed", func(_ context.Context, wCtx *WorkflowContext) error {
 			wCtx.Set("items", []any{"a", "b", "c"})
 			return nil
@@ -138,7 +140,7 @@ func TestWorkflowForEachSequential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +149,7 @@ func TestWorkflowForEachSequential(t *testing.T) {
 func TestWorkflowForEachConcurrent(t *testing.T) {
 	var processed atomic.Int32
 
-	wf, err := NewWorkflow("foreach-conc", "foreach concurrent test",
+	wf, err := New("foreach-conc", "foreach concurrent test",
 		Step("seed", func(_ context.Context, wCtx *WorkflowContext) error {
 			items := make([]any, 10)
 			for i := range items {
@@ -177,7 +179,7 @@ func TestWorkflowForEachConcurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +197,7 @@ func TestWorkflowForEachNoItemRace(t *testing.T) {
 	}
 	ch := make(chan seen, 100)
 
-	wf, err := NewWorkflow("foreach-race", "foreach race test",
+	wf, err := New("foreach-race", "foreach race test",
 		Step("seed", func(_ context.Context, wCtx *WorkflowContext) error {
 			items := make([]any, 100)
 			for i := range items {
@@ -215,7 +217,7 @@ func TestWorkflowForEachNoItemRace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +231,7 @@ func TestWorkflowForEachNoItemRace(t *testing.T) {
 }
 
 func TestWorkflowForEachMissingIterOver(t *testing.T) {
-	wf, err := NewWorkflow("foreach-missing", "foreach missing iterover",
+	wf, err := New("foreach-missing", "foreach missing iterover",
 		ForEach("bad", func(_ context.Context, _ *WorkflowContext) error {
 			return nil
 		}),
@@ -238,7 +240,7 @@ func TestWorkflowForEachMissingIterOver(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	var wfErr *WorkflowError
 	if !errors.As(err, &wfErr) {
 		t.Fatalf("expected *WorkflowError, got %v", err)
@@ -248,7 +250,7 @@ func TestWorkflowForEachMissingIterOver(t *testing.T) {
 // --- DoUntil tests ---
 
 func TestWorkflowDoUntil(t *testing.T) {
-	wf, err := NewWorkflow("dountil", "do until test",
+	wf, err := New("dountil", "do until test",
 		DoUntil("count", func(_ context.Context, wCtx *WorkflowContext) error {
 			v, _ := wCtx.Get("counter")
 			counter := 0
@@ -267,7 +269,7 @@ func TestWorkflowDoUntil(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := wf.Execute(context.Background(), AgentTask{Input: "go"})
+	result, err := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +279,7 @@ func TestWorkflowDoUntil(t *testing.T) {
 func TestWorkflowDoUntilMaxIter(t *testing.T) {
 	iterations := 0
 
-	wf, err := NewWorkflow("dountil-max", "do until max iter test",
+	wf, err := New("dountil-max", "do until max iter test",
 		DoUntil("infinite", func(_ context.Context, _ *WorkflowContext) error {
 			iterations++
 			return nil
@@ -289,14 +291,14 @@ func TestWorkflowDoUntilMaxIter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wf.Execute(context.Background(), AgentTask{Input: "go"})
+	wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if iterations != 5 {
 		t.Errorf("iterations = %d, want 5", iterations)
 	}
 }
 
 func TestWorkflowDoUntilMissingCondition(t *testing.T) {
-	wf, err := NewWorkflow("dountil-nocond", "do until no condition",
+	wf, err := New("dountil-nocond", "do until no condition",
 		DoUntil("bad", func(_ context.Context, _ *WorkflowContext) error {
 			return nil
 		}),
@@ -305,7 +307,7 @@ func TestWorkflowDoUntilMissingCondition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	var wfErr *WorkflowError
 	if !errors.As(err, &wfErr) {
 		t.Fatalf("expected *WorkflowError, got %v", err)
@@ -317,7 +319,7 @@ func TestWorkflowDoUntilMissingCondition(t *testing.T) {
 func TestWorkflowDoWhile(t *testing.T) {
 	iterations := 0
 
-	wf, err := NewWorkflow("dowhile", "do while test",
+	wf, err := New("dowhile", "do while test",
 		DoWhile("count", func(_ context.Context, wCtx *WorkflowContext) error {
 			iterations++
 			wCtx.Set("counter", iterations)
@@ -331,14 +333,14 @@ func TestWorkflowDoWhile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wf.Execute(context.Background(), AgentTask{Input: "go"})
+	wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	if iterations != 3 {
 		t.Errorf("iterations = %d, want 3", iterations)
 	}
 }
 
 func TestWorkflowDoWhileMissingCondition(t *testing.T) {
-	wf, err := NewWorkflow("dowhile-nocond", "do while no condition",
+	wf, err := New("dowhile-nocond", "do while no condition",
 		DoWhile("bad", func(_ context.Context, _ *WorkflowContext) error {
 			return nil
 		}),
@@ -347,7 +349,7 @@ func TestWorkflowDoWhileMissingCondition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = wf.Execute(context.Background(), AgentTask{Input: "go"})
+	_, err = wf.Execute(context.Background(), core.AgentTask{Input: "go"})
 	var wfErr *WorkflowError
 	if !errors.As(err, &wfErr) {
 		t.Fatalf("expected *WorkflowError, got %v", err)

@@ -5,6 +5,29 @@ import (
 	"time"
 )
 
+// TestToolNameConstants_Frozen pins the wire-format values the LLM and the
+// dispatch path agree on. A rename is a breaking protocol change — this test
+// catches accidental edits before they ship.
+func TestToolNameConstants_Frozen(t *testing.T) {
+	cases := map[string]string{
+		"ToolPrefixAgent": ToolPrefixAgent,
+		"ToolAskUser":     ToolAskUser,
+		"ToolExecutePlan": ToolExecutePlan,
+		"ToolSpawnAgent":  ToolSpawnAgent,
+	}
+	want := map[string]string{
+		"ToolPrefixAgent": "agent_",
+		"ToolAskUser":     "ask_user",
+		"ToolExecutePlan": "execute_plan",
+		"ToolSpawnAgent":  "spawn_agent",
+	}
+	for name, got := range cases {
+		if got != want[name] {
+			t.Errorf("%s = %q, want %q (renaming changes the wire format)", name, got, want[name])
+		}
+	}
+}
+
 func TestIterationTraceShape(t *testing.T) {
 	it := IterationTrace{
 		Iter:      0,
@@ -22,18 +45,6 @@ func TestIterationTraceShape(t *testing.T) {
 	}
 	if it.LLMCall.FinishReason != FinishStop {
 		t.Errorf("LLMCall.FinishReason not preserved")
-	}
-}
-
-// Verify ToolCallTrace alias is interchangeable with StepTrace.
-func TestToolCallTraceAlias(t *testing.T) {
-	var tct ToolCallTrace = StepTrace{Name: "x"}
-	if tct.Name != "x" {
-		t.Errorf("alias broken")
-	}
-	var st StepTrace = ToolCallTrace{Name: "y"}
-	if st.Name != "y" {
-		t.Errorf("alias broken")
 	}
 }
 

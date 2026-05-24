@@ -1,6 +1,8 @@
 package core
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,6 +85,109 @@ func TestAgentResult_LastStep(t *testing.T) {
 	empty := AgentResult{}
 	if zero := empty.LastStep(); zero.Name != "" {
 		t.Errorf("LastStep() on empty result should be zero value, got %+v", zero)
+	}
+}
+
+// TestAgentResult_ToolCalls_RoundTripLargePayload pins the contract that
+// ToolCalls() returns the untruncated JSON the LLM produced, even when the
+// agent loop truncated Input for UI/log display. Regression test for silent
+// mid-string EOFs callers hit when json.Unmarshal'ing Args from large tool
+// calls.
+func TestAgentResult_ToolCalls_RoundTripLargePayload(t *testing.T) {
+	// Build a payload that overflows the 200-rune Input cap so the display
+	// string would be unparseable JSON on its own.
+	type payload struct {
+		Query string `json:"query"`
+		Pad   string `json:"pad"`
+	}
+	want := payload{Query: "find things", Pad: strings.Repeat("x", 1024)}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	r := AgentResult{
+		Steps: []StepTrace{
+			{
+				Name:     "search",
+				Type:     "tool",
+				Input:    string(raw[:200]), // mimics TruncateStr(input, 200)
+				Output:   "{}",
+				RawArgs:  json.RawMessage(raw),
+				Duration: time.Millisecond,
+			},
+		},
+	}
+
+	calls := r.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("ToolCalls len = %d, want 1", len(calls))
+	}
+	var got payload
+	if err := json.Unmarshal(calls[0].Args, &got); err != nil {
+		t.Fatalf("Unmarshal ToolCalls[0].Args: %v (Args=%q)", err, string(calls[0].Args))
+	}
+	if got != want {
+		t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", got, want)
+	}
+}
+
+// TestAgentResult_ToolResults_RoundTripLargePayload mirrors the ToolCalls
+// regression test for ToolResults — Output is bounded for display, but
+// callers reading ToolResults().Content must get the original JSON intact.
+func TestAgentResult_ToolResults_RoundTripLargePayload(t *testing.T) {
+	type payload struct {
+		Body string `json:"body"`
+		Pad  string `json:"pad"`
+	}
+	want := payload{Body: "ok", Pad: strings.Repeat("y", 2048)}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	r := AgentResult{
+		Steps: []StepTrace{
+			{
+				Name:      "fetch",
+				Type:      "tool",
+				Input:     "{}",
+				Output:    string(raw[:500]), // mimics TruncateStr(output, 500)
+				RawOutput: json.RawMessage(raw),
+				Duration:  time.Millisecond,
+			},
+		},
+	}
+
+	results := r.ToolResults()
+	if len(results) != 1 {
+		t.Fatalf("ToolResults len = %d, want 1", len(results))
+	}
+	var got payload
+	if err := json.Unmarshal(results[0].Content, &got); err != nil {
+		t.Fatalf("Unmarshal ToolResults[0].Content: %v (Content=%q)", err, string(results[0].Content))
+	}
+	if got != want {
+		t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", got, want)
+	}
+}
+
+// TestAgentResult_ToolCalls_FallbackToInputWhenRawNil keeps backward-compat
+// for trace objects constructed externally (workflow.exec, custom callers)
+// that don't populate RawArgs/RawOutput.
+func TestAgentResult_ToolCalls_FallbackToInputWhenRawNil(t *testing.T) {
+	r := AgentResult{
+		Steps: []StepTrace{
+			{Name: "legacy", Type: "tool", Input: `{"q":"hi"}`, Output: `{"hits":1}`},
+		},
+	}
+	calls := r.ToolCalls()
+	if len(calls) != 1 || string(calls[0].Args) != `{"q":"hi"}` {
+		t.Errorf("fallback to Input failed: %+v", calls)
+	}
+	results := r.ToolResults()
+	if len(results) != 1 || string(results[0].Content) != `{"hits":1}` {
+		t.Errorf("fallback to Output failed: %+v", results)
 	}
 }
 

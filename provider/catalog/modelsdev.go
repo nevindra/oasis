@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 const modelsDevURL = "https://models.dev/api.json"

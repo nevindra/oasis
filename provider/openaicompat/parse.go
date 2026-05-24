@@ -3,7 +3,7 @@ package openaicompat
 import (
 	"encoding/json"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // mapOpenAIFinishReason converts an OpenAI finish_reason string to an
@@ -47,9 +47,17 @@ func ParseResponse(resp ChatResponse) (oasis.ChatResponse, error) {
 			InputTokens:  resp.Usage.PromptTokens,
 			OutputTokens: resp.Usage.CompletionTokens,
 		}
+		// OpenAI: cache hits arrive nested under prompt_tokens_details.
 		if resp.Usage.PromptTokensDetails != nil {
 			out.Usage.CachedTokens = resp.Usage.PromptTokensDetails.CachedTokens
 		}
+		// Anthropic: cache hits and warming costs arrive as top-level fields.
+		// CacheReadInputTokens maps to the same CachedTokens concept (read = hit).
+		// We prefer the Anthropic field when the OpenAI nested field is absent.
+		if resp.Usage.CacheReadInputTokens > 0 && out.Usage.CachedTokens == 0 {
+			out.Usage.CachedTokens = resp.Usage.CacheReadInputTokens
+		}
+		out.Usage.CacheCreationTokens = resp.Usage.CacheCreationInputTokens
 	}
 
 	if resp.SystemFingerprint != "" {

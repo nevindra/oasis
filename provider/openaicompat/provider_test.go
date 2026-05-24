@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 func TestProvider_Chat(t *testing.T) {

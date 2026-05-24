@@ -11,114 +11,114 @@ import (
 
 func TestIterationDecision_Continue(t *testing.T) {
 	d := Continue()
-	if d.action != decisionContinue {
-		t.Fatalf("Continue: action = %v, want decisionContinue", d.action)
+	if d.IsStop() || d.IsInject() {
+		t.Fatalf("Continue: should not be Stop or Inject")
 	}
 }
 
 func TestIterationDecision_Stop(t *testing.T) {
 	result := core.AgentResult{Output: "done"}
 	d := Stop(result)
-	if d.action != decisionStop {
-		t.Fatalf("Stop: action = %v, want decisionStop", d.action)
+	if !d.IsStop() {
+		t.Fatalf("Stop: IsStop() = false, want true")
 	}
-	if d.result.Output != "done" {
-		t.Fatalf("Stop: result.Output = %q, want %q", d.result.Output, "done")
+	if d.Result().Output != "done" {
+		t.Fatalf("Stop: Result().Output = %q, want %q", d.Result().Output, "done")
 	}
 }
 
 func TestIterationDecision_InjectFeedback(t *testing.T) {
 	d := InjectFeedback("retry")
-	if d.action != decisionInject {
-		t.Fatalf("InjectFeedback: action = %v, want decisionInject", d.action)
+	if !d.IsInject() {
+		t.Fatalf("InjectFeedback: IsInject() = false, want true")
 	}
-	if len(d.msgs) != 1 {
-		t.Fatalf("InjectFeedback: len(msgs) = %d, want 1", len(d.msgs))
+	if len(d.Msgs()) != 1 {
+		t.Fatalf("InjectFeedback: len(Msgs()) = %d, want 1", len(d.Msgs()))
 	}
-	if d.msgs[0].Role != core.RoleUser {
-		t.Fatalf("InjectFeedback: msgs[0].Role = %v, want RoleUser", d.msgs[0].Role)
+	if d.Msgs()[0].Role != core.RoleUser {
+		t.Fatalf("InjectFeedback: Msgs()[0].Role = %v, want RoleUser", d.Msgs()[0].Role)
 	}
 }
 
 func TestIterationDecision_InjectMessages(t *testing.T) {
 	msg := core.ChatMessage{Role: core.RoleAssistant, Content: "hello"}
 	d := InjectMessages(msg)
-	if d.action != decisionInject {
-		t.Fatalf("InjectMessages: action = %v, want decisionInject", d.action)
+	if !d.IsInject() {
+		t.Fatalf("InjectMessages: IsInject() = false, want true")
 	}
-	if len(d.msgs) != 1 || d.msgs[0].Role != core.RoleAssistant {
-		t.Fatalf("InjectMessages: got %+v", d.msgs)
+	if len(d.Msgs()) != 1 || d.Msgs()[0].Role != core.RoleAssistant {
+		t.Fatalf("InjectMessages: got %+v", d.Msgs())
 	}
 }
 
 func TestErrorDecision_Propagate(t *testing.T) {
 	d := Propagate()
-	if d.action != errPropagate {
-		t.Fatalf("Propagate: action = %v, want errPropagate", d.action)
+	if !d.IsPropagate() {
+		t.Fatalf("Propagate: IsPropagate() = false, want true")
 	}
 }
 
 func TestErrorDecision_Retry(t *testing.T) {
 	d := Retry()
-	if d.action != errRetry {
-		t.Fatalf("Retry: action = %v, want errRetry", d.action)
+	if !d.IsRetry() {
+		t.Fatalf("Retry: IsRetry() = false, want true")
 	}
 }
 
 func TestErrorDecision_RetryWithFeedback(t *testing.T) {
 	d := RetryWithFeedback("try again with this hint")
-	if d.action != errRetry {
-		t.Fatalf("RetryWithFeedback: action = %v, want errRetry", d.action)
+	if !d.IsRetry() {
+		t.Fatalf("RetryWithFeedback: IsRetry() = false, want true")
 	}
-	if d.feedback != "try again with this hint" {
-		t.Fatalf("RetryWithFeedback: feedback = %q", d.feedback)
+	if d.Feedback() != "try again with this hint" {
+		t.Fatalf("RetryWithFeedback: Feedback() = %q", d.Feedback())
 	}
 }
 
 func TestErrorDecision_HaltDecision(t *testing.T) {
 	result := core.AgentResult{Output: "partial"}
 	d := HaltDecision(result)
-	if d.action != errHalt {
-		t.Fatalf("HaltDecision: action = %v, want errHalt", d.action)
+	if !d.IsHalt() {
+		t.Fatalf("HaltDecision: IsHalt() = false, want true")
 	}
-	if d.result.Output != "partial" {
-		t.Fatalf("HaltDecision: result.Output = %q", d.result.Output)
+	if d.Result().Output != "partial" {
+		t.Fatalf("HaltDecision: Result().Output = %q", d.Result().Output)
 	}
 }
 
-func TestWithPrepareStep(t *testing.T) {
+func TestWithHooks_PrepareStep(t *testing.T) {
 	called := false
 	fn := func(ctx context.Context, iter int, ctrl *StepControl) error {
 		called = true
 		return nil
 	}
-	cfg := BuildConfig([]AgentOption{WithPrepareStep(fn)})
-	if cfg.prepareStep == nil {
-		t.Fatalf("WithPrepareStep: cfg.prepareStep is nil")
+	cfg := BuildConfig([]AgentOption{WithHooks(Hooks{PrepareStep: fn})})
+	if cfg.PrepareStep == nil {
+		t.Fatalf("WithHooks: cfg.PrepareStep is nil")
 	}
-	_ = cfg.prepareStep(context.Background(), 0, &StepControl{})
+	_ = cfg.PrepareStep(context.Background(), 0, &StepControl{})
 	if !called {
-		t.Fatalf("WithPrepareStep: hook was not stored")
+		t.Fatalf("WithHooks: PrepareStep was not stored")
 	}
 }
 
-func TestWithOnIterationComplete(t *testing.T) {
+func TestWithHooks_OnIterationComplete(t *testing.T) {
 	fn := func(ctx context.Context, iter int, snap *IterationSnapshot) (IterationDecision, error) {
 		return Stop(core.AgentResult{Output: "stopped"}), nil
 	}
-	cfg := BuildConfig([]AgentOption{WithOnIterationComplete(fn)})
-	if cfg.onIterationComplete == nil {
-		t.Fatalf("WithOnIterationComplete: hook not stored")
+	cfg := BuildConfig([]AgentOption{WithHooks(Hooks{OnIterationComplete: fn})})
+	if cfg.OnIterationComplete == nil {
+		t.Fatalf("WithHooks: OnIterationComplete not stored")
 	}
 }
 
-func TestWithOnError(t *testing.T) {
+func TestWithHooks_OnError(t *testing.T) {
 	fn := func(ctx context.Context, iter int, err error) (ErrorDecision, error) {
 		return Retry(), nil
 	}
-	cfg := BuildConfig([]AgentOption{WithOnError(fn)})
-	if cfg.onError == nil {
-		t.Fatalf("WithOnError: hook not stored")
+	cfg := BuildConfig([]AgentOption{WithHooks(Hooks{OnError: fn})})
+	if cfg.OnError == nil {
+		t.Fatalf("WithHooks: OnError not stored")
 	}
 }
 
@@ -134,7 +134,7 @@ func TestPrepareStep_MutatesRequest(t *testing.T) {
 	}
 
 	captured := &capturedRequestProvider{}
-	a := NewLLMAgent("a", "d", captured, WithPrepareStep(hook))
+	a := New("a", "d", captured, WithHooks(Hooks{PrepareStep: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "hello"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -161,7 +161,7 @@ func TestPrepareStep_ErrorFailsRun(t *testing.T) {
 		return wantErr
 	}
 	provider := &capturedRequestProvider{}
-	a := NewLLMAgent("a", "d", provider, WithPrepareStep(hook))
+	a := New("a", "d", provider, WithHooks(Hooks{PrepareStep: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Execute: err = %v, want wrapping %v", err, wantErr)
@@ -176,7 +176,7 @@ func TestPrepareStep_OverrideModel(t *testing.T) {
 		ctrl.Model = overrideProvider
 		return nil
 	}
-	a := NewLLMAgent("a", "d", defaultProvider, WithPrepareStep(hook))
+	a := New("a", "d", defaultProvider, WithHooks(Hooks{PrepareStep: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -195,7 +195,7 @@ func TestOnError_Propagate(t *testing.T) {
 	hook := func(ctx context.Context, iter int, err error) (ErrorDecision, error) {
 		return Propagate(), nil
 	}
-	a := NewLLMAgent("a", "d", provider, WithOnError(hook))
+	a := New("a", "d", provider, WithHooks(Hooks{OnError: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Execute: err = %v, want wrapping %v", err, wantErr)
@@ -217,7 +217,7 @@ func TestOnError_Retry(t *testing.T) {
 	hook := func(ctx context.Context, iter int, err error) (ErrorDecision, error) {
 		return Retry(), nil
 	}
-	a := NewLLMAgent("a", "d", provider, WithOnError(hook))
+	a := New("a", "d", provider, WithHooks(Hooks{OnError: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute: err = %v, want nil after retry", err)
@@ -245,7 +245,7 @@ func TestOnError_RetryWithFeedback(t *testing.T) {
 	hook := func(ctx context.Context, iter int, err error) (ErrorDecision, error) {
 		return RetryWithFeedback("use one of: search, calc"), nil
 	}
-	a := NewLLMAgent("a", "d", provider, WithOnError(hook))
+	a := New("a", "d", provider, WithHooks(Hooks{OnError: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute: err = %v", err)
@@ -269,7 +269,7 @@ func TestOnError_HaltDecision(t *testing.T) {
 	hook := func(ctx context.Context, iter int, err error) (ErrorDecision, error) {
 		return HaltDecision(core.AgentResult{Output: "graceful end"}), nil
 	}
-	a := NewLLMAgent("a", "d", provider, WithOnError(hook))
+	a := New("a", "d", provider, WithHooks(Hooks{OnError: hook}))
 	result, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute: err = %v, want nil after HaltDecision", err)
@@ -285,7 +285,7 @@ func TestOnError_HookErrorPropagates(t *testing.T) {
 	hook := func(ctx context.Context, iter int, err error) (ErrorDecision, error) {
 		return ErrorDecision{}, hookErr
 	}
-	a := NewLLMAgent("a", "d", provider, WithOnError(hook))
+	a := New("a", "d", provider, WithHooks(Hooks{OnError: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if !errors.Is(err, hookErr) {
 		t.Fatalf("Execute: err = %v, want wrapping hook err %v", err, hookErr)
@@ -301,9 +301,9 @@ func TestOnIterationComplete_Continue(t *testing.T) {
 		return Continue(), nil
 	}
 	provider := &twoIterProvider{}
-	a := NewLLMAgent("a", "d", provider,
+	a := New("a", "d", provider,
 		WithTools(mockTool{}),
-		WithOnIterationComplete(hook))
+		WithHooks(Hooks{OnIterationComplete: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -318,9 +318,9 @@ func TestOnIterationComplete_Stop(t *testing.T) {
 		return Stop(core.AgentResult{Output: "early stop"}), nil
 	}
 	provider := &twoIterProvider{}
-	a := NewLLMAgent("a", "d", provider,
+	a := New("a", "d", provider,
 		WithTools(mockTool{}),
-		WithOnIterationComplete(hook))
+		WithHooks(Hooks{OnIterationComplete: hook}))
 	result, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -344,9 +344,9 @@ func TestOnIterationComplete_InjectFeedback(t *testing.T) {
 		return Continue(), nil
 	}
 	provider := &twoIterProvider{}
-	a := NewLLMAgent("a", "d", provider,
+	a := New("a", "d", provider,
 		WithTools(mockTool{}),
-		WithOnIterationComplete(hook))
+		WithHooks(Hooks{OnIterationComplete: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -370,9 +370,9 @@ func TestOnIterationComplete_HookErrorPropagates(t *testing.T) {
 		return IterationDecision{}, hookErr
 	}
 	provider := &twoIterProvider{}
-	a := NewLLMAgent("a", "d", provider,
+	a := New("a", "d", provider,
 		WithTools(mockTool{}),
-		WithOnIterationComplete(hook))
+		WithHooks(Hooks{OnIterationComplete: hook}))
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if !errors.Is(err, hookErr) {
 		t.Fatalf("Execute: err = %v, want wrapping hook err %v", err, hookErr)

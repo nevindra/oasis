@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 var baseURL = "https://generativelanguage.googleapis.com/v1beta"

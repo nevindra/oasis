@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // --- Documents + Chunks ---
@@ -38,12 +38,12 @@ func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, [
 		switch {
 		case f.Field == "document_id":
 			if f.Op == oasis.OpIn {
-				ids, ok := f.Value.([]string)
-				if !ok || len(ids) == 0 {
+				idsVal, ok := f.Value.(oasis.StringsValue)
+				if !ok || len(idsVal) == 0 {
 					continue
 				}
-				placeholders := make([]string, len(ids))
-				for i, id := range ids {
+				placeholders := make([]string, len(idsVal))
+				for i, id := range idsVal {
 					placeholders[i] = fmt.Sprintf("$%d", p)
 					p++
 					args = append(args, id)
@@ -52,11 +52,11 @@ func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, [
 			} else if f.Op == oasis.OpEq {
 				clauses = append(clauses, fmt.Sprintf("c.document_id = $%d", p))
 				p++
-				args = append(args, f.Value)
+				args = append(args, f.Value.Raw())
 			} else if f.Op == oasis.OpNeq {
 				clauses = append(clauses, fmt.Sprintf("c.document_id != $%d", p))
 				p++
-				args = append(args, f.Value)
+				args = append(args, f.Value.Raw())
 			}
 
 		case f.Field == "source":
@@ -66,18 +66,18 @@ func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, [
 			needsDocJoin = true
 			clauses = append(clauses, fmt.Sprintf("d.source = $%d", p))
 			p++
-			args = append(args, f.Value)
+			args = append(args, f.Value.Raw())
 
 		case f.Field == "created_at":
 			needsDocJoin = true
 			if f.Op == oasis.OpGt {
 				clauses = append(clauses, fmt.Sprintf("d.created_at > $%d", p))
 				p++
-				args = append(args, f.Value)
+				args = append(args, f.Value.Raw())
 			} else if f.Op == oasis.OpLt {
 				clauses = append(clauses, fmt.Sprintf("d.created_at < $%d", p))
 				p++
-				args = append(args, f.Value)
+				args = append(args, f.Value.Raw())
 			}
 
 		case strings.HasPrefix(f.Field, "meta."):
@@ -87,7 +87,7 @@ func buildChunkFiltersPg(filters []oasis.ChunkFilter, startParam int) (string, [
 			}
 			clauses = append(clauses, fmt.Sprintf("c.metadata->>'%s' = $%d", key, p))
 			p++
-			args = append(args, f.Value)
+			args = append(args, f.Value.Raw())
 		}
 	}
 

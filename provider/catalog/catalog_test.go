@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 func TestNewModelCatalog(t *testing.T) {

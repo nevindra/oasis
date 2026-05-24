@@ -6,12 +6,15 @@ import (
 	"log/slog"
 	"math/rand"
 	"time"
+
+	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/provider"
 )
 
 // retryProvider wraps a Provider and automatically retries transient HTTP errors
 // (status 429 Too Many Requests and 503 Service Unavailable) with exponential backoff.
 type retryProvider struct {
-	inner       Provider
+	inner       core.Provider
 	maxAttempts int
 	baseDelay   time.Duration
 	timeout     time.Duration    // overall timeout across all attempts; 0 = no limit
@@ -46,15 +49,10 @@ func RetryLogger(l *slog.Logger) RetryOption {
 	return func(r *retryProvider) { r.logger = l }
 }
 
-// WithRetry wraps p with automatic retry on transient HTTP errors (429, 503).
-// Retries use exponential backoff with jitter. When the error includes a
-// Retry-After duration (parsed from the HTTP header), the retry delay is at
-// least that long. Compose with any Provider:
-//
-//	chatLLM = oasis.WithRetry(gemini.New(apiKey, model))
-//	chatLLM = oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryMaxAttempts(5))
-//	chatLLM = oasis.WithRetry(gemini.New(apiKey, model), oasis.RetryTimeout(30*time.Second))
-func WithRetry(p Provider, opts ...RetryOption) Provider {
+// newRetryProvider applies opts and returns a wrapped provider.
+// Shared builder used by RetryMiddleware (and by WithEmbeddingRetry to
+// extract config values without duplicating the option-fold).
+func newRetryProvider(p core.Provider, opts ...RetryOption) *retryProvider {
 	r := &retryProvider{
 		inner:       p,
 		maxAttempts: 3,
@@ -76,14 +74,14 @@ func (r *retryProvider) Name() string { return r.inner.Name() }
 // tokens have been written to ch yet — once streaming has started, errors pass
 // through immediately to avoid sending duplicate content.
 // ch is always closed before returning.
-func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (r *retryProvider) ChatStream(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
 	var lastErr error
 	for i := 0; i < r.maxAttempts; i++ {
-		mid := make(chan StreamEvent, 64)
+		mid := make(chan core.StreamEvent, 64)
 		var (
-			resp      ChatResponse
+			resp      core.ChatResponse
 			streamErr error
 		)
 		done := make(chan struct{})
@@ -93,12 +91,27 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 		}()
 
 		var tokensSent bool
+		// Why: never block the LLM token feed on a slow consumer. If ctx fires
+		// mid-stream we keep draining mid (so the inner provider goroutine can
+		// finish and close mid) but stop forwarding, then return ctx.Err.
+		ctxDone := false
 		for ev := range mid {
+			if ctxDone {
+				continue
+			}
 			tokensSent = true
-			ch <- ev
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				ctxDone = true
+			}
 		}
 		<-done
 
+		if ctxDone {
+			close(ch)
+			return core.ChatResponse{}, ctx.Err()
+		}
 		if streamErr == nil || !isTransient(streamErr) || tokensSent {
 			close(ch)
 			return resp, streamErr
@@ -117,7 +130,7 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 			case <-ctx.Done():
 				timer.Stop()
 				close(ch)
-				return ChatResponse{}, ctx.Err()
+				return core.ChatResponse{}, ctx.Err()
 			case <-timer.C:
 			}
 		}
@@ -127,7 +140,7 @@ func (r *retryProvider) ChatStream(ctx context.Context, req ChatRequest, ch chan
 		"attempts", r.maxAttempts,
 		"error", lastErr)
 	close(ch)
-	return ChatResponse{}, lastErr
+	return core.ChatResponse{}, lastErr
 }
 
 // withTimeout returns a child context with a deadline if r.timeout is set.
@@ -146,13 +159,13 @@ func (r *retryProvider) withTimeout(ctx context.Context) (context.Context, conte
 
 // isTransient reports whether err is a retryable HTTP error (429 or 503).
 func isTransient(err error) bool {
-	var e *ErrHTTP
+	var e *core.ErrHTTP
 	return errors.As(err, &e) && (e.Status == 429 || e.Status == 503)
 }
 
 // statusOf extracts the HTTP status code from an ErrHTTP, or 0.
 func statusOf(err error) int {
-	var e *ErrHTTP
+	var e *core.ErrHTTP
 	if errors.As(err, &e) {
 		return e.Status
 	}
@@ -161,7 +174,7 @@ func statusOf(err error) int {
 
 // retryAfterOf extracts the Retry-After duration from an ErrHTTP, or 0.
 func retryAfterOf(err error) time.Duration {
-	var e *ErrHTTP
+	var e *core.ErrHTTP
 	if errors.As(err, &e) {
 		return e.RetryAfter
 	}
@@ -223,7 +236,7 @@ func retryBackoff(base time.Duration, i int) time.Duration {
 // retryEmbeddingProvider wraps an EmbeddingProvider and automatically retries
 // transient HTTP errors (429, 503) with exponential backoff.
 type retryEmbeddingProvider struct {
-	inner       EmbeddingProvider
+	inner       core.EmbeddingProvider
 	maxAttempts int
 	baseDelay   time.Duration
 	timeout     time.Duration
@@ -231,26 +244,18 @@ type retryEmbeddingProvider struct {
 }
 
 // WithEmbeddingRetry wraps p with automatic retry on transient HTTP errors (429, 503).
-// Accepts the same RetryOption functions as WithRetry. Compose with any EmbeddingProvider:
+// Accepts the same RetryOption functions as RetryMiddleware. Compose with any EmbeddingProvider:
 //
 //	emb = oasis.WithEmbeddingRetry(gemini.NewEmbedding(apiKey, model))
 //	emb = oasis.WithEmbeddingRetry(gemini.NewEmbedding(apiKey, model), oasis.RetryMaxAttempts(5))
-func WithEmbeddingRetry(p EmbeddingProvider, opts ...RetryOption) EmbeddingProvider {
-	// Apply options to a temporary retryProvider to extract config values.
-	cfg := &retryProvider{maxAttempts: 3, baseDelay: time.Second}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	logger := cfg.logger
-	if logger == nil {
-		logger = nopLogger
-	}
+func WithEmbeddingRetry(p core.EmbeddingProvider, opts ...RetryOption) core.EmbeddingProvider {
+	cfg := newRetryProvider(nil, opts...)
 	return &retryEmbeddingProvider{
 		inner:       p,
 		maxAttempts: cfg.maxAttempts,
 		baseDelay:   cfg.baseDelay,
 		timeout:     cfg.timeout,
-		logger:      logger,
+		logger:      cfg.logger,
 	}
 }
 
@@ -271,8 +276,20 @@ func (r *retryEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][
 	})
 }
 
+// RetryMiddleware returns a provider.Middleware that retries transient HTTP
+// errors (429, 503) with exponential backoff and jitter. When the error includes
+// a Retry-After duration (parsed from the HTTP header), the retry delay is at
+// least that long. Use with provider.Chain:
+//
+//	p := provider.Chain(agent.RetryMiddleware(agent.RetryMaxAttempts(3)))(base)
+func RetryMiddleware(opts ...RetryOption) provider.Middleware {
+	return func(p core.Provider) core.Provider {
+		return newRetryProvider(p, opts...)
+	}
+}
+
 // compile-time checks
 var (
-	_ Provider          = (*retryProvider)(nil)
-	_ EmbeddingProvider = (*retryEmbeddingProvider)(nil)
+	_ core.Provider          = (*retryProvider)(nil)
+	_ core.EmbeddingProvider = (*retryEmbeddingProvider)(nil)
 )

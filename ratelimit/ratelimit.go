@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/provider"
 )
 
 // rateLimitProvider wraps a Provider with proactive rate limiting.
@@ -48,7 +49,9 @@ func TPM(n int) RateLimitOption {
 //
 //	chatLLM = ratelimit.WithRateLimit(provider, ratelimit.RPM(60))
 //	chatLLM = ratelimit.WithRateLimit(provider, ratelimit.RPM(60), ratelimit.TPM(100000))
-//	chatLLM = ratelimit.WithRateLimit(oasisRetry.WithRetry(provider), ratelimit.RPM(60))
+//	chatLLM = provider.Chain(ratelimit.RateLimitMiddleware(ratelimit.RPM(60)), agent.RetryMiddleware())(p)
+//
+// Deprecated: use RateLimitMiddleware with provider.Chain.
 func WithRateLimit(p core.Provider, opts ...RateLimitOption) core.Provider {
 	r := &rateLimitProvider{inner: p}
 	for _, opt := range opts {
@@ -163,6 +166,18 @@ func pruneTpm(s []tpmEntry, cutoff time.Time) []tpmEntry {
 		i++
 	}
 	return s[i:]
+}
+
+// RateLimitMiddleware returns a provider.Middleware that adds rate-limiting
+// with the supplied options. Use with provider.Chain:
+//
+//	p := provider.Chain(ratelimit.RateLimitMiddleware(ratelimit.RPM(60)))(base)
+//
+// Equivalent to WithRateLimit but composable via provider.Chain.
+func RateLimitMiddleware(opts ...RateLimitOption) provider.Middleware {
+	return func(p core.Provider) core.Provider {
+		return WithRateLimit(p, opts...)
+	}
 }
 
 // compile-time check

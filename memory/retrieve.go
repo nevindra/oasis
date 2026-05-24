@@ -75,12 +75,31 @@ func (m *AgentMemory) BuildMessages(ctx context.Context, agentName, systemPrompt
 	runRetrievePipeline(ctx, in, m.defaultRetrieveChain())
 
 	// Assemble final []core.ChatMessage.
+	//
+	// Message order:
+	//   [0]   system  — stable: systemPrompt only (no RAG content)
+	//   [1..N] history — stable: loaded from store
+	//   [N+1] user    — RAG context block (only if PromptParts non-empty)
+	//                   varies per turn; kept out of system to preserve cache hits
+	//   [N+2] user    — current user input
+	//
+	// Note: pinned items (LoadPinned) and semantic recall (BatchedRecall,
+	// RecallCrossThread) all land in the retrieved-context message rather than
+	// the system message. They are still authoritative content — the
+	// <context>...</context> wrapper signals to the LLM that this is retrieved
+	// context rather than user instruction.
 	var out []core.ChatMessage
-	if assembled := strings.Join(append([]string{systemPrompt}, in.PromptParts...), "\n\n"); strings.TrimSpace(assembled) != "" {
-		out = append(out, core.SystemMessage(assembled))
+	if strings.TrimSpace(systemPrompt) != "" {
+		out = append(out, core.SystemMessage(systemPrompt))
 	}
 	for _, msg := range in.History {
 		out = append(out, core.ChatMessage{Role: core.Role(msg.Role), Content: msg.Content})
+	}
+	if len(in.PromptParts) > 0 {
+		out = append(out, core.ChatMessage{
+			Role:    core.RoleUser,
+			Content: "<context>\n" + strings.Join(in.PromptParts, "\n\n") + "\n</context>",
+		})
 	}
 	out = append(out, core.ChatMessage{
 		Role: core.RoleUser, Content: task.Input, Attachments: task.Attachments,

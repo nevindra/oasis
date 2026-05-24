@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 )
 
 func TestMapBatchState(t *testing.T) {
@@ -444,7 +445,7 @@ func TestBatchChatResults_NotCompleted(t *testing.T) {
 		t.Fatal("expected error for non-completed batch job")
 	}
 
-	llmErr, ok := err.(*oasis.ErrLLM)
+	llmErr, ok := err.(*core.ErrLLM)
 	if !ok {
 		t.Fatalf("expected ErrLLM, got %T", err)
 	}
@@ -514,7 +515,7 @@ func TestBatchChat_HTTPError(t *testing.T) {
 		t.Fatal("expected error for HTTP 400")
 	}
 
-	httpErr, ok := err.(*oasis.ErrHTTP)
+	httpErr, ok := err.(*core.ErrHTTP)
 	if !ok {
 		t.Fatalf("expected ErrHTTP, got %T: %v", err, err)
 	}

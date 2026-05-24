@@ -38,9 +38,9 @@ func TestCompressMessagesRoutesThroughCompactor(t *testing.T) {
 	fake := &fakeCompressorCompactor{summary: "compacted by fake"}
 
 	cfg := LoopConfig{
-		name:       "test",
-		compressor: fake,
-		Config:     Config{logger: nopLogger},
+		Name:       "test",
+		Compressor: fake,
+		Config:     Config{Logger: nopLogger},
 	}
 
 	// Build a message slice that has compressible content:
@@ -52,11 +52,11 @@ func TestCompressMessagesRoutesThroughCompactor(t *testing.T) {
 	//
 	// With preserveIters=1, iteration 1 (indices 1-2) will be compressed;
 	// iteration 2 (indices 3-4) is preserved.
-	msgs := []ChatMessage{
-		UserMessage("initial"),
-		{Role: "assistant", ToolCalls: []ToolCall{{ID: "tc1", Name: "tool"}}},
+	msgs := []core.ChatMessage{
+		core.UserMessage("initial"),
+		{Role: "assistant", ToolCalls: []core.ToolCall{{ID: "tc1", Name: "tool"}}},
 		{Role: "user", ToolCallID: "tc1", Content: "result of tc1"},
-		{Role: "assistant", ToolCalls: []ToolCall{{ID: "tc2", Name: "tool"}}},
+		{Role: "assistant", ToolCalls: []core.ToolCall{{ID: "tc2", Name: "tool"}}},
 		{Role: "user", ToolCallID: "tc2", Content: "result of tc2"},
 	}
 
@@ -97,17 +97,17 @@ func TestCompressMessagesFallbackToInlineCompactor(t *testing.T) {
 	}
 
 	cfg := LoopConfig{
-		name:       "test-fallback",
-		provider:   fakeProvider,
-		compressor: nil, // no compressor configured — should fall back
-		Config:     Config{logger: nopLogger},
+		Name:       "test-fallback",
+		Provider:   fakeProvider,
+		Compressor: nil, // no compressor configured — should fall back
+		Config:     Config{Logger: nopLogger},
 	}
 
-	msgs := []ChatMessage{
-		UserMessage("initial"),
-		{Role: "assistant", ToolCalls: []ToolCall{{ID: "tc1", Name: "tool"}}},
+	msgs := []core.ChatMessage{
+		core.UserMessage("initial"),
+		{Role: "assistant", ToolCalls: []core.ToolCall{{ID: "tc1", Name: "tool"}}},
 		{Role: "user", ToolCallID: "tc1", Content: "big tool result"},
-		{Role: "assistant", ToolCalls: []ToolCall{{ID: "tc2", Name: "tool"}}},
+		{Role: "assistant", ToolCalls: []core.ToolCall{{ID: "tc2", Name: "tool"}}},
 		{Role: "user", ToolCallID: "tc2", Content: "another result"},
 	}
 
@@ -132,14 +132,14 @@ func TestCompressMessagesNoOpWhenNothingToCompress(t *testing.T) {
 	fake := &fakeCompressorCompactor{summary: "should not be called"}
 
 	cfg := LoopConfig{
-		name:       "test-noop",
-		compressor: fake,
-		Config:     Config{logger: nopLogger},
+		Name:       "test-noop",
+		Compressor: fake,
+		Config:     Config{Logger: nopLogger},
 	}
 
 	// Only user messages — no tool results to compress.
-	msgs := []ChatMessage{
-		UserMessage("hello"),
+	msgs := []core.ChatMessage{
+		core.UserMessage("hello"),
 		{Role: "assistant", Content: "world"},
 	}
 
@@ -157,10 +157,10 @@ func TestCompressMessagesNoOpWhenNothingToCompress(t *testing.T) {
 }
 
 // makeChatResponses returns n ChatResponse values all with the given content.
-func makeChatResponses(n int, content string) []ChatResponse {
-	out := make([]ChatResponse, n)
+func makeChatResponses(n int, content string) []core.ChatResponse {
+	out := make([]core.ChatResponse, n)
 	for i := range out {
-		out[i] = ChatResponse{Content: content}
+		out[i] = core.ChatResponse{Content: content}
 	}
 	return out
 }

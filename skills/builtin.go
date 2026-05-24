@@ -12,18 +12,28 @@ import (
 //go:embed */SKILL.md
 var builtinSkills embed.FS
 
-// BuiltinSkillProvider serves skills embedded in the oasis module binary.
+// builtinSkillProvider serves skills embedded in the oasis module binary.
 // These are read-only — Discover and Activate work, but write operations
-// are not supported. Chain with a FileSkillProvider for user skills.
-type BuiltinSkillProvider struct{}
+// are not supported. Chain with a fileSkillProvider for user skills.
+type builtinSkillProvider struct{}
+
+// Builtin returns a SkillProvider backed by skills embedded in the framework
+// binary. Read-only — does not implement SkillWriter.
+//
+//	provider := skills.Builtin()
+func Builtin() SkillProvider {
+	return NewBuiltinSkillProvider()
+}
 
 // NewBuiltinSkillProvider returns a provider that reads the framework's
 // embedded skills (oasis-pdf, oasis-docx, oasis-xlsx, oasis-pptx, etc.).
-func NewBuiltinSkillProvider() *BuiltinSkillProvider {
-	return &BuiltinSkillProvider{}
+//
+// Deprecated: use skills.Builtin instead. Will be removed in next major.
+func NewBuiltinSkillProvider() SkillProvider {
+	return &builtinSkillProvider{}
 }
 
-func (p *BuiltinSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error) {
+func (p *builtinSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error) {
 	entries, err := fs.ReadDir(builtinSkills, "skills")
 	if err != nil {
 		return nil, nil // no embedded skills
@@ -60,7 +70,7 @@ func (p *BuiltinSkillProvider) Discover(ctx context.Context) ([]SkillSummary, er
 	return summaries, nil
 }
 
-func (p *BuiltinSkillProvider) Activate(ctx context.Context, name string) (Skill, error) {
+func (p *builtinSkillProvider) Activate(ctx context.Context, name string) (Skill, error) {
 	data, err := fs.ReadFile(builtinSkills, "skills/"+name+"/SKILL.md")
 	if err != nil {
 		return Skill{}, fmt.Errorf("builtin skill %q not found", name)

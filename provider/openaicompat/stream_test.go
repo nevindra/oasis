@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // buildSSE constructs a mock SSE stream from data lines.
@@ -345,6 +345,70 @@ func TestStreamSSE_SystemFingerprint(t *testing.T) {
 	}
 	if meta["system_fingerprint"] != "fp_xyz789" {
 		t.Errorf("expected system_fingerprint 'fp_xyz789', got %q", meta["system_fingerprint"])
+	}
+}
+
+// TestStreamSSE_AnthropicCacheUsage verifies that Anthropic's top-level
+// cache_read_input_tokens and cache_creation_input_tokens propagate correctly
+// through the streaming-final-usage path (usage-only chunk with no choices).
+func TestStreamSSE_AnthropicCacheUsage(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"msg_01stream","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"}}]}`,
+		`{"id":"msg_01stream","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		// Anthropic-style usage-only final chunk: top-level cache fields, no nested details.
+		`{"id":"msg_01stream","choices":[],"usage":{"prompt_tokens":14,"completion_tokens":89,"total_tokens":103,"cache_creation_input_tokens":1024,"cache_read_input_tokens":4096}}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 10)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+	for range ch {
+	}
+
+	if resp.Usage.InputTokens != 14 {
+		t.Errorf("expected 14 input tokens, got %d", resp.Usage.InputTokens)
+	}
+	if resp.Usage.OutputTokens != 89 {
+		t.Errorf("expected 89 output tokens, got %d", resp.Usage.OutputTokens)
+	}
+	if resp.Usage.CachedTokens != 4096 {
+		t.Errorf("expected CachedTokens 4096, got %d", resp.Usage.CachedTokens)
+	}
+	if resp.Usage.CacheCreationTokens != 1024 {
+		t.Errorf("expected CacheCreationTokens 1024, got %d", resp.Usage.CacheCreationTokens)
+	}
+}
+
+// TestStreamSSE_AnthropicCacheUsageInlineChunk verifies the same Anthropic
+// cache fields when the usage appears inline with a choices chunk (not a
+// separate usage-only chunk).
+func TestStreamSSE_AnthropicCacheUsageInlineChunk(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"msg_01inline","choices":[{"index":0,"delta":{"content":"Hello"}}]}`,
+		`{"id":"msg_01inline","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"cache_creation_input_tokens":512,"cache_read_input_tokens":2048}}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 10)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+	for range ch {
+	}
+
+	if resp.Usage.CachedTokens != 2048 {
+		t.Errorf("expected CachedTokens 2048, got %d", resp.Usage.CachedTokens)
+	}
+	if resp.Usage.CacheCreationTokens != 512 {
+		t.Errorf("expected CacheCreationTokens 512, got %d", resp.Usage.CacheCreationTokens)
 	}
 }
 

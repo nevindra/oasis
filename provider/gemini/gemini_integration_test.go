@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 const rateLimitDelay = 5 * time.Second

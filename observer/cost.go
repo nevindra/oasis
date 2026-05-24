@@ -1,6 +1,6 @@
 package observer
 
-import oasis "github.com/nevindra/oasis"
+import oasis "github.com/nevindra/oasis/core"
 
 // DefaultPricing contains sensible defaults for common models.
 // Users can override or extend via [observer.pricing] in oasis.toml.

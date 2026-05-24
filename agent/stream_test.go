@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,22 +20,22 @@ import (
 func TestNewStreamEventTypes(t *testing.T) {
 	// Verify the new event type constants have the expected string values.
 	tests := []struct {
-		got  StreamEventType
+		got  core.StreamEventType
 		want string
 	}{
-		{EventToolCallDelta, "tool-call-delta"},
-		{EventToolProgress, "tool-progress"},
-		{EventStepStart, "step-start"},
-		{EventStepFinish, "step-finish"},
-		{EventStepProgress, "step-progress"},
-		{EventRoutingDecision, "routing-decision"},
-		{EventReasoningStart, "reasoning-start"},
-		{EventReasoningDelta, "reasoning-delta"},
-		{EventReasoningEnd, "reasoning-end"},
-		{EventHalt, "halt"},
-		{EventError, "error"},
-		{EventStreamWarning, "stream-warning"},
-		{EventToolApprovalPending, "tool-approval-pending"},
+		{core.EventToolCallDelta, "tool-call-delta"},
+		{core.EventToolProgress, "tool-progress"},
+		{core.EventStepStart, "step-start"},
+		{core.EventStepFinish, "step-finish"},
+		{core.EventStepProgress, "step-progress"},
+		{core.EventRoutingDecision, "routing-decision"},
+		{core.EventReasoningStart, "reasoning-start"},
+		{core.EventReasoningDelta, "reasoning-delta"},
+		{core.EventReasoningEnd, "reasoning-end"},
+		{core.EventHalt, "halt"},
+		{core.EventError, "error"},
+		{core.EventStreamWarning, "stream-warning"},
+		{core.EventToolApprovalPending, "tool-approval-pending"},
 	}
 	for _, tt := range tests {
 		if string(tt.got) != tt.want {
@@ -43,8 +45,8 @@ func TestNewStreamEventTypes(t *testing.T) {
 }
 
 func TestStreamEventIDField(t *testing.T) {
-	ev := StreamEvent{
-		Type: EventToolCallStart,
+	ev := core.StreamEvent{
+		Type: core.EventToolCallStart,
 		ID:   "call_123",
 		Name: "search",
 	}
@@ -57,7 +59,7 @@ func TestStreamEventIDField(t *testing.T) {
 	}
 
 	// Zero-value ID should be omitted.
-	ev2 := StreamEvent{Type: EventTextDelta, Content: "hi"}
+	ev2 := core.StreamEvent{Type: core.EventTextDelta, Content: "hi"}
 	data2, _ := json.Marshal(ev2)
 	if strings.Contains(string(data2), `"id"`) {
 		t.Errorf("empty ID should be omitted: %s", data2)
@@ -69,13 +71,13 @@ func TestStreamEventIDField(t *testing.T) {
 func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "streamed hello"}},
+		responses: []core.ChatResponse{{Content: "streamed hello"}},
 	}
 
-	agent := NewLLMAgent("streamer", "Streams output", provider)
+	agent := New("streamer", "Streams output", provider)
 
-	ch := make(chan StreamEvent, 10)
-	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "hi"}, ch)
+	ch := make(chan core.StreamEvent, 10)
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "hi"}, core.WithStream(ch))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,16 +86,16 @@ func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
 	}
 
 	// Verify events were sent to channel
-	var events []StreamEvent
+	var events []core.StreamEvent
 	for ev := range ch {
 		events = append(events, ev)
 	}
 	if len(events) < 3 {
 		t.Fatalf("expected at least 3 events (run-start, iteration-start, text-delta...), got %d", len(events))
 	}
-	// First event should be run-start (replaced EventInputReceived + EventProcessingStart).
-	if events[0].Type != EventRunStart {
-		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventRunStart)
+	// First event should be run-start.
+	if events[0].Type != core.EventRunStart {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, core.EventRunStart)
 	}
 	if events[0].Name != "streamer" {
 		t.Errorf("events[0].Name = %q, want %q", events[0].Name, "streamer")
@@ -102,32 +104,32 @@ func TestLLMAgentExecuteStreamNoTools(t *testing.T) {
 		t.Errorf("events[0].Content = %q, want %q", events[0].Content, "hi")
 	}
 	// Second event should be iteration-start.
-	if events[1].Type != EventIterationStart {
-		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventIterationStart)
+	if events[1].Type != core.EventIterationStart {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, core.EventIterationStart)
 	}
 	// Last event should be run-finish.
-	if events[len(events)-1].Type != EventRunFinish {
-		t.Errorf("last event type = %q, want %q", events[len(events)-1].Type, EventRunFinish)
+	if events[len(events)-1].Type != core.EventRunFinish {
+		t.Errorf("last event type = %q, want %q", events[len(events)-1].Type, core.EventRunFinish)
 	}
 }
 
 func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// First: tool call (blocking)
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
 			// Second: final text response (streamed as single chunk since from Chat with tools)
 			{Content: "after tool call"},
 		},
 	}
 
-	agent := NewLLMAgent("streamer", "Streams with tools", provider,
+	agent := New("streamer", "Streams with tools", provider,
 		WithTools(mockTool{}),
 	)
 
-	ch := make(chan StreamEvent, 10)
-	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "greet"}, ch)
+	ch := make(chan core.StreamEvent, 10)
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "greet"}, core.WithStream(ch))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +138,7 @@ func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 	}
 
 	// Channel should be closed and contain lifecycle + tool + text events
-	var events []StreamEvent
+	var events []core.StreamEvent
 	for ev := range ch {
 		events = append(events, ev)
 	}
@@ -144,21 +146,21 @@ func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 		t.Fatalf("expected at least 3 events, got %d", len(events))
 	}
 	// First two events should be the new lifecycle events.
-	if events[0].Type != EventRunStart {
-		t.Errorf("events[0].Type = %q, want %q", events[0].Type, EventRunStart)
+	if events[0].Type != core.EventRunStart {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, core.EventRunStart)
 	}
-	if events[1].Type != EventIterationStart {
-		t.Errorf("events[1].Type = %q, want %q", events[1].Type, EventIterationStart)
+	if events[1].Type != core.EventIterationStart {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, core.EventIterationStart)
 	}
 	// Should have tool-call-start, tool-call-result, and text-delta events
 	var hasToolStart, hasToolResult, hasTextDelta bool
 	for _, ev := range events {
 		switch ev.Type {
-		case EventToolCallStart:
+		case core.EventToolCallStart:
 			hasToolStart = true
-		case EventToolCallResult:
+		case core.EventToolCallResult:
 			hasToolResult = true
-		case EventTextDelta:
+		case core.EventTextDelta:
 			hasTextDelta = true
 		}
 	}
@@ -174,19 +176,19 @@ func TestLLMAgentExecuteStreamWithTools(t *testing.T) {
 }
 
 func TestLLMAgentStreamingInterfaceCompliance(t *testing.T) {
-	agent := NewLLMAgent("test", "test", &mockProvider{name: "test"})
-	var _ StreamingAgent = agent
+	agent := New("test", "test", &mockProvider{name: "test"})
+	var _ core.Agent = agent
 }
 
 
 func TestLLMAgentExecuteStreamProviderError(t *testing.T) {
-	agent := NewLLMAgent("broken", "Broken", &errProvider{
+	agent := New("broken", "Broken", &errProvider{
 		name: "fail",
 		err:  errors.New("stream error"),
 	})
 
-	ch := make(chan StreamEvent, 10)
-	_, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "hi"}, ch)
+	ch := make(chan core.StreamEvent, 10)
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "hi"}, core.WithStream(ch))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -201,27 +203,28 @@ func TestLLMAgentExecuteStreamProviderError(t *testing.T) {
 
 // --- SSE tests ---
 
-// stubStreamingAgent implements StreamingAgent for testing.
+// stubStreamingAgent implements core.Agent for testing, emitting events via WithStream.
 type stubStreamingAgent struct {
 	name   string
 	desc   string
-	events []StreamEvent
+	events []core.StreamEvent
 	result AgentResult
 	err    error
 }
 
 func (s *stubStreamingAgent) Name() string        { return s.name }
 func (s *stubStreamingAgent) Description() string { return s.desc }
-func (s *stubStreamingAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error) {
-	return s.result, s.err
-}
-func (s *stubStreamingAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
-	defer close(ch)
-	for _, ev := range s.events {
-		select {
-		case ch <- ev:
-		case <-ctx.Done():
-			return AgentResult{}, ctx.Err()
+func (s *stubStreamingAgent) Execute(ctx context.Context, _ AgentTask, opts ...RunOption) (AgentResult, error) {
+	rcfg := core.ApplyRunOptions(opts...)
+	ch := rcfg.Stream
+	if ch != nil {
+		defer close(ch)
+		for _, ev := range s.events {
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return AgentResult{}, ctx.Err()
+			}
 		}
 	}
 	return s.result, s.err
@@ -231,11 +234,11 @@ func TestServeSSE(t *testing.T) {
 	agent := &stubStreamingAgent{
 		name: "test",
 		desc: "test agent",
-		events: []StreamEvent{
-			{Type: EventTextDelta, Content: "Hello"},
-			{Type: EventTextDelta, Content: " world"},
-			{Type: EventToolCallStart, Name: "search", Args: json.RawMessage(`{"q":"test"}`)},
-			{Type: EventToolCallResult, Name: "search", Content: "found it"},
+		events: []core.StreamEvent{
+			{Type: core.EventTextDelta, Content: "Hello"},
+			{Type: core.EventTextDelta, Content: " world"},
+			{Type: core.EventToolCallStart, Name: "search", Args: json.RawMessage(`{"q":"test"}`)},
+			{Type: core.EventToolCallResult, Name: "search", Content: "found it"},
 		},
 		result: AgentResult{Output: "Hello world"},
 	}
@@ -298,8 +301,8 @@ func TestServeSSE_AgentError(t *testing.T) {
 	agent := &stubStreamingAgent{
 		name: "fail",
 		desc: "fails",
-		events: []StreamEvent{
-			{Type: EventTextDelta, Content: "partial"},
+		events: []core.StreamEvent{
+			{Type: core.EventTextDelta, Content: "partial"},
 		},
 		err: errors.New("provider timeout"),
 	}
@@ -346,6 +349,46 @@ func TestServeSSE_NoFlusher(t *testing.T) {
 	}
 }
 
+// TestStreamDispatch_LogsPanic verifies that a panic inside a subscriber
+// callback is recovered and logged (not silently swallowed) per ENGINEERING.md
+// "Errors must be observable."
+func TestStreamDispatch_LogsPanic(t *testing.T) {
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	logger := slog.New(handler)
+
+	s := &Stream{
+		replay:      make([]core.StreamEvent, 0, defaultStreamReplayLimit),
+		replayLimit: defaultStreamReplayLimit,
+		done:        make(chan struct{}),
+		logger:      logger,
+	}
+
+	panicMsg := "subscriber kaboom"
+	called := 0
+	s.OnEvent(func(ev core.StreamEvent) {
+		called++
+		panic(panicMsg)
+	})
+
+	ev := core.StreamEvent{Type: core.EventTextDelta, Content: "hello"}
+	s.dispatch(ev) // must not panic the caller
+
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, "panic") {
+		t.Errorf("expected log to contain 'panic', got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, string(core.EventTextDelta)) {
+		t.Errorf("expected log to contain event_type %q, got: %s", core.EventTextDelta, logOutput)
+	}
+	if !strings.Contains(logOutput, panicMsg) {
+		t.Errorf("expected log to contain panic value %q, got: %s", panicMsg, logOutput)
+	}
+	if called != 1 {
+		t.Errorf("expected callback to be called once, got %d", called)
+	}
+}
+
 // --- ServeSSE panic recovery ---
 
 func TestServeSSE_AgentPanic(t *testing.T) {
@@ -371,7 +414,7 @@ func TestServeSSE_AgentPanic(t *testing.T) {
 	}
 }
 
-// panicStreamingAgent is a StreamingAgent that panics during ExecuteStream.
+// panicStreamingAgent is a core.Agent that panics during Execute with streaming.
 type panicStreamingAgent struct {
 	name string
 	desc string
@@ -379,13 +422,13 @@ type panicStreamingAgent struct {
 
 func (p *panicStreamingAgent) Name() string        { return p.name }
 func (p *panicStreamingAgent) Description() string { return p.desc }
-func (p *panicStreamingAgent) Execute(_ context.Context, _ AgentTask) (AgentResult, error) {
+func (p *panicStreamingAgent) Execute(_ context.Context, _ AgentTask, opts ...RunOption) (AgentResult, error) {
+	rcfg := core.ApplyRunOptions(opts...)
+	if rcfg.Stream != nil {
+		// Send one event before panicking.
+		rcfg.Stream <- core.StreamEvent{Type: core.EventTextDelta, Content: "partial"}
+	}
 	panic("agent panic in Execute")
-}
-func (p *panicStreamingAgent) ExecuteStream(_ context.Context, _ AgentTask, ch chan<- StreamEvent) (AgentResult, error) {
-	// Send one event before panicking.
-	ch <- StreamEvent{Type: EventTextDelta, Content: "partial"}
-	panic("agent panic in ExecuteStream")
 }
 
 // --- WriteSSEEvent tests ---
@@ -441,9 +484,9 @@ func TestLLMAgentExecuteStreamContextCancellation(t *testing.T) {
 
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			// Tool call that will trigger context cancellation.
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
 		},
 	}
 
@@ -453,12 +496,12 @@ func TestLLMAgentExecuteStreamContextCancellation(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("cancel", "Cancel test", provider,
+	agent := New("cancel", "Cancel test", provider,
 		WithTools(cancelTool),
 	)
 
-	ch := make(chan StreamEvent, 32)
-	_, _ = agent.ExecuteStream(ctx, AgentTask{Input: "go"}, ch)
+	ch := make(chan core.StreamEvent, 32)
+	_, _ = agent.Execute(ctx, AgentTask{Input: "go"}, core.WithStream(ch))
 
 	// Channel should be closed — verify by draining.
 	drained := false
@@ -475,9 +518,9 @@ func TestThinkingEventEmitted(t *testing.T) {
 	// EventThinking events should be emitted on the stream channel.
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
+		responses: []core.ChatResponse{
 			{
-				ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}},
+				ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}},
 				Thinking:  "I need to call the greet tool.",
 			},
 			{
@@ -487,19 +530,19 @@ func TestThinkingEventEmitted(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("thinker", "Emits thinking", provider,
+	agent := New("thinker", "Emits thinking", provider,
 		WithTools(mockTool{}),
 	)
 
-	ch := make(chan StreamEvent, 32)
-	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "greet"}, ch)
+	ch := make(chan core.StreamEvent, 32)
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "greet"}, core.WithStream(ch))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var thinkingEvents []StreamEvent
+	var thinkingEvents []core.StreamEvent
 	for ev := range ch {
-		if ev.Type == EventThinking {
+		if ev.Type == core.EventThinking {
 			thinkingEvents = append(thinkingEvents, ev)
 		}
 	}
@@ -525,22 +568,22 @@ type progressTool struct{}
 
 func (t progressTool) Name() string { return "slow_search" }
 
-func (t progressTool) Definition() ToolDefinition {
-	return ToolDefinition{
+func (t progressTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{
 		Name:        "slow_search",
 		Description: "Slow search with progress",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`),
 	}
 }
 
-func (t progressTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (t progressTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult("found 3 results"), nil
 }
 
-func (t progressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch chan<- StreamEvent) (ToolResult, error) {
+func (t progressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch chan<- core.StreamEvent) (core.ToolResult, error) {
 	for i := 1; i <= 3; i++ {
-		ch <- StreamEvent{
-			Type:    EventToolProgress,
+		ch <- core.StreamEvent{
+			Type:    core.EventToolProgress,
 			Name:    "slow_search",
 			Content: fmt.Sprintf(`{"found":%d}`, i),
 		}
@@ -551,18 +594,18 @@ func (t progressTool) ExecuteStream(_ context.Context, _ json.RawMessage, ch cha
 func TestStreamingToolEmitsProgress(t *testing.T) {
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "slow_search", Args: json.RawMessage(`{"q":"test"}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "slow_search", Args: json.RawMessage(`{"q":"test"}`)}}},
 			{Content: "done"},
 		},
 	}
 
-	agent := NewLLMAgent("searcher", "Searches", provider,
+	agent := New("searcher", "Searches", provider,
 		WithTools(progressTool{}),
 	)
 
-	ch := make(chan StreamEvent, 32)
-	result, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "search"}, ch)
+	ch := make(chan core.StreamEvent, 32)
+	result, err := agent.Execute(context.Background(), AgentTask{Input: "search"}, core.WithStream(ch))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,9 +613,9 @@ func TestStreamingToolEmitsProgress(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "done")
 	}
 
-	var progressEvents []StreamEvent
+	var progressEvents []core.StreamEvent
 	for ev := range ch {
-		if ev.Type == EventToolProgress {
+		if ev.Type == core.EventToolProgress {
 			progressEvents = append(progressEvents, ev)
 		}
 	}
@@ -589,13 +632,13 @@ func TestStreamingToolFallsBackToExecute(t *testing.T) {
 	// fall back to ExecuteRaw.
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "slow_search", Args: json.RawMessage(`{"q":"test"}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "slow_search", Args: json.RawMessage(`{"q":"test"}`)}}},
 			{Content: "done"},
 		},
 	}
 
-	agent := NewLLMAgent("searcher", "Searches", provider,
+	agent := New("searcher", "Searches", provider,
 		WithTools(progressTool{}),
 	)
 
@@ -612,24 +655,24 @@ func TestNoThinkingEventWhenEmpty(t *testing.T) {
 	// When provider returns no thinking content, no EventThinking events should appear.
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
 			{Content: "done"},
 		},
 	}
 
-	agent := NewLLMAgent("no-think", "No thinking", provider,
+	agent := New("no-think", "No thinking", provider,
 		WithTools(mockTool{}),
 	)
 
-	ch := make(chan StreamEvent, 32)
-	_, err := agent.ExecuteStream(context.Background(), AgentTask{Input: "greet"}, ch)
+	ch := make(chan core.StreamEvent, 32)
+	_, err := agent.Execute(context.Background(), AgentTask{Input: "greet"}, core.WithStream(ch))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for ev := range ch {
-		if ev.Type == EventThinking {
+		if ev.Type == core.EventThinking {
 			t.Error("unexpected thinking event when provider returns no thinking")
 		}
 	}
@@ -643,11 +686,11 @@ func TestNoThinkingEventWhenEmpty(t *testing.T) {
 // the loop keeps requesting tools until it hits maxIter.
 type alwaysToolProvider struct {
 	toolName string
-	synthResp ChatResponse
+	synthResp core.ChatResponse
 }
 
 func (a *alwaysToolProvider) Name() string { return "always-tool" }
-func (a *alwaysToolProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (a *alwaysToolProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	// If the last message looks like a forced-synthesis prompt, return text.
 	if len(req.Messages) > 0 {
@@ -657,8 +700,8 @@ func (a *alwaysToolProvider) ChatStream(_ context.Context, req ChatRequest, ch c
 			return a.synthResp, nil
 		}
 	}
-	return ChatResponse{
-		ToolCalls: []ToolCall{{ID: "loop-1", Name: a.toolName, Args: json.RawMessage(`{}`)}},
+	return core.ChatResponse{
+		ToolCalls: []core.ToolCall{{ID: "loop-1", Name: a.toolName, Args: json.RawMessage(`{}`)}},
 	}, nil
 }
 
@@ -668,23 +711,23 @@ func (a *alwaysToolProvider) ChatStream(_ context.Context, req ChatRequest, ch c
 func TestEventMaxIterReachedEmitted(t *testing.T) {
 	provider := &alwaysToolProvider{
 		toolName:  "loop_tool",
-		synthResp: ChatResponse{Content: "forced synthesis result"},
+		synthResp: core.ChatResponse{Content: "forced synthesis result"},
 	}
-	a := NewLLMAgent("test", "", provider,
+	a := New("test", "", provider,
 		WithTools(&configuredFakeAgentTool{name: "loop_tool", output: "still going"}),
 		WithLimits(Limits{MaxIter: 3}),
 	)
 
-	ch := make(chan StreamEvent, 64)
-	_, _ = a.ExecuteStream(context.Background(), AgentTask{Input: "loop"}, ch)
+	ch := make(chan core.StreamEvent, 64)
+	_, _ = a.Execute(context.Background(), AgentTask{Input: "loop"}, core.WithStream(ch))
 
 	var sawRunFinish bool
 	var sawMaxIterReached bool
 	for ev := range ch {
-		if ev.Type == EventRunFinish && ev.FinishReason == FinishMaxIter {
+		if ev.Type == core.EventRunFinish && ev.FinishReason == core.FinishMaxIter {
 			sawRunFinish = true
 		}
-		if ev.Type == EventMaxIterReached {
+		if ev.Type == core.EventMaxIterReached {
 			sawMaxIterReached = true
 		}
 	}
@@ -703,10 +746,10 @@ type configuredFakeAgentTool struct {
 }
 
 func (t *configuredFakeAgentTool) Name() string { return t.name }
-func (t *configuredFakeAgentTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: t.name, Description: "fake tool"}
+func (t *configuredFakeAgentTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: t.name, Description: "fake tool"}
 }
-func (t *configuredFakeAgentTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (t *configuredFakeAgentTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult(t.output), nil
 }
 

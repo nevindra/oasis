@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nevindra/oasis"
+	"github.com/nevindra/oasis/core"
 )
 
 // batchEmbedDest holds the destination field for batch embedding responses.
@@ -190,7 +191,7 @@ func (e *GeminiEmbedding) doBatchRequest(ctx context.Context, url string, payloa
 }
 
 func (e *GeminiEmbedding) wrapErr(msg string) error {
-	return &oasis.ErrLLM{Provider: "gemini", Message: msg}
+	return &core.ErrLLM{Provider: "gemini", Message: msg}
 }
 
 // Compile-time interface assertion.

@@ -4,8 +4,12 @@ package docs
 
 import "embed"
 
-// FS contains all documentation files (concepts, guides, api, configuration,
-// getting-started, and ENGINEERING.md). Use embed.FS methods to read files.
+// FS contains all documentation files. The layout is topic-grouped: each topic
+// folder holds three files (index.md = concept, api.md = reference,
+// examples.md = recipes). The landing page is at index.md.
 //
-//go:embed concepts guides api configuration getting-started ENGINEERING.md
+// Internal contributor-only docs (PHILOSOPHY.md, ENGINEERING.md, benchmarks)
+// live under internal/ and are intentionally excluded from the embed.
+//
+//go:embed index.md getting-started agent network workflow memory rag skills tools sandbox providers observability processors store
 var FS embed.FS

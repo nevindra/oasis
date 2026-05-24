@@ -17,7 +17,7 @@ import (
 // condition nodes without branches, and cycles all produce errors.
 //
 // The returned Workflow uses the same DAG execution engine as compile-time
-// workflows built with NewWorkflow.
+// workflows built with New.
 func FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, error) {
 	if len(def.Nodes) == 0 {
 		return nil, fmt.Errorf("workflow definition %q: no nodes", def.Name)
@@ -98,7 +98,7 @@ func FromDefinition(def WorkflowDefinition, reg DefinitionRegistry) (*Workflow, 
 		opts = append(opts, generated...)
 	}
 
-	return NewWorkflow(def.Name, def.Description, opts...)
+	return New(def.Name, def.Description, opts...)
 }
 
 // nodeToWorkflowOptions converts a single NodeDefinition into one or more
@@ -145,7 +145,7 @@ func buildLLMNode(n NodeDefinition, after []string, reg DefinitionRegistry, when
 		return []WorkflowOption{
 			Step(n.ID, func(ctx context.Context, wCtx *WorkflowContext) error {
 				resolved := wCtx.Resolve(n.Input)
-				result, err := agent.Execute(ctx, AgentTask{Input: resolved})
+				result, err := agent.Execute(ctx, core.AgentTask{Input: resolved})
 				if err != nil {
 					return err
 				}
@@ -201,7 +201,7 @@ func buildToolNode(n NodeDefinition, after []string, reg DefinitionRegistry, whe
 	if len(after) > 0 {
 		baseOpts = append(baseOpts, After(after...))
 	}
-	return []WorkflowOption{ToolStep(n.ID, tool, toolName, baseOpts...)}, nil
+	return []WorkflowOption{toolStepInternal(n.ID, tool, toolName, baseOpts...)}, nil
 }
 
 // toolNodeBaseOpts builds the common StepOption set shared by all tool node variants.
@@ -252,7 +252,7 @@ func buildToolNodeTemplateArgs(n NodeDefinition, tool core.AnyTool, toolName str
 	copy(toolOpts, baseOpts)
 	toolOpts = append(toolOpts, After(resolverID), ArgsFrom(resolverID))
 
-	return []WorkflowOption{resolver, ToolStep(n.ID, tool, toolName, toolOpts...)}, nil
+	return []WorkflowOption{resolver, toolStepInternal(n.ID, tool, toolName, toolOpts...)}, nil
 }
 
 // buildToolNodeStaticArgs generates an arg-setter step (marshals static args)
@@ -286,7 +286,7 @@ func buildToolNodeStaticArgs(n NodeDefinition, tool core.AnyTool, toolName strin
 		toolOpts = append(toolOpts, Retry(n.Retry, time.Second))
 	}
 
-	return []WorkflowOption{setter, ToolStep(n.ID, tool, toolName, toolOpts...)}, nil
+	return []WorkflowOption{setter, toolStepInternal(n.ID, tool, toolName, toolOpts...)}, nil
 }
 
 // buildConditionNode generates a Step that evaluates the condition expression

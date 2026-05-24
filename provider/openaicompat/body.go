@@ -6,22 +6,49 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
+
+// markCacheControl sets cache_control: {"type":"ephemeral"} on the last
+// content block of msg. If Content is a plain string, it is promoted to a
+// single-element []ContentBlock so the marker can be attached. If Content is
+// already []ContentBlock, the marker is set on the last block only.
+// The function is idempotent: setting the same ephemeral marker twice is a no-op.
+func markCacheControl(msg *Message) {
+	cc := &CacheControl{Type: "ephemeral"}
+	switch content := msg.Content.(type) {
+	case string:
+		msg.Content = []ContentBlock{
+			{Type: "text", Text: content, CacheControl: cc},
+		}
+	case []ContentBlock:
+		if len(content) > 0 {
+			content[len(content)-1].CacheControl = cc
+			msg.Content = content
+		}
+	}
+}
 
 // BuildBody converts oasis ChatMessages and a model name into an OpenAI-format ChatRequest.
 // System messages are kept in the messages array as role:"system".
 // Options configure generation parameters (temperature, top_p, etc.).
+// Messages with CacheCheckpoint=true are automatically marked with
+// cache_control: {"type":"ephemeral"} so providers that support ephemeral
+// caching (Anthropic, Qwen, etc.) will cache all tokens up to that message.
 func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model string, schema *oasis.ResponseSchema, opts ...Option) ChatRequest {
 	var msgs []Message
 
 	for _, m := range messages {
 		switch {
 		case m.Role == "system":
-			msgs = append(msgs, Message{
+			msg := Message{
 				Role:    "system",
 				Content: m.Content,
-			})
+			}
+			if m.CacheCheckpoint {
+				markCacheControl(&msg)
+			}
+			msgs = append(msgs, msg)
 
 		case m.Role == "assistant" && len(m.ToolCalls) > 0:
 			// Assistant message with tool calls.
@@ -44,18 +71,26 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 			if m.Content != "" {
 				msg.Content = m.Content
 			}
+			if m.CacheCheckpoint {
+				markCacheControl(&msg)
+			}
 			msgs = append(msgs, msg)
 
 		case m.Role == "tool":
 			// Tool result message.
-			msgs = append(msgs, Message{
+			msg := Message{
 				Role:       "tool",
 				Content:    m.Content,
 				ToolCallID: m.ToolCallID,
-			})
+			}
+			if m.CacheCheckpoint {
+				markCacheControl(&msg)
+			}
+			msgs = append(msgs, msg)
 
 		default:
 			// Regular user or assistant message.
+			var msg Message
 			if len(m.Attachments) > 0 {
 				// Multimodal: build content blocks.
 				var blocks []ContentBlock
@@ -83,16 +118,20 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 						})
 					}
 				}
-				msgs = append(msgs, Message{
+				msg = Message{
 					Role:    string(m.Role),
 					Content: blocks,
-				})
+				}
 			} else {
-				msgs = append(msgs, Message{
+				msg = Message{
 					Role:    string(m.Role),
 					Content: m.Content,
-				})
+				}
 			}
+			if m.CacheCheckpoint {
+				markCacheControl(&msg)
+			}
+			msgs = append(msgs, msg)
 		}
 	}
 

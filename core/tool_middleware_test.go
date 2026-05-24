@@ -89,3 +89,56 @@ func TestApplyToolMiddleware_NilReturnPanics(t *testing.T) {
 		func(AnyTool) AnyTool { return nil },
 	})
 }
+
+// tagMiddleware records "<label>-pre" before and "<label>-post" after
+// delegating to the inner tool.
+func tagMiddleware(label string, log *[]string) ToolMiddleware {
+	return func(t AnyTool) AnyTool {
+		return &tagWrapper{inner: t, label: label, log: log}
+	}
+}
+
+type tagWrapper struct {
+	inner AnyTool
+	label string
+	log   *[]string
+}
+
+func (w *tagWrapper) Name() string             { return w.inner.Name() }
+func (w *tagWrapper) Definition() ToolDefinition { return w.inner.Definition() }
+func (w *tagWrapper) ExecuteRaw(ctx context.Context, a json.RawMessage) (ToolResult, error) {
+	*w.log = append(*w.log, w.label+"-pre")
+	res, err := w.inner.ExecuteRaw(ctx, a)
+	*w.log = append(*w.log, w.label+"-post")
+	return res, err
+}
+
+func TestChainToolMiddleware_AppliesInOrder(t *testing.T) {
+	var log []string
+	hits := 0
+	tool := &stubTool{name: "t", hits: &hits}
+
+	// a is outermost, b is innermost → expected: a-pre, b-pre, b-post, a-post
+	wrapped := ChainToolMiddleware(
+		tagMiddleware("a", &log),
+		tagMiddleware("b", &log),
+	)(tool)
+
+	_, err := wrapped.ExecuteRaw(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ExecuteRaw err = %v", err)
+	}
+
+	want := []string{"a-pre", "b-pre", "b-post", "a-post"}
+	if len(log) != len(want) {
+		t.Fatalf("log = %v, want %v", log, want)
+	}
+	for i, entry := range want {
+		if log[i] != entry {
+			t.Errorf("log[%d] = %q, want %q (full log: %v)", i, log[i], entry, log)
+		}
+	}
+	if hits != 1 {
+		t.Errorf("tool hits = %d, want 1", hits)
+	}
+}

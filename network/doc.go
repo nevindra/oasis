@@ -7,15 +7,16 @@
 // which agents to invoke, in what order, and with what data. This enables
 // flexible, LLM-driven composition of complex multi-agent workflows.
 //
-// Create a Network with NewNetwork and pass subagents via WithAgents:
+// Create a Network with network.New; children and all other knobs flow
+// through Options:
 //
-//	searchAgent := oasis.NewLLMAgent("search", "...", provider, ...)
-//	summarizeAgent := oasis.NewLLMAgent("summarize", "...", provider, ...)
+//	searchAgent := agent.New("search", "...", provider, ...)
+//	summarizeAgent := agent.New("summarize", "...", provider, ...)
 //
-//	router := oasis.NewLLMAgent("router", "...", provider, ...)
-//	network := network.NewNetwork("coordinator", "...", router,
-//		oasis.WithAgents(searchAgent, summarizeAgent),
+//	var routerProvider core.Provider
+//	net := network.New("coordinator", "...", routerProvider,
+//		network.WithChildren(searchAgent, summarizeAgent),
 //	)
 //
-//	result, err := network.Execute(ctx, oasis.AgentTask{Input: "research this topic"})
+//	result, err := net.Execute(ctx, oasis.AgentTask{Input: "research this topic"})
 package network

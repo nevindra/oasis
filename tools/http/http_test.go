@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 func TestHTTPFetchBasic(t *testing.T) {

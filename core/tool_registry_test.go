@@ -155,6 +155,43 @@ func TestToolRegistry_EnsureSchema_ToolNotSchemaEnsurer(t *testing.T) {
 	}
 }
 
+// namedResultTool returns its result field when executed — used for dedup tests.
+type namedResultTool struct {
+	name   string
+	result string
+}
+
+func (s namedResultTool) Name() string               { return s.name }
+func (s namedResultTool) Definition() ToolDefinition { return ToolDefinition{Name: s.name} }
+func (s namedResultTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+	return TextResult(s.result), nil
+}
+
+func TestToolRegistry_Add_ReplacesByName(t *testing.T) {
+	r := NewToolRegistry()
+	first := namedResultTool{name: "greet", result: "first"}
+	second := namedResultTool{name: "greet", result: "second"}
+
+	r.Add(first)
+	r.Add(second)
+
+	// Only one definition should be present after adding the same name twice.
+	defs := r.AllDefinitions()
+	if len(defs) != 1 {
+		t.Errorf("AllDefinitions() len = %d, want 1 (duplicate entry after re-Add)", len(defs))
+	}
+
+	// Execute must reach the second (replacement) tool, not the first.
+	res, err := r.Execute(context.Background(), "greet", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := string(res.Content)
+	if got != `"second"` {
+		t.Errorf("Execute result = %q, want %q (first tool still active after re-Add)", got, `"second"`)
+	}
+}
+
 // streamingAnyToolStub is a minimal StreamingAnyTool used for registry tests.
 type streamingAnyToolStub struct{ name string }
 

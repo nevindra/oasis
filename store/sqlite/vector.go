@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // vecIndexWarnThreshold logs a warning when the in-memory vector index exceeds

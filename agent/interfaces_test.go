@@ -4,12 +4,9 @@ import (
 	"testing"
 
 	"github.com/nevindra/oasis/agent"
+	"github.com/nevindra/oasis/core"
 )
 
-func TestLLMAgentSatisfiesAgentWithOptions(t *testing.T) {
-	var _ agent.AgentWithOptions = (*agent.LLMAgent)(nil)
-}
-
-func TestLLMAgentSatisfiesStreamingAgentWithOptions(t *testing.T) {
-	var _ agent.StreamingAgentWithOptions = (*agent.LLMAgent)(nil)
+func TestLLMAgentSatisfiesCoreAgent(t *testing.T) {
+	var _ core.Agent = (*agent.LLMAgent)(nil)
 }

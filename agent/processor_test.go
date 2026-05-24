@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nevindra/oasis/core"
@@ -16,7 +17,7 @@ import (
 // uppercaseProcessor is a PostProcessor that prefixes the response content.
 type uppercaseProcessor struct{}
 
-func (p *uppercaseProcessor) PostLLM(_ context.Context, resp *ChatResponse) error {
+func (p *uppercaseProcessor) PostLLM(_ context.Context, resp *core.ChatResponse) error {
 	resp.Content = "[modified] " + resp.Content
 	return nil
 }
@@ -24,7 +25,7 @@ func (p *uppercaseProcessor) PostLLM(_ context.Context, resp *ChatResponse) erro
 // redactToolProcessor is a PostToolProcessor that prefixes tool results.
 type redactToolProcessor struct{}
 
-func (p *redactToolProcessor) PostTool(_ context.Context, _ ToolCall, result *ToolResult) error {
+func (p *redactToolProcessor) PostTool(_ context.Context, _ core.ToolCall, result *core.ToolResult) error {
 	result.Content = core.TextContent("[redacted] " + string(result.Content))
 	return nil
 }
@@ -34,16 +35,16 @@ type haltProcessor struct {
 	response string
 }
 
-func (p *haltProcessor) PreLLM(_ context.Context, _ *ChatRequest) error {
-	return &ErrHalt{Response: p.response}
+func (p *haltProcessor) PreLLM(_ context.Context, _ *core.ChatRequest) error {
+	return &core.ErrHalt{Response: p.response}
 }
 
-func (p *haltProcessor) PostLLM(_ context.Context, _ *ChatResponse) error {
-	return &ErrHalt{Response: p.response}
+func (p *haltProcessor) PostLLM(_ context.Context, _ *core.ChatResponse) error {
+	return &core.ErrHalt{Response: p.response}
 }
 
-func (p *haltProcessor) PostTool(_ context.Context, _ ToolCall, _ *ToolResult) error {
-	return &ErrHalt{Response: p.response}
+func (p *haltProcessor) PostTool(_ context.Context, _ core.ToolCall, _ *core.ToolResult) error {
+	return &core.ErrHalt{Response: p.response}
 }
 
 // errors used in defensive assertions below
@@ -52,11 +53,11 @@ var _ = errors.New
 func TestLLMAgentPreProcessorHalt(t *testing.T) {
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "should not reach"}},
+		responses: []core.ChatResponse{{Content: "should not reach"}},
 	}
 
-	agent := NewLLMAgent("guarded", "Guarded agent", provider,
-		WithPreProcessors(&haltProcessor{response: "blocked by guardrail"}),
+	agent := New("guarded", "Guarded agent", provider,
+		WithProcessors(Processors{Pre: []core.PreProcessor{&haltProcessor{response: "blocked by guardrail"}}}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "attack"})
@@ -71,11 +72,11 @@ func TestLLMAgentPreProcessorHalt(t *testing.T) {
 func TestLLMAgentPostProcessorModifies(t *testing.T) {
 	provider := &mockProvider{
 		name:      "test",
-		responses: []ChatResponse{{Content: "raw response"}},
+		responses: []core.ChatResponse{{Content: "raw response"}},
 	}
 
-	agent := NewLLMAgent("modified", "Modified agent", provider,
-		WithPostProcessors(&uppercaseProcessor{}),
+	agent := New("modified", "Modified agent", provider,
+		WithProcessors(Processors{Post: []core.PostProcessor{&uppercaseProcessor{}}}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "hello"})
@@ -90,15 +91,15 @@ func TestLLMAgentPostProcessorModifies(t *testing.T) {
 func TestLLMAgentPostToolProcessorModifies(t *testing.T) {
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
 			{Content: "done"},
 		},
 	}
 
-	agent := NewLLMAgent("redacted", "Redacted agent", provider,
+	agent := New("redacted", "Redacted agent", provider,
 		WithTools(mockTool{}),
-		WithPostToolProcessors(&redactToolProcessor{}),
+		WithProcessors(Processors{PostTool: []core.PostToolProcessor{&redactToolProcessor{}}}),
 	)
 
 	result, err := agent.Execute(context.Background(), AgentTask{Input: "greet"})
@@ -108,5 +109,44 @@ func TestLLMAgentPostToolProcessorModifies(t *testing.T) {
 	// Agent should complete — the redaction happens on tool results in message history
 	if result.Output != "done" {
 		t.Errorf("Output = %q, want %q", result.Output, "done")
+	}
+}
+
+// TestPostToolProcessor_OnIterationCompleteReceivesMutatedContent verifies that
+// the OnIterationComplete snapshot delivers the post-processed (mutated) tool
+// result, not the raw dispatcher output.
+func TestPostToolProcessor_OnIterationCompleteReceivesMutatedContent(t *testing.T) {
+	provider := &mockProvider{
+		name: "test",
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "greet", Args: json.RawMessage(`{}`)}}},
+			{Content: "done"},
+		},
+	}
+
+	var capturedContent string
+	hook := func(ctx context.Context, iter int, snap *IterationSnapshot) (IterationDecision, error) {
+		if len(snap.ToolResults) > 0 {
+			capturedContent = string(snap.ToolResults[0].Content)
+		}
+		return Continue(), nil
+	}
+
+	a := New("snap-redact", "Snapshot redact agent", provider,
+		WithTools(mockTool{}),
+		WithProcessors(Processors{PostTool: []core.PostToolProcessor{&redactToolProcessor{}}}),
+		WithHooks(Hooks{OnIterationComplete: hook}),
+	)
+
+	_, err := a.Execute(context.Background(), AgentTask{Input: "greet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// result.Content is a JSON-encoded string (e.g. `"[redacted] ..."`);
+	// check that the encoded form contains the redaction marker.
+	const wantMarker = "[redacted]"
+	if !strings.Contains(capturedContent, wantMarker) {
+		t.Errorf("OnIterationComplete snap.ToolResults[0].Content = %q, want it to contain %q (post-processed content not delivered to hook)", capturedContent, wantMarker)
 	}
 }

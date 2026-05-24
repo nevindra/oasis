@@ -325,6 +325,120 @@ func TestParseToolCalls_InvalidJSON(t *testing.T) {
 	}
 }
 
+// TestParseResponse_AnthropicCacheUsage verifies that Anthropic's top-level
+// cache_read_input_tokens and cache_creation_input_tokens map to
+// core.Usage.CachedTokens and core.Usage.CacheCreationTokens respectively.
+func TestParseResponse_AnthropicCacheUsage(t *testing.T) {
+	resp := ChatResponse{
+		ID: "msg_01abc",
+		Choices: []Choice{
+			{
+				Message:      &ChoiceMessage{Content: "Hello from Anthropic."},
+				FinishReason: "stop",
+			},
+		},
+		Usage: &Usage{
+			PromptTokens:             14,
+			CompletionTokens:         89,
+			TotalTokens:              103,
+			CacheCreationInputTokens: 1024,
+			CacheReadInputTokens:     4096,
+		},
+	}
+
+	result, err := ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse returned error: %v", err)
+	}
+
+	if result.Usage.InputTokens != 14 {
+		t.Errorf("expected 14 input tokens, got %d", result.Usage.InputTokens)
+	}
+	if result.Usage.OutputTokens != 89 {
+		t.Errorf("expected 89 output tokens, got %d", result.Usage.OutputTokens)
+	}
+	if result.Usage.CachedTokens != 4096 {
+		t.Errorf("expected CachedTokens 4096 (cache_read_input_tokens), got %d", result.Usage.CachedTokens)
+	}
+	if result.Usage.CacheCreationTokens != 1024 {
+		t.Errorf("expected CacheCreationTokens 1024 (cache_creation_input_tokens), got %d", result.Usage.CacheCreationTokens)
+	}
+}
+
+// TestParseResponse_OpenAICacheUsage verifies that OpenAI's nested
+// prompt_tokens_details.cached_tokens still maps to core.Usage.CachedTokens
+// and that CacheCreationTokens stays zero (OpenAI doesn't expose it).
+func TestParseResponse_OpenAICacheUsage(t *testing.T) {
+	resp := ChatResponse{
+		ID: "chatcmpl-openai",
+		Choices: []Choice{
+			{
+				Message:      &ChoiceMessage{Content: "Hello from OpenAI."},
+				FinishReason: "stop",
+			},
+		},
+		Usage: &Usage{
+			PromptTokens:     100,
+			CompletionTokens: 50,
+			TotalTokens:      150,
+			PromptTokensDetails: &PromptTokensDetails{
+				CachedTokens: 80,
+			},
+		},
+	}
+
+	result, err := ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse returned error: %v", err)
+	}
+
+	if result.Usage.CachedTokens != 80 {
+		t.Errorf("expected CachedTokens 80 (prompt_tokens_details.cached_tokens), got %d", result.Usage.CachedTokens)
+	}
+	if result.Usage.CacheCreationTokens != 0 {
+		t.Errorf("expected CacheCreationTokens 0 for OpenAI shape, got %d", result.Usage.CacheCreationTokens)
+	}
+}
+
+// TestParseResponse_BothFormats exercises a defensive scenario where both the
+// OpenAI nested field and Anthropic top-level fields appear in the same payload.
+// The OpenAI nested field takes precedence for CachedTokens (it's checked first),
+// and CacheCreationTokens still comes from the Anthropic field.
+func TestParseResponse_BothFormats(t *testing.T) {
+	resp := ChatResponse{
+		ID: "chatcmpl-hybrid",
+		Choices: []Choice{
+			{
+				Message:      &ChoiceMessage{Content: "Hybrid payload."},
+				FinishReason: "stop",
+			},
+		},
+		Usage: &Usage{
+			PromptTokens:     50,
+			CompletionTokens: 20,
+			TotalTokens:      70,
+			PromptTokensDetails: &PromptTokensDetails{
+				CachedTokens: 30, // OpenAI nested — takes precedence
+			},
+			CacheReadInputTokens:     999, // would be ignored because OpenAI field is non-zero
+			CacheCreationInputTokens: 512, // always mapped
+		},
+	}
+
+	result, err := ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse returned error: %v", err)
+	}
+
+	// OpenAI nested value wins (non-zero, checked first).
+	if result.Usage.CachedTokens != 30 {
+		t.Errorf("expected CachedTokens 30 (OpenAI nested wins), got %d", result.Usage.CachedTokens)
+	}
+	if result.Usage.CacheCreationTokens != 512 {
+		t.Errorf("expected CacheCreationTokens 512, got %d", result.Usage.CacheCreationTokens)
+	}
+}
+
 func TestParseResponse_MultipleToolCalls(t *testing.T) {
 	resp := ChatResponse{
 		ID: "chatcmpl-multi",

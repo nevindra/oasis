@@ -206,7 +206,7 @@ func (t TrimToBudget) Process(ctx context.Context, in *RetrieveContext) error {
 	trimmed := trimHistoryOldestFirst(msgs, 0, len(msgs), total, t.Budget)
 	out := make([]core.Message, 0, len(trimmed))
 	for _, m := range trimmed {
-		out = append(out, core.Message{Role: string(m.Role), Content: m.Content})
+		out = append(out, core.Message{Role: m.Role, Content: m.Content})
 	}
 	in.History = out
 	_ = ctx

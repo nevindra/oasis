@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // fakeMultimodalEmb returns fixed vectors.

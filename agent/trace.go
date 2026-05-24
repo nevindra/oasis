@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // appendStepBounded appends trace to steps, enforcing the max cap. When max <= 0
@@ -21,8 +23,8 @@ func appendStepBounded(steps []StepTrace, trace StepTrace, max int) []StepTrace 
 // handleProcessorErrorWithSteps converts a processor error into an AgentResult.
 // ErrHalt produces a graceful result; other errors propagate as failures.
 // Any step traces collected before the error are preserved in the result.
-func handleProcessorErrorWithSteps(err error, usage Usage, steps []StepTrace) (AgentResult, error) {
-	var halt *ErrHalt
+func handleProcessorErrorWithSteps(err error, usage core.Usage, steps []StepTrace) (AgentResult, error) {
+	var halt *core.ErrHalt
 	if errors.As(err, &halt) {
 		return AgentResult{Output: halt.Response, Usage: usage, Steps: steps}, nil
 	}
@@ -30,16 +32,16 @@ func handleProcessorErrorWithSteps(err error, usage Usage, steps []StepTrace) (A
 }
 
 // buildStepTrace creates a StepTrace from a tool call and its execution result.
-// Agent delegations (tool calls prefixed with "agent_") get Type "agent" and
-// the prefix stripped from Name. All other calls get Type "tool".
-func buildStepTrace(tc ToolCall, res toolExecResult) StepTrace {
+// Agent delegations (tool calls prefixed with "agent_") get Type StepTypeAgent
+// and the prefix stripped from Name. All other calls get StepTypeTool.
+func buildStepTrace(tc core.ToolCall, res toolExecResult) StepTrace {
 	name := tc.Name
-	traceType := "tool"
+	traceType := core.StepTypeTool
 	input := string(tc.Args)
 
-	if after, ok := strings.CutPrefix(name, "agent_"); ok {
+	if after, ok := strings.CutPrefix(name, core.ToolPrefixAgent); ok {
 		name = after
-		traceType = "agent"
+		traceType = core.StepTypeAgent
 		// Extract the task field from agent call args for a cleaner trace.
 		var params struct {
 			Task string `json:"task"`
@@ -47,21 +49,16 @@ func buildStepTrace(tc ToolCall, res toolExecResult) StepTrace {
 		if json.Unmarshal(tc.Args, &params) == nil && params.Task != "" {
 			input = params.Task
 		}
-	} else if tc.Name == "spawn_agent" {
-		traceType = "agent"
-		var params spawnAgentArgs
-		if json.Unmarshal(tc.Args, &params) == nil {
-			input = params.Task
-			name = spawnAgentName(params)
-		}
 	}
 
 	return StepTrace{
-		Name:     name,
-		Type:     traceType,
-		Input:    TruncateStr(input, 200),
-		Output:   TruncateStr(res.content, 500),
-		Usage:    res.usage,
-		Duration: res.duration,
+		Name:      name,
+		Type:      traceType,
+		Input:     TruncateStr(input, 200),
+		Output:    TruncateStr(res.content, 500),
+		RawArgs:   json.RawMessage(tc.Args),
+		RawOutput: json.RawMessage(res.content),
+		Usage:     res.usage,
+		Duration:  res.duration,
 	}
 }

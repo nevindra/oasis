@@ -35,7 +35,7 @@ func TestNetworkPassesImagesToSubAgent(t *testing.T) {
 		},
 	}
 
-	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, WithChildren(sub))
 
 	images := []core.Attachment{
 		mustAttachmentBase64(t, "image/jpeg", "YWJjMTIz"),
@@ -72,10 +72,10 @@ func TestNetworkDynamicPrompt(t *testing.T) {
 		},
 	}
 
-	net := NewNetwork("dynamic", "Dynamic", router,
-		agent.WithDynamicPrompt(func(_ context.Context, task agent.AgentTask) string {
+	net := New("dynamic", "Dynamic", router,
+		WithRouter(agent.WithDynamicPrompt(func(_ context.Context, task agent.AgentTask) string {
 			return "router for " + task.UserID
-		}),
+		})),
 	)
 
 	net.Execute(context.Background(), agent.AgentTask{
@@ -106,7 +106,7 @@ func TestNetworkTaskFromContextInTool(t *testing.T) {
 		},
 	}
 
-	net := NewNetwork("ctx", "Context test", router, agent.WithTools(ctxTool))
+	net := New("ctx", "Context test", router, WithRouter(agent.WithTools(ctxTool)))
 	net.Execute(context.Background(), agent.AgentTask{
 		Input:  "test",
 		UserID: "user-99",
@@ -121,13 +121,13 @@ func TestNetworkDynamicModel(t *testing.T) {
 	routerA := &mockProvider{name: "router-a", responses: []core.ChatResponse{{Content: "from A"}}}
 	routerB := &mockProvider{name: "router-b", responses: []core.ChatResponse{{Content: "from B"}}}
 
-	net := NewNetwork("dynamic", "Dynamic model", routerA,
-		agent.WithDynamicModel(func(_ context.Context, task agent.AgentTask) core.Provider {
+	net := New("dynamic", "Dynamic model", routerA,
+		WithRouter(agent.WithDynamicModel(func(_ context.Context, task agent.AgentTask) core.Provider {
 			if task.Extra["tier"] == "pro" {
 				return routerB
 			}
 			return routerA
-		}),
+		})),
 	)
 
 	result, _ := net.Execute(context.Background(), agent.AgentTask{
@@ -149,7 +149,11 @@ type stubAgent struct {
 
 func (s *stubAgent) Name() string        { return s.name }
 func (s *stubAgent) Description() string { return s.desc }
-func (s *stubAgent) Execute(ctx context.Context, task agent.AgentTask) (agent.AgentResult, error) {
+func (s *stubAgent) Execute(_ context.Context, task agent.AgentTask, opts ...core.RunOption) (agent.AgentResult, error) {
+	rcfg := core.ApplyRunOptions(opts...)
+	if rcfg.Stream != nil {
+		close(rcfg.Stream)
+	}
 	return s.fn(task)
 }
 
@@ -213,8 +217,8 @@ func TestNetworkWithSkillsRegistersSkillTools(t *testing.T) {
 		responses: []core.ChatResponse{{Content: "ok"}},
 	}
 
-	net := NewNetwork("skills-net", "test", provider,
-		agent.WithSkills(&stubSkillProvider{}),
+	net := New("skills-net", "test", provider,
+		WithRouter(agent.WithSkills(&stubSkillProvider{})),
 	)
 
 	defs := net.Tools().AllDefinitions()
@@ -259,9 +263,7 @@ func BenchmarkNetworkBuildToolDefs(b *testing.B) {
 					fn:   func(task agent.AgentTask) (agent.AgentResult, error) { return agent.AgentResult{Output: "ok"}, nil },
 				}
 			}
-			opts := make([]agent.AgentOption, 0, 1)
-			opts = append(opts, agent.WithAgents(agents...))
-			net := NewNetwork("bench", "bench", router, opts...)
+			net := New("bench", "bench", router, WithChildren(agents...))
 			toolDefs := []core.ToolDefinition{
 				{Name: "extra", Description: "extra tool", Parameters: json.RawMessage(`{}`)},
 			}
@@ -284,8 +286,8 @@ func (s *stubSkillProvider) Activate(_ context.Context, name string) (skills.Ski
 	return skills.Skill{}, nil
 }
 
-// TestNetwork_ExecuteWith_NilSameAsExecute verifies that ExecuteWith(nil) behaves
-// identically to Execute.
+// TestNetwork_ExecuteWith_NilSameAsExecute verifies that Execute with nil overrides
+// behaves identically to Execute without options.
 func TestNetwork_ExecuteWith_NilSameAsExecute(t *testing.T) {
 	sub := &stubAgent{
 		name: "worker",
@@ -301,7 +303,7 @@ func TestNetwork_ExecuteWith_NilSameAsExecute(t *testing.T) {
 			{Content: "done"},
 		},
 	}
-	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, WithChildren(sub))
 
 	r1, err1 := net.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err1 != nil {
@@ -310,18 +312,18 @@ func TestNetwork_ExecuteWith_NilSameAsExecute(t *testing.T) {
 
 	// Reset router for second call
 	router.idx = 0
-	r2, err2 := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, nil)
+	r2, err2 := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithOverrides(nil))
 	if err2 != nil {
-		t.Fatalf("ExecuteWith(nil): %v", err2)
+		t.Fatalf("Execute(WithOverrides(nil)): %v", err2)
 	}
 
 	if r1.Output != r2.Output {
-		t.Fatalf("Execute(%q) != ExecuteWith(nil, %q)", r1.Output, r2.Output)
+		t.Fatalf("Execute(%q) != Execute(WithOverrides(nil), %q)", r1.Output, r2.Output)
 	}
 }
 
-// TestNetwork_ExecuteWith_EmptySameAsExecute verifies that ExecuteWith with empty
-// RunOptions behaves identically to Execute.
+// TestNetwork_ExecuteWith_EmptySameAsExecute verifies that Execute with empty
+// RunOptions behaves identically to Execute without options.
 func TestNetwork_ExecuteWith_EmptySameAsExecute(t *testing.T) {
 	sub := &stubAgent{
 		name: "worker",
@@ -337,7 +339,7 @@ func TestNetwork_ExecuteWith_EmptySameAsExecute(t *testing.T) {
 			{Content: "done"},
 		},
 	}
-	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, WithChildren(sub))
 
 	r1, err1 := net.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if err1 != nil {
@@ -346,20 +348,19 @@ func TestNetwork_ExecuteWith_EmptySameAsExecute(t *testing.T) {
 
 	// Reset router for second call
 	router.idx = 0
-	r2, err2 := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{})
+	r2, err2 := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithOverrides(&agent.RunOptions{}))
 	if err2 != nil {
-		t.Fatalf("ExecuteWith(&{}): %v", err2)
+		t.Fatalf("Execute(WithOverrides(&{})): %v", err2)
 	}
 
 	if r1.Output != r2.Output {
-		t.Fatalf("Execute(%q) != ExecuteWith(&{}, %q)", r1.Output, r2.Output)
+		t.Fatalf("Execute(%q) != Execute(WithOverrides(&{}), %q)", r1.Output, r2.Output)
 	}
 }
 
-// TestNetwork_ExecuteWith_AppliesOverrides verifies that ExecuteWith applies
-// router-level RunOptions overrides instead of rejecting them. RunOptions
-// are NOT propagated to subagents — that limitation is documented on the
-// method.
+// TestNetwork_ExecuteWith_AppliesOverrides verifies that Execute with overrides applies
+// router-level RunOptions instead of rejecting them. RunOptions
+// are NOT propagated to subagents — that limitation is documented on the method.
 func TestNetwork_ExecuteWith_AppliesOverrides(t *testing.T) {
 	sub := &stubAgent{
 		name: "worker",
@@ -372,30 +373,30 @@ func TestNetwork_ExecuteWith_AppliesOverrides(t *testing.T) {
 		name: "router",
 		responses: []core.ChatResponse{{Content: "ok"}},
 	}
-	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, WithChildren(sub))
 
-	r, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}})
+	r, err := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithOverrides(&agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}}))
 	if err != nil {
-		t.Fatalf("ExecuteWith(MaxIter=3): expected success now that overrides are applied, got %v", err)
+		t.Fatalf("Execute(WithOverrides(MaxIter=3)): expected success now that overrides are applied, got %v", err)
 	}
 	if r.Output != "ok" {
 		t.Errorf("Output: want %q, got %q", "ok", r.Output)
 	}
 }
 
-// TestNetwork_ExecuteWith_InvalidOverrideErrors verifies that ExecuteWith
+// TestNetwork_ExecuteWith_InvalidOverrideErrors verifies that Execute
 // still rejects invalid RunOptions values.
 func TestNetwork_ExecuteWith_InvalidOverrideErrors(t *testing.T) {
 	router := &mockProvider{name: "router", responses: []core.ChatResponse{{Content: "ok"}}}
-	net := NewNetwork("net", "test", router)
-	_, err := net.ExecuteWith(context.Background(), core.AgentTask{Input: "x"}, &agent.RunOptions{Limits: &agent.Limits{MaxIter: -1}})
+	net := New("net", "test", router)
+	_, err := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithOverrides(&agent.RunOptions{Limits: &agent.Limits{MaxIter: -1}}))
 	if err == nil {
-		t.Fatalf("ExecuteWith with invalid MaxIter: expected validation error")
+		t.Fatalf("Execute with invalid MaxIter: expected validation error")
 	}
 }
 
 // TestNetwork_ExecuteStreamWith_NilSameAsExecuteStream verifies that
-// ExecuteStreamWith(nil) behaves identically to ExecuteStream.
+// Execute with stream and nil overrides behaves identically to Execute with stream only.
 func TestNetwork_ExecuteStreamWith_NilSameAsExecuteStream(t *testing.T) {
 	sub := &stubAgent{
 		name: "worker",
@@ -411,34 +412,34 @@ func TestNetwork_ExecuteStreamWith_NilSameAsExecuteStream(t *testing.T) {
 			{Content: "done"},
 		},
 	}
-	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, WithChildren(sub))
 
 	ch1 := make(chan core.StreamEvent, 100)
-	r1, err1 := net.ExecuteStream(context.Background(), core.AgentTask{Input: "x"}, ch1)
+	r1, err1 := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithStream(ch1))
 	for range ch1 {
 	}
 	if err1 != nil {
-		t.Fatalf("ExecuteStream: %v", err1)
+		t.Fatalf("Execute(WithStream): %v", err1)
 	}
 
 	// Reset router for second call
 	router.idx = 0
 	ch2 := make(chan core.StreamEvent, 100)
-	r2, err2 := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch2, nil)
+	r2, err2 := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithStream(ch2), agent.WithOverrides(nil))
 	for range ch2 {
 	}
 	if err2 != nil {
-		t.Fatalf("ExecuteStreamWith(nil): %v", err2)
+		t.Fatalf("Execute(WithStream, WithOverrides(nil)): %v", err2)
 	}
 
 	if r1.Output != r2.Output {
-		t.Fatalf("ExecuteStream(%q) != ExecuteStreamWith(nil, %q)", r1.Output, r2.Output)
+		t.Fatalf("Execute(WithStream, %q) != Execute(WithStream, WithOverrides(nil), %q)", r1.Output, r2.Output)
 	}
 }
 
 // TestNetwork_ExecuteStreamWith_AppliesOverrides verifies that
-// ExecuteStreamWith applies router-level RunOptions and streams events through
-// the channel until close — no longer rejects overrides.
+// Execute with stream and overrides applies router-level RunOptions and streams
+// events through the channel until close.
 func TestNetwork_ExecuteStreamWith_AppliesOverrides(t *testing.T) {
 	sub := &stubAgent{
 		name: "worker",
@@ -451,14 +452,14 @@ func TestNetwork_ExecuteStreamWith_AppliesOverrides(t *testing.T) {
 		name: "router",
 		responses: []core.ChatResponse{{Content: "ok"}},
 	}
-	net := NewNetwork("net", "test", router, agent.WithAgents(sub))
+	net := New("net", "test", router, WithChildren(sub))
 
 	ch := make(chan core.StreamEvent, 100)
-	r, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}})
+	r, err := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithStream(ch), agent.WithOverrides(&agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}}))
 	for range ch {
 	}
 	if err != nil {
-		t.Fatalf("ExecuteStreamWith(MaxIter=3): expected success, got %v", err)
+		t.Fatalf("Execute(WithStream, WithOverrides(MaxIter=3)): expected success, got %v", err)
 	}
 	if r.Output != "ok" {
 		t.Errorf("Output: want %q, got %q", "ok", r.Output)
@@ -469,20 +470,14 @@ func TestNetwork_ExecuteStreamWith_AppliesOverrides(t *testing.T) {
 // invalid RunOptions still close the channel and return a validation error.
 func TestNetwork_ExecuteStreamWith_InvalidOverrideClosesChannel(t *testing.T) {
 	router := &mockProvider{name: "router", responses: []core.ChatResponse{{Content: "ok"}}}
-	net := NewNetwork("net", "test", router)
+	net := New("net", "test", router)
 	ch := make(chan core.StreamEvent, 100)
-	_, err := net.ExecuteStreamWith(context.Background(), core.AgentTask{Input: "x"}, ch, &agent.RunOptions{Limits: &agent.Limits{MaxIter: -1}})
+	_, err := net.Execute(context.Background(), core.AgentTask{Input: "x"}, agent.WithStream(ch), agent.WithOverrides(&agent.RunOptions{Limits: &agent.Limits{MaxIter: -1}}))
 	if err == nil {
-		t.Fatalf("ExecuteStreamWith with invalid MaxIter: expected validation error")
+		t.Fatalf("Execute with invalid MaxIter: expected validation error")
 	}
 	if _, ok := <-ch; ok {
 		t.Fatalf("channel should be closed on validation error")
 	}
 }
 
-// TestNetwork_SatisfiesAgentWithOptions verifies that Network implements
-// both AgentWithOptions and StreamingAgentWithOptions interfaces.
-func TestNetwork_SatisfiesAgentWithOptions(t *testing.T) {
-	var _ agent.AgentWithOptions = (*Network)(nil)
-	var _ agent.StreamingAgentWithOptions = (*Network)(nil)
-}

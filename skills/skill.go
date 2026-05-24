@@ -12,24 +12,37 @@ import (
 )
 
 // Compile-time interface checks.
-var _ SkillProvider = (*FileSkillProvider)(nil)
-var _ SkillWriter = (*FileSkillProvider)(nil)
-var _ SkillProvider = (*ChainedSkillProvider)(nil)
+var _ SkillProvider = (*fileSkillProvider)(nil)
+var _ SkillWriter = (*fileSkillProvider)(nil)
+var _ SkillProvider = (*chainedSkillProvider)(nil)
 
-// ChainedSkillProvider merges multiple SkillProviders. Discover returns the
+// chainedSkillProvider merges multiple SkillProviders. Discover returns the
 // union (first provider wins on name collisions). Activate searches in order.
-type ChainedSkillProvider struct {
+type chainedSkillProvider struct {
 	providers []SkillProvider
+}
+
+// Chain returns a SkillProvider that merges multiple providers, with the
+// earliest provider winning on name collisions.
+//
+//	provider := skills.Chain(
+//	    skills.FromDir("./skills"),
+//	    skills.Builtin(),
+//	)
+func Chain(providers ...SkillProvider) SkillProvider {
+	return ChainSkillProviders(providers...)
 }
 
 // ChainSkillProviders creates a provider that searches multiple providers in
 // order. Typically: ChainSkillProviders(fileProvider, builtinProvider) so
 // user skills override built-in ones.
-func ChainSkillProviders(providers ...SkillProvider) *ChainedSkillProvider {
-	return &ChainedSkillProvider{providers: providers}
+//
+// Deprecated: use skills.Chain instead. Will be removed in next major.
+func ChainSkillProviders(providers ...SkillProvider) SkillProvider {
+	return &chainedSkillProvider{providers: providers}
 }
 
-func (c *ChainedSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error) {
+func (c *chainedSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error) {
 	seen := make(map[string]bool)
 	var all []SkillSummary
 	for _, p := range c.providers {
@@ -49,7 +62,7 @@ func (c *ChainedSkillProvider) Discover(ctx context.Context) ([]SkillSummary, er
 	return all, nil
 }
 
-func (c *ChainedSkillProvider) Activate(ctx context.Context, name string) (Skill, error) {
+func (c *chainedSkillProvider) Activate(ctx context.Context, name string) (Skill, error) {
 	for _, p := range c.providers {
 		skill, err := p.Activate(ctx, name)
 		if err == nil {
@@ -212,27 +225,37 @@ func splitCSV(s string) []string {
 	return result
 }
 
-// --- FileSkillProvider ---
+// --- fileSkillProvider ---
 
-// FileSkillProvider discovers and manages skills stored as directories on disk.
+// fileSkillProvider discovers and manages skills stored as directories on disk.
 // Each skill lives in its own subdirectory containing a SKILL.md file.
 // Multiple search directories are supported; the first directory wins on
 // name collisions during discovery, and is the write target for CreateSkill.
-type FileSkillProvider struct {
+type fileSkillProvider struct {
 	dirs []string
 }
 
-// NewFileSkillProvider creates a FileSkillProvider that searches the given
-// directories in order for skill subdirectories.
-func NewFileSkillProvider(dirs ...string) *FileSkillProvider {
-	return &FileSkillProvider{dirs: dirs}
+// FromDir returns a SkillProvider that reads skills from the given directories.
+// Non-existent directories are silently skipped.
+//
+//	provider := skills.FromDir("./skills", "./team-skills")
+func FromDir(dirs ...string) SkillProvider {
+	return NewFileSkillProvider(dirs...)
+}
+
+// NewFileSkillProvider creates a provider that searches the given directories
+// in order for skill subdirectories.
+//
+// Deprecated: use skills.FromDir instead. Will be removed in next major.
+func NewFileSkillProvider(dirs ...string) SkillProvider {
+	return &fileSkillProvider{dirs: dirs}
 }
 
 // Discover scans all configured directories for skill subdirectories and
 // returns lightweight summaries sorted by name. Non-existent directories and
 // malformed SKILL.md files are silently skipped. If the same skill name
 // appears in multiple directories, the first directory wins.
-func (p *FileSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error) {
+func (p *fileSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error) {
 	seen := make(map[string]bool)
 	var summaries []SkillSummary
 
@@ -289,7 +312,7 @@ func (p *FileSkillProvider) Discover(ctx context.Context) ([]SkillSummary, error
 // Activate loads the full skill by folder name, searching configured
 // directories in order. Body (trimmed) becomes Instructions.
 // Returns an error if the skill is not found.
-func (p *FileSkillProvider) Activate(ctx context.Context, name string) (Skill, error) {
+func (p *fileSkillProvider) Activate(ctx context.Context, name string) (Skill, error) {
 	for _, dir := range p.dirs {
 		skillPath := filepath.Join(dir, name, "SKILL.md")
 		f, err := os.Open(skillPath)
@@ -347,7 +370,7 @@ func (p *FileSkillProvider) Activate(ctx context.Context, name string) (Skill, e
 // CreateSkill writes a new skill to the first configured directory.
 // Returns an error if no directories are configured, name is empty, or the
 // skill already exists. On write failure the folder is cleaned up.
-func (p *FileSkillProvider) CreateSkill(ctx context.Context, skill Skill) error {
+func (p *fileSkillProvider) CreateSkill(ctx context.Context, skill Skill) error {
 	if len(p.dirs) == 0 {
 		return fmt.Errorf("CreateSkill: no directories configured")
 	}
@@ -379,7 +402,7 @@ func (p *FileSkillProvider) CreateSkill(ctx context.Context, skill Skill) error 
 
 // UpdateSkill finds an existing skill by name across all configured
 // directories and rewrites its SKILL.md. Returns an error if not found.
-func (p *FileSkillProvider) UpdateSkill(ctx context.Context, name string, skill Skill) error {
+func (p *fileSkillProvider) UpdateSkill(ctx context.Context, name string, skill Skill) error {
 	for _, dir := range p.dirs {
 		skillDir := filepath.Join(dir, name)
 		skillPath := filepath.Join(skillDir, "SKILL.md")
@@ -399,7 +422,7 @@ func (p *FileSkillProvider) UpdateSkill(ctx context.Context, name string, skill 
 
 // DeleteSkill finds a skill by name across all configured directories and
 // removes its entire folder. Returns an error if not found.
-func (p *FileSkillProvider) DeleteSkill(ctx context.Context, name string) error {
+func (p *fileSkillProvider) DeleteSkill(ctx context.Context, name string) error {
 	for _, dir := range p.dirs {
 		skillDir := filepath.Join(dir, name)
 		skillPath := filepath.Join(skillDir, "SKILL.md")

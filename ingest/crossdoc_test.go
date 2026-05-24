@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 func TestExtractCrossDocumentEdges(t *testing.T) {
@@ -71,7 +71,8 @@ func (s *mockCrossDocStore) SearchChunks(_ context.Context, _ []float32, topK in
 	// Return chunks from other documents based on exclude filter.
 	for _, f := range filters {
 		if f.Op == oasis.OpNeq && f.Field == "document_id" {
-			excludeDoc, _ := f.Value.(string)
+			excludeStr, _ := f.Value.(oasis.StringValue)
+			excludeDoc := string(excludeStr)
 			for docID, chunks := range s.chunksByDoc {
 				if docID == excludeDoc {
 					continue

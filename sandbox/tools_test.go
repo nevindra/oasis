@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // decodeContent unwraps a tool result's JSON-encoded text content for assertion.

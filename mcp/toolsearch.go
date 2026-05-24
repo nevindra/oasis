@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 const ToolSearchName = "ToolSearch"

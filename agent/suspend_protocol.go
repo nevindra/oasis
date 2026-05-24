@@ -17,6 +17,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/nevindra/oasis/core"
 )
 
 // SuspendProtocol is a typed HITL contract. Declare once with
@@ -141,7 +143,7 @@ func (p SuspendProtocol[Req, Resp]) Resume(e *ErrSuspended, ctx context.Context,
 // ResumeStream is the streaming form of Resume. Same tag check, same
 // JSON marshaling; events are emitted on ch by the engine throughout
 // the post-resume loop. The engine closes ch when streaming completes.
-func (p SuspendProtocol[Req, Resp]) ResumeStream(e *ErrSuspended, ctx context.Context, data Resp, ch chan<- StreamEvent) (AgentResult, error) {
+func (p SuspendProtocol[Req, Resp]) ResumeStream(e *ErrSuspended, ctx context.Context, data Resp, ch chan<- core.StreamEvent) (AgentResult, error) {
 	if e == nil {
 		return AgentResult{}, errors.New("ResumeStream: nil suspended err")
 	}

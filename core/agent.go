@@ -6,6 +6,29 @@ import (
 	"time"
 )
 
+// Tool-name constants for framework-special tools the runtime and Network
+// recognize by name. Centralized here so a typo at any call site fails at
+// compile time instead of silently mis-routing at runtime.
+const (
+	// ToolPrefixAgent is the prefix all sub-agent tool-call names share.
+	// Network builds tool definitions as ToolPrefixAgent + child.Name() so a
+	// router LLM emits "agent_<child>" when it wants to delegate. The agent
+	// loop strips the prefix when classifying StepTrace.Type as "agent".
+	ToolPrefixAgent = "agent_"
+
+	// ToolAskUser is the built-in human-in-the-loop tool name. Wired by
+	// agent.WithInputHandler and dispatched by the runtime's built-in handler.
+	ToolAskUser = "ask_user"
+
+	// ToolExecutePlan is the built-in multi-step parallel-dispatch tool name.
+	// Wired by agent.WithPlanExecution and dispatched by the runtime.
+	ToolExecutePlan = "execute_plan"
+
+	// ToolSpawnAgent is the Network built-in that lets the router add new
+	// children at runtime. Wired by network.WithDynamicSpawning.
+	ToolSpawnAgent = "spawn_agent"
+)
+
 // Agent is a unit of work that takes a task and returns a result.
 // Implementations range from single LLM tool-calling agents (LLMAgent)
 // to multi-agent coordinators (Network).
@@ -16,24 +39,9 @@ type Agent interface {
 	// Used by Network to generate tool definitions for the routing LLM.
 	Description() string
 	// Execute runs the agent on the given task and returns a result.
-	Execute(ctx context.Context, task AgentTask) (AgentResult, error)
-}
-
-// StreamingAgent is an optional capability for agents that support event streaming.
-// Check via type assertion: if sa, ok := agent.(StreamingAgent); ok { ... }
-//
-// Implemented by LLMAgent, Network, and Workflow.
-type StreamingAgent interface {
-	Agent
-	// ExecuteStream runs the agent like Execute, but emits StreamEvent values
-	// into ch throughout execution. Events include text deltas, tool call
-	// deltas/start/result/progress, agent start/finish (Networks), step
-	// start/finish/progress (Workflows), and routing decisions (Networks).
-	//
-	// Contract: implementations MUST close ch before returning. Callers
-	// (including ServeSSE) use `for ev := range ch` to consume events,
-	// which blocks until ch is closed. Failing to close ch causes a deadlock.
-	ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
+	// Optional RunOption values configure per-call behaviour (streaming,
+	// deadline, overrides). Zero options is equivalent to the old two-argument call.
+	Execute(ctx context.Context, task AgentTask, opts ...RunOption) (AgentResult, error)
 }
 
 // AgentTask is the input to an Agent.
@@ -123,30 +131,60 @@ type AgentResult struct {
 // A nil return falls back to the agent's main provider.
 type ModelFunc func(ctx context.Context, task AgentTask) Provider
 
+// StepTraceType classifies a StepTrace entry. Typed so a typo at a write
+// site (e.g. "tol") fails to compile. JSON round-trips as the underlying
+// string value.
+type StepTraceType string
+
+const (
+	// StepTypeTool marks a tool-call step (one entry per tool invocation).
+	StepTypeTool StepTraceType = "tool"
+	// StepTypeAgent marks an agent-delegation step (one entry per sub-agent call).
+	StepTypeAgent StepTraceType = "agent"
+	// StepTypeStep marks a workflow step (one entry per workflow node).
+	StepTypeStep StepTraceType = "step"
+)
+
 // StepTrace records the execution of a single tool call or agent delegation.
 // Collected automatically during the agent's tool-calling loop.
+//
+// Why two pairs of input/output fields?
+//   - Input and Output are bounded display strings (truncated mid-rune to a
+//     fixed cap by the agent loop) so logs and UIs stay readable. They are
+//     NOT safe to json.Unmarshal — a truncation that lands inside a JSON
+//     value produces a mid-string EOF.
+//   - RawArgs and RawOutput carry the untruncated original bytes for callers
+//     that need round-trip access (json.Unmarshal, replay, audit). They are
+//     populated by the runtime when the trace originates from a real tool
+//     dispatch; trace objects built externally without them fall back to the
+//     truncated Input/Output via AgentResult.ToolCalls/ToolResults.
 type StepTrace struct {
 	// Name is the tool or agent name (e.g. "web_search", "researcher").
 	// For agent delegations, the "agent_" prefix is stripped.
 	Name string `json:"name"`
-	// Type is "tool" or "agent".
-	Type string `json:"type"`
-	// Input is the tool arguments or agent task, truncated to 200 characters.
+	// Type classifies the step. See StepType* constants.
+	Type StepTraceType `json:"type"`
+	// Input is the tool arguments or agent task, truncated to 200 characters
+	// for display. Use RawArgs (or AgentResult.ToolCalls) for the original
+	// JSON bytes.
 	Input string `json:"input"`
-	// Output is the result content, truncated to 500 characters.
+	// Output is the result content, truncated to 500 characters for display.
+	// Use RawOutput (or AgentResult.ToolResults) for the original bytes.
 	Output string `json:"output"`
+	// RawArgs is the untruncated JSON the LLM produced for this tool call,
+	// before any UI/log truncation. Populated by the agent runtime when the
+	// step originates from a real tool call; nil for steps that did not
+	// invoke a tool, or for traces constructed externally.
+	RawArgs json.RawMessage `json:"raw_args,omitempty"`
+	// RawOutput is the untruncated content the tool returned, before any
+	// UI/log truncation. Populated by the agent runtime for tool-call steps;
+	// nil for LLM-only steps or traces constructed externally.
+	RawOutput json.RawMessage `json:"raw_output,omitempty"`
 	// Usage is the token usage for this individual step.
 	Usage Usage `json:"usage"`
 	// Duration is the wall-clock time for this step.
 	Duration time.Duration `json:"duration"`
 }
-
-// ToolCallTrace is a per-tool-call execution record. It is an alias for
-// StepTrace, introduced for naming consistency with IterationTrace and
-// LLMCallTrace. New code should use ToolCallTrace; StepTrace is kept as
-// a name alias for back-compat for one minor release and will be removed
-// in the next major.
-type ToolCallTrace = StepTrace
 
 // IterationTrace records one iteration of the agent's tool-calling loop.
 // One LLM call plus zero or more tool dispatches. Collected automatically
@@ -165,7 +203,7 @@ type IterationTrace struct {
 	LLMCall LLMCallTrace `json:"llm_call"`
 	// ToolCalls records the tool calls that fired in this iteration.
 	// In execution order. Empty if the iteration was text-only.
-	ToolCalls []ToolCallTrace `json:"tool_calls,omitempty"`
+	ToolCalls []StepTrace `json:"tool_calls,omitempty"`
 	// Usage is the per-iteration token usage (excluding tool-side usage).
 	Usage Usage `json:"usage"`
 	// FinishReason is the reason this iteration ended. Carries
@@ -200,31 +238,43 @@ func (r AgentResult) Text() string { return r.Output }
 func (r AgentResult) Reasoning() string { return r.Thinking }
 
 // ToolCalls returns the tool calls captured in r.Steps, in execution order.
-// Returns nil if no tools were called. Each call's Name and Args
-// mirror the ToolCall the LLM produced.
+// Returns nil if no tools were called. Args contains the untruncated JSON the
+// LLM produced (sourced from StepTrace.RawArgs when populated), safe to
+// json.Unmarshal. Falls back to []byte(StepTrace.Input) for traces built
+// externally without RawArgs.
 func (r AgentResult) ToolCalls() []ToolCall {
 	if len(r.Steps) == 0 {
 		return nil
 	}
 	out := make([]ToolCall, 0, len(r.Steps))
 	for _, s := range r.Steps {
+		args := []byte(s.RawArgs)
+		if args == nil {
+			args = []byte(s.Input)
+		}
 		out = append(out, ToolCall{
 			Name: s.Name,
-			Args: []byte(s.Input),
+			Args: args,
 		})
 	}
 	return out
 }
 
 // ToolResults returns the tool results captured in r.Steps, in execution order.
-// Each result's Content mirrors the JSON the tool returned to the LLM.
+// Content contains the untruncated bytes the tool returned (sourced from
+// StepTrace.RawOutput when populated), safe to json.Unmarshal. Falls back to
+// []byte(StepTrace.Output) for traces built externally without RawOutput.
 func (r AgentResult) ToolResults() []ToolResult {
 	if len(r.Steps) == 0 {
 		return nil
 	}
 	out := make([]ToolResult, 0, len(r.Steps))
 	for _, s := range r.Steps {
-		out = append(out, ToolResult{Content: []byte(s.Output)})
+		content := []byte(s.RawOutput)
+		if content == nil {
+			content = []byte(s.Output)
+		}
+		out = append(out, ToolResult{Content: content})
 	}
 	return out
 }

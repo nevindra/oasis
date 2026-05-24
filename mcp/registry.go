@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // Registry is the per-process or per-agent owner of MCP server connections

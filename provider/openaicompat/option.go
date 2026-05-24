@@ -56,32 +56,21 @@ func WithToolChoice(choice any) Option {
 // Typical usage: mark the system message and/or long context messages:
 //
 //	openaicompat.WithCacheControl(0, 1) // cache system prompt (index 0) and context (index 1)
+//
+// Composable with core.ChatMessage.CacheCheckpoint: if a message already has
+// cache_control set (via CacheCheckpoint), applying WithCacheControl for the
+// same index is idempotent — the same ephemeral marker is written once.
 func WithCacheControl(messageIndices ...int) Option {
 	return func(r *ChatRequest) {
 		set := make(map[int]struct{}, len(messageIndices))
 		for _, idx := range messageIndices {
 			set[idx] = struct{}{}
 		}
-		cc := &CacheControl{Type: "ephemeral"}
-
 		for i := range r.Messages {
 			if _, ok := set[i]; !ok {
 				continue
 			}
-			msg := &r.Messages[i]
-			switch content := msg.Content.(type) {
-			case string:
-				// Convert plain string to content blocks so we can attach cache_control.
-				msg.Content = []ContentBlock{
-					{Type: "text", Text: content, CacheControl: cc},
-				}
-			case []ContentBlock:
-				// Mark the last block.
-				if len(content) > 0 {
-					content[len(content)-1].CacheControl = cc
-					msg.Content = content
-				}
-			}
+			markCacheControl(&r.Messages[i])
 		}
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 const contextualEnrichmentPrompt = `<document>

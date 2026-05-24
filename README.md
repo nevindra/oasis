@@ -56,7 +56,7 @@ func main() {
 
 - **LLMAgent** — single LLM with tools. Runs a tool-calling loop until the model produces a final response. Multiple tool calls execute in parallel automatically.
 - **Network** — coordinates multiple agents via an LLM router. Subagents appear as callable tools (`agent_<name>`). Networks nest recursively.
-- **Workflow** — deterministic DAG-based orchestration with `Step`, `AgentStep`, `ToolStep`, `ForEach`, `DoUntil`/`DoWhile`. Steps without dependencies run concurrently. Compile-time validation (cycles, missing deps, duplicates).
+- **Workflow** — deterministic DAG-based orchestration with `Step`, `AgentStep`, `ForEach`, `DoUntil`/`DoWhile`. Steps without dependencies run concurrently. Compile-time validation (cycles, missing deps, duplicates).
 - **Background agents** — `Spawn()` launches agents in goroutines with `AgentHandle` for lifecycle tracking, cancellation, and `select`-based multiplexing.
 
 ### Intelligence
@@ -147,7 +147,7 @@ pipeline, err := oasis.NewWorkflow("research-pipeline", "Research and write",
 result, err := pipeline.Execute(ctx, oasis.AgentTask{Input: "Go error handling"})
 ```
 
-Step types: `Step` (function), `AgentStep` (delegate to Agent), `ToolStep` (call a tool), `ForEach` (iterate with concurrency), `DoUntil`/`DoWhile` (loop). Workflows can also be defined from JSON at runtime via `FromDefinition` for visual workflow builders.
+Step types: `Step` (function), `AgentStep` (delegate to Agent — use `agent.WithTools(...)` for a single-tool wrapper), `ForEach` (iterate with concurrency), `DoUntil`/`DoWhile` (loop). Workflows can also be defined from JSON at runtime via `FromDefinition` for visual workflow builders.
 
 ### Streaming
 

@@ -52,12 +52,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   construction-only). Negative values rejected with typed
   `RunOptionsError`; `MaxSteps == Unbounded` is the sentinel for "no
   cap" and is valid.
-- **`(*AgentCore).Limits() Limits`** — getter for the agent's current
-  budget, intended for partial per-call overrides:
+- **`(*LLMAgent).Limits() Limits`** (promoted from the embedded
+  `internal/runtime.Runtime`) — getter for the agent's current budget,
+  intended for partial per-call overrides:
   ```go
   lim := ag.Limits()
   lim.MaxIter = 5
-  ag.ExecuteWith(ctx, task, &RunOptions{Limits: &lim})
+  ag.Execute(ctx, task, agent.WithOverrides(&agent.RunOptions{Limits: &lim}))
   ```
 
 #### HITL stream event parity
@@ -147,22 +148,34 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   `EventThinking` remains; deprecated when providers port to the
   triplet.
 
-#### Tool middleware & approval
+#### Tool subsystem config (`ToolConfig`)
 
-- **Tool middleware chain.** `core.ToolMiddleware` +
-  `oasis.WithToolMiddleware` with built-in `LoggingMiddleware`,
-  `TimingMiddleware`, `TransformMiddleware`, and `OTelSpanMiddleware`
-  (auto-applied when a `Tracer` is configured and not already in the
-  user's chain). Innermost-first ordering matches `net/http`.
-- **Framework-enforced tool approval.**
-  `oasis.WithToolApproval(name, opts...)` pauses tool execution for
-  human approval via the configured `InputHandler`. Built on the
-  middleware chain — composes with logging, tracing, policy, and any
-  custom middleware. Approve/deny decisions via `InputResponse.Value`;
-  `DenyAskLLMToRevise` (default) returns an error `ToolResult` so the
-  LLM can adapt, `DenyHalt` halts the run with `*core.ErrHalt`.
-  Outermost layer of the chain — retries do not re-prompt. Emits
-  `EventToolApprovalPending` on the stream before prompting.
+- **`agent.ToolConfig` + `agent.WithToolConfig(ToolConfig) AgentOption`.**
+  One typed sub-config replaces the four previous tool-subsystem knobs
+  (`WithToolPolicy`, `WithToolPolicyMatch`, `WithToolApproval`,
+  `WithToolMiddleware`). Fields: `Policies map[string]core.ToolPolicy`,
+  `PolicyMatchers []ToolPolicyMatcher`, `Approvals []ApprovalConfig`,
+  `Middleware []core.ToolMiddleware`. Calling `WithToolConfig` multiple
+  times merges field-by-field.
+- **`agent.Approval(toolName, opts...) ApprovalConfig`** helper for
+  populating `ToolConfig.Approvals`. Per-tool prompt customization via
+  `agent.ApprovalPrompt(fn)`.
+- **Tool middleware chain.** Built-in middlewares:
+  `LoggingMiddleware`, `TimingMiddleware`, `TransformMiddleware`,
+  `OTelSpanMiddleware` (auto-applied when a `Tracer` is configured and
+  not already in the user's chain). Innermost-first ordering matches
+  `net/http`. `core.ChainToolMiddleware(mws...)` composes a slice into
+  a single middleware.
+- **Framework-enforced tool approval** pauses tool execution for human
+  approval via the configured `InputHandler`. Composes with logging,
+  tracing, policy, and any custom middleware. Approve/deny decisions
+  via `InputResponse.Value`; `DenyAskLLMToRevise` (default) returns an
+  error `ToolResult` so the LLM can adapt, `DenyHalt` halts the run
+  with `*core.ErrHalt`. Outermost layer of the chain — retries do not
+  re-prompt. Emits `EventToolApprovalPending` on the stream before
+  prompting.
+- Re-exports on the umbrella: `oasis.WithToolConfig`, `oasis.ToolConfig`,
+  `oasis.Approval`, `oasis.ApprovalPrompt`.
 
 #### Tool robustness layer
 
@@ -179,11 +192,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   `DeriveSchema[Out]()` (or the override). Provider implementations
   decide whether to forward this to the LLM.
 - **`core.ToolRegistry.IsStreamingTool(name) bool`** lookup.
-- **`agent.WithToolPolicy(name, policy)`** and
-  **`agent.WithToolPolicyMatch(matcher, policy)`** options. ServeMux-
-  style precedence: exact name first, then matchers in registration
-  order. Streaming tools bypass the policy wrapper entirely (with a
-  one-shot `slog.Warn` if a policy was registered for one).
+- **Per-tool policies via `ToolConfig.Policies` (exact name) and
+  `ToolConfig.PolicyMatchers` (prefix/glob).** ServeMux-style
+  precedence: exact name first, then matchers in registration order.
+  Streaming tools bypass the policy wrapper entirely (with a one-shot
+  `slog.Warn` if a policy was registered for one).
 - Umbrella re-exports: `oasis.ToolPolicy`, `oasis.Retryable`,
   `oasis.RetryableError`, `oasis.DefaultRetryOn`,
   `oasis.OutSchemaProvider`.
@@ -206,10 +219,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 - **`core.ToolResultStore` interface** + default in-memory implementation
   (`core.NewInMemoryToolResultStore`) for paging large tool results.
-  Auto-enabled with 10 MiB total cap and 5-minute TTL per entry; opt out
-  with `WithToolResultStore(nil)`.
-- **`read_full_result` built-in tool** for the LLM to retrieve slices of
-  stored results. Auto-registered when a `ToolResultStore` is configured.
+  Auto-enabled with 10 MiB total cap, 5-minute TTL per entry, and
+  per-store entry cap (`core.WithToolResultMaxEntries`); opt out with
+  `WithToolResultStore(nil)`.
+- **Transparent tool-result chunking.** Oversized tool results are now
+  split into sequential `tool`-role messages by the loop itself —
+  callers no longer need a separate retrieval tool. (Replaces the old
+  `read_full_result` built-in.)
 - **`core.Sandbox` interface** — `Close() error` contract; replaces the
   old `WithSandbox(any)` signature.
 - **`core.CompactRequest.Scope`** field with `core.ScopeFull` and
@@ -227,6 +243,125 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   constructors.
 - `Role` type with `RoleSystem`, `RoleUser`, `RoleAssistant`, `RoleTool`
   constants.
+
+#### Agent foundation redesign
+
+- **`core.Agent.Execute(ctx, task, ...core.RunOption)`** — the single
+  entry point for every `core.Agent` implementation (LLMAgent,
+  Network, Workflow, custom). Streaming, deadlines, and per-call
+  overrides are passed as variadic `RunOption` values instead of a
+  bag of `ExecuteStream` / `ExecuteWith` / `ExecuteStreamWith` /
+  `StartStream` / `StartStreamWith` method variants.
+- **`core.RunOption` type + helpers.** `core.WithStream(ch chan<-
+  core.StreamEvent)`, `core.WithDeadline(t time.Time)`, plus
+  `agent.WithOverrides(*agent.RunOptions)` for the existing struct of
+  per-call overrides. `core.ApplyRunOptions(opts...)` returns the
+  resolved `core.RunConfig`; agent implementations call this once at
+  the top of `Execute`.
+- **`agent.Subscribe(ctx, ag, task, opts...) *Stream`** — multi-reader
+  stream wrapper accepting any `core.Agent`. Replaces both
+  `oasis.StartStream` and the older `StartStreamWith`; the previous
+  symbols are kept as aliases on the umbrella.
+- **Constructor renames** (umbrella aliases preserved):
+  - `agent.NewLLMAgent` → `agent.New` (umbrella keeps `oasis.NewLLMAgent`
+    and adds `oasis.NewAgent`).
+  - `network.NewNetwork` → `network.New` (umbrella keeps
+    `oasis.NewNetwork`).
+  - `workflow.NewWorkflow` → `workflow.New` (umbrella keeps
+    `oasis.NewWorkflow`).
+
+#### Network orchestration primitive
+
+- **`network.New(name, desc, router, opts ...network.Option)`** — the
+  Network is now the home for multi-agent coordination. Children are
+  declared via `network.WithChildren(agents ...core.Agent)`; the
+  legacy `agent.WithAgents` option is removed.
+- **Supervision policies.** `network.WithSupervisor(policy)` and
+  `network.WithSupervisorFor(name, policy)` attach restart / fallback
+  / quorum / circuit-breaker / chain behavior. Built-ins:
+  `network.RestartOnFail(n)`, `network.Fallback(primary, fallback)`,
+  `network.Quorum(threshold, agents...)`,
+  `network.CircuitBreaker(threshold, window)`, `network.Chain(agents...)`.
+  Plus the `network.ErrCircuitOpen` sentinel.
+- **Runtime membership.** `(*Network).AddAgent(a)` and
+  `(*Network).RemoveAgent(name)` for thread-safe live mutation; new
+  `(*Network).Topology()` returns a read-only graph snapshot.
+- **LLM-driven sub-agent spawning moves to the Network layer.**
+  `network.WithDynamicSpawning(SpawnPolicy)` replaces the agent-level
+  `WithSubAgentSpawning` / `MaxSpawnDepth` / `DenySpawnTools` options.
+
+#### Workflow Plan C cleanup
+
+- **Step output access via `result.Steps[name].Output`.** The mutable
+  `WorkflowContext` bag is gone from the public API; the framework
+  owns step lifecycle.
+- **`workflow.ToolStep` removed.** Compose a single-tool `LLMAgent`
+  and wrap it with `workflow.AgentStep` instead — same behavior, one
+  fewer step kind to learn.
+
+#### Plan D cleanup
+
+- **Massive umbrella trim** — `oasis.go` shrank from 845 LOC to 137.
+  The umbrella now re-exports only the most common types and
+  constructors. Hook types (`OnError`, `OnIterationComplete`,
+  `PrepareStep`), event/finish-reason constants, workflow step
+  helpers (`Step`, `AgentStep`, `ForEach`, `When`, `After`,
+  `InputFrom`, `OutputTo`, `IterOver`), guardrail constructors,
+  compaction symbols, store-capability interfaces, processor types,
+  and many more must be imported from their subpackages (`oasis/agent`,
+  `oasis/core`, `oasis/workflow`, `oasis/guardrail`, `oasis/compaction`,
+  `oasis/skills`, etc.) directly. Subpackage import paths are
+  unchanged.
+- **Skills constructors return the interface.** `skills.FromDir(dirs
+  ...string) SkillProvider` (replaces `NewFileSkillProvider`),
+  `skills.Chain(providers ...SkillProvider) SkillProvider` (replaces
+  `ChainSkillProviders`), `skills.Builtin() SkillProvider` (replaces
+  `NewBuiltinSkillProvider`). The concrete types
+  (`FileSkillProvider`, `ChainedSkillProvider`,
+  `BuiltinSkillProvider`) are no longer exported.
+- **Provider middleware.** `provider.Middleware = func(core.Provider)
+  core.Provider` + `provider.Chain(mws ...Middleware) Middleware`.
+  Used to compose retry, rate-limit, caching, etc. into a single
+  provider stack. `agent.Middleware`, `agent.Chain`, and
+  `agent.WithMiddleware(mws ...)` are the agent-facing wiring;
+  built-in values `agent.RetryMiddleware` and
+  `ratelimit.RateLimitMiddleware` replace the older
+  `agent.WithRetry` / `ratelimit.WithRateLimit` wrappers (kept as
+  deprecated convenience constructors).
+- **`core.MemoryItemStore` interface** — canonical location for the
+  store contract; `memory.ItemStore` is kept as a deprecated alias.
+
+#### Surface consolidation (Processors & Hooks)
+
+- **`agent.Processors` struct + `agent.WithProcessors(Processors)
+  AgentOption`.** One typed sub-config replaces `WithPreProcessors`,
+  `WithPostProcessors`, and `WithPostToolProcessors`. Fields are
+  optional; multiple calls merge.
+- **`agent.Hooks` struct + `agent.WithHooks(Hooks) AgentOption`.**
+  One typed sub-config replaces `WithPrepareStep`,
+  `WithOnIterationComplete`, and `WithOnError`. Fields are optional;
+  multiple calls merge.
+- Re-exported: `oasis.Processors`, `oasis.Hooks`,
+  `oasis.WithProcessors`, `oasis.WithHooks`.
+
+#### Prompt caching (default-on)
+
+- **Anthropic & OpenAI-compat prompt caching wired by default.** The
+  loop stamps ephemeral cache breakpoints on the system prompt and on
+  the most recent user/tool message each iteration; cache hits flow
+  through to provider requests automatically. No code change required
+  to benefit.
+- **New `core.Usage` fields:**
+  - `CachedTokens int` — tokens served from the provider's prompt
+    cache (read hit). Populated by Anthropic native and
+    OpenAI-compatible providers when the upstream reports it.
+  - `CacheCreationTokens int` — tokens written into the cache
+    (warming cost). Anthropic-only.
+- **`core.ChatMessage.CacheCheckpoint bool`** — instructs cache-aware
+  providers to stamp an ephemeral-cache breakpoint at this message.
+  Ignored by providers without cache support.
+- **`agent.WithoutPromptCaching() AgentOption`** — opt-out for cost
+  or debugging. Re-exported as `oasis.WithoutPromptCaching`.
 
 ### Changed
 
@@ -366,23 +501,38 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
     limited := ratelimit.WithRateLimit(provider, ratelimit.RPM(60), ratelimit.TPM(100_000))
     ```
 
-- **BREAKING — `agent.AgentCore` fields are no longer exported.** Access
-  via methods (`Name()`, `Tools()`, `Logger()`, `HasDynamicTools()`,
-  `CachedToolDefs()`, `SetCachedToolDefs()`, `ActiveSkillInstructions()`)
-  or via methods that absorb operations previously requiring field
-  access (`ExecuteSpawn`, `DispatchBuiltins`). Internal type — was
-  documented "do not depend on stability."
+- **BREAKING — `agent.AgentCore` is deleted.** Its replacement,
+  `internal/runtime.Runtime`, is embedded inside `LLMAgent`,
+  `Network`, and `Workflow`; the promoted methods (`Name()`,
+  `Tools()`, `Logger()`, `Limits()`, `HasDynamicTools()`,
+  `CachedToolDefs()`, `SetCachedToolDefs()`,
+  `ActiveSkillInstructions()`, `ExecuteSpawn`, `DispatchBuiltins`,
+  `ExecuteWithSpan`, `ApplyRunOptions`) remain reachable through the
+  agent value. `internal/runtime` is not part of the public API —
+  third-party agent implementations no longer need to embed an
+  oasis-internal type to participate.
+
+- **BREAKING — `core.Agent.Execute` signature is now
+  `Execute(ctx context.Context, task AgentTask, opts ...core.RunOption)
+  error`.** Every third-party `core.Agent` implementation must add the
+  variadic `opts` parameter (it is fine to ignore them initially) and
+  delete any companion `ExecuteStream` / `ExecuteWith` /
+  `ExecuteStreamWith` / `StartStream` / `StartStreamWith` methods.
+
+- **BREAKING — `network.New` signature change.** From
+  `New(name, desc, router, children ...core.Agent)` to
+  `New(name, desc, router, opts ...network.Option)`. Children move
+  into `network.WithChildren(a, b, ...)`; the previous variadic
+  positional form (and the `network.NewWithOptions` helper) is gone.
+
+- **BREAKING — `agent.WithMetadata` value type narrowed.** From
+  `map[string]any` to `map[string]string`. JSON-encode structured
+  metadata before passing if you need richer values.
 
 - **BREAKING — `agent.BuildConfig` now returns `*agent.Config` instead
   of `agent.agentConfig` (by value).** The returned type's fields are
-  no longer exported; access via methods (`Agents()` and same-package
-  reads in `agent/`).
-
-- **BREAKING — Removed `agent.SubAgentConfig` struct.** State now lives
-  on `AgentCore` and is accessed via the new `ExecuteSpawn` method.
-
-- **BREAKING — Removed package-level helpers `agent.ExecuteSpawnAgent`
-  and `agent.DispatchBuiltins`.** Use methods on `*AgentCore` instead.
+  no longer exported; access via methods (and same-package reads in
+  `agent/`).
 
 - `core/` package documentation no longer says "do not import directly."
   Importing `core/` is supported for power users and subpackage authors;
@@ -419,11 +569,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Deprecated
 
-- `EventInputReceived`, `EventProcessingStart`, `EventMaxIterReached`,
-  `EventHalt` are no longer emitted. The constants remain exported for
-  one minor release for back-compat with consumers that type-switch on
-  them. Replace with `EventRunStart` (for the first two) and
-  `EventRunFinish{FinishReason: ...}` (for the last two).
+- `EventMaxIterReached` and `EventHalt` are no longer emitted by the
+  loop but the constants remain exported for one minor release.
+  Replace with `EventRunFinish{FinishReason: ...}`.
+- `agent.WithRetry(provider, attempts, base)` and
+  `ratelimit.WithRateLimit(provider, ...)` are kept as convenience
+  wrappers. Prefer composing `agent.RetryMiddleware` /
+  `ratelimit.RateLimitMiddleware` via `provider.Chain` or
+  `agent.WithMiddleware` for stacks of more than one wrapper.
 
 ### Removed
 
@@ -440,6 +593,73 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   // After
   &RunOptions{Limits: &Limits{MaxIter: 5}}
   ```
+- **BREAKING — `LLMAgent.ExecuteStream`, `ExecuteWith`,
+  `ExecuteStreamWith`, `StartStream`, `StartStreamWith` methods
+  removed.** Use `Execute(ctx, task, opts...)` with
+  `core.WithStream(ch)` and/or `agent.WithOverrides(opts)`. For
+  multi-reader streaming, use `agent.Subscribe(ctx, ag, task,
+  opts...)` (re-exported as `oasis.StartStream` for back-compat).
+- **BREAKING — Streaming interfaces removed.** `agent.StreamingAgent`,
+  `agent.AgentWithOptions`, `agent.StreamingAgentWithOptions`. Streaming
+  is now a `RunOption`, not a separate method or interface.
+- **BREAKING — Per-knob tool-subsystem options removed.**
+  `agent.WithToolPolicy`, `agent.WithToolPolicyMatch`,
+  `agent.WithToolApproval`, `agent.WithToolMiddleware` (and their
+  `oasis.*` re-exports). Use `agent.WithToolConfig(ToolConfig{...})`
+  with `Policies`, `PolicyMatchers`, `Approvals`, `Middleware`
+  fields.
+- **BREAKING — Per-knob processor & hook options removed.**
+  `WithPreProcessors`, `WithPostProcessors`, `WithPostToolProcessors`,
+  `WithPrepareStep`, `WithOnIterationComplete`, `WithOnError`. Use
+  `WithProcessors(Processors{...})` and `WithHooks(Hooks{...})`.
+- **BREAKING — Sub-agent spawning moved out of `agent` package.**
+  `agent.WithAgents`, `agent.WithSubAgentSpawning`,
+  `agent.MaxSpawnDepth`, `agent.DenySpawnTools`, `agent.SubAgentOption`,
+  `agent.SubAgentConfig`, `agent.ExecuteSpawnAgent`,
+  `agent.DispatchBuiltins`, and the `agent.Config` spawn fields
+  (`SpawnEnabled`, `SpawnDepthLimit`, `DeniedSpawnTools`, `Agents`,
+  `GetAgents()`), plus `RunOptions.Agents` — all removed. Use
+  `network.WithChildren(...)` for static membership and
+  `network.WithDynamicSpawning(SpawnPolicy)` for LLM-driven spawning.
+  Umbrella names dropped: `oasis.WithAgents`,
+  `oasis.WithSubAgentSpawning`, `oasis.MaxSpawnDepth`,
+  `oasis.DenySpawnTools`.
+- **BREAKING — `workflow.ToolStep` and `oasis.ToolStep` removed.** Use
+  `workflow.AgentStep` wrapping a single-tool `LLMAgent`.
+- **BREAKING — `workflow.NewWorkflowContext` and
+  `workflow.WorkflowResult.Context` removed.** Read step outputs via
+  `result.Steps[name].Output`.
+- **BREAKING — `agent.Suspend(json.RawMessage)` removed.** Use
+  `SuspendProtocol[Req, Resp].Suspend(req)` — the untyped escape
+  hatch is gone; every suspending site must declare a typed protocol.
+- **BREAKING — `read_full_result` built-in tool and its
+  auto-registration removed.** Oversized results now chunk
+  transparently into sequential tool-result messages.
+- **BREAKING — `network.ParallelDispatch` mode, the
+  `network.ParallelDefault` / `network.ParallelDisabled` constants,
+  and `network.WithParallelDispatch(mode)` removed.** Set the per-
+  router parallelism via `network.WithRouter(agent.WithLimits(
+  agent.Limits{MaxParallelDispatch: N}))` — `N = 1` is sequential.
+- **BREAKING — Skill provider concrete types unexported.**
+  `skills.FileSkillProvider`, `skills.ChainedSkillProvider`,
+  `skills.BuiltinSkillProvider` removed; use the interface-returning
+  constructors `skills.FromDir`, `skills.Chain`, `skills.Builtin`.
+  `skills.NewFileSkillProvider`, `skills.NewBuiltinSkillProvider`,
+  `skills.ChainSkillProviders` are also gone.
+- **BREAKING — Umbrella surface massively trimmed** (`oasis.go`
+  845 → 137 LOC). Most niche re-exports moved to their subpackages;
+  imports `oasis.OnError`, `oasis.PrepareStep`, `oasis.Step`,
+  `oasis.AgentStep`, `oasis.ForEach`, `oasis.When`, `oasis.After`,
+  `oasis.InputFrom`, `oasis.OutputTo`, `oasis.IterOver`,
+  `oasis.NewContentGuard`, `oasis.NewKeywordGuard`,
+  `oasis.NewInjectionGuard`, `oasis.NewStructuredCompactor`,
+  `oasis.LLMAgent`, `oasis.AgentHandle`, `oasis.AgentOption`, and
+  many more must now import their owning subpackage directly. See
+  `oasis.go` for the curated remaining surface.
+- **BREAKING — `core.ScheduledToolCall` removed.** Was a
+  workflow-internal type that leaked into the public surface.
+- **BREAKING — `EventInputReceived` and `EventProcessingStart`
+  constants removed** (were deprecated). Use `EventRunStart`.
 - **Satellite `go.mod` files collapsed back into the root module.**
   During the microkernel migration, 8 directories (`ingest`, `mcp`,
   `observer`, `rag`, `sandbox`, `provider/gemini`,
@@ -496,10 +716,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 - `result.Output` continues to work; `result.Text()` is identical.
 - New `AgentResult` fields are zero-value by default; existing reads are
   unaffected.
-- All re-exported types and functions from `oasis.*` retain their
-  names. If your code uses `oasis.Provider`, `oasis.LLMAgent`,
-  `oasis.WithCompaction`, `oasis.CosineSimilarity`, etc., no source
-  change is needed.
+- The umbrella `oasis.*` surface was trimmed in Plan D. The most-used
+  symbols stay re-exported (`oasis.Provider`, `oasis.Agent`,
+  `oasis.NewAgent`, `oasis.NewLLMAgent`, `oasis.NewNetwork`,
+  `oasis.NewWorkflow`, `oasis.WithMemory`, `oasis.WithLimits`,
+  `oasis.WithToolConfig`, `oasis.WithProcessors`, `oasis.WithHooks`,
+  `oasis.SuspendProtocol`, `oasis.Stream`, `oasis.StartStream`,
+  `oasis.CosineSimilarity`, `oasis.WithCompaction`, …). Niche
+  exports (hook types, event constants, workflow step constructors,
+  guardrail/compaction constructors, store-capability interfaces,
+  processor types, `oasis.LLMAgent`, `oasis.AgentHandle`,
+  `oasis.AgentOption`, etc.) now require importing the owning
+  subpackage directly — e.g. `agent.LLMAgent`, `agent.AgentOption`,
+  `workflow.Step`, `guardrail.NewInjectionGuard`.
 - Direct imports of subpackages (`oasis/store/sqlite`,
   `oasis/provider/gemini`, etc.) keep working — they are now regular
   subpackages of the root module rather than separate go modules, but
@@ -511,8 +740,85 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   `enum:"..."` tags to the `In` struct fields; (4) delete the
   hand-written `Parameters: json.RawMessage(...)` block. For schemas
   reflection cannot express, implement `SchemaProvider.JSONSchema()
-  json.RawMessage` on the input type. See
-  `docs/guides/typed-tool-schemas.md` for a worked side-by-side example.
+  json.RawMessage` on the input type.
+- Every external `core.Agent` implementation must change `Execute(ctx,
+  task) error` to `Execute(ctx, task, opts ...core.RunOption) error`.
+  Inside the body, call `cfg := core.ApplyRunOptions(opts...)` once
+  and read `cfg.Stream` / `cfg.Deadline` / `cfg.Overrides` as needed.
+  Delete any `ExecuteStream` / `ExecuteWith` / `ExecuteStreamWith` /
+  `StartStream` / `StartStreamWith` companion methods — the loop now
+  dispatches through `Execute` with `core.WithStream(ch)` instead.
+- Streaming/per-call cheat-sheet:
+  ```go
+  // Before
+  ag.ExecuteStream(ctx, task, ch)
+  ag.ExecuteWith(ctx, task, &RunOptions{Limits: &Limits{MaxIter: 3}})
+  s := oasis.StartStream(ctx, ag, task)
+
+  // After
+  ag.Execute(ctx, task, core.WithStream(ch))
+  ag.Execute(ctx, task,
+      agent.WithOverrides(&agent.RunOptions{Limits: &agent.Limits{MaxIter: 3}}),
+  )
+  s := agent.Subscribe(ctx, ag, task) // or the kept oasis.StartStream alias
+  ```
+- Tool-subsystem cheat-sheet:
+  ```go
+  // Before
+  oasis.WithToolPolicy("search", core.ToolPolicy{Timeout: 5*time.Second})
+  oasis.WithToolPolicyMatch(matcher, policy)
+  oasis.WithToolApproval("delete_file", agent.DenyHalt)
+  oasis.WithToolMiddleware(LoggingMiddleware, TimingMiddleware)
+
+  // After (one option, merges across calls)
+  oasis.WithToolConfig(agent.ToolConfig{
+      Policies: map[string]core.ToolPolicy{
+          "search": {Timeout: 5 * time.Second},
+      },
+      PolicyMatchers: []agent.ToolPolicyMatcher{{Match: matcher, Policy: policy}},
+      Approvals: []agent.ApprovalConfig{agent.Approval("delete_file", agent.DenyHalt)},
+      Middleware: []core.ToolMiddleware{LoggingMiddleware, TimingMiddleware},
+  })
+  ```
+- Processors / Hooks cheat-sheet:
+  ```go
+  // Before
+  agent.WithPreProcessors(pre)
+  agent.WithPostProcessors(post)
+  agent.WithPostToolProcessors(postTool)
+  agent.WithPrepareStep(fn)
+  agent.WithOnIterationComplete(cb)
+  agent.WithOnError(eh)
+
+  // After
+  agent.WithProcessors(agent.Processors{Pre: []core.PreProcessor{pre},
+      Post: []core.PostProcessor{post},
+      PostTool: []core.PostToolProcessor{postTool}})
+  agent.WithHooks(agent.Hooks{PrepareStep: fn,
+      OnIterationComplete: cb, OnError: eh})
+  ```
+- Sub-agent spawning cheat-sheet:
+  ```go
+  // Before — spawning lived on the agent
+  ag := agent.NewLLMAgent("router", "...", provider,
+      agent.WithAgents(child1, child2),
+      agent.WithSubAgentSpawning(agent.MaxSpawnDepth(2)),
+  )
+
+  // After — spawning lives on the Network
+  net := network.New("team", "...", provider,
+      network.WithChildren(child1, child2),
+      network.WithDynamicSpawning(network.SpawnPolicy{MaxDepth: 2}),
+  )
+  ```
+- Workflow `ToolStep` → `AgentStep` cheat-sheet:
+  ```go
+  // Before
+  workflow.ToolStep("lookup", myTool, inputSpec)
+  // After
+  workflow.AgentStep("lookup", agent.New("lookup", "", provider,
+      agent.WithTools(myTool)), inputSpec)
+  ```
 - Budget migration cheat-sheet:
   ```go
   // Before
@@ -585,8 +891,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   `DeferExclude`. New methods `ToolRegistry.EnsureSchema`,
   `ToolRegistry.DeferredDefinitions`, `MCPRegistry.SetDeferredMode`. New
   capability interface `SchemaEnsurer` (tools may implement to participate in
-  deferred-schema loading). See [`docs/guides/connecting-mcp-servers.md`](docs/guides/connecting-mcp-servers.md) §
-  "Deferred schemas".
+  deferred-schema loading).
 - **MCP client** — connect agents to external Model Context Protocol servers over
   stdio and HTTP transports. Tools from MCP servers register into the existing
   `ToolRegistry` under `mcp__<server>__<tool>` namespacing and are callable like
@@ -594,8 +899,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   10 attempts, ±25% jitter). New options `WithMCPServer`, `WithMCPServers`,
   `WithSharedMCPRegistry`, `WithMCPLifecycleHandler`; runtime management via
   `(*LLMAgent).MCP()` controller. File-based config loader at `mcp/config`
-  (Claude Desktop compatible schema, `${ENV_VAR}` interpolation). See
-  [`docs/guides/connecting-mcp-servers.md`](docs/guides/connecting-mcp-servers.md).
+  (Claude Desktop compatible schema, `${ENV_VAR}` interpolation).
 - New root types: `MCPServerConfig`, `StdioMCPConfig`, `HTTPMCPConfig`, `Auth`,
   `BearerAuth`, `MCPToolFilter`, `MCPServerStatus`, `MCPServerInfo`,
   `MCPServerState`, `MCPLifecycleHandler`, `NoopMCPLifecycle`, `MCPController`,

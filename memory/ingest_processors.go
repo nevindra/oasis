@@ -67,7 +67,16 @@ func (PersistMessages) Process(ctx context.Context, in *IngestContext) error {
 		CreatedAt: now + 1,
 	}
 	if len(in.Steps) > 0 {
-		asst.Metadata = map[string]any{"steps": in.Steps}
+		// Marshal at the boundary; Message.Metadata is opaque JSON.
+		// json.Marshal of map[string]any with serializable values cannot
+		// fail in practice, but check anyway — the contract forbids
+		// swallowed errors.
+		data, err := json.Marshal(map[string]any{"steps": in.Steps})
+		if err != nil {
+			in.Logger.Error("marshal assistant metadata failed", "error", err)
+		} else {
+			asst.Metadata = data
+		}
 	}
 	if err := in.Store.StoreMessage(ctx, user); err != nil {
 		in.Logger.Error("persist user message failed", "error", err)

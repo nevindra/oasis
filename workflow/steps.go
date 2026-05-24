@@ -47,7 +47,7 @@ func ForEachIndex(ctx context.Context) (int, bool) {
 // agentStepFunc wraps an Agent into a StepFunc. Input is read from context
 // (via InputFrom key) or from the original task input. Output and usage are
 // written back to context.
-func agentStepFunc(agent Agent, cfg *stepConfig) StepFunc {
+func agentStepFunc(agent core.Agent, cfg *stepConfig) StepFunc {
 	return func(ctx context.Context, wCtx *WorkflowContext) error {
 		input := wCtx.Input()
 		if cfg.inputFrom != "" {
@@ -56,7 +56,7 @@ func agentStepFunc(agent Agent, cfg *stepConfig) StepFunc {
 			}
 		}
 
-		result, err := agent.Execute(ctx, AgentTask{
+		result, err := agent.Execute(ctx, core.AgentTask{
 			Input:       input,
 			Attachments: wCtx.task.Attachments,
 			ThreadID:    wCtx.task.ThreadID,

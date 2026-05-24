@@ -8,9 +8,9 @@
 // or custom implementations. Chain multiple providers so user skills override
 // built-in ones:
 //
-//	provider := skills.ChainSkillProviders(
-//		skills.NewFileSkillProvider(dirs...),
-//		skills.NewBuiltinSkillProvider(),
+//	provider := skills.Chain(
+//		skills.FromDir(dirs...),
+//		skills.Builtin(),
 //	)
 //
 // Load a skill and apply any referenced skills:

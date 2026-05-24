@@ -6,7 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // Extractor converts raw content to plain text.

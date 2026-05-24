@@ -29,13 +29,13 @@ func TestToolApproval_ApproveRunsTool(t *testing.T) {
 	handler := &fakeInputHandler{approve: true}
 	called := false
 
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: &called}),
 		WithInputHandler(handler),
-		WithToolApproval("rec"),
+		WithToolConfig(ToolConfig{Approvals: []ApprovalConfig{Approval("rec")}}),
 	)
 
-	result, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	result, err := ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute err = %v", err)
 	}
@@ -54,13 +54,13 @@ func TestToolApproval_DenyAsksLLMToRevise(t *testing.T) {
 	handler := &fakeInputHandler{approve: false}
 	called := false
 
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: &called}),
 		WithInputHandler(handler),
-		WithToolApproval("rec"), // default OnDeny: DenyAskLLMToRevise
+		WithToolConfig(ToolConfig{Approvals: []ApprovalConfig{Approval("rec")}}), // default OnDeny: DenyAskLLMToRevise
 	)
 
-	result, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	result, err := ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute err = %v", err)
 	}
@@ -68,19 +68,19 @@ func TestToolApproval_DenyAsksLLMToRevise(t *testing.T) {
 		t.Error("tool should NOT have run on deny")
 	}
 	if result.Error == "" {
-		t.Error("expected ToolResult.Error on deny so LLM can adapt")
+		t.Error("expected core.ToolResult.Error on deny so LLM can adapt")
 	}
 }
 
 func TestToolApproval_DenyHaltReturnsErrHalt(t *testing.T) {
 	handler := &fakeInputHandler{approve: false}
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: new(bool)}),
 		WithInputHandler(handler),
-		WithToolApproval("rec", OnDeny(DenyHalt)),
+		WithToolConfig(ToolConfig{Approvals: []ApprovalConfig{Approval("rec", OnDeny(DenyHalt))}}),
 	)
 
-	_, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	_, err := ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 
 	var halt *core.ErrHalt
 	if !errors.As(err, &halt) {
@@ -91,12 +91,12 @@ func TestToolApproval_DenyHaltReturnsErrHalt(t *testing.T) {
 func TestToolApproval_NonGuardedToolNotAffected(t *testing.T) {
 	handler := &fakeInputHandler{approve: false}
 	called := false
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: &called}),
 		WithInputHandler(handler),
 		// No WithToolApproval — tool runs without prompting.
 	)
-	_, err := ag.tools.Execute(context.Background(), "rec", json.RawMessage(`{}`))
+	_, err := ag.Tools().Execute(context.Background(), "rec", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute err = %v", err)
 	}
@@ -110,10 +110,10 @@ func TestToolApproval_NonGuardedToolNotAffected(t *testing.T) {
 
 func TestToolApproval_EmitsPendingEvent(t *testing.T) {
 	handler := &fakeInputHandler{approve: true}
-	ag := NewLLMAgent("test", "", &callbackProvider{},
+	ag := New("test", "", &callbackProvider{},
 		WithTools(&recordingTool{called: new(bool)}),
 		WithInputHandler(handler),
-		WithToolApproval("rec"),
+		WithToolConfig(ToolConfig{Approvals: []ApprovalConfig{Approval("rec")}}),
 	)
 
 	ch := make(chan core.StreamEvent, 8)
@@ -123,7 +123,7 @@ func TestToolApproval_EmitsPendingEvent(t *testing.T) {
 	// read the sink from ctx and emit the pending event.
 	resultCh := make(chan struct{}, 1)
 	go func() {
-		_, _ = ag.tools.Execute(ctx, "rec", json.RawMessage(`{}`))
+		_, _ = ag.Tools().Execute(ctx, "rec", json.RawMessage(`{}`))
 		close(ch)
 		resultCh <- struct{}{}
 	}()

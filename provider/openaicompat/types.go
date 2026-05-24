@@ -148,11 +148,17 @@ type ChoiceMessage struct {
 }
 
 // Usage contains token usage statistics.
+// OpenAI populates PromptTokensDetails.CachedTokens for cache hits.
+// Anthropic populates CacheReadInputTokens (hits) and CacheCreationInputTokens
+// (warming cost) as top-level fields on the same object instead.
 type Usage struct {
-	PromptTokens     int              `json:"prompt_tokens"`
-	CompletionTokens int              `json:"completion_tokens"`
-	TotalTokens      int              `json:"total_tokens"`
-	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	PromptTokens             int                  `json:"prompt_tokens"`
+	CompletionTokens         int                  `json:"completion_tokens"`
+	TotalTokens              int                  `json:"total_tokens"`
+	PromptTokensDetails      *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	// Anthropic-specific top-level cache fields.
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // PromptTokensDetails breaks down prompt token usage, including cached tokens.

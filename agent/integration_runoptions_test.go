@@ -20,11 +20,11 @@ import (
 type scriptedProvider struct {
 	capturedRequestProvider
 	mu        sync.Mutex
-	responses []ChatResponse
+	responses []core.ChatResponse
 	idx       int
 }
 
-func (p *scriptedProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (p *scriptedProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	p.capturedRequestProvider.mu.Lock()
 	p.capturedRequestProvider.reqs = append(p.capturedRequestProvider.reqs, req)
@@ -33,7 +33,7 @@ func (p *scriptedProvider) ChatStream(_ context.Context, req ChatRequest, ch cha
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.idx >= len(p.responses) {
-		return ChatResponse{}, errors.New("scripted provider: out of responses")
+		return core.ChatResponse{}, errors.New("scripted provider: out of responses")
 	}
 	resp := p.responses[p.idx]
 	p.idx++
@@ -46,10 +46,10 @@ func (p *scriptedProvider) ChatStream(_ context.Context, req ChatRequest, ch cha
 // loop terminates after first iteration).
 type scriptedRepeatingProvider struct {
 	capturedRequestProvider
-	response ChatResponse
+	response core.ChatResponse
 }
 
-func (p *scriptedRepeatingProvider) ChatStream(_ context.Context, req ChatRequest, ch chan<- StreamEvent) (ChatResponse, error) {
+func (p *scriptedRepeatingProvider) ChatStream(_ context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 	defer close(ch)
 	p.capturedRequestProvider.mu.Lock()
 	p.capturedRequestProvider.reqs = append(p.capturedRequestProvider.reqs, req)
@@ -63,7 +63,7 @@ func (p *scriptedRepeatingProvider) ChatStream(_ context.Context, req ChatReques
 // a re-prompt loop: the agent loop continues until the response matches
 // a validation predicate.
 func TestIntegration_ValidationLoop(t *testing.T) {
-	responses := []ChatResponse{
+	responses := []core.ChatResponse{
 		{Content: "42"},
 		{Content: "the answer is 42"},
 		{Content: "42 is the answer to life, the universe, and everything"},
@@ -80,8 +80,8 @@ func TestIntegration_ValidationLoop(t *testing.T) {
 		return InjectFeedback("be more elaborate — explain why 42"), nil
 	}
 
-	a := NewLLMAgent("validator", "validates", provider,
-		WithOnIterationComplete(hook))
+	a := New("validator", "validates", provider,
+		WithHooks(Hooks{OnIterationComplete: hook}))
 
 	result, err := a.Execute(context.Background(), AgentTask{Input: "what is the answer?"})
 	if err != nil {
@@ -119,7 +119,7 @@ func TestIntegration_OnError_RetryWithFeedback(t *testing.T) {
 		return Propagate(), nil
 	}
 
-	a := NewLLMAgent("recover", "recovers", provider, WithOnError(hook))
+	a := New("recover", "recovers", provider, WithHooks(Hooks{OnError: hook}))
 
 	_, err := a.Execute(context.Background(), AgentTask{Input: "x"})
 	if err != nil {
@@ -152,8 +152,8 @@ func TestIntegration_OnError_RetryWithFeedback(t *testing.T) {
 // with distinct memory orchestrators per tenant; verifies no
 // cross-contamination. Run with -race to confirm thread safety.
 func TestIntegration_MultiTenantMemorySwap(t *testing.T) {
-	a := NewLLMAgent("multi", "tenant",
-		&scriptedRepeatingProvider{response: ChatResponse{Content: "ack"}})
+	a := New("multi", "tenant",
+		&scriptedRepeatingProvider{response: core.ChatResponse{Content: "ack"}})
 
 	const N = 20
 	stores := make([]*recordingStore, N)
@@ -174,7 +174,7 @@ func TestIntegration_MultiTenantMemorySwap(t *testing.T) {
 				Input:    fmt.Sprintf("hello from tenant %d", idx),
 				ThreadID: fmt.Sprintf("t-%d", idx),
 			}
-			_, err := a.ExecuteWith(context.Background(), task, &RunOptions{Memory: mems[idx]})
+			_, err := a.Execute(context.Background(), task, WithOverrides(&RunOptions{Memory: mems[idx]}))
 			if err != nil {
 				t.Errorf("tenant %d: %v", idx, err)
 			}
@@ -235,11 +235,11 @@ type sourcedTool struct {
 }
 
 func (s *sourcedTool) Name() string { return "search" }
-func (s *sourcedTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: "search", Description: "search", Parameters: []byte(`{"type":"object"}`)}
+func (s *sourcedTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "search", Description: "search", Parameters: []byte(`{"type":"object"}`)}
 }
-func (s *sourcedTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
-	return ToolResult{Content: []byte(`"` + s.out + `"`)}, nil
+func (s *sourcedTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
+	return core.ToolResult{Content: []byte(`"` + s.out + `"`)}, nil
 }
 func (s *sourcedTool) Sources() []core.Source { return s.srcs }
 
@@ -249,15 +249,15 @@ func TestExecuteWith_PopulatesSources(t *testing.T) {
 		out:  "found",
 	}
 	provider := &scriptedProvider{
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "search", Args: []byte(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "search", Args: []byte(`{}`)}}},
 			{Content: "done"},
 		},
 	}
-	a := NewLLMAgent("a", "d", provider, WithTools(tool))
+	a := New("a", "d", provider, WithTools(tool))
 
 	prompt := "override"
-	result, err := a.ExecuteWith(context.Background(), AgentTask{Input: "q"}, &RunOptions{Prompt: &prompt})
+	result, err := a.Execute(context.Background(), AgentTask{Input: "q"}, WithOverrides(&RunOptions{Prompt: &prompt}))
 	if err != nil {
 		t.Fatalf("ExecuteWith: %v", err)
 	}

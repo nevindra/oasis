@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // Compile-time interface checks.

@@ -23,11 +23,11 @@ type barrierTool struct {
 
 func (b *barrierTool) Name() string { return b.name }
 
-func (b *barrierTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: b.name, Description: "barrier tool"}
+func (b *barrierTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: b.name, Description: "barrier tool"}
 }
 
-func (b *barrierTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (b *barrierTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	b.started <- struct{}{} // signal: I have started
 	<-b.barrier             // wait for release
 	return core.TextResult("done from " + b.name), nil
@@ -39,7 +39,7 @@ func TestLLMAgentParallelToolExecution(t *testing.T) {
 	started := make(chan struct{}, numTools)
 
 	// Create tools that share a barrier
-	var tools []AnyTool
+	var tools []core.AnyTool
 	for i := 0; i < numTools; i++ {
 		tools = append(tools, &barrierTool{
 			name:    fmt.Sprintf("tool_%d", i),
@@ -51,8 +51,8 @@ func TestLLMAgentParallelToolExecution(t *testing.T) {
 	// Provider returns all tool calls at once, then a final response
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{
 				{ID: "1", Name: "tool_0", Args: json.RawMessage(`{}`)},
 				{ID: "2", Name: "tool_1", Args: json.RawMessage(`{}`)},
 				{ID: "3", Name: "tool_2", Args: json.RawMessage(`{}`)},
@@ -61,7 +61,7 @@ func TestLLMAgentParallelToolExecution(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("parallel", "Tests parallel", provider, WithTools(tools...))
+	agent := New("parallel", "Tests parallel", provider, WithTools(tools...))
 
 	done := make(chan struct{})
 	var result AgentResult
@@ -105,8 +105,8 @@ func TestLLMAgentPlanExecution(t *testing.T) {
 	// Provider calls execute_plan with 3 steps, then synthesizes final response
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "execute_plan",
 				Args: json.RawMessage(`{"steps":[
@@ -119,7 +119,7 @@ func TestLLMAgentPlanExecution(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("planner", "Plans tool calls", provider,
+	agent := New("planner", "Plans tool calls", provider,
 		WithTools(mockTool{}),
 		WithPlanExecution(),
 	)
@@ -138,8 +138,8 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 	var capturedResult string
 	captureProvider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "execute_plan",
 				Args: json.RawMessage(`{"steps":[
@@ -151,7 +151,7 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("planner", "Plans", captureProvider,
+	agent := New("planner", "Plans", captureProvider,
 		WithTools(mockTool{}, mockToolCalc{}),
 		WithPlanExecution(),
 	)
@@ -164,8 +164,8 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 
 	// The plan result was fed back as a tool result message.
 	// We can verify the format by calling executePlan directly.
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
-		return DispatchResult{Content: "result_" + tc.Name, Usage: Usage{InputTokens: 10}}
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
+		return DispatchResult{Content: "result_" + tc.Name, Usage: core.Usage{InputTokens: 10}}
 	}
 	dr := executePlan(context.Background(), json.RawMessage(`{"steps":[
 		{"tool":"greet","args":{}},
@@ -193,7 +193,7 @@ func TestLLMAgentPlanExecutionResultFormat(t *testing.T) {
 
 func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 	// Verify that a failed step reports error without aborting other steps
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		if tc.Name == "fail" {
 			return DispatchResult{Content: "error: tool broken", IsError: true}
 		}
@@ -225,7 +225,7 @@ func TestLLMAgentPlanExecutionErrorStep(t *testing.T) {
 }
 
 func TestLLMAgentPlanExecutionRecursionPrevented(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "should not reach"}
 	}
 
@@ -239,7 +239,7 @@ func TestLLMAgentPlanExecutionRecursionPrevented(t *testing.T) {
 }
 
 func TestLLMAgentPlanExecutionEmptySteps(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "should not reach"}
 	}
 
@@ -250,7 +250,7 @@ func TestLLMAgentPlanExecutionEmptySteps(t *testing.T) {
 }
 
 func TestLLMAgentPlanExecutionInvalidArgs(t *testing.T) {
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "should not reach"}
 	}
 
@@ -264,8 +264,8 @@ func TestLLMAgentPlanExecutionNotEnabledIgnored(t *testing.T) {
 	// When WithPlanExecution is NOT set, execute_plan is treated as unknown tool
 	provider := &mockProvider{
 		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{
 				ID:   "1",
 				Name: "execute_plan",
 				Args: json.RawMessage(`{"steps":[{"tool":"greet","args":{}}]}`),
@@ -274,7 +274,7 @@ func TestLLMAgentPlanExecutionNotEnabledIgnored(t *testing.T) {
 		},
 	}
 
-	agent := NewLLMAgent("nope", "No plan", provider,
+	agent := New("nope", "No plan", provider,
 		WithTools(mockTool{}),
 		// Note: WithPlanExecution() NOT set
 	)
@@ -300,7 +300,7 @@ func TestPlanExecutionMaxStepsCap(t *testing.T) {
 		Steps []json.RawMessage `json:"steps"`
 	}{Steps: steps})
 
-	dispatch := func(_ context.Context, _ ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, _ core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "should not reach"}
 	}
 
@@ -312,7 +312,7 @@ func TestPlanExecutionMaxStepsCap(t *testing.T) {
 
 func TestPlanExecutionBlocksAskUser(t *testing.T) {
 	// ask_user should be blocked from within execute_plan steps.
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		if tc.Name == "ask_user" {
 			return DispatchResult{Content: "error: ask_user cannot be called from within execute_plan", IsError: true}
 		}
@@ -346,7 +346,7 @@ func TestDispatchParallelContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	callCount := 0
-	dispatch := func(ctx context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(ctx context.Context, tc core.ToolCall) DispatchResult {
 		callCount++
 		if tc.Name == "slow" {
 			// Simulate a slow tool — cancel the context and block.
@@ -357,7 +357,7 @@ func TestDispatchParallelContextCancellation(t *testing.T) {
 		return DispatchResult{Content: "fast result"}
 	}
 
-	calls := []ToolCall{
+	calls := []core.ToolCall{
 		{ID: "1", Name: "fast", Args: json.RawMessage(`{}`)},
 		{ID: "2", Name: "slow", Args: json.RawMessage(`{}`)},
 	}
@@ -381,11 +381,11 @@ func TestDispatchParallelContextCancellation(t *testing.T) {
 
 func TestDispatchParallelSingleCallNoGoroutine(t *testing.T) {
 	// Single call should take the fast path (inline, no goroutine).
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		return DispatchResult{Content: "single result"}
 	}
 
-	calls := []ToolCall{{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}}
+	calls := []core.ToolCall{{ID: "1", Name: "tool", Args: json.RawMessage(`{}`)}}
 	results := dispatchParallel(context.Background(), calls, dispatch, 10)
 
 	if len(results) != 1 {
@@ -398,14 +398,14 @@ func TestDispatchParallelSingleCallNoGoroutine(t *testing.T) {
 
 func TestDispatchParallelToolPanicRecovery(t *testing.T) {
 	// A tool that panics should be caught by safeDispatch.
-	dispatch := func(_ context.Context, tc ToolCall) DispatchResult {
+	dispatch := func(_ context.Context, tc core.ToolCall) DispatchResult {
 		if tc.Name == "panicker" {
 			panic("tool exploded")
 		}
 		return DispatchResult{Content: "ok"}
 	}
 
-	calls := []ToolCall{
+	calls := []core.ToolCall{
 		{ID: "1", Name: "safe", Args: json.RawMessage(`{}`)},
 		{ID: "2", Name: "panicker", Args: json.RawMessage(`{}`)},
 	}
@@ -426,46 +426,29 @@ func TestDispatchParallelToolPanicRecovery(t *testing.T) {
 	}
 }
 
-// --- Tool result truncation test ---
+// --- Tool result chunking test ---
 
-func TestToolResultTruncationInLoop(t *testing.T) {
-	// Verify that large tool results are truncated in the message history
-	// but the step trace retains the full content.
+func TestToolResultChunkedTransparently(t *testing.T) {
+	// Verify that large tool results are split into multiple tool-result messages
+	// (all with the same call ID) rather than being truncated with a hint.
 	bigContent := strings.Repeat("x", maxToolResultMessageLen+1000)
-	bigTool := &stubAgent{
-		name: "big",
-		desc: "Returns huge content",
-		fn: func(_ AgentTask) (AgentResult, error) {
-			return AgentResult{Output: bigContent}, nil
-		},
-	}
-	_ = bigTool // We test via the tool path, not agent path.
 
 	// Create a tool that returns a very large result.
 	largeTool := &largeTool{content: bigContent}
 
-	var capturedMessages []ChatMessage
-	provider := &mockProvider{
-		name: "test",
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "large", Args: json.RawMessage(`{}`)}}},
-			{Content: "done"},
-		},
-	}
-
+	var capturedMessages []core.ChatMessage
 	// Use a callbackProvider to capture the second request's messages.
 	cbProvider := &sequentialCallbackProvider{
-		responses: []ChatResponse{
-			{ToolCalls: []ToolCall{{ID: "1", Name: "large", Args: json.RawMessage(`{}`)}}},
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{{ID: "1", Name: "large", Args: json.RawMessage(`{}`)}}},
 			{Content: "done"},
 		},
-		onChat: func(req ChatRequest) {
+		onChat: func(req core.ChatRequest) {
 			capturedMessages = req.Messages
 		},
 	}
-	_ = provider // use cbProvider instead
 
-	agent := NewLLMAgent("truncator", "Tests truncation", cbProvider,
+	agent := New("chunker", "Tests chunking", cbProvider,
 		WithTools(largeTool),
 	)
 
@@ -477,37 +460,47 @@ func TestToolResultTruncationInLoop(t *testing.T) {
 		t.Errorf("Output = %q, want %q", result.Output, "done")
 	}
 
-	// Find the tool result message in the captured messages.
-	var toolResultMsg *ChatMessage
-	for i, m := range capturedMessages {
+	// Collect all tool-result messages for call ID "1".
+	var toolResultMsgs []core.ChatMessage
+	for _, m := range capturedMessages {
 		if m.ToolCallID == "1" {
-			toolResultMsg = &capturedMessages[i]
-			break
+			toolResultMsgs = append(toolResultMsgs, m)
 		}
 	}
-	if toolResultMsg == nil {
-		t.Fatal("tool result message not found in captured messages")
+	if len(toolResultMsgs) < 2 {
+		t.Fatalf("expected >=2 tool-result chunks, got %d", len(toolResultMsgs))
 	}
 
-	// The message content should be truncated.
-	// +300 for the truncation marker (paging marker can be ~200 chars with id, legacy is shorter).
-	if len([]rune(toolResultMsg.Content)) > maxToolResultMessageLen+300 {
-		t.Errorf("tool result message len = %d runes, want <= %d (should be truncated)",
-			len([]rune(toolResultMsg.Content)), maxToolResultMessageLen+300)
-	}
-	// Default behaviour (store configured) emits a paging marker; legacy emits "[output truncated".
-	hasPaging := strings.Contains(toolResultMsg.Content, "Use read_full_result(id=")
-	hasLegacy := strings.Contains(toolResultMsg.Content, "[output truncated")
-	if !hasPaging && !hasLegacy {
-		t.Error("truncated message should contain a truncation marker (paging or legacy)")
+	// Each individual chunk must fit within the limit.
+	for i, m := range toolResultMsgs {
+		if len([]rune(m.Content)) > maxToolResultMessageLen {
+			t.Errorf("chunk %d: len = %d runes, want <= %d", i, len([]rune(m.Content)), maxToolResultMessageLen)
+		}
 	}
 
-	// Step trace should retain the full content.
+	// Reassembled content must equal the original.
+	var reassembled strings.Builder
+	for _, m := range toolResultMsgs {
+		reassembled.WriteString(m.Content)
+	}
+	if reassembled.String() != bigContent {
+		t.Error("reassembled chunks do not equal original content")
+	}
+
+	// No truncation hints or read_full_result markers in any chunk.
+	for i, m := range toolResultMsgs {
+		if strings.Contains(m.Content, "read_full_result") {
+			t.Errorf("chunk %d should not contain read_full_result hint", i)
+		}
+		if strings.Contains(m.Content, "[output truncated") {
+			t.Errorf("chunk %d should not contain truncation marker", i)
+		}
+	}
+
+	// Step trace should exist and have the right name.
 	if len(result.Steps) == 0 {
 		t.Fatal("expected at least one step trace")
 	}
-	// Step trace output is truncated to 500 chars by buildStepTrace, not maxToolResultMessageLen.
-	// Verify it exists and has content.
 	if result.Steps[0].Name != "large" {
 		t.Errorf("step name = %q, want %q", result.Steps[0].Name, "large")
 	}
@@ -519,11 +512,11 @@ type largeTool struct {
 }
 
 func (l *largeTool) Name() string { return "large" }
-func (l *largeTool) Definition() ToolDefinition {
-	return ToolDefinition{Name: "large", Description: "Returns large content"}
+func (l *largeTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "large", Description: "Returns large content"}
 }
 
-func (l *largeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (ToolResult, error) {
+func (l *largeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult(l.content), nil
 }
 
@@ -559,8 +552,8 @@ func TestTruncateStr(t *testing.T) {
 // --- buildStepTrace tests ---
 
 func TestBuildStepTraceToolCall(t *testing.T) {
-	tc := ToolCall{ID: "1", Name: "web_search", Args: json.RawMessage(`{"query":"test"}`)}
-	res := toolExecResult{content: "found it", usage: Usage{InputTokens: 10}, duration: time.Second}
+	tc := core.ToolCall{ID: "1", Name: "web_search", Args: json.RawMessage(`{"query":"test"}`)}
+	res := toolExecResult{content: "found it", usage: core.Usage{InputTokens: 10}, duration: time.Second}
 
 	trace := buildStepTrace(tc, res)
 
@@ -579,7 +572,7 @@ func TestBuildStepTraceToolCall(t *testing.T) {
 }
 
 func TestBuildStepTraceAgentDelegation(t *testing.T) {
-	tc := ToolCall{ID: "1", Name: "agent_researcher", Args: json.RawMessage(`{"task":"find papers"}`)}
+	tc := core.ToolCall{ID: "1", Name: "agent_researcher", Args: json.RawMessage(`{"task":"find papers"}`)}
 	res := toolExecResult{content: "3 papers found"}
 
 	trace := buildStepTrace(tc, res)
@@ -601,22 +594,22 @@ func TestBuildStepTraceAgentDelegation(t *testing.T) {
 // Pinning this contract lets us safely replace 6 hand-rolled tails with the helper.
 func TestTerminateIteration_PinsContractFields(t *testing.T) {
 	state := &loopState{
-		totalUsage:       Usage{InputTokens: 7, OutputTokens: 11},
+		totalUsage:       core.Usage{InputTokens: 7, OutputTokens: 11},
 		steps:            []StepTrace{{Name: "x"}},
 		lastWarnings:     []string{"w"},
 		lastProviderMeta: json.RawMessage(`{"k":"v"}`),
-		files:            []Attachment{{MimeType: "text/plain"}},
-		iterations:       []IterationTrace{{Iter: 0}},
+		files:            []core.Attachment{{MimeType: "text/plain"}},
+		iterations:       []core.IterationTrace{{Iter: 0}},
 		sources:          []core.Source{{URL: "https://example.test"}},
 		safeCloseCh:      func() {},
 	}
-	cfg := LoopConfig{name: "test", Config: Config{logger: nopLogger}}
+	cfg := LoopConfig{Name: "test", Config: Config{Logger: nopLogger}}
 	extra := AgentResult{SuspendPayload: json.RawMessage(`"x"`), SuspendProtocol: "tag"}
-	res := terminateIteration(context.Background(), cfg, nil, state, FinishSuspended, extra, nil)
+	res := terminateIteration(context.Background(), cfg, nil, state, core.FinishSuspended, extra, nil)
 	if res.outcome != iterDone {
 		t.Fatalf("outcome = %v, want iterDone", res.outcome)
 	}
-	if res.final.FinishReason != FinishSuspended {
+	if res.final.FinishReason != core.FinishSuspended {
 		t.Fatalf("FinishReason = %v, want FinishSuspended", res.final.FinishReason)
 	}
 	if res.final.Usage != state.totalUsage {
@@ -629,5 +622,67 @@ func TestTerminateIteration_PinsContractFields(t *testing.T) {
 	}
 	if string(res.final.SuspendPayload) != `"x"` || res.final.SuspendProtocol != "tag" {
 		t.Fatalf("extra fields not merged: %+v", res.final)
+	}
+}
+
+// --- splitContentRunes unit tests ---
+
+func TestSplitContentRunes_FitsInOne(t *testing.T) {
+	chunks := splitContentRunes("hello", 100)
+	if len(chunks) != 1 || chunks[0] != "hello" {
+		t.Fatalf("expected single chunk %q, got %v", "hello", chunks)
+	}
+}
+
+func TestSplitContentRunes_ExactBoundary(t *testing.T) {
+	chunks := splitContentRunes("abcde", 5)
+	if len(chunks) != 1 || chunks[0] != "abcde" {
+		t.Fatalf("expected single chunk, got %v", chunks)
+	}
+}
+
+func TestSplitContentRunes_SplitsEvenly(t *testing.T) {
+	s := strings.Repeat("x", 200)
+	chunks := splitContentRunes(s, 100)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if chunks[0] != strings.Repeat("x", 100) || chunks[1] != strings.Repeat("x", 100) {
+		t.Error("chunks do not equal expected 100-x slices")
+	}
+}
+
+func TestSplitContentRunes_Reassembly(t *testing.T) {
+	original := strings.Repeat("abc", 70_000) // 210_000 runes
+	chunks := splitContentRunes(original, 100_000)
+	if len(chunks) < 2 {
+		t.Fatalf("expected >=2 chunks, got %d", len(chunks))
+	}
+	var reassembled strings.Builder
+	for _, c := range chunks {
+		reassembled.WriteString(c)
+	}
+	if reassembled.String() != original {
+		t.Error("reassembled string does not equal original")
+	}
+}
+
+func TestSplitContentRunes_MultibyteUTF8(t *testing.T) {
+	// 2-byte runes (é = U+00E9). Each rune is 2 bytes in UTF-8.
+	original := strings.Repeat("é", 5)
+	chunks := splitContentRunes(original, 3)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks for 5 runes with max=3, got %d", len(chunks))
+	}
+	if chunks[0] != strings.Repeat("é", 3) || chunks[1] != strings.Repeat("é", 2) {
+		t.Errorf("unexpected chunks: %v", chunks)
+	}
+	// Verify bytes are valid UTF-8 (no broken sequences).
+	for i, c := range chunks {
+		for j, r := range c {
+			if r == '�' {
+				t.Errorf("chunk %d position %d: replacement rune (broken UTF-8)", i, j)
+			}
+		}
 	}
 }

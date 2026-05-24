@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/workflow"
 )
 
@@ -48,16 +49,6 @@ type errSuspend struct {
 
 func (e *errSuspend) Error() string { return "suspend" }
 
-// Suspend returns an error that signals the workflow or network engine to
-// pause execution. The payload provides context for the human (what they
-// need to decide, what data to show).
-//
-// For typed payloads use SuspendProtocol.Suspend; this untyped form
-// remains as an escape hatch for prototypes and dynamic payloads.
-func Suspend(payload json.RawMessage) error {
-	return &errSuspend{payload: payload}
-}
-
 // ErrSuspended is returned by Execute() when a workflow step or network
 // processor suspends execution to await external input.
 // Inspect Payload for context, then call Resume() or ResumeStream() with
@@ -90,7 +81,7 @@ type ErrSuspended struct {
 	resume func(ctx context.Context, data json.RawMessage) (AgentResult, error)
 	// resumeStream is like resume but emits StreamEvent values into ch.
 	// Set by workflow and agent-level suspend for streaming resume support.
-	resumeStream func(ctx context.Context, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error)
+	resumeStream func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (AgentResult, error)
 	// mu guards resume/resumeStream against concurrent access from the TTL timer goroutine.
 	mu sync.Mutex
 	// ttlTimer is the auto-release timer. Nil when no TTL is set.
@@ -135,7 +126,7 @@ func (e *ErrSuspended) Resume(ctx context.Context, data json.RawMessage) (AgentR
 // The channel is closed when streaming completes.
 // Returns an error if called on a released, expired, or externally constructed ErrSuspended,
 // or if the suspend was created in a non-streaming context (resumeStream is nil).
-func (e *ErrSuspended) ResumeStream(ctx context.Context, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error) {
+func (e *ErrSuspended) ResumeStream(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (AgentResult, error) {
 	e.mu.Lock()
 	if e.ttlTimer != nil {
 		e.ttlTimer.Stop()
@@ -236,7 +227,7 @@ func ResumeData(wCtx *WorkflowContext) (json.RawMessage, bool) {
 // estimateSnapshotSize returns a rough byte count for a message slice.
 // Counts Content, ToolCall Args/Metadata, and message-level Metadata.
 // Attachment.Data is shared (not deep-copied), so excluded.
-func estimateSnapshotSize(messages []ChatMessage) int64 {
+func estimateSnapshotSize(messages []core.ChatMessage) int64 {
 	var size int64
 	for _, m := range messages {
 		size += int64(len(m.Content))
@@ -256,7 +247,7 @@ func estimateSnapshotSize(messages []ChatMessage) int64 {
 //
 // A default TTL of 30 minutes is applied automatically. Callers can override
 // with WithSuspendTTL or call Release() explicitly.
-func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task AgentTask) *ErrSuspended {
+func checkSuspendLoop(err error, cfg LoopConfig, messages []core.ChatMessage, task AgentTask) *ErrSuspended {
 	var suspend *errSuspend
 	if !errors.As(err, &suspend) {
 		return nil
@@ -268,40 +259,40 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 	// Enforce per-agent suspend budget.
 	// The check-then-add must be atomic to prevent concurrent suspensions
 	// from both passing the check and exceeding the budget (TOCTOU race).
-	if cfg.suspendCount != nil {
-		maxSnap := cfg.maxSuspendSnapshots
+	if cfg.SuspendCount != nil {
+		maxSnap := cfg.MaxSuspendSnapshots
 		if maxSnap <= 0 {
 			maxSnap = defaultMaxSuspendSnapshots
 		}
-		maxBytes := cfg.maxSuspendBytes
+		maxBytes := cfg.MaxSuspendBytes
 		if maxBytes <= 0 {
 			maxBytes = defaultMaxSuspendBytes
 		}
-		cfg.suspendMu.Lock()
-		count := *cfg.suspendCount
-		bytes := *cfg.suspendBytes
+		cfg.SuspendMu.Lock()
+		count := *cfg.SuspendCount
+		bytes := *cfg.SuspendBytes
 		if count >= int64(maxSnap) || bytes+snapSize > maxBytes {
-			cfg.suspendMu.Unlock()
-			cfg.logger.Warn("suspend budget exceeded, skipping suspension",
-				"agent", cfg.name,
+			cfg.SuspendMu.Unlock()
+			cfg.Logger.Warn("suspend budget exceeded, skipping suspension",
+				"agent", cfg.Name,
 				"count", count,
 				"bytes", bytes)
 			return nil // caller propagates the original processor error
 		}
-		*cfg.suspendCount = count + 1
-		*cfg.suspendBytes = bytes + snapSize
-		cfg.suspendMu.Unlock()
+		*cfg.SuspendCount = count + 1
+		*cfg.SuspendBytes = bytes + snapSize
+		cfg.SuspendMu.Unlock()
 	}
 
 	// Deep-copy messages for resume closure so that ToolCalls, Attachments,
 	// and Metadata slices don't share backing arrays with the original.
 	// Inner byte slices (ToolCall.Args/Metadata, Attachment.Data) are also
 	// deep-copied to prevent shared mutable state across the snapshot boundary.
-	snapshot := make([]ChatMessage, len(messages))
+	snapshot := make([]core.ChatMessage, len(messages))
 	for i, m := range messages {
 		snapshot[i] = m
 		if len(m.ToolCalls) > 0 {
-			snapshot[i].ToolCalls = make([]ToolCall, len(m.ToolCalls))
+			snapshot[i].ToolCalls = make([]core.ToolCall, len(m.ToolCalls))
 			for j, tc := range m.ToolCalls {
 				snapshot[i].ToolCalls[j] = tc
 				if len(tc.Args) > 0 {
@@ -320,7 +311,7 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 		// backing byte slice is safe and avoids duplicating large binary
 		// content (images, PDFs, audio).
 		if len(m.Attachments) > 0 {
-			snapshot[i].Attachments = make([]Attachment, len(m.Attachments))
+			snapshot[i].Attachments = make([]core.Attachment, len(m.Attachments))
 			copy(snapshot[i].Attachments, m.Attachments)
 		}
 		if len(m.Metadata) > 0 {
@@ -335,34 +326,34 @@ func checkSuspendLoop(err error, cfg LoopConfig, messages []ChatMessage, task Ag
 	}
 
 	suspended := &ErrSuspended{
-		Step:         cfg.name,
+		Step:         cfg.Name,
 		Payload:      suspend.payload,
 		tag:          suspend.tag, // propagate from sentinel
 		snapshotSize: snapSize,
 		resume: func(ctx context.Context, data json.RawMessage) (AgentResult, error) {
-			resumed := make([]ChatMessage, len(snapshot)+1)
+			resumed := make([]core.ChatMessage, len(snapshot)+1)
 			copy(resumed, snapshot)
-			resumed[len(snapshot)] = UserMessage(formatFn(data))
+			resumed[len(snapshot)] = core.UserMessage(formatFn(data))
 			resumeCfg := cfg
-			resumeCfg.resumeMessages = resumed
+			resumeCfg.ResumeMessages = resumed
 			return runLoop(ctx, resumeCfg, task, nil)
 		},
-		resumeStream: func(ctx context.Context, data json.RawMessage, ch chan<- StreamEvent) (AgentResult, error) {
+		resumeStream: func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (AgentResult, error) {
 			// runLoop closes ch via its safeCloseCh — no additional defer close here.
-			resumed := make([]ChatMessage, len(snapshot)+1)
+			resumed := make([]core.ChatMessage, len(snapshot)+1)
 			copy(resumed, snapshot)
-			resumed[len(snapshot)] = UserMessage(formatFn(data))
+			resumed[len(snapshot)] = core.UserMessage(formatFn(data))
 			resumeCfg := cfg
-			resumeCfg.resumeMessages = resumed
+			resumeCfg.ResumeMessages = resumed
 			return runLoop(ctx, resumeCfg, task, ch)
 		},
 	}
-	if cfg.suspendCount != nil {
+	if cfg.SuspendCount != nil {
 		suspended.onRelease = func(size int64) {
-			cfg.suspendMu.Lock()
-			*cfg.suspendCount--
-			*cfg.suspendBytes -= size
-			cfg.suspendMu.Unlock()
+			cfg.SuspendMu.Lock()
+			*cfg.SuspendCount--
+			*cfg.SuspendBytes -= size
+			cfg.SuspendMu.Unlock()
 		}
 	}
 	// Apply default TTL to prevent memory leaks from abandoned suspensions.

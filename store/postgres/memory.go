@@ -25,7 +25,7 @@ type ItemStore struct {
 	logger *slog.Logger
 }
 
-var _ memory.ItemStore = (*ItemStore)(nil)
+var _ core.MemoryItemStore = (*ItemStore)(nil)
 
 // NewItemStore constructs an ItemStore on the given *pgxpool.Pool.
 func NewItemStore(pool *pgxpool.Pool, logger *slog.Logger) *ItemStore {

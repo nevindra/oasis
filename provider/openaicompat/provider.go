@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // Provider implements oasis.Provider for any OpenAI-compatible API.

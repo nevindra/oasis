@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	oasis "github.com/nevindra/oasis"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 const (
@@ -157,6 +157,9 @@ func parseCSV(content string, limit int) ([]map[string]any, []string, int, error
 
 func parseJSON(content string, limit int) ([]map[string]any, []string, int, error) {
 	trimmed := strings.TrimSpace(content)
+	if len(trimmed) == 0 {
+		return nil, nil, 0, fmt.Errorf("json content is empty")
+	}
 
 	var rawRecords []map[string]any
 	if trimmed[0] == '[' {
@@ -185,7 +188,7 @@ func parseJSONL(content string, limit int) ([]map[string]any, []string, int, err
 	records := make([]map[string]any, 0, min(len(lines), limit))
 	totalCount := 0
 
-	for _, line := range lines {
+	for lineNum, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -196,7 +199,10 @@ func parseJSONL(content string, limit int) ([]map[string]any, []string, int, err
 		}
 		var rec map[string]any
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue // skip malformed lines
+			// Match parseCSV/parseJSON: surface malformed input as an error
+			// rather than silently dropping records — silent drops let the
+			// LLM act on data that doesn't match the totalCount it sees.
+			return nil, nil, 0, fmt.Errorf("malformed JSONL at line %d: %w", lineNum+1, err)
 		}
 		records = append(records, rec)
 	}
