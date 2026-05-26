@@ -6,6 +6,82 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-05-26
+
+DX ergonomics patch addressing friction from real-world migration feedback.
+
+### Added
+
+- **`core.Func[In, Out]` — functional tool authoring.** Create an `AnyTool`
+  from a plain function in one line. Schema derived from the input type by
+  reflection; output auto-marshaled to JSON. Eliminates the struct + interface
+  + `Erase` ceremony for stateless tools. Re-exported as `oasis.Func`.
+  ```go
+  oasis.WithTools(oasis.Func("add", "Add two numbers",
+      func(ctx context.Context, in AddInput) (int, error) {
+          return in.A + in.B, nil
+      }))
+  ```
+- **`core.JSONResult(v any) ToolResult`** — marshal any value into a tool
+  result. Panics on marshal failure (programming error).
+- **`core.ErrorResult(msg string) ToolResult`** — tool result with the Error
+  field set.
+- **`core.ToolResult.Text() string`** — unquote Content as a plain string.
+  Replaces `string(result.Content)` and `json.Unmarshal` in tests.
+- **`core.RawTool(name, desc, schema, fn) AnyTool`** — one-liner for tools
+  that work with raw `json.RawMessage` instead of typed structs.
+- **Umbrella re-exports expanded (~40 symbols).** Common types and constants
+  now accessible from the `oasis` package without importing `core` or `agent`:
+  - Types: `Store`, `ToolDefinition`, `StreamEvent`, `StreamEventType`,
+    `FinishReason`, `InputHandler`.
+  - Event constants: `EventTextDelta`, `EventToolCallStart`,
+    `EventToolCallResult`, `EventToolCallDelta`, `EventToolProgress`,
+    `EventAgentStart`, `EventAgentFinish`, `EventRoutingDecision`,
+    `EventThinking`, `EventFileAttachment`, `EventRunStart`,
+    `EventRunFinish`, `EventIterationStart`, `EventIterationFinish`,
+    `EventError`.
+  - Finish reasons: `FinishStop`, `FinishToolCalls`, `FinishLength`,
+    `FinishContentFilter`, `FinishHalted`, `FinishSuspended`,
+    `FinishMaxIter`, `FinishError`.
+  - Message constructors: `SystemMessage`, `UserMessage`,
+    `AssistantMessage`.
+  - Functions: `Chat`, `WithSandbox`, `InputHandlerFromContext`.
+  - Tool helpers: `TextResult`, `JSONResult`, `ErrorResult`, `RawTool`,
+    `Func`.
+
+### Changed
+
+- **BREAKING — `memory.WithStore()` now accepts `core.Store`** instead of
+  the removed `memory.Store` combined interface. If the store also implements
+  `core.MemoryItemStore`, memory-item features (semantic recall, working
+  memory) activate automatically via interface assertion. Stores that only
+  implement `core.Store` work for conversation history without adapter
+  boilerplate.
+- **BREAKING — `network.WithRouter()` renamed to
+  `network.WithAgentOptions()`.** Same behavior — applies `agent.AgentOption`
+  values to the network's internal routing agent. The name now describes what
+  it does.
+
+### Removed
+
+- **`memory.Store` combined interface** (`core.Store` + `core.MemoryItemStore`).
+  Pass `core.Store` directly to `memory.WithStore()`.
+- **`memory.ItemStore` and `memory.Filter` deprecated comments** removed.
+  The aliases remain as package-level shorthand (they are type aliases for
+  `core.MemoryItemStore` and `core.MemoryFilter`).
+
+### Migration
+
+- `memory.WithStore(myStore)` — if `myStore` previously required a no-op
+  adapter to satisfy `memory.Store`, remove the adapter. Pass `core.Store`
+  directly.
+- `network.WithRouter(opts...)` → `network.WithAgentOptions(opts...)`.
+- Tool authoring: existing `Tool[In, Out]` + `Erase` continues to work.
+  `Func` is the new recommended path for stateless tools.
+- Imports: `core.StreamEvent`, `core.EventTextDelta`, `core.Chat`, etc.
+  can now be accessed as `oasis.StreamEvent`, `oasis.EventTextDelta`,
+  `oasis.Chat`. The `core` imports still work.
+
 ## [0.17.0] - 2026-05-24
 
 ### Added
