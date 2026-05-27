@@ -219,7 +219,7 @@ h.Cancel()
 | **Providers** | `provider/gemini` (Google Gemini), `provider/openaicompat` (OpenAI, Groq, Together, DeepSeek, Mistral, Ollama, vLLM, LM Studio, OpenRouter, Azure, and any OpenAI-compatible API). Anthropic native via `provider/openaicompat` with the Messages-API endpoint. |
 | **Storage** | `store/sqlite` (local, pure-Go, no CGO), `store/postgres` (PostgreSQL + pgvector). Both implement `Store`, `MemoryItemStore`, `GraphStore`, `KeywordSearcher`, and `ScheduledActionStore`. |
 | **Tools** | `tools/data` (CSV/JSON transform), `tools/http` (typed fetch). Sandbox tools (`shell`, `code_execute`, `file_read`, `file_write`, `file_edit`, `browser`, `deliver_file`, MCP wrappers) are auto-registered via `agent.WithSandbox(sb, sandbox.Tools(sb)...)`. |
-| **Sandbox** | `sandbox` (interface + `Tools()`); implementations live in separate repos (e.g. [`oasis-sandbox-ix`](https://github.com/nevindra/oasis-sandbox-ix) — Docker-backed). |
+| **Sandbox** | `sandbox` (interface + `Tools()` + `Lazy()` deferred-init wrapper); implementations live in separate repos (e.g. [`oasis-sandbox-ix`](https://github.com/nevindra/oasis-sandbox-ix) — Docker-backed). |
 | **MCP** | `mcp` client over stdio + HTTP. Tools register under `mcp__<server>__<tool>` namespacing. Deferred-schema mode for many-server setups. File-based config loader at `mcp/config` (Claude Desktop schema compatible). |
 | **Retrieval** | `rag.HybridRetriever` (vector + FTS + RRF), `rag.GraphRetriever` (multi-hop BFS), `rag.ScoreReranker`, `rag.LLMReranker`. |
 | **Ingestion** | `ingest` (HTML, Markdown, CSV, JSON, DOCX, PDF extractors; recursive, markdown, semantic chunkers; parent-child strategy). |

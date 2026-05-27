@@ -12,16 +12,9 @@ import (
 	oasis "github.com/nevindra/oasis/core"
 )
 
-// decodeContent unwraps a tool result's JSON-encoded text content for assertion.
-// Tools built with oasis.TextResult store text as a JSON string literal so the
-// wire format is always valid JSON; tests inspect the decoded value, not the envelope.
-func decodeContent(t *testing.T, r oasis.ToolResult) string {
-	t.Helper()
-	var s string
-	if err := json.Unmarshal(r.Content, &s); err != nil {
-		t.Fatalf("Content not a JSON string: %v (raw=%s)", err, r.Content)
-	}
-	return s
+// decodeContent returns the tool result's text content for assertion.
+func decodeContent(_ *testing.T, r oasis.ToolResult) string {
+	return r.Content
 }
 
 // mockSandbox implements Sandbox for testing tool dispatch.

@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **`sandbox.Lazy(create func(ctx context.Context) (Sandbox, error)) Sandbox`.**
+  Deferred-init wrapper that creates the underlying sandbox on first method
+  call. Create is called at most once; retries on error; `Close` is a no-op
+  if never created. Thread-safe. Eliminates the 276-line proxy boilerplate
+  that every consumer needed for lazy container creation.
+
+### Fixed
+
+- **`sandbox/tools_test.go` build failure.** `decodeContent` helper still
+  used `json.Unmarshal` on `ToolResult.Content`, which became `string` in
+  v0.17.2. Updated to use the string directly.
+
 ## [0.17.3] - 2026-05-27
 
 DX and safety patch: fixes a semantic bug in `core.Func`/`core.Erase` error
