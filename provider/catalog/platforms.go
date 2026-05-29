@@ -6,7 +6,9 @@ import oasis "github.com/nevindra/oasis/core"
 
 // protocolOverrides maps provider names that don't use OpenAI-compatible protocol.
 var protocolOverrides = map[string]oasis.Protocol{
-	"gemini": oasis.ProtocolGemini,
+	"gemini":       oasis.ProtocolGemini,
+	"dashscope":    oasis.ProtocolDashScope,
+	"dashscope-cn": oasis.ProtocolDashScope,
 }
 
 // generatedPlatforms is overridden by platforms_gen.go when present.
@@ -27,4 +29,8 @@ var builtinPlatforms = []oasis.Platform{
 	{Name: "Fireworks", Protocol: oasis.ProtocolOpenAICompat, BaseURL: "https://api.fireworks.ai/inference/v1", EnvVars: []string{"FIREWORKS_API_KEY"}},
 	{Name: "Cerebras", Protocol: oasis.ProtocolOpenAICompat, BaseURL: "https://api.cerebras.ai/v1", EnvVars: []string{"CEREBRAS_API_KEY"}},
 	{Name: "Ollama", Protocol: oasis.ProtocolOpenAICompat, BaseURL: "http://localhost:11434/v1"},
+	// DashScope native image API (Qwen-Image text-to-image). Distinct from the
+	// "Qwen" platform above, which is DashScope's OpenAI-compatible chat endpoint.
+	{Name: "DashScope", Protocol: oasis.ProtocolDashScope, BaseURL: "https://dashscope-intl.aliyuncs.com/api/v1", EnvVars: []string{"DASHSCOPE_API_KEY"}},
+	{Name: "DashScope-CN", Protocol: oasis.ProtocolDashScope, BaseURL: "https://dashscope.aliyuncs.com/api/v1", EnvVars: []string{"DASHSCOPE_API_KEY"}},
 }

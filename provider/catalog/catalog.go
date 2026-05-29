@@ -22,6 +22,7 @@ import (
 	"time"
 
 	oasis "github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/provider/dashscope"
 	"github.com/nevindra/oasis/provider/gemini"
 	"github.com/nevindra/oasis/provider/openaicompat"
 )
@@ -363,6 +364,8 @@ func listerFor(protocol oasis.Protocol, provider string) modelLister {
 	switch protocol {
 	case oasis.ProtocolGemini:
 		return &geminiLister{}
+	case oasis.ProtocolDashScope:
+		return &dashscopeLister{}
 	default:
 		return &openaiLister{provider: provider}
 	}
@@ -373,11 +376,38 @@ func createProvider(platform oasis.Platform, apiKey, model string) (oasis.Provid
 	switch platform.Protocol {
 	case oasis.ProtocolGemini:
 		return gemini.New(apiKey, model), nil
+	case oasis.ProtocolDashScope:
+		return dashscope.New(apiKey, model, dashscopeNativeBaseURL(platform.BaseURL)), nil
 	default:
+		// DashScope image models (qwen-image*) are NOT served over the
+		// OpenAI-compatible chat endpoint. Route them to the native
+		// multimodal-generation API even when the model is selected under the
+		// compatible-mode "Qwen" platform — otherwise the request 500s.
+		if isDashScopeImageModel(model) && strings.Contains(platform.BaseURL, "dashscope") {
+			return dashscope.New(apiKey, model, dashscopeNativeBaseURL(platform.BaseURL)), nil
+		}
 		var provOpts []openaicompat.ProviderOption
 		provOpts = append(provOpts, openaicompat.WithName(strings.ToLower(platform.Name)))
 		return openaicompat.NewProvider(apiKey, model, platform.BaseURL, provOpts...), nil
 	}
+}
+
+// isDashScopeImageModel reports whether model is a DashScope text-to-image
+// model (Qwen-Image or Wan image) served by the native multimodal-generation
+// API rather than the OpenAI-compatible chat endpoint.
+func isDashScopeImageModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.HasPrefix(m, "qwen-image") ||
+		(strings.HasPrefix(m, "wan") && strings.Contains(m, "image"))
+}
+
+// dashscopeNativeBaseURL maps a DashScope compatible-mode base URL to the
+// native API base. Already-native or unknown URLs are returned unchanged.
+func dashscopeNativeBaseURL(baseURL string) string {
+	if strings.Contains(baseURL, "/compatible-mode/v1") {
+		return strings.Replace(baseURL, "/compatible-mode/v1", "/api/v1", 1)
+	}
+	return baseURL
 }
 
 // mergeModels combines static metadata with live availability data.

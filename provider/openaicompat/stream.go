@@ -34,6 +34,7 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 	var usage oasis.Usage
 	var finishReason string
 	var systemFingerprint string
+	var attachments []oasis.Attachment
 
 	// Accumulate tool calls across chunks. OpenAI streams tool calls
 	// incrementally: each chunk has an index, and arguments arrive as string fragments.
@@ -112,6 +113,12 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 			}
 		}
 
+		// Accumulate generated images (image-capable models emit these,
+		// often in a delta with empty text content).
+		if atts := imagesToAttachments(delta.Images); len(atts) > 0 {
+			attachments = append(attachments, atts...)
+		}
+
 		// Accumulate tool calls.
 		for _, tc := range delta.ToolCalls {
 			// Ensure we have a slot for this tool call index.
@@ -168,6 +175,7 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 	out := oasis.ChatResponse{
 		Content:      fullContent.String(),
 		ToolCalls:    oasisToolCalls,
+		Attachments:  attachments,
 		Usage:        usage,
 		FinishReason: mapOpenAIFinishReason(finishReason),
 	}

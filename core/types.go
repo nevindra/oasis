@@ -387,6 +387,12 @@ type ChatRequest struct {
 	Tools            []ToolDefinition  `json:"tools,omitempty"`
 	ResponseSchema   *ResponseSchema   `json:"response_schema,omitempty"`
 	GenerationParams *GenerationParams `json:"generation_params,omitempty"`
+	// Modalities requests specific output modalities (e.g. ["text","image"]).
+	// Providers that support image output enable returning generated images
+	// when "image" is present. Empty means text-only (the default). Provider-
+	// agnostic: OpenAI-compatible providers map it to the request's
+	// `modalities` field; Gemini maps it to responseModalities.
+	Modalities []string `json:"modalities,omitempty"`
 }
 
 type ChatResponse struct {

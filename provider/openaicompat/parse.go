@@ -1,7 +1,9 @@
 package openaicompat
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"strings"
 
 	oasis "github.com/nevindra/oasis/core"
 )
@@ -38,6 +40,7 @@ func ParseResponse(resp ChatResponse) (oasis.ChatResponse, error) {
 	if choice.Message != nil {
 		out.Content = choice.Message.Content
 		out.ToolCalls = ParseToolCalls(choice.Message.ToolCalls)
+		out.Attachments = imagesToAttachments(choice.Message.Images)
 	}
 
 	out.FinishReason = mapOpenAIFinishReason(choice.FinishReason)
@@ -70,6 +73,56 @@ func ParseResponse(resp ChatResponse) (oasis.ChatResponse, error) {
 	}
 
 	return out, nil
+}
+
+// imagesToAttachments converts response `images` entries into oasis Attachments.
+// Inline data URIs ("data:<mime>;base64,<...>") are decoded to bytes; remote
+// URLs are passed through as URL attachments.
+func imagesToAttachments(imgs []ImageOut) []oasis.Attachment {
+	if len(imgs) == 0 {
+		return nil
+	}
+	var out []oasis.Attachment
+	for _, img := range imgs {
+		if img.ImageURL == nil || img.ImageURL.URL == "" {
+			continue
+		}
+		if att, ok := parseImageDataURI(img.ImageURL.URL); ok {
+			out = append(out, att)
+			continue
+		}
+		// Remote URL — let the consumer fetch it. MIME is best-effort.
+		out = append(out, oasis.Attachment{MimeType: "image/png", URL: img.ImageURL.URL})
+	}
+	return out
+}
+
+// parseImageDataURI decodes a "data:<mime>;base64,<payload>" URI into an
+// Attachment. Returns ok=false if the string is not a base64 data URI.
+func parseImageDataURI(uri string) (oasis.Attachment, bool) {
+	if !strings.HasPrefix(uri, "data:") {
+		return oasis.Attachment{}, false
+	}
+	rest := uri[len("data:"):]
+	comma := strings.IndexByte(rest, ',')
+	if comma < 0 {
+		return oasis.Attachment{}, false
+	}
+	meta, payload := rest[:comma], rest[comma+1:]
+	mime := meta
+	isB64 := false
+	if semi := strings.IndexByte(meta, ';'); semi >= 0 {
+		mime = meta[:semi]
+		isB64 = strings.Contains(meta[semi:], "base64")
+	}
+	if !isB64 {
+		return oasis.Attachment{}, false
+	}
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil || len(data) == 0 {
+		return oasis.Attachment{}, false
+	}
+	return oasis.Attachment{MimeType: mime, Data: data}, true
 }
 
 // ParseToolCalls converts OpenAI tool call requests to oasis ToolCalls.

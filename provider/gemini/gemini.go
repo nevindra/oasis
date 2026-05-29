@@ -65,7 +65,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 		defer close(ch)
 	}
 
-	body, err := g.buildBody(req.Messages, req.Tools, req.ResponseSchema, req.GenerationParams)
+	body, err := g.buildBody(req.Messages, req.Tools, req.ResponseSchema, req.GenerationParams, req.Modalities)
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("build body: " + err.Error())
 	}
@@ -435,7 +435,17 @@ func (e *GeminiEmbedding) Embed(ctx context.Context, texts []string) ([][]float3
 // ---- Body builder ----
 
 // buildBody constructs the Gemini API request body from chat messages and optional tool definitions.
-func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schema *oasis.ResponseSchema, genParams *oasis.GenerationParams) (map[string]any, error) {
+// appendUnique appends v to s only if not already present.
+func appendUnique(s []string, v string) []string {
+	for _, x := range s {
+		if x == v {
+			return s
+		}
+	}
+	return append(s, v)
+}
+
+func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, schema *oasis.ResponseSchema, genParams *oasis.GenerationParams, modalities []string) (map[string]any, error) {
 	var systemParts []string
 	var contents []map[string]any
 
@@ -630,8 +640,21 @@ func (g *Gemini) buildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefin
 		genConfig["mediaResolution"] = g.mediaResolution
 	}
 
-	if len(g.responseModalities) > 0 {
-		genConfig["responseModalities"] = g.responseModalities
+	// Response modalities: provider-level defaults merged with per-request
+	// modalities from req.Modalities (mapped to Gemini's uppercase names).
+	respMods := g.responseModalities
+	for _, m := range modalities {
+		switch strings.ToLower(m) {
+		case "text":
+			respMods = appendUnique(respMods, "TEXT")
+		case "image":
+			respMods = appendUnique(respMods, "IMAGE")
+		case "audio":
+			respMods = appendUnique(respMods, "AUDIO")
+		}
+	}
+	if len(respMods) > 0 {
+		genConfig["responseModalities"] = respMods
 	}
 
 	if g.thinkingEnabled {

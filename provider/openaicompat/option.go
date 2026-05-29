@@ -18,6 +18,31 @@ func WithMaxTokens(n int) Option {
 	return func(r *ChatRequest) { r.MaxTokens = n }
 }
 
+// WithModalities sets the requested output modalities (e.g. ["text","image"]).
+// When "image" is requested, string message content is promoted to a single
+// text content block, because image-capable endpoints require `content` to be
+// a list. Text-only requests are left untouched.
+func WithModalities(m []string) Option {
+	return func(r *ChatRequest) {
+		r.Modalities = m
+		wantImage := false
+		for _, mod := range m {
+			if mod == "image" {
+				wantImage = true
+				break
+			}
+		}
+		if !wantImage {
+			return
+		}
+		for i := range r.Messages {
+			if s, ok := r.Messages[i].Content.(string); ok && s != "" {
+				r.Messages[i].Content = []ContentBlock{{Type: "text", Text: s}}
+			}
+		}
+	}
+}
+
 // WithFrequencyPenalty sets the frequency penalty (-2.0–2.0).
 func WithFrequencyPenalty(p float64) Option {
 	return func(r *ChatRequest) { r.FrequencyPenalty = &p }

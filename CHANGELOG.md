@@ -8,6 +8,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Provider-agnostic image generation.** `core.ChatRequest.Modalities`
+  (e.g. `["text","image"]`) lets callers request image output. The
+  OpenAI-compatible provider now maps it to the request `modalities` field and
+  decodes generated images from `choices[].message.images[]` (data-URI or URL)
+  into `ChatResponse.Attachments`, for both streaming and non-streaming paths.
+  Gemini maps `Modalities` to `responseModalities`. Previously only Gemini
+  could return generated images.
+- **`provider/dashscope` + `ProtocolDashScope`.** Native Alibaba DashScope
+  image provider for text-to-image. Qwen-Image uses the synchronous
+  multimodal-generation endpoint; Wan image models use the asynchronous
+  interleaved flow (create task → poll). Generated images are downloaded and
+  returned as inline `Attachments` (provider URLs expire in 24h). Registered
+  via the built-in `DashScope`/`DashScope-CN` platforms; the catalog also
+  auto-routes `qwen-image*`/`wan*-image` models selected under the
+  OpenAI-compatible "Qwen" platform to the native endpoint.
 - **`sandbox.Lazy(create func(ctx context.Context) (Sandbox, error)) Sandbox`.**
   Deferred-init wrapper that creates the underlying sandbox on first method
   call. Create is called at most once; retries on error; `Close` is a no-op

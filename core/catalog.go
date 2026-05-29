@@ -14,6 +14,10 @@ const (
 	ProtocolOpenAICompat Protocol = iota
 	// ProtocolGemini is for Google's unique Generative Language API.
 	ProtocolGemini
+	// ProtocolDashScope is for Alibaba DashScope's native multimodal-generation
+	// API (Qwen-Image text-to-image). Distinct from DashScope's OpenAI-compatible
+	// chat endpoint, which uses ProtocolOpenAICompat.
+	ProtocolDashScope
 )
 
 // Platform represents a known LLM provider platform.

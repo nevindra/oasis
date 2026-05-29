@@ -31,6 +31,10 @@ type ChatRequest struct {
 	Seed             *int            `json:"seed,omitempty"`
 	ResponseFormat   *ResponseFormat `json:"response_format,omitempty"`
 	ToolChoice       any             `json:"tool_choice,omitempty"`
+	// Modalities requests output modalities (e.g. ["text","image"]). Providers
+	// that support image generation (OpenRouter, image-capable gateways) return
+	// generated images when "image" is present. Omitted = text only.
+	Modalities []string `json:"modalities,omitempty"`
 	// When streaming, request usage in the final chunk.
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
 }
@@ -145,6 +149,16 @@ type ChoiceMessage struct {
 	Content   string            `json:"content,omitempty"`
 	ToolCalls []ToolCallRequest `json:"tool_calls,omitempty"`
 	Refusal   string            `json:"refusal,omitempty"`
+	// Images carries generated images returned by image-capable models. This
+	// is the de-facto OpenAI-compatible convention (OpenRouter and others):
+	// each entry is {"type":"image_url","image_url":{"url":"data:<mime>;base64,<...>"}}.
+	Images []ImageOut `json:"images,omitempty"`
+}
+
+// ImageOut is a generated-image entry in a response message's `images` array.
+type ImageOut struct {
+	Type     string    `json:"type,omitempty"` // "image_url"
+	ImageURL *ImageURL `json:"image_url,omitempty"`
 }
 
 // Usage contains token usage statistics.

@@ -73,7 +73,7 @@ type batchInlinedResponse struct {
 func (g *Gemini) BatchChat(ctx context.Context, requests []oasis.ChatRequest) (oasis.BatchJob, error) {
 	inlineReqs := make([]map[string]any, 0, len(requests))
 	for i, req := range requests {
-		body, err := g.buildBody(req.Messages, nil, req.ResponseSchema, req.GenerationParams)
+		body, err := g.buildBody(req.Messages, nil, req.ResponseSchema, req.GenerationParams, req.Modalities)
 		if err != nil {
 			return oasis.BatchJob{}, g.wrapErr(fmt.Sprintf("build body for request %d: %s", i, err))
 		}

@@ -11,6 +11,37 @@ import (
 	oasis "github.com/nevindra/oasis/core"
 )
 
+// dashscopeImageModels is the static set of DashScope (Qwen-Image) text-to-image
+// models. DashScope has no OpenAI-style /models listing for these, so the
+// catalog relies on this curated list for validation and selection.
+var dashscopeImageModels = []string{
+	"qwen-image-2.0",
+	"qwen-image-2.0-pro",
+	"qwen-image-max",
+	"qwen-image-plus",
+	"qwen-image",
+	"wan2.6-image",
+	"wan2.7-image",
+}
+
+// dashscopeLister returns the curated DashScope image model list. It performs
+// no network call (DashScope exposes no model-listing endpoint for image models).
+type dashscopeLister struct{}
+
+func (l *dashscopeLister) listModels(ctx context.Context, baseURL, apiKey string) ([]oasis.ModelInfo, error) {
+	out := make([]oasis.ModelInfo, 0, len(dashscopeImageModels))
+	for _, id := range dashscopeImageModels {
+		out = append(out, oasis.ModelInfo{
+			ID:               id,
+			Provider:         "dashscope",
+			DisplayName:      id,
+			OutputModalities: []string{"image"},
+			Status:           oasis.ModelStatusAvailable,
+		})
+	}
+	return out, nil
+}
+
 // modelLister fetches and normalizes model lists from a provider API.
 type modelLister interface {
 	listModels(ctx context.Context, baseURL, apiKey string) ([]oasis.ModelInfo, error)
