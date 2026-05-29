@@ -83,7 +83,11 @@ func (p *Provider) mergeGenParams(params *oasis.GenerationParams) []Option {
 // The channel is closed when streaming completes (via StreamSSE) or on error.
 // When req.Tools is non-empty, tool call arguments stream as EventToolCallDelta events.
 func (p *Provider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-	body := BuildBody(req.Messages, req.Tools, p.model, req.ResponseSchema, p.mergeGenParams(req.GenerationParams)...)
+	opts := p.mergeGenParams(req.GenerationParams)
+	if len(req.Modalities) > 0 {
+		opts = append(opts, WithModalities(req.Modalities))
+	}
+	body := BuildBody(req.Messages, req.Tools, p.model, req.ResponseSchema, opts...)
 	body.Stream = true
 	body.StreamOptions = &StreamOptions{IncludeUsage: true}
 
