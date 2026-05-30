@@ -42,9 +42,10 @@ func (t toolImpl) ExecuteRaw(ctx context.Context, args json.RawMessage) (oasis.T
 type ToolsOption func(*toolsConfig)
 
 type toolsConfig struct {
-	delivery FileDelivery
-	mounts   []MountSpec
-	manifest *Manifest
+	delivery  FileDelivery
+	mounts    []MountSpec
+	manifest  *Manifest
+	noBrowser bool
 }
 
 // WithFileDelivery enables the deliver_file tool with a single legacy
@@ -55,6 +56,14 @@ type toolsConfig struct {
 // fallback inside deliver_file when no mount covers the requested path.
 func WithFileDelivery(fd FileDelivery) ToolsOption {
 	return func(c *toolsConfig) { c.delivery = fd }
+}
+
+// WithoutBrowser omits the browser tool set (browser, screenshot, snapshot,
+// page_text, export_pdf, browser_eval, browser_find) from the returned tools.
+// Use for "light" sandboxes that have no browser capability, so the model is
+// never offered tools that would fail.
+func WithoutBrowser() ToolsOption {
+	return func(c *toolsConfig) { c.noBrowser = true }
 }
 
 // WithMounts attaches a slice of FilesystemMount specs to the tool layer.
@@ -223,15 +232,20 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 		fileTreeTool(sb),
 		httpFetchTool(sb),
 		workspaceInfoTool(sb),
-		browserTool(sb),
-		screenshotTool(sb),
 		mcpCallTool(sb),
-		snapshotTool(sb),
-		pageTextTool(sb),
-		exportPDFTool(sb),
-		browserEvalTool(sb),
-		browserFindTool(sb),
 		webSearchTool(sb),
+	}
+
+	if !cfg.noBrowser {
+		tools = append(tools,
+			browserTool(sb),
+			screenshotTool(sb),
+			snapshotTool(sb),
+			pageTextTool(sb),
+			exportPDFTool(sb),
+			browserEvalTool(sb),
+			browserFindTool(sb),
+		)
 	}
 
 	// Register deliver_file when ANY destination is available — either an

@@ -38,6 +38,12 @@ type CreateOpts struct {
 	TTL       time.Duration     // sandbox lifetime; 0 uses manager default
 	Resources ResourceSpec      // per-sandbox resource limits; zero values use defaults
 	Env       map[string]string // additional env vars injected into the container
+
+	// Browser declares whether this sandbox needs browser capability.
+	// nil  = manager default (typically browser via shared tier);
+	// true = ensure browser; false = no browser ("light" sandbox).
+	// Implementations that have no browser concept may ignore it.
+	Browser *bool
 }
 
 // ResourceSpec defines per-sandbox resource limits.

@@ -1064,6 +1064,45 @@ func findToolByName(tools []oasis.AnyTool, name string) oasis.AnyTool {
 	return nil
 }
 
+func TestTools_WithoutBrowserOmitsBrowserTools(t *testing.T) {
+	sb := &mockSandbox{}
+	browserNames := map[string]bool{
+		"browser": true, "screenshot": true, "snapshot": true,
+		"page_text": true, "export_pdf": true, "browser_eval": true,
+		"browser_find": true,
+	}
+
+	full := Tools(sb)
+	var fullHasBrowser bool
+	for _, tl := range full {
+		if browserNames[tl.Definition().Name] {
+			fullHasBrowser = true
+		}
+	}
+	if !fullHasBrowser {
+		t.Fatal("baseline Tools() should include browser tools")
+	}
+
+	light := Tools(sb, WithoutBrowser())
+	for _, tl := range light {
+		if browserNames[tl.Definition().Name] {
+			t.Errorf("WithoutBrowser() leaked browser tool %q", tl.Definition().Name)
+		}
+	}
+	var hasShell, hasWebSearch bool
+	for _, tl := range light {
+		switch tl.Definition().Name {
+		case "shell":
+			hasShell = true
+		case "web_search":
+			hasWebSearch = true
+		}
+	}
+	if !hasShell || !hasWebSearch {
+		t.Errorf("WithoutBrowser() dropped non-browser tools: shell=%v web_search=%v", hasShell, hasWebSearch)
+	}
+}
+
 func TestFileWriteToolPublishesUnderWriteMount(t *testing.T) {
 	mount := newFakeMount()
 	sb := newRecordingSandbox()
