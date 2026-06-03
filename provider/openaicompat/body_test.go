@@ -655,3 +655,65 @@ func TestBuildBody_OptionsJSONRoundTrip(t *testing.T) {
 		t.Error("expected presence_penalty to be omitted")
 	}
 }
+
+func TestContentBlock_TextTypeAlwaysHasTextField(t *testing.T) {
+	// A text block with empty text MUST still emit "text":"" — omitempty would
+	// drop it and produce an invalid {"type":"text"} part that providers reject
+	// ("Expected 'text' field in text type content part to be a string").
+	raw, err := json.Marshal(ContentBlock{Type: "text", Text: ""})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	txt, ok := m["text"]
+	if !ok {
+		t.Fatalf("text block must include a \"text\" field; got %s", raw)
+	}
+	if _, isStr := txt.(string); !isStr {
+		t.Fatalf("\"text\" must be a string, got %T; raw=%s", txt, raw)
+	}
+
+	// Non-text blocks keep "text" omitted.
+	raw2, _ := json.Marshal(ContentBlock{Type: "image_url", ImageURL: &ImageURL{URL: "data:image/png;base64,AAAA"}})
+	var m2 map[string]any
+	_ = json.Unmarshal(raw2, &m2)
+	if _, ok := m2["text"]; ok {
+		t.Fatalf("image_url block should omit \"text\"; got %s", raw2)
+	}
+}
+
+func TestBuildBody_EmptyContentCacheCheckpointKeepsTextField(t *testing.T) {
+	// Regression: an empty-content message marked as a cache checkpoint was
+	// promoted to a {"type":"text"} block whose empty text got dropped by
+	// omitempty, yielding an invalid content part (HTTP 400 from providers).
+	messages := []oasis.ChatMessage{
+		{Role: "tool", Content: "", ToolCallID: "call_1", CacheCheckpoint: true},
+	}
+	req := BuildBody(messages, nil, "gpt-4o", nil)
+	if len(req.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(req.Messages))
+	}
+
+	raw, err := json.Marshal(req.Messages[0].Content)
+	if err != nil {
+		t.Fatalf("marshal content: %v", err)
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		t.Fatalf("checkpointed content should be a content-block array; got %s", raw)
+	}
+	if len(blocks) == 0 {
+		t.Fatalf("expected at least one content block; got %s", raw)
+	}
+	for _, blk := range blocks {
+		if blk["type"] != "text" {
+			continue
+		}
+		if _, ok := blk["text"].(string); !ok {
+			t.Fatalf("text block must carry a string \"text\" field; got %s", raw)
+		}
+	}
+}
