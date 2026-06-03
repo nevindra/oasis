@@ -75,6 +75,24 @@ type ContentBlock struct {
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 
+// MarshalJSON ensures a "text"-type block always carries its "text" field, even
+// when the text is empty. The struct tag uses `omitempty`, which would drop an
+// empty string and emit an invalid {"type":"text"} part — providers reject that
+// with "Expected 'text' field in text type content part to be a string". This
+// happens, e.g., when an empty-content message is promoted to a content block to
+// attach cache_control. Non-text blocks (image_url/file) keep `text` omitted.
+func (b ContentBlock) MarshalJSON() ([]byte, error) {
+	if b.Type == "text" {
+		return json.Marshal(struct {
+			Type         string        `json:"type"`
+			Text         string        `json:"text"`
+			CacheControl *CacheControl `json:"cache_control,omitempty"`
+		}{Type: b.Type, Text: b.Text, CacheControl: b.CacheControl})
+	}
+	type alias ContentBlock
+	return json.Marshal(alias(b))
+}
+
 // CacheControl marks a content block as a cache breakpoint.
 // The provider caches all content up to and including this block.
 // Supported by Anthropic, Qwen, and other providers that implement
