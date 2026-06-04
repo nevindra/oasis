@@ -59,9 +59,9 @@ func WithFileDelivery(fd FileDelivery) ToolsOption {
 }
 
 // WithoutBrowser omits the browser tool set (browser, screenshot, snapshot,
-// page_text, export_pdf, browser_eval, browser_find) from the returned tools.
-// Use for "light" sandboxes that have no browser capability, so the model is
-// never offered tools that would fail.
+// page_text, export_pdf, browser_eval, browser_find, browser_wait) from the
+// returned tools. Use for "light" sandboxes that have no browser capability,
+// so the model is never offered tools that would fail.
 func WithoutBrowser() ToolsOption {
 	return func(c *toolsConfig) { c.noBrowser = true }
 }
@@ -192,6 +192,13 @@ type browserFindArgs struct {
 	Query string `json:"query" describe:"Natural-language description of the element (e.g., 'submit button', 'email input', 'search box')"`
 }
 
+type browserWaitArgs struct {
+	Kind      string `json:"kind" describe:"What to wait for: selector, text, url, load, time, function"`
+	Value     string `json:"value,omitempty" describe:"Depends on kind — CSS selector (selector), text to appear (text), URL glob (url), load state: ready-state|content-loaded|network-idle (load), JS expression (function). Unused for time."`
+	TimeoutMs int    `json:"timeout_ms,omitempty" describe:"Max wait in milliseconds (default 10000, max 30000). For kind=time this is the delay itself."`
+	State     string `json:"state,omitempty" describe:"selector kind only: visible (default) or hidden"`
+}
+
 type httpFetchArgs struct {
 	URL      string `json:"url" describe:"URL to fetch"`
 	Raw      bool   `json:"raw,omitempty" describe:"true = raw HTML, false = readability extraction (default)"`
@@ -245,6 +252,7 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 			exportPDFTool(sb),
 			browserEvalTool(sb),
 			browserFindTool(sb),
+			browserWaitTool(sb),
 		)
 	}
 
@@ -722,6 +730,38 @@ func browserFindTool(sb Sandbox) toolImpl {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
 			return oasis.TextResult(fmt.Sprintf("ref: %s (confidence: %s, score: %.2f)", result.Ref, result.Confidence, result.Score)), nil
+		})
+}
+
+func browserWaitTool(sb Sandbox) toolImpl {
+	return newTool("browser_wait",
+		"Wait for a page condition after navigate/click instead of polling with screenshots. Returns satisfied=false on timeout (never errors) — if not satisfied, take a snapshot to inspect the actual page state.",
+		string(core.DeriveSchema[browserWaitArgs]()),
+		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+			var p browserWaitArgs
+			if err := json.Unmarshal(args, &p); err != nil {
+				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+			}
+			if p.Kind == "" {
+				return oasis.ToolResult{Error: "kind is required (selector, text, url, load, time, function)"}, nil
+			}
+			res, err := sb.BrowserWait(ctx, BrowserWaitOpts{
+				Kind:      p.Kind,
+				Value:     p.Value,
+				TimeoutMs: p.TimeoutMs,
+				State:     p.State,
+			})
+			if err != nil {
+				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			if res.Satisfied {
+				return oasis.TextResult(fmt.Sprintf("condition met (%s) after %dms", res.Kind, res.ElapsedMs)), nil
+			}
+			msg := fmt.Sprintf("condition NOT met (%s) after %dms", res.Kind, res.ElapsedMs)
+			if res.Detail != "" {
+				msg += ": " + res.Detail
+			}
+			return oasis.TextResult(msg + ". Take a snapshot to inspect the current page state."), nil
 		})
 }
 
