@@ -52,6 +52,9 @@ func (m *mockSandbox) BrowserEval(context.Context, string) (string, error) {
 func (m *mockSandbox) BrowserFind(context.Context, string) (sandbox.BrowserFindResult, error) {
 	return sandbox.BrowserFindResult{}, nil
 }
+func (m *mockSandbox) BrowserWait(context.Context, sandbox.BrowserWaitOpts) (sandbox.BrowserWaitResult, error) {
+	return sandbox.BrowserWaitResult{}, nil
+}
 func (m *mockSandbox) MCPCall(context.Context, sandbox.MCPRequest) (sandbox.MCPResult, error) {
 	return sandbox.MCPResult{}, nil
 }

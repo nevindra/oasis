@@ -148,6 +148,14 @@ func (l *lazySandbox) BrowserFind(ctx context.Context, query string) (BrowserFin
 	return sb.BrowserFind(ctx, query)
 }
 
+func (l *lazySandbox) BrowserWait(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error) {
+	sb, err := l.get(ctx)
+	if err != nil {
+		return BrowserWaitResult{}, err
+	}
+	return sb.BrowserWait(ctx, opts)
+}
+
 func (l *lazySandbox) MCPCall(ctx context.Context, req MCPRequest) (MCPResult, error) {
 	sb, err := l.get(ctx)
 	if err != nil {

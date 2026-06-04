@@ -60,6 +60,11 @@ type Sandbox interface {
 	// for a given query (e.g., "submit button", "email input").
 	BrowserFind(ctx context.Context, query string) (BrowserFindResult, error)
 
+	// BrowserWait blocks until a page condition is met or the timeout elapses.
+	// A timeout is NOT an error: the result has Satisfied=false and a Detail
+	// explaining what was being waited on.
+	BrowserWait(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error)
+
 	// MCPCall invokes a tool on an MCP server running inside the sandbox.
 	MCPCall(ctx context.Context, req MCPRequest) (MCPResult, error)
 
@@ -183,6 +188,22 @@ type BrowserFindResult struct {
 	Ref        string  `json:"best_ref"`
 	Confidence string  `json:"confidence"` // "high", "medium", "low"
 	Score      float64 `json:"score"`
+}
+
+// BrowserWaitOpts configures a BrowserWait request.
+type BrowserWaitOpts struct {
+	Kind      string // "selector", "text", "url", "load", "time", "function"
+	Value     string // selector / text / URL glob / load state / JS expression; unused for time
+	TimeoutMs int    // max wait in ms; 0 uses default (10000), capped at 30000
+	State     string // selector only: "visible" (default) or "hidden"
+}
+
+// BrowserWaitResult is the output of BrowserWait.
+type BrowserWaitResult struct {
+	Satisfied bool   // condition met before the deadline
+	Kind      string // echoed kind
+	ElapsedMs int    // milliseconds spent waiting
+	Detail    string // why not satisfied (timeout message) when Satisfied=false
 }
 
 // TextOpts configures a browser text extraction request.

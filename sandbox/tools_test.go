@@ -34,6 +34,7 @@ type mockSandbox struct {
 	snapshotFn     func(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error)
 	browserTextFn  func(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
 	browserPDFFn   func(ctx context.Context) ([]byte, error)
+	browserWaitFn  func(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error)
 }
 
 func (m *mockSandbox) Shell(ctx context.Context, req ShellRequest) (ShellResult, error) {
@@ -163,6 +164,13 @@ func (m *mockSandbox) BrowserEval(ctx context.Context, expression string) (strin
 
 func (m *mockSandbox) BrowserFind(ctx context.Context, query string) (BrowserFindResult, error) {
 	return BrowserFindResult{}, nil
+}
+
+func (m *mockSandbox) BrowserWait(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error) {
+	if m.browserWaitFn != nil {
+		return m.browserWaitFn(ctx, opts)
+	}
+	return BrowserWaitResult{}, nil
 }
 
 func (m *mockSandbox) WebSearch(ctx context.Context, req WebSearchRequest) (WebSearchResult, error) {
@@ -357,6 +365,7 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		"export_pdf":     false,
 		"browser_eval":   false,
 		"browser_find":   false,
+		"browser_wait":   false,
 		"web_search":     false,
 	}
 
@@ -392,8 +401,8 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		}
 	}
 
-	if len(tools) != 19 {
-		t.Errorf("got %d tools, want 19", len(tools))
+	if len(tools) != 20 {
+		t.Errorf("got %d tools, want 20", len(tools))
 	}
 }
 
@@ -1069,7 +1078,7 @@ func TestTools_WithoutBrowserOmitsBrowserTools(t *testing.T) {
 	browserNames := map[string]bool{
 		"browser": true, "screenshot": true, "snapshot": true,
 		"page_text": true, "export_pdf": true, "browser_eval": true,
-		"browser_find": true,
+		"browser_find": true, "browser_wait": true,
 	}
 
 	full := Tools(sb)
@@ -1249,6 +1258,65 @@ func TestFileWriteToolReadOnlyMountSilentlyAbsorbsLocally(t *testing.T) {
 	if len(mount.entries) != 0 {
 		t.Errorf("read-only mount should not publish, has %d entries", len(mount.entries))
 	}
+}
+
+func TestBrowserWaitToolDispatch(t *testing.T) {
+	var captured BrowserWaitOpts
+	sb := &mockSandbox{
+		browserWaitFn: func(_ context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error) {
+			captured = opts
+			return BrowserWaitResult{Satisfied: true, Kind: opts.Kind, ElapsedMs: 840}, nil
+		},
+	}
+
+	for _, tool := range Tools(sb) {
+		if tool.Definition().Name != "browser_wait" {
+			continue
+		}
+		args := json.RawMessage(`{"kind":"selector","value":"#login","timeout_ms":5000,"state":"visible"}`)
+		result, err := tool.ExecuteRaw(context.Background(), args)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if captured.Kind != "selector" || captured.Value != "#login" ||
+			captured.TimeoutMs != 5000 || captured.State != "visible" {
+			t.Errorf("opts not forwarded: %+v", captured)
+		}
+		if got := decodeContent(t, result); got != "condition met (selector) after 840ms" {
+			t.Errorf("content = %q", got)
+		}
+		return
+	}
+	t.Fatal("browser_wait tool not registered")
+}
+
+func TestBrowserWaitToolRendersTimeout(t *testing.T) {
+	sb := &mockSandbox{
+		browserWaitFn: func(_ context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error) {
+			return BrowserWaitResult{
+				Satisfied: false,
+				Kind:      opts.Kind,
+				ElapsedMs: 10000,
+				Detail:    "timeout after 10000ms waiting for selector",
+			}, nil
+		},
+	}
+
+	for _, tool := range Tools(sb) {
+		if tool.Definition().Name != "browser_wait" {
+			continue
+		}
+		result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"kind":"selector","value":"#x"}`))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got := decodeContent(t, result)
+		if !strings.Contains(got, "NOT met") || !strings.Contains(got, "snapshot") {
+			t.Errorf("content = %q, want NOT met + snapshot hint", got)
+		}
+		return
+	}
+	t.Fatal("browser_wait tool not registered")
 }
 
 func TestFindMountForPathPrefersDeepest(t *testing.T) {
