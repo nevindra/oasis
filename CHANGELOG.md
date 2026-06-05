@@ -6,6 +6,65 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-06-05
+
+Sandbox browser release: condition-based waiting (`BrowserWait` +
+`browser_wait` tool), browser capability opt-out for light sandboxes, an
+openaicompat serialization fix for text content blocks, and a root-module
+build fix for the embedded docs.
+
+### Added
+
+- **`Sandbox.BrowserWait(ctx context.Context, opts BrowserWaitOpts)
+  (BrowserWaitResult, error)` + `browser_wait` tool.** Blocks until a page
+  condition is met or the timeout elapses — replaces screenshot-polling
+  after navigate/click. Condition kinds: `selector` (with `State` visible
+  or hidden), `text`, `url`, `load`, `time`, `function`. Default timeout
+  10s, capped at 30s. A timeout is NOT an error: the result carries
+  `Satisfied=false` and a `Detail` explaining what was being waited on,
+  and the tool output nudges the model to take a snapshot instead of
+  retrying blindly. New types: `sandbox.BrowserWaitOpts`,
+  `sandbox.BrowserWaitResult`.
+- **`sandbox.WithoutBrowser() ToolsOption`.** Omits the browser tool set
+  (`browser`, `screenshot`, `snapshot`, `page_text`, `export_pdf`,
+  `browser_eval`, `browser_find`, `browser_wait`) from `Tools()`, for
+  "light" sandboxes with no browser capability — the model is never
+  offered tools that would fail.
+- **`sandbox.CreateOpts.Browser *bool`.** Declares whether a sandbox needs
+  browser capability: `nil` = manager default (typically browser via a
+  shared tier), `&true` = ensure browser, `&false` = no browser ("light"
+  sandbox). Implementations that have no browser concept may ignore it.
+### Changed
+
+- **BREAKING — `sandbox.Sandbox` interface gained the `BrowserWait`
+  method.** Out-of-tree implementations (e.g. `oasis-sandbox-ix`) must add
+  it. Implementations without a wait primitive can return a never-satisfied
+  `BrowserWaitResult` whose `Detail` says waiting is unsupported.
+
+### Fixed
+
+- **`openaicompat`: text content blocks always emit their `"text"` field.**
+  `ContentBlock` uses `omitempty` on `Text`, so a text block with empty
+  text serialized as `{"type":"text"}` — providers reject that with
+  HTTP 400 ("Expected 'text' field in text type content part to be a
+  string"). This happened when an empty-content message (e.g. a tool
+  message marked as a cache checkpoint) was promoted to a content-block
+  array to attach `cache_control`. A custom `MarshalJSON` now always
+  includes `"text"` for text-type blocks; non-text blocks still omit it.
+- **Root-module build: `docs` embed patterns.** The docs were split into
+  `docs/external/` + `docs/internal/`, but `//go:embed` still referenced
+  the old top-level topic folders, so `go build ./...` failed at the root
+  with "pattern agent: no matching files found". `docs.FS` is now a
+  sub-filesystem rooted at `external/` — consumer paths (`index.md`,
+  `<topic>/api.md`, ...) are unchanged. Note: `docs.FS` is typed `fs.FS`
+  now (was `embed.FS`).
+
+## [0.17.4] - 2026-05-29
+
+Retroactive entry — this tag shipped without a changelog update.
+Provider-agnostic image generation with a native DashScope provider, plus
+`sandbox.Lazy`.
+
 ### Added
 
 - **Provider-agnostic image generation.** `core.ChatRequest.Modalities`
@@ -1355,7 +1414,12 @@ DX ergonomics patch addressing friction from real-world migration feedback.
 - `renderers/` directory — PDF, DOCX, XLSX, PPTX renderer scripts removed.
 - `requirements.txt` — Python deps for renderers (library deps remain in Dockerfile for direct agent use).
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/nevindra/oasis/compare/v0.17.4...v0.19.0
+[0.17.4]: https://github.com/nevindra/oasis/compare/v0.17.3...v0.17.4
+[0.17.3]: https://github.com/nevindra/oasis/compare/v0.17.2...v0.17.3
+[0.17.2]: https://github.com/nevindra/oasis/compare/v0.17.1...v0.17.2
+[0.17.1]: https://github.com/nevindra/oasis/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/nevindra/oasis/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/nevindra/oasis/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/nevindra/oasis/compare/v0.14.0...v0.15.0
