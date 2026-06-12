@@ -83,7 +83,7 @@ func (f *fakeImageStore) UpdateScheduledAction(context.Context, oasis.ScheduledA
 func (f *fakeImageStore) UpdateScheduledActionEnabled(context.Context, string, bool) error   { return nil }
 func (f *fakeImageStore) DeleteScheduledAction(context.Context, string) error                { return nil }
 func (f *fakeImageStore) DeleteAllScheduledActions(context.Context) (int, error)             { return 0, nil }
-func (f *fakeImageStore) FindScheduledActionsByDescription(context.Context, string) ([]oasis.ScheduledAction, error) {
+func (f *fakeImageStore) ListScheduledActionsByDescription(context.Context, string) ([]oasis.ScheduledAction, error) {
 	return nil, nil
 }
 func (f *fakeImageStore) Init(context.Context) error { return nil }

@@ -101,6 +101,41 @@ func TestEraseStreaming_SetsUIWhenOutRenderable(t *testing.T) {
 	}
 }
 
+func TestFunc_SetsUIWhenOutRenderable(t *testing.T) {
+	at := Func("ui", "d", func(_ context.Context, _ struct{}) (uiOut, error) {
+		return uiOut{V: 7}, nil
+	})
+	res, err := at.ExecuteRaw(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("ExecuteRaw: %v", err)
+	}
+	if res.UI == nil {
+		t.Fatal("UI is nil, want set")
+	}
+	if res.UI.Name != "Widget" {
+		t.Fatalf("UI.Name = %q, want Widget", res.UI.Name)
+	}
+	if string(res.UI.Props) != `{"v":7}` {
+		t.Fatalf("UI.Props = %s", res.UI.Props)
+	}
+	if res.Content != `{"v":7}` {
+		t.Fatalf("Content = %q", res.Content)
+	}
+}
+
+func TestFunc_NoUIWhenOutNotRenderable(t *testing.T) {
+	at := Func("plain", "d", func(_ context.Context, _ struct{}) (plainOut, error) {
+		return plainOut{V: 7}, nil
+	})
+	res, err := at.ExecuteRaw(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("ExecuteRaw: %v", err)
+	}
+	if res.UI != nil {
+		t.Fatalf("UI = %+v, want nil", res.UI)
+	}
+}
+
 func TestUIResult(t *testing.T) {
 	type props struct {
 		Title string `json:"title"`

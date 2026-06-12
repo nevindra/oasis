@@ -95,6 +95,19 @@ type inMemoryStore struct {
 	maxBytes   int64
 	maxEntries int
 	ttl        time.Duration
+	// Why: O(1) fast path for expireExpiredLocked. nextExpiry tracks the
+	// minimum expiresAt across all live entries. If now < nextExpiry, nothing
+	// can have expired yet and the O(N) scan is skipped entirely. The invariant
+	// is that nextExpiry is NEVER later than the true minimum — a stale-but-
+	// earlier value wastes at most one scan; a later-than-true value would allow
+	// expired entries to survive a Get/Put, which is a correctness bug.
+	// FIFO and byte-cap eviction remove entries but never need to update
+	// nextExpiry: removing an entry can only increase (or keep equal) the true
+	// minimum, so any existing nextExpiry remains <= the true minimum — the
+	// invariant is preserved. Only Put (which adds a new entry potentially
+	// earlier than all survivors) and the sweep itself (which must recompute
+	// after removals) touch this field.
+	nextExpiry time.Time
 }
 
 func (s *inMemoryStore) Put(ctx context.Context, content string) (string, error) {
@@ -104,15 +117,23 @@ func (s *inMemoryStore) Put(ctx context.Context, content string) (string, error)
 	s.expireExpiredLocked()
 
 	id := newResultID()
+	now := time.Now()
 	entry := &storeEntry{
 		content:    content,
 		bytes:      int64(len(content)),
-		expiresAt:  time.Now().Add(s.ttl),
-		lastAccess: time.Now(),
+		expiresAt:  now.Add(s.ttl),
+		lastAccess: now,
 	}
 	s.entries[id] = entry
 	s.order = append(s.order, id)
 	s.totalBytes += entry.bytes
+
+	// Why: maintain the nextExpiry invariant — take the earlier of the current
+	// tracked minimum and the new entry's expiry. Zero nextExpiry means unset
+	// (no entries were live before this Put), so always take the new expiry.
+	if s.nextExpiry.IsZero() || entry.expiresAt.Before(s.nextExpiry) {
+		s.nextExpiry = entry.expiresAt
+	}
 
 	s.evictLocked()
 	return id, nil
@@ -142,8 +163,19 @@ func (s *inMemoryStore) Get(ctx context.Context, id string, offset, length int) 
 }
 
 func (s *inMemoryStore) expireExpiredLocked() {
+	// Why: O(1) fast path — if the soonest-expiring entry has not yet expired,
+	// nothing in the store can have expired, so skip the O(N) scan entirely.
+	// This is the common case for short-lived agent runs (typical TTL 5 minutes,
+	// run duration well under 5 minutes). Zero nextExpiry means the store is
+	// empty; nothing to do.
 	now := time.Now()
+	if s.nextExpiry.IsZero() || now.Before(s.nextExpiry) {
+		return
+	}
+
+	// Slow path: at least one entry may have expired. Walk and recompute.
 	kept := s.order[:0]
+	var minExpiry time.Time
 	for _, id := range s.order {
 		e, ok := s.entries[id]
 		if !ok {
@@ -155,8 +187,18 @@ func (s *inMemoryStore) expireExpiredLocked() {
 			continue
 		}
 		kept = append(kept, id)
+		// Why: recompute the minimum expiry of surviving entries so nextExpiry
+		// reflects the true minimum after removals. Zero minExpiry means no
+		// survivors have been seen yet.
+		if minExpiry.IsZero() || e.expiresAt.Before(minExpiry) {
+			minExpiry = e.expiresAt
+		}
 	}
 	s.order = kept
+	// Why: update nextExpiry to the recomputed minimum. If no entries survived,
+	// minExpiry is zero, which correctly marks the store as empty. This ensures
+	// the invariant (nextExpiry <= true minimum) is maintained post-sweep.
+	s.nextExpiry = minExpiry
 }
 
 // evictLocked enforces both the byte cap and entry cap in a single FIFO pass.

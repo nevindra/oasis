@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -663,6 +664,98 @@ func TestSplitContentRunes_Reassembly(t *testing.T) {
 	}
 	if reassembled.String() != original {
 		t.Error("reassembled string does not equal original")
+	}
+}
+
+// toolThenTextProvider drives a fresh tool-call -> final-text pair on EVERY
+// Execute call: each iteration of the agent loop pops the next scripted
+// response, cycling back to the start of the pair once a turn ends. This lets a
+// single agent (and thus a single shared loopStatePool) be run repeatedly while
+// guaranteeing every run populates Steps and Iterations.
+type toolThenTextProvider struct {
+	idx int
+}
+
+func (p *toolThenTextProvider) Name() string { return "tool-then-text" }
+
+func (p *toolThenTextProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
+	if ch != nil {
+		defer close(ch)
+	}
+	// Even calls: emit a tool call (forces a step + a non-final iteration).
+	// Odd calls: emit final text (terminates the turn).
+	turn := p.idx
+	p.idx++
+	if turn%2 == 0 {
+		return core.ChatResponse{
+			ToolCalls: []core.ToolCall{{ID: "tc", Name: "greet", Args: json.RawMessage(`{}`)}},
+		}, nil
+	}
+	return core.ChatResponse{Content: "done"}, nil
+}
+
+// cloneSteps and cloneIterations take deep, value-level snapshots so the
+// comparison target does NOT alias the pooled backing array under test — only a
+// genuine post-Execute snapshot can detect the pool overwriting result 1.
+func cloneSteps(in []StepTrace) []StepTrace {
+	out := make([]StepTrace, len(in))
+	copy(out, in)
+	return out
+}
+
+func cloneIterations(in []core.IterationTrace) []core.IterationTrace {
+	out := make([]core.IterationTrace, len(in))
+	copy(out, in)
+	return out
+}
+
+// TestExecuteResultNotCorruptedByPooledStateReuse is a regression test for the
+// loopState pool aliasing bug: patchTerminal assigns the pooled, append-built
+// slices (Steps, Iterations, Warnings, Files, Sources) directly into the
+// returned AgentResult. If releaseLoopState truncated those slices to [:0] and
+// returned the backing array to the pool, the NEXT Execute in the process would
+// append into the very same arrays and silently mutate the previously returned
+// result. The fix nils those fields on release so the escaped backing arrays
+// are owned solely by the AgentResult. Here we run Execute twice on the same
+// agent (each run drives a tool call, so Steps/Iterations are non-empty),
+// snapshot result 1's contents, run a third Execute to churn the pool, then
+// assert result 1 is still bit-identical to its snapshot.
+func TestExecuteResultNotCorruptedByPooledStateReuse(t *testing.T) {
+	p := &toolThenTextProvider{}
+	a := New("reuse", "exercises pooled state reuse", p, WithTools(mockTool{}))
+	ctx := context.Background()
+
+	// Run 1: retain the result and a deep snapshot of its trace slices.
+	r1, err := a.Execute(ctx, AgentTask{Input: "first"})
+	if err != nil {
+		t.Fatalf("Execute run 1: %v", err)
+	}
+	if len(r1.Steps) == 0 {
+		t.Fatalf("run 1 produced no steps; test cannot detect corruption")
+	}
+	if len(r1.Iterations) == 0 {
+		t.Fatalf("run 1 produced no iterations; test cannot detect corruption")
+	}
+	stepsSnapshot := cloneSteps(r1.Steps)
+	itersSnapshot := cloneIterations(r1.Iterations)
+
+	// Run 2 (and 3) on the SAME agent. With the bug, releaseLoopState from run 1
+	// returns r1's backing arrays to the pool; these runs reacquire that state
+	// and append into the same arrays, overwriting r1.Steps[0] / r1.Iterations[0]
+	// in place.
+	if _, err := a.Execute(ctx, AgentTask{Input: "second"}); err != nil {
+		t.Fatalf("Execute run 2: %v", err)
+	}
+	if _, err := a.Execute(ctx, AgentTask{Input: "third"}); err != nil {
+		t.Fatalf("Execute run 3: %v", err)
+	}
+
+	// Result 1 must be untouched by the later runs.
+	if !reflect.DeepEqual(r1.Steps, stepsSnapshot) {
+		t.Errorf("result 1 Steps were corrupted by a later Execute:\n got  %+v\n want %+v", r1.Steps, stepsSnapshot)
+	}
+	if !reflect.DeepEqual(r1.Iterations, itersSnapshot) {
+		t.Errorf("result 1 Iterations were corrupted by a later Execute:\n got  %+v\n want %+v", r1.Iterations, itersSnapshot)
 	}
 }
 

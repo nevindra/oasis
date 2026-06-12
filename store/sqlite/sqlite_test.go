@@ -270,7 +270,7 @@ func TestScheduledActions(t *testing.T) {
 	}
 
 	// Find by description
-	found, _ := s.FindScheduledActionsByDescription(ctx, "briefing")
+	found, _ := s.ListScheduledActionsByDescription(ctx, "briefing")
 	if len(found) != 1 {
 		t.Fatal("expected 1 match")
 	}

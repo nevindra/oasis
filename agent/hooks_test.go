@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -376,5 +377,60 @@ func TestOnIterationComplete_HookErrorPropagates(t *testing.T) {
 	_, err := a.Execute(context.Background(), core.AgentTask{Input: "x"})
 	if !errors.Is(err, hookErr) {
 		t.Fatalf("Execute: err = %v, want wrapping hook err %v", err, hookErr)
+	}
+}
+
+// TestOnIterationComplete_SnapshotTraceRingBufferEviction guards the snapshot's
+// Trace against the ring-buffer eviction hazard in state.steps.
+//
+// With MaxSteps=1 the step ring holds a single slot, but the iteration emits two
+// parallel tool calls — so the second append evicts the first and len(steps)
+// stays at 1. The previous back-index form (state.steps[len-len(ToolCalls)] =
+// state.steps[1-2] = state.steps[-1]) panicked here. The snapshot's Trace must
+// instead be the FIRST tool call of this iteration ("greet"), captured forward
+// as traces are built rather than recovered by indexing the ring.
+func TestOnIterationComplete_SnapshotTraceRingBufferEviction(t *testing.T) {
+	// First iteration: two parallel calls with distinct names so we can assert
+	// which one lands in the snapshot Trace. Second: plain text to terminate.
+	provider := &mockProvider{
+		name: "test",
+		responses: []core.ChatResponse{
+			{ToolCalls: []core.ToolCall{
+				{ID: "tc1", Name: "greet", Args: json.RawMessage(`{}`)},
+				{ID: "tc2", Name: "calc", Args: json.RawMessage(`{}`)},
+			}},
+			{Content: "done"},
+		},
+	}
+
+	var gotTrace StepTrace
+	hookCalls := 0
+	hook := func(ctx context.Context, iter int, snap *IterationSnapshot) (IterationDecision, error) {
+		hookCalls++
+		if iter == 0 {
+			gotTrace = snap.Trace
+		}
+		return Continue(), nil
+	}
+
+	a := New("a", "d", provider,
+		WithTools(mockTool{}, mockToolCalc{}),
+		WithLimits(Limits{MaxSteps: 1}), // ring of size 1 → eviction within the iteration
+		WithHooks(Hooks{OnIterationComplete: hook}))
+
+	// (a) No panic: a panic in the loop goroutine would surface as a failed run
+	// or crash the test binary.
+	_, err := a.Execute(context.Background(), core.AgentTask{Input: "go"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if hookCalls == 0 {
+		t.Fatalf("OnIterationComplete never fired")
+	}
+
+	// (b) The snapshot Trace is the FIRST tool call of the iteration, not the
+	// evicted/overwritten ring slot.
+	if gotTrace.Name != "greet" {
+		t.Fatalf("snapshot Trace.Name = %q, want %q (first tool call of the iteration)", gotTrace.Name, "greet")
 	}
 }

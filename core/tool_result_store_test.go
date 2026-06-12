@@ -168,3 +168,119 @@ func TestInMemoryStoreConcurrentPut(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// TestInMemoryStoreNextExpiryTracking verifies that nextExpiry correctly tracks
+// the soonest surviving entry after a partial TTL sweep removes early-expiring
+// entries.
+func TestInMemoryStoreNextExpiryTracking(t *testing.T) {
+	ctx := context.Background()
+	// Use two different TTLs: a short one (50ms) and a long one (10s).
+	// After the short entries expire, nextExpiry must advance to the long entry's
+	// expiry — not stay at the already-gone short expiry.
+	shortTTL := 60 * time.Millisecond
+	longTTL := 10 * time.Second
+
+	// Store two entries with long TTL first.
+	sLong := core.NewInMemoryToolResultStore(core.WithToolResultTTL(longTTL))
+	idLong1, err := sLong.Put(ctx, "long-entry-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idLong2, err := sLong.Put(ctx, "long-entry-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both long entries must be retrievable immediately.
+	_, _, err = sLong.Get(ctx, idLong1, 0, 12)
+	if err != nil {
+		t.Fatalf("long entry 1 missing immediately after put: %v", err)
+	}
+	_, _, err = sLong.Get(ctx, idLong2, 0, 12)
+	if err != nil {
+		t.Fatalf("long entry 2 missing immediately after put: %v", err)
+	}
+
+	// Now create a separate store with short TTL to exercise the nextExpiry
+	// fast-path: after the short entries expire, a subsequent Put/Get must
+	// trigger a sweep and remove them.
+	sShort := core.NewInMemoryToolResultStore(core.WithToolResultTTL(shortTTL))
+	idShort, err := sShort.Put(ctx, "short-entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Entry must exist right after put.
+	_, _, err = sShort.Get(ctx, idShort, 0, 11)
+	if err != nil {
+		t.Fatalf("short entry missing immediately after put: %v", err)
+	}
+
+	// Wait for short TTL to expire.
+	time.Sleep(100 * time.Millisecond)
+
+	// A new Put triggers expireExpiredLocked which must remove the expired entry.
+	_, err = sShort.Put(ctx, "trigger-sweep")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The expired entry must now be gone.
+	_, _, err = sShort.Get(ctx, idShort, 0, 11)
+	if !errors.Is(err, core.ErrToolResultNotFound) {
+		t.Errorf("expected expired short entry to be gone after sweep, got: %v", err)
+	}
+}
+
+// BenchmarkInMemoryStorePut measures Put throughput on a store pre-filled with
+// ~10,000 unexpired entries. The nextExpiry fast-path should make the
+// expireExpiredLocked call a near-zero-cost early return rather than an O(N) scan.
+func BenchmarkInMemoryStorePut(b *testing.B) {
+	ctx := context.Background()
+	const prefill = 10_000
+	// Large enough TTL that nothing expires during the benchmark.
+	s := core.NewInMemoryToolResultStore(
+		core.WithToolResultTTL(10*time.Minute),
+		core.WithToolResultMaxEntries(prefill+b.N+1),
+		core.WithToolResultMaxBytes(1<<31), // 2 GiB — won't be hit
+	)
+	for i := 0; i < prefill; i++ {
+		if _, err := s.Put(ctx, fmt.Sprintf("prefill-entry-%d", i)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := s.Put(ctx, "bench-entry"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkInMemoryStoreGet measures Get throughput on a store pre-filled with
+// ~10,000 unexpired entries. The nextExpiry fast-path should skip the O(N)
+// expiry scan on every Get.
+func BenchmarkInMemoryStoreGet(b *testing.B) {
+	ctx := context.Background()
+	const prefill = 10_000
+	s := core.NewInMemoryToolResultStore(
+		core.WithToolResultTTL(10*time.Minute),
+		core.WithToolResultMaxEntries(prefill+1),
+		core.WithToolResultMaxBytes(1<<31),
+	)
+	ids := make([]string, prefill)
+	for i := 0; i < prefill; i++ {
+		id, err := s.Put(ctx, fmt.Sprintf("prefill-entry-%d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
+		ids[i] = id
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		id := ids[i%prefill]
+		if _, _, err := s.Get(ctx, id, 0, 5); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

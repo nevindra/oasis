@@ -120,22 +120,22 @@ func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
-func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
+func (s *Store) ListScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
 	start := time.Now()
-	s.logger.Debug("sqlite: find scheduled actions by description", "pattern", pattern)
+	s.logger.Debug("sqlite: list scheduled actions by description", "pattern", pattern)
 
 	rows, err := s.db.QueryContext(ctx, `SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at FROM scheduled_actions WHERE description LIKE ?`, "%"+pattern+"%")
 	if err != nil {
-		s.logger.Error("sqlite: find scheduled actions by description failed", "pattern", pattern, "error", err, "duration", time.Since(start))
+		s.logger.Error("sqlite: list scheduled actions by description failed", "pattern", pattern, "error", err, "duration", time.Since(start))
 		return nil, err
 	}
 	defer rows.Close()
 	actions, err := scanScheduledActions(rows)
 	if err != nil {
-		s.logger.Error("sqlite: find scheduled actions by description scan failed", "pattern", pattern, "error", err, "duration", time.Since(start))
+		s.logger.Error("sqlite: list scheduled actions by description scan failed", "pattern", pattern, "error", err, "duration", time.Since(start))
 		return nil, err
 	}
-	s.logger.Debug("sqlite: find scheduled actions by description ok", "pattern", pattern, "count", len(actions), "duration", time.Since(start))
+	s.logger.Debug("sqlite: list scheduled actions by description ok", "pattern", pattern, "count", len(actions), "duration", time.Since(start))
 	return actions, nil
 }
 

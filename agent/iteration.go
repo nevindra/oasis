@@ -60,7 +60,6 @@ func acquireLoopState(messages []core.ChatMessage, messageRuneCount int, attachB
 func releaseLoopState(s *loopState) {
 	s.messages = nil
 	s.totalUsage = core.Usage{}
-	s.steps = s.steps[:0]
 	s.lastAgentOutput = ""
 	s.lastThinking = ""
 	s.accumulatedAttachments = s.accumulatedAttachments[:0]
@@ -70,12 +69,31 @@ func releaseLoopState(s *loopState) {
 	s.compressThreshold = 0
 	s.closeOnce = sync.Once{}
 	s.closeCh = nil
-	s.lastWarnings = s.lastWarnings[:0]
 	s.lastProviderMeta = nil
-	s.files = s.files[:0]
-	s.iterations = s.iterations[:0]
-	s.sources = s.sources[:0]
 	s.messageRuneCount = 0
+
+	// Why: steps, lastWarnings, files, iterations and sources are assigned
+	// directly into the returned AgentResult by patchTerminal (no copy). If we
+	// truncated to [:0] and kept the backing array in the pool, the next Execute
+	// in this process would append into those same arrays and silently corrupt
+	// the previously returned result. Nil-ing transfers ownership of the escaped
+	// backing arrays to the AgentResult: the pool retains nothing, and the next
+	// run's appends (appendStepBounded and plain append both handle nil) allocate
+	// fresh arrays — the natural cost of result-owned memory, no memcpy.
+	//
+	// The result fields that are empty on a given run (e.g. steps/files/sources
+	// on a no-tool turn) stay nil and cost nothing. iterations is the one
+	// exception: endIteration always appends at least one trace per LLM call, so
+	// even a no-tool turn now allocates one small iterations slice that the
+	// AgentResult owns (+1 alloc, ~176 B on SingleTurn). That allocation is
+	// load-bearing — AgentResult.Iterations must point at memory the pool can
+	// never reuse — and is the intended price of the fix.
+	s.steps = nil
+	s.lastWarnings = nil
+	s.files = nil
+	s.iterations = nil
+	s.sources = nil
+
 	loopStatePool.Put(s)
 }
 
@@ -442,6 +460,17 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 		postProcessed = make([]core.ToolResult, len(resp.ToolCalls))
 	}
 
+	// firstTrace holds the first step trace built in THIS iteration, for the
+	// OnIterationComplete snapshot.
+	// Why: state.steps is a ring buffer (appendStepBounded). Once it reaches
+	// MaxStepsResolved, appends overwrite the oldest slot and len() stops
+	// growing — so back-indexing as state.steps[len-len(ToolCalls)] either
+	// panics (when an iteration emits more parallel calls than MaxSteps) or
+	// points at a trace evicted from a prior iteration. Capturing the first
+	// trace forward as it is built sidesteps the eviction hazard entirely.
+	var firstTrace StepTrace
+	haveFirstTrace := false
+
 	// Process results sequentially.
 	for j, tc := range resp.ToolCalls {
 		state.totalUsage.InputTokens += results[j].usage.InputTokens
@@ -488,6 +517,10 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 		// Build step trace.
 		trace := buildStepTrace(tc, results[j])
 		state.steps = appendStepBounded(state.steps, trace, cfg.MaxStepsResolved)
+		if !haveFirstTrace {
+			firstTrace = trace
+			haveFirstTrace = true
+		}
 
 		// Accumulate attachments.
 		for _, a := range results[j].attachments {
@@ -586,10 +619,6 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 
 	// OnIterationComplete hook (tool-call path).
 	if cfg.OnIterationComplete != nil {
-		var firstTrace StepTrace
-		if len(state.steps) > 0 {
-			firstTrace = state.steps[len(state.steps)-len(resp.ToolCalls)]
-		}
 		snap := &IterationSnapshot{
 			Response:    &resp,
 			ToolCalls:   resp.ToolCalls,

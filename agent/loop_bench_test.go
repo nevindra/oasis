@@ -11,7 +11,7 @@ import (
 
 // --- stream forwarder benchmarks ---
 
-// BenchmarkIterChStreaming exercises newStreamForwarder with a realistic
+// BenchmarkIterChStreaming exercises newForwarder with a realistic
 // per-iteration event burst (64 events ≈ one LLM call worth of text deltas).
 // Serves as a regression guard for future changes to defaultIterChBufSize
 // (Phase 4 finding 4.1.a): a meaningful drop in ns/op or B/op alongside a
@@ -24,7 +24,7 @@ func BenchmarkIterChStreaming(b *testing.B) {
 	b.ReportAllocs()
 	for range b.N {
 		dest := make(chan core.StreamEvent, 256)
-		iterCh, wait := newStreamForwarder(ctx, dest, defaultIterChBufSize)
+		iterCh, wait := newForwarder(ctx, dest, defaultIterChBufSize, forwarderConfig{})
 		done := make(chan struct{})
 		go func() {
 			for range dest {

@@ -412,14 +412,7 @@ func OnDeny(action DenyAction) ApprovalOption {
 }
 
 // nopLogger is a logger that discards all output.
-var nopLogger = slog.New(discardHandler{})
-
-type discardHandler struct{}
-
-func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
-func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
-func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
-func (d discardHandler) WithGroup(string) slog.Handler           { return d }
+var nopLogger = slog.New(slog.DiscardHandler)
 
 // BuildConfig applies options and fills in defaults.
 func BuildConfig(opts []AgentOption) *Config {

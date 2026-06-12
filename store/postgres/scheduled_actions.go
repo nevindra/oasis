@@ -109,20 +109,20 @@ func (s *Store) DeleteAllScheduledActions(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-func (s *Store) FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
+func (s *Store) ListScheduledActionsByDescription(ctx context.Context, pattern string) ([]oasis.ScheduledAction, error) {
 	start := time.Now()
-	s.logger.Debug("postgres: find scheduled actions by description", "pattern", pattern)
+	s.logger.Debug("postgres: list scheduled actions by description", "pattern", pattern)
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, description, schedule, tool_calls, synthesis_prompt, next_run, enabled, skill_id, created_at
 		 FROM scheduled_actions WHERE description LIKE $1`,
 		"%"+pattern+"%")
 	if err != nil {
-		s.logger.Error("postgres: find scheduled actions by description failed", "error", err, "duration", time.Since(start))
+		s.logger.Error("postgres: list scheduled actions by description failed", "error", err, "duration", time.Since(start))
 		return nil, err
 	}
 	defer rows.Close()
 	actions, err := scanScheduledActions(rows)
-	s.logger.Debug("postgres: find scheduled actions by description ok", "count", len(actions), "duration", time.Since(start))
+	s.logger.Debug("postgres: list scheduled actions by description ok", "count", len(actions), "duration", time.Since(start))
 	return actions, err
 }
 

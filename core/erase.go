@@ -39,6 +39,30 @@ func (e *erasedTool[In, Out]) ExecuteRaw(ctx context.Context, args json.RawMessa
 		return ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
 	out, err := e.tool.Execute(ctx, in)
+	return toolResultFromOut(out, err)
+}
+
+// toolResultFromOut builds the ToolResult for a typed tool invocation's
+// (out, err) pair. It is the single shared post-execute tail for every tool
+// adapter (Func, Erase, EraseStreaming) — all three decode/coerce their own
+// In and make the typed call, then delegate here so the marshal/UI behavior
+// can never drift between them.
+//
+// Why: this tail repeats verbatim across three adapters, and a prior
+// divergence (Func omitting the UIRenderable check) shipped silently.
+// Centralizing it makes that class of drift impossible.
+//
+// Error semantics (must match the ToolResult/error contract):
+//   - err is an infra error → ToolResult.Error is set AND the Go error
+//     propagates so the caller can react to infrastructure failures.
+//   - err is a non-infra (business) error → ToolResult.Error is set, Go error
+//     is nil.
+//   - marshal of out fails → ToolResult.Error carries a "marshal result: "
+//     prefix, Go error is nil (a marshal failure is a tool-output bug, not an
+//     infrastructure failure).
+//   - success → Content is the marshaled JSON; if out implements UIRenderable,
+//     UI is populated and UI.Props aliases the same body bytes as Content.
+func toolResultFromOut[Out any](out Out, err error) (ToolResult, error) {
 	if err != nil {
 		result := ToolResult{Error: err.Error()}
 		if IsInfraError(err) {
@@ -92,22 +116,7 @@ func (e *erasedStreamingTool[In, Out]) ExecuteStream(ctx context.Context, args j
 		return ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
 	out, err := e.streamTool.ExecuteStream(ctx, in, ch)
-	if err != nil {
-		result := ToolResult{Error: err.Error()}
-		if IsInfraError(err) {
-			return result, err
-		}
-		return result, nil
-	}
-	body, err := json.Marshal(out)
-	if err != nil {
-		return ToolResult{Error: "marshal result: " + err.Error()}, nil
-	}
-	res := ToolResult{Content: string(body)}
-	if r, ok := any(out).(UIRenderable); ok {
-		res.UI = &UIComponent{Name: r.UIComponent(), Props: body}
-	}
-	return res, nil
+	return toolResultFromOut(out, err)
 }
 
 // deriveOutSchema returns the OutputSchema to publish for an erased tool.

@@ -47,7 +47,7 @@ func (nopStore) UpdateScheduledAction(_ context.Context, _ core.ScheduledAction)
 func (nopStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ bool) error       { return nil }
 func (nopStore) DeleteScheduledAction(_ context.Context, _ string) error                      { return nil }
 func (nopStore) DeleteAllScheduledActions(_ context.Context) (int, error)                     { return 0, nil }
-func (nopStore) FindScheduledActionsByDescription(_ context.Context, _ string) ([]core.ScheduledAction, error) {
+func (nopStore) ListScheduledActionsByDescription(_ context.Context, _ string) ([]core.ScheduledAction, error) {
 	return nil, nil
 }
 func (nopStore) Init(_ context.Context) error { return nil }

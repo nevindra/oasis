@@ -41,7 +41,7 @@ func (s *stubStore) UpdateScheduledAction(_ context.Context, _ core.ScheduledAct
 func (s *stubStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ bool) error { return nil }
 func (s *stubStore) DeleteScheduledAction(_ context.Context, _ string) error { return nil }
 func (s *stubStore) DeleteAllScheduledActions(_ context.Context) (int, error) { return 0, nil }
-func (s *stubStore) FindScheduledActionsByDescription(_ context.Context, _ string) ([]core.ScheduledAction, error) { return nil, nil }
+func (s *stubStore) ListScheduledActionsByDescription(_ context.Context, _ string) ([]core.ScheduledAction, error) { return nil, nil }
 
 // memory.ItemStore methods (zero-valued no-ops).
 func (s *stubStore) Upsert(_ context.Context, _ memory.MemoryItem) error            { return nil }

@@ -41,7 +41,7 @@ type Store interface {
     UpdateScheduledActionEnabled(ctx context.Context, id string, enabled bool) error
     DeleteScheduledAction(ctx context.Context, id string) error
     DeleteAllScheduledActions(ctx context.Context) (int, error)
-    FindScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
+    ListScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
 
     // Lifecycle
     Init(ctx context.Context) error

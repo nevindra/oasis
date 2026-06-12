@@ -42,16 +42,5 @@ func (t *funcTool[In, Out]) ExecuteRaw(ctx context.Context, args json.RawMessage
 		return ToolResult{Error: "invalid args: " + err.Error()}, nil
 	}
 	out, err := t.fn(ctx, in)
-	if err != nil {
-		result := ToolResult{Error: err.Error()}
-		if IsInfraError(err) {
-			return result, err
-		}
-		return result, nil
-	}
-	body, err := json.Marshal(out)
-	if err != nil {
-		return ToolResult{Error: "marshal result: " + err.Error()}, nil
-	}
-	return ToolResult{Content: string(body)}, nil
+	return toolResultFromOut(out, err)
 }

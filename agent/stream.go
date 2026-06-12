@@ -161,15 +161,6 @@ func contextWithStreamSink(ctx context.Context, ch chan<- core.StreamEvent) cont
 	return runtime.ContextWithStreamSink(ctx, ch)
 }
 
-// streamSinkFromContext returns the StreamEvent sink stored on ctx by
-// contextWithStreamSink, or nil if none is set.
-//
-// Delegates to runtime.StreamSinkFromContext so that the same key is used
-// everywhere.
-func streamSinkFromContext(ctx context.Context) chan<- core.StreamEvent {
-	return runtime.StreamSinkFromContext(ctx)
-}
-
 // --- Internal forwarders ---
 
 // forwarderConfig carries the optional per-event callbacks for newForwarder.
@@ -231,24 +222,7 @@ func newForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int
 	return iterCh, wg.Wait
 }
 
-// newStreamForwarder creates an intermediate StreamEvent channel and spawns a
-// goroutine that forwards events from it to dest until the channel is closed
-// by the producer (typically provider.ChatStream's defer-close) or ctx is
-// cancelled.
-//
-// Returns (iterCh, wait). Callers pass iterCh to the producer (provider) and
-// MUST call wait() after the producer returns to ensure the forwarder
-// finishes drain-and-exit before subsequent code observes dest.
-//
-// The forwarder pattern centralizes three previously duplicated sites in
-// runLoop and ensures the producer's defer-close doesn't touch dest directly
-// (the caller's safeCloseCh is the sole closer of dest).
-func newStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int) (chan<- core.StreamEvent, func()) {
-	ch, wait := newForwarder(ctx, dest, bufSize, forwarderConfig{})
-	return ch, wait
-}
-
-// newCapturingStreamForwarder is like newStreamForwarder but also captures
+// newCapturingStreamForwarder is like newForwarder but also captures
 // EventFileAttachment events into state.files. Used for provider streaming paths
 // where the provider may emit EventFileAttachment alongside text deltas.
 func newCapturingStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, _ int, state *loopState) (chan<- core.StreamEvent, func()) {

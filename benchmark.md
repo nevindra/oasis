@@ -2,7 +2,7 @@
 
 Benchmarks measure **framework overhead only** — LLM providers are mocked with instant responses (zero latency). Every nanosecond and byte reported is the framework's tax, not LLM time.
 
-**Environment:** Go 1.26, Linux, AMD Ryzen 7 9700X (16 threads). Results averaged over 3 runs.
+**Environment:** Go 1.26, Linux, AMD Ryzen 7 9700X (16 threads). Results are medians over 3–8 runs (last measured 2026-06-12, post-Phase 6).
 
 ## How to Run
 
@@ -24,35 +24,41 @@ The core agent loop: message building, tool dispatch, iteration control, streami
 
 | Benchmark | ns/op | B/op | allocs/op | What it measures |
 |-----------|------:|-----:|----------:|------------------|
-| SingleTurn | 559 | 961 | 8 | Bare agent, no tools, one LLM call. **Baseline framework tax.** |
-| WithTools/1 | 1,121 | 14,167 | 8 | Tools registered but not called. Definition-building overhead. |
-| WithTools/5 | 1,175 | 14,168 | 8 | |
-| WithTools/10 | 1,179 | 14,168 | 8 | |
-| ToolLoop/calls=1 | 3,029 | 18,903 | 46 | Provider returns tool calls, then text. Full iteration loop. |
-| ToolLoop/calls=3 | 6,878 | 20,971 | 71 | |
-| ToolLoop/calls=5 | 8,588 | 22,529 | 87 | |
-| DeepIteration/iters=1 | 2,266 | 6,590 | 46 | Multiple iterations before final text. Tests iteration scaling. |
-| DeepIteration/iters=3 | 3,878 | 8,741 | 64 | |
-| DeepIteration/iters=5 | 5,591 | 11,053 | 81 | |
-| DeepIteration/iters=10 | 10,286 | 17,034 | 125 | |
-| ParallelDispatch/1 | 3,137 | 18,907 | 46 | Parallel tool calls in a single iteration. Goroutine overhead. |
-| ParallelDispatch/5 | 8,617 | 22,530 | 87 | |
-| ParallelDispatch/10 | 13,990 | 27,579 | 130 | |
-| ParallelDispatch/20 | 23,943 | 37,524 | 206 | |
-| Stream | 2,312 | 2,173 | 24 | Single turn with streaming channel. |
-| StreamWithToolCalls | 12,023 | 23,061 | 94 | Streaming + 3 tool calls. **Real-world hot path.** |
-| Processors/1 | 578 | 961 | 8 | Pre + post processor chains. |
-| Processors/3 | 579 | 961 | 8 | |
-| Processors/5 | 589 | 961 | 8 | |
-| LargePrompt/10KB | 622 | 1,346 | 9 | System prompt size scaling. |
-| LargePrompt/50KB | 625 | 1,346 | 9 | |
-| LargePrompt/100KB | 626 | 1,346 | 9 | |
-| LargeInput/10KB | 567 | 961 | 8 | User input size scaling. |
-| LargeInput/50KB | 573 | 961 | 8 | |
-| LargeInput/100KB | 573 | 961 | 8 | |
-| LargeToolResult/10KB | 6,393 | 29,164 | 46 | Tool result payload size scaling. |
-| LargeToolResult/100KB | 120,167 | 125,618 | 47 | |
-| LargeToolResult/1MB | 1,202,638 | 1,068,779 | 48 | |
+| SingleTurn | 583 | 1,170 | 9 | Bare agent, no tools, one LLM call. **Baseline framework tax.** |
+| WithTools/1 | 1,364 | 14,378 | 9 | Tools registered but not called. Definition-building overhead. |
+| WithTools/5 | 1,351 | 14,378 | 9 | |
+| WithTools/10 | 1,504 | 14,379 | 9 | |
+| ToolLoop/calls=1 | 3,802 | 19,672 | 49 | Provider returns tool calls, then text. Full iteration loop. |
+| ToolLoop/calls=3 | 7,163 | 22,732 | 76 | |
+| ToolLoop/calls=5 | 9,916 | 25,668 | 93 | |
+| DeepIteration/iters=1 | 2,350 | 7,359 | 49 | Multiple iterations before final text. Tests iteration scaling. |
+| DeepIteration/iters=3 | 4,054 | 11,237 | 70 | |
+| DeepIteration/iters=5 | 6,564 | 16,303 | 89 | |
+| DeepIteration/iters=10 | 11,044 | 28,205 | 135 | |
+| ParallelDispatch/1 | 2,975 | 19,664 | 49 | Parallel tool calls in a single iteration. Goroutine overhead. |
+| ParallelDispatch/5 | 9,500 | 25,668 | 93 | |
+| ParallelDispatch/10 | 14,702 | 33,534 | 137 | |
+| ParallelDispatch/20 | 24,894 | 49,125 | 214 | |
+| Stream | 2,654 | 2,382 | 25 | Single turn with streaming channel. |
+| StreamWithToolCalls | 11,829 | 24,820 | 99 | Streaming + 3 tool calls. **Real-world hot path.** |
+| Processors/1 | 595 | 1,170 | 9 | Pre + post processor chains. |
+| Processors/3 | 566 | 1,170 | 9 | |
+| Processors/5 | 573 | 1,170 | 9 | |
+| LargePrompt/10KB | 598 | 1,554 | 10 | System prompt size scaling. |
+| LargePrompt/50KB | 607 | 1,555 | 10 | |
+| LargePrompt/100KB | 622 | 1,555 | 10 | |
+| LargeInput/10KB | 578 | 1,170 | 9 | User input size scaling. |
+| LargeInput/50KB | 581 | 1,170 | 9 | |
+| LargeInput/100KB | 558 | 1,170 | 9 | |
+| LargeToolResult/10KB | 6,592 | 29,932 | 49 | Tool result payload size scaling. |
+| LargeToolResult/100KB | 118,826 | 126,396 | 50 | |
+| LargeToolResult/1MB | 1,194,350 | 1,069,932 | 51 | |
+
+> **Phase 6 note:** B/op and allocs/op rose slightly across the board
+> (e.g. SingleTurn 961B/8 → 1,170B/9) because `AgentResult` now owns its
+> trace memory (`Steps`, `Iterations`, …) instead of aliasing pooled
+> backing arrays that the next `Execute` silently overwrote. The old
+> numbers were measuring unsafe behavior; ns/op is unchanged.
 
 ## Network (Multi-Agent)
 
@@ -60,19 +66,19 @@ Router-based orchestration: tool-definition building, agent delegation, result f
 
 | Benchmark | ns/op | B/op | allocs/op | What it measures |
 |-----------|------:|-----:|----------:|------------------|
-| SingleAgent | 3,723 | 20,274 | 71 | One child, one delegation. **Baseline network overhead.** |
-| AgentScaling/1 | 3,911 | 20,300 | 72 | Varying child count, router picks one. |
-| AgentScaling/3 | 4,227 | 20,782 | 81 | |
-| AgentScaling/5 | 4,434 | 21,279 | 88 | |
-| AgentScaling/10 | 5,254 | 23,094 | 107 | |
-| AgentScaling/20 | 6,928 | 26,737 | 140 | |
-| MultiDelegation/1 | 3,979 | 20,316 | 73 | Router delegates to N agents sequentially. |
-| MultiDelegation/2 | 5,787 | 22,035 | 108 | |
-| MultiDelegation/3 | 7,662 | 23,833 | 144 | |
-| MultiDelegation/5 | 11,388 | 27,372 | 212 | |
-| Stream | 13,792 | 58,317 | 91 | Single delegation with streaming. |
-| LargeAgentOutput/10KB | 7,018 | 30,556 | 72 | Child returns large payload. |
-| LargeAgentOutput/100KB | 123,043 | 127,016 | 73 | |
+| SingleAgent | 3,844 | 21,041 | 74 | One child, one delegation. **Baseline network overhead.** |
+| AgentScaling/1 | 4,046 | 21,067 | 75 | Varying child count, router picks one. |
+| AgentScaling/3 | 4,285 | 21,549 | 84 | |
+| AgentScaling/5 | 4,853 | 22,047 | 91 | |
+| AgentScaling/10 | 5,436 | 23,860 | 110 | |
+| AgentScaling/20 | 6,828 | 27,502 | 143 | |
+| MultiDelegation/1 | 4,152 | 21,084 | 76 | Router delegates to N agents sequentially. |
+| MultiDelegation/2 | 5,919 | 23,858 | 113 | |
+| MultiDelegation/3 | 7,984 | 26,328 | 150 | |
+| MultiDelegation/5 | 11,908 | 32,616 | 220 | |
+| Stream | 13,615 | 59,078 | 94 | Single delegation with streaming. |
+| LargeAgentOutput/10KB | 11,216 | 31,323 | 75 | Child returns large payload. |
+| LargeAgentOutput/100KB | 119,211 | 127,775 | 76 | |
 | BuildToolDefs/1 | 8 | 0 | 0 | Cached tool-def lookup. **Zero-alloc when membership stable.** |
 | BuildToolDefs/5 | 8 | 0 | 0 | |
 | BuildToolDefs/20 | 8 | 0 | 0 | |
@@ -85,13 +91,13 @@ A JSON+base64 loopback round trip necessarily materializes at least three payloa
 
 | Benchmark | ns/op | B/op | allocs/op | What it measures |
 |-----------|------:|-----:|----------:|------------------|
-| Server_MessageSend | 2,230 | 2,016 | 34 | Handler path: decode → execute → store → encode. **Server baseline tax.** |
-| RoundTrip | 35,031 | 17,621 | 196 | Full client→server loopback. Wire cost above the agent execute baseline (~559 ns). |
-| RoundTrip_Stream | 139,962 | 126,563 | 339 | Streaming loopback: SSE event translation both directions. |
-| RoundTrip_LargeArtifact/10KB | 169,000 | 99,307 | 215 | Binary attachment, 10 KB payload. Base64 wire encoding + decode. |
-| RoundTrip_LargeArtifact/100KB | 2,021,000 | 1,198,978 | 243 | |
-| RoundTrip_LargeArtifact/1024KB | 10,272,000 | 10,823,000 | 261 | |
-| TaskStore | 31 | 0 | 0 | In-memory store under parallel poll. **Zero-alloc read path.** |
+| Server_MessageSend | 2,131 | 2,016 | 34 | Handler path: decode → execute → store → encode. **Server baseline tax.** |
+| RoundTrip | 37,280 | 17,610 | 198 | Full client→server loopback. Wire cost above the agent execute baseline (~583 ns). |
+| RoundTrip_Stream | 109,718 | 126,142 | 338 | Streaming loopback: SSE event translation both directions. |
+| RoundTrip_LargeArtifact/10KB | 159,053 | 98,380 | 214 | Binary attachment, 10 KB payload. Base64 wire encoding + decode. |
+| RoundTrip_LargeArtifact/100KB | 1,182,483 | 1,188,418 | 243 | |
+| RoundTrip_LargeArtifact/1024KB | 10,479,219 | 10,823,324 | 261 | |
+| TaskStore | 42 | 0 | 0 | In-memory store under parallel poll. **Zero-alloc read path.** |
 
 ## Memory
 
@@ -99,20 +105,33 @@ Message assembly, fact storage, and recall.
 
 | Benchmark | ns/op | B/op | allocs/op | What it measures |
 |-----------|------:|-----:|----------:|------------------|
-| BuildMessages/20 | 169 | 1,017 | 6 | Message assembly with conversation history. |
-| BuildMessages/100 | 169 | 1,017 | 6 | |
-| BuildMessages/200 | 171 | 1,017 | 6 | |
-| BuildMessages/1000 | 178 | 1,017 | 6 | |
-| Remember/facts=1 | 433 | 482 | 4 | Storing memory items. |
-| Remember/facts=10 | 2,679 | 3,309 | 34 | |
-| Remember/facts=50 | 12,065 | 16,631 | 158 | |
-| Recall/items=10 | 52 | 96 | 4 | Retrieving facts (in-memory store). |
-| Recall/items=100 | 52 | 96 | 4 | |
+| BuildMessages/20 | 160 | 1,017 | 6 | Message assembly with conversation history. |
+| BuildMessages/100 | 174 | 1,017 | 6 | |
+| BuildMessages/200 | 209 | 1,017 | 6 | |
+| BuildMessages/1000 | 190 | 1,017 | 6 | |
+| Remember/facts=1 | 403 | 482 | 4 | Storing memory items. |
+| Remember/facts=10 | 2,626 | 3,309 | 34 | |
+| Remember/facts=50 | 11,828 | 16,631 | 158 | |
+| Recall/items=10 | 51 | 96 | 4 | Retrieving facts (in-memory store). |
+| Recall/items=100 | 54 | 96 | 4 | |
 | Recall/items=500 | 52 | 96 | 4 | |
+
+## Tool Result Store
+
+The in-memory `ToolResultStore` on the tool-dispatch path, pre-filled with
+10,000 unexpired entries (the default cap) — the worst case for the
+TTL sweep. The Phase 6 `nextExpiry` watermark skips the O(N) sweep entirely
+when nothing can have expired: `Put` was ~376,000 ns/op and `Get` ~87,000
+ns/op before the watermark.
+
+| Benchmark | ns/op | B/op | allocs/op | What it measures |
+|-----------|------:|-----:|----------:|------------------|
+| InMemoryStorePut | 393 | 245 | 2 | Store a tool result with 10,000 entries resident. |
+| InMemoryStoreGet | 88 | 0 | 0 | Fetch with 10,000 entries resident. **Zero-alloc read path.** |
 
 ## Optimization History
 
-### Phase 4 (current) vs Phase 3 vs Phase 2 vs Phase 1 vs pre-optimization baseline
+### Phase 6 (current) vs earlier phases vs pre-optimization baseline
 
 **Phase 1** (v0.18.0): channel buffer reduction (64 → 1) + sync.Pool for signaling channel, LoopConfig pass-by-pointer, tool result copy chain reduction, TruncateStr ASCII fast path, RetrieveContext lazy map init, endIter closure inlining.
 
@@ -122,7 +141,20 @@ Message assembly, fact storage, and recall.
 
 **Phase 4**: ToolResult.Content `json.RawMessage` → `string` (eliminates 4 type round-trips on tool results), `splitContentRunes` rewritten with byte-scanning (eliminates `[]rune` explosion), `rawMessageToString`/`toolContentToString` eliminated, streaming forwarder buffer 64→1 (saves 16KB per forwarder), `onceClose` moved to pooled loopState.
 
-**Phase 5** (current): DX audit — Store interface 25→17 methods (ScheduledActionStore extraction removes 8 methods + 32 mock stubs), iteration.go `iterEndParams` copy elimination (-30 lines), LLM call 3-way branch collapsed, `TextContent` identity function removed, `JSONResult` generic, `WithSemanticTrimming` wired to actual implementation, `WithDecayInterval` stub removed, `RestartOnFail` gains backoff delay, `classifyAgent` correctly returns `KindUnknown` for custom agents, `agentTool.ExecuteRaw` error protocol fixed. Zero agent/memory allocation regression; network allocs -26% from Store interface shrink.
+**Phase 5**: DX audit — Store interface 25→17 methods (ScheduledActionStore extraction removes 8 methods + 32 mock stubs), iteration.go `iterEndParams` copy elimination (-30 lines), LLM call 3-way branch collapsed, `TextContent` identity function removed, `JSONResult` generic, `WithSemanticTrimming` wired to actual implementation, `WithDecayInterval` stub removed, `RestartOnFail` gains backoff delay, `classifyAgent` correctly returns `KindUnknown` for custom agents, `agentTool.ExecuteRaw` error protocol fixed. Zero agent/memory allocation regression; network allocs -26% from Store interface shrink.
+
+**Phase 6** (current): correctness + audit round — `AgentResult` no longer
+aliases pooled `loopState` backing arrays (`Steps`/`Iterations`/`Warnings`/
+`Files`/`Sources` ownership transfers to the result on release; previously
+the next `Execute` silently overwrote returned results in place). This
+costs the allocations the result genuinely owns: SingleTurn 8→9 allocs/op
+(+~200B), tool-loop paths +3–10 allocs/op proportional to trace size;
+ns/op flat. Tool-result store gained a `nextExpiry` watermark — `Put`/`Get`
+no longer run an O(N) TTL sweep per call (~376µs→393ns Put, ~87µs→88ns Get
+at the 10,000-entry cap). Also: `OnIterationComplete` snapshot ring-buffer
+panic fixed, `Func`/`Erase`/`EraseStreaming` post-execute tails unified
+(`Func` now emits `ToolResult.UI`), hand-rolled discard logger replaced
+with `slog.DiscardHandler`, dead stream-forwarder symbols removed.
 
 **Agent highlights (memory):**
 
@@ -176,22 +208,24 @@ Message assembly, fact storage, and recall.
 
 ## Key Takeaways
 
-**Baseline overhead is negligible.** A single agent turn costs ~559ns and 961B with 8 allocs — five orders of magnitude below any real LLM API call (100ms+). The framework is not your bottleneck.
+**Baseline overhead is negligible.** A single agent turn costs ~583ns and ~1.2KB with 9 allocs — five orders of magnitude below any real LLM API call (100ms+). The framework is not your bottleneck. Since Phase 6 every returned `AgentResult` owns its trace memory outright (no pooled aliasing), so results are safe to hold indefinitely.
 
 **Everything scales linearly.** No hidden quadratic behavior in iterations, tool dispatch, agent scaling, or delegation chains:
-- Each additional tool call: ~1.4us + ~900B
-- Each additional iteration: ~1.0us + ~1.3KB
-- Each additional parallel dispatch: ~1.1us
+- Each additional tool call: ~1.5us + ~1.5KB
+- Each additional iteration: ~1.0us + ~2.3KB
+- Each additional parallel dispatch: ~1.2us
 - Each additional network delegation: ~1.9us
-- Each additional child agent (definitions only): ~60ns
+- Each additional child agent: ~150ns
 
 **Processors add zero measurable overhead.** 1 vs 5 no-op processors show identical numbers — the chain dispatch is essentially free.
 
-**Prompt/input size is now O(1).** With compression disabled (the default), large system prompts and user inputs add zero overhead — 100KB costs the same ~570ns as 0KB. The O(n) RuneCount walk is skipped entirely.
+**Prompt/input size is now O(1).** With compression disabled (the default), large system prompts and user inputs add zero overhead — 100KB costs the same ~580ns as 0KB. The O(n) RuneCount walk is skipped entirely.
+
+**Tool-result storage is O(1).** The in-memory store's `nextExpiry` watermark skips the TTL sweep unless something can actually have expired: with 10,000 entries resident, `Put` costs 393ns and `Get` 88ns (zero-alloc), down from ~376µs and ~87µs.
 
 **Non-streaming path is zero-overhead.** With nil-channel ChatStream, cached DispatchFunc, and pooled LoopConfig, a non-streaming Execute allocates no channels, spawns no goroutines, and reuses dispatch closures.
 
-**Streaming overhead is minimal.** A streaming Execute adds ~1.75us and 1.2KB over the non-streaming baseline — down from 38KB in Phase 2. Buffer-1 forwarder channels and pooled close guards eliminated the bulk of the streaming tax.
+**Streaming overhead is minimal.** A streaming Execute adds ~2.1us and 1.2KB over the non-streaming baseline — down from 38KB in Phase 2. Buffer-1 forwarder channels and pooled close guards eliminated the bulk of the streaming tax.
 
 **Large payloads scale at ~1x.** A 1MB tool result costs 1.2ms and 1.04MB (~1x the payload size). The `ToolResult.Content` string type and byte-scanning `splitContentRunes` eliminated the 4× `[]rune` explosion and 4 type round-trips that previously inflated 1MB to 9.5MB.
 

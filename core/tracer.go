@@ -26,27 +26,40 @@ type Span interface {
 }
 
 // SpanAttr is a key-value attribute attached to a span or event.
+// Construction must go through the typed constructors (StringAttr, IntAttr,
+// BoolAttr, Float64Attr) — direct struct literals are not supported and the
+// Value field is intentionally unexported to enforce this.
 type SpanAttr struct {
 	Key   string
-	Value any
+	value any
 }
+
+// Val returns the attribute value. The dynamic type is always one of
+// string, int, float64, or bool — enforced by the constructors.
+//
+// Why: observer is a separate Go module and cannot access unexported fields
+// across module boundaries, so the accessor must be exported. Returning any
+// from an accessor whose godoc documents the closed type set is the accepted
+// shape here — the construction boundary (not the accessor type) is what
+// enforces type safety.
+func (a SpanAttr) Val() any { return a.value }
 
 // StringAttr creates a string-typed span attribute.
 func StringAttr(k, v string) SpanAttr {
-	return SpanAttr{Key: k, Value: v}
+	return SpanAttr{Key: k, value: v}
 }
 
 // IntAttr creates an int-typed span attribute.
 func IntAttr(k string, v int) SpanAttr {
-	return SpanAttr{Key: k, Value: v}
+	return SpanAttr{Key: k, value: v}
 }
 
 // BoolAttr creates a bool-typed span attribute.
 func BoolAttr(k string, v bool) SpanAttr {
-	return SpanAttr{Key: k, Value: v}
+	return SpanAttr{Key: k, value: v}
 }
 
 // Float64Attr creates a float64-typed span attribute.
 func Float64Attr(k string, v float64) SpanAttr {
-	return SpanAttr{Key: k, Value: v}
+	return SpanAttr{Key: k, value: v}
 }
