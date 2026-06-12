@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nevindra/oasis/core"
 )
@@ -760,21 +761,49 @@ func TestExecuteResultNotCorruptedByPooledStateReuse(t *testing.T) {
 }
 
 func TestSplitContentRunes_MultibyteUTF8(t *testing.T) {
-	// 2-byte runes (é = U+00E9). Each rune is 2 bytes in UTF-8.
+	// 2-byte runes (é = U+00E9). Byte-offset chunking guarantees at most
+	// maxRunes runes per chunk (not exact packing — multibyte content may
+	// yield more chunks than a rune-exact split), boundaries never tear a
+	// rune, and concatenation reproduces the original.
 	original := strings.Repeat("é", 5)
 	chunks := splitContentRunes(original, 3)
-	if len(chunks) != 2 {
-		t.Fatalf("expected 2 chunks for 5 runes with max=3, got %d", len(chunks))
+	if len(chunks) < 2 {
+		t.Fatalf("expected >=2 chunks for 5 runes with max=3, got %d", len(chunks))
 	}
-	if chunks[0] != strings.Repeat("é", 3) || chunks[1] != strings.Repeat("é", 2) {
-		t.Errorf("unexpected chunks: %v", chunks)
-	}
-	// Verify bytes are valid UTF-8 (no broken sequences).
+	var reassembled strings.Builder
 	for i, c := range chunks {
+		if n := utf8.RuneCountInString(c); n > 3 {
+			t.Errorf("chunk %d: %d runes, want <= 3", i, n)
+		}
+		// Verify bytes are valid UTF-8 (no broken sequences).
 		for j, r := range c {
 			if r == '�' {
 				t.Errorf("chunk %d position %d: replacement rune (broken UTF-8)", i, j)
 			}
 		}
+		reassembled.WriteString(c)
+	}
+	if reassembled.String() != original {
+		t.Errorf("reassembled chunks do not equal original: %v", chunks)
+	}
+}
+
+func TestSplitContentRunes_FourByteRuneNarrowMax(t *testing.T) {
+	// 4-byte runes (emoji) with maxRunes < 4: the byte cut backs off to 0,
+	// so the splitter must emit the whole rune to guarantee progress.
+	original := strings.Repeat("🎉", 3)
+	chunks := splitContentRunes(original, 2)
+	var reassembled strings.Builder
+	for i, c := range chunks {
+		if n := utf8.RuneCountInString(c); n > 2 {
+			t.Errorf("chunk %d: %d runes, want <= 2", i, n)
+		}
+		if !utf8.ValidString(c) {
+			t.Errorf("chunk %d: broken UTF-8 %q", i, c)
+		}
+		reassembled.WriteString(c)
+	}
+	if reassembled.String() != original {
+		t.Errorf("reassembled chunks do not equal original: %v", chunks)
 	}
 }

@@ -56,8 +56,12 @@ func buildStepTrace(tc core.ToolCall, res toolExecResult) StepTrace {
 		Type:      traceType,
 		Input:     TruncateStr(input, 200),
 		Output:    TruncateStr(res.content, 500),
-		RawArgs:   json.RawMessage(tc.Args),
-		RawOutput: json.RawMessage(res.content),
+		RawArgs: json.RawMessage(tc.Args),
+		// Why: res.content is an immutable string the tool already owns;
+		// assigning it directly is zero-copy. Typing RawOutput as []byte-backed
+		// json.RawMessage here used to copy the full payload per step — the
+		// dominant allocation for large tool results.
+		RawOutput: res.content,
 		Usage:     res.usage,
 		Duration:  res.duration,
 	}

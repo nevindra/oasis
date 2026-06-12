@@ -118,6 +118,12 @@ Both O(1). Fantasy is ~1.8x faster from lower constant overhead. Both have const
 
 Fantasy still wins on large tool results due to its opaque `ToolResponse` values (no string conversion or history storage). However, Phase 4's `ToolResult.Content` string type and byte-scanning `splitContentRunes` closed the gap dramatically — at 1MB: **365x faster** (was 1,111x) and **1.02x payload** (was 9.5x). Oasis stores results in conversation history (needed for compression and observability), which requires copying and chunking large payloads.
 
+> **Stale since Phase 7 (2026-06-12):** the Oasis column above predates the
+> Phase 7 O(1) large-tool-result work (`RawOutput` string type + byte-offset
+> chunking). Oasis now measures ~4.6µs / ~19.8KB / 49 allocs at 1MB —
+> payload-independent, within ~1.4x of Fantasy's ns/op. Re-run the Fantasy
+> side before quoting this table.
+
 ### Conversation history (prior messages)
 
 | Messages | Oasis ns/op | Fantasy ns/op | Oasis B/op | Fantasy B/op |

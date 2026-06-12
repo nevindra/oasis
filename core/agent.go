@@ -153,11 +153,11 @@ const (
 //     fixed cap by the agent loop) so logs and UIs stay readable. They are
 //     NOT safe to json.Unmarshal — a truncation that lands inside a JSON
 //     value produces a mid-string EOF.
-//   - RawArgs and RawOutput carry the untruncated original bytes for callers
-//     that need round-trip access (json.Unmarshal, replay, audit). They are
-//     populated by the runtime when the trace originates from a real tool
-//     dispatch; trace objects built externally without them fall back to the
-//     truncated Input/Output via AgentResult.ToolCalls/ToolResults.
+//   - RawArgs and RawOutput carry the untruncated original content for
+//     callers that need round-trip access (json.Unmarshal, replay, audit).
+//     They are populated by the runtime when the trace originates from a real
+//     tool dispatch; trace objects built externally without them fall back to
+//     the truncated Input/Output via AgentResult.ToolCalls/ToolResults.
 type StepTrace struct {
 	// Name is the tool or agent name (e.g. "web_search", "researcher").
 	// For agent delegations, the "agent_" prefix is stripped.
@@ -169,7 +169,7 @@ type StepTrace struct {
 	// JSON bytes.
 	Input string `json:"input"`
 	// Output is the result content, truncated to 500 characters for display.
-	// Use RawOutput (or AgentResult.ToolResults) for the original bytes.
+	// Use RawOutput (or AgentResult.ToolResults) for the original content.
 	Output string `json:"output"`
 	// RawArgs is the untruncated JSON the LLM produced for this tool call,
 	// before any UI/log truncation. Populated by the agent runtime when the
@@ -178,8 +178,13 @@ type StepTrace struct {
 	RawArgs json.RawMessage `json:"raw_args,omitempty"`
 	// RawOutput is the untruncated content the tool returned, before any
 	// UI/log truncation. Populated by the agent runtime for tool-call steps;
-	// nil for LLM-only steps or traces constructed externally.
-	RawOutput json.RawMessage `json:"raw_output,omitempty"`
+	// empty for LLM-only steps or traces constructed externally.
+	//
+	// Why string and not json.RawMessage: tool content is arbitrary text, not
+	// guaranteed JSON — a RawMessage holding plain text fails json.Marshal
+	// validation, and the string→[]byte conversion copied the full payload
+	// per step. A string shares the tool result's immutable backing memory.
+	RawOutput string `json:"raw_output,omitempty"`
 	// Usage is the token usage for this individual step.
 	Usage Usage `json:"usage"`
 	// Duration is the wall-clock time for this step.
@@ -261,16 +266,17 @@ func (r AgentResult) ToolCalls() []ToolCall {
 }
 
 // ToolResults returns the tool results captured in r.Steps, in execution order.
-// Content contains the untruncated bytes the tool returned (sourced from
-// StepTrace.RawOutput when populated), safe to json.Unmarshal. Falls back to
-// []byte(StepTrace.Output) for traces built externally without RawOutput.
+// Content contains the untruncated content the tool returned (sourced from
+// StepTrace.RawOutput when populated), safe to json.Unmarshal when the tool
+// emitted JSON. Falls back to StepTrace.Output for traces built externally
+// without RawOutput.
 func (r AgentResult) ToolResults() []ToolResult {
 	if len(r.Steps) == 0 {
 		return nil
 	}
 	out := make([]ToolResult, 0, len(r.Steps))
 	for _, s := range r.Steps {
-		content := string(s.RawOutput)
+		content := s.RawOutput
 		if content == "" {
 			content = s.Output
 		}

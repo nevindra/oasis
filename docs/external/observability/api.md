@@ -65,7 +65,7 @@ type StepTrace struct {
     Input     string          // args truncated to 200 chars (display only)
     Output    string          // result truncated to 500 chars (display only)
     RawArgs   json.RawMessage // untruncated original args bytes; nil for external traces
-    RawOutput json.RawMessage // untruncated original result bytes; nil for external traces
+    RawOutput string          // untruncated original result content; empty for external traces
     Usage     core.Usage      // per-step token counts
     Duration  time.Duration   // wall-clock time for this step
 }

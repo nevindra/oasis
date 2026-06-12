@@ -2,7 +2,7 @@
 
 Benchmarks measure **framework overhead only** — LLM providers are mocked with instant responses (zero latency). Every nanosecond and byte reported is the framework's tax, not LLM time.
 
-**Environment:** Go 1.26, Linux, AMD Ryzen 7 9700X (16 threads). Results are medians over 3–8 runs (last measured 2026-06-12, post-Phase 6).
+**Environment:** Go 1.26, Linux, AMD Ryzen 7 9700X (16 threads). Results are medians over 3–8 runs (last measured 2026-06-12, post-Phase 8; agent and network tables fully re-measured — A2A, memory, and tool-result-store tables are post-Phase 6).
 
 ## How to Run
 
@@ -25,22 +25,22 @@ The core agent loop: message building, tool dispatch, iteration control, streami
 | Benchmark | ns/op | B/op | allocs/op | What it measures |
 |-----------|------:|-----:|----------:|------------------|
 | SingleTurn | 583 | 1,170 | 9 | Bare agent, no tools, one LLM call. **Baseline framework tax.** |
-| WithTools/1 | 1,364 | 14,378 | 9 | Tools registered but not called. Definition-building overhead. |
-| WithTools/5 | 1,351 | 14,378 | 9 | |
-| WithTools/10 | 1,504 | 14,379 | 9 | |
-| ToolLoop/calls=1 | 3,802 | 19,672 | 49 | Provider returns tool calls, then text. Full iteration loop. |
-| ToolLoop/calls=3 | 7,163 | 22,732 | 76 | |
-| ToolLoop/calls=5 | 9,916 | 25,668 | 93 | |
-| DeepIteration/iters=1 | 2,350 | 7,359 | 49 | Multiple iterations before final text. Tests iteration scaling. |
-| DeepIteration/iters=3 | 4,054 | 11,237 | 70 | |
-| DeepIteration/iters=5 | 6,564 | 16,303 | 89 | |
-| DeepIteration/iters=10 | 11,044 | 28,205 | 135 | |
-| ParallelDispatch/1 | 2,975 | 19,664 | 49 | Parallel tool calls in a single iteration. Goroutine overhead. |
-| ParallelDispatch/5 | 9,500 | 25,668 | 93 | |
-| ParallelDispatch/10 | 14,702 | 33,534 | 137 | |
-| ParallelDispatch/20 | 24,894 | 49,125 | 214 | |
+| WithTools/1 | 673 | 2,067 | 9 | Tools registered but not called. Definition-building overhead. |
+| WithTools/5 | 699 | 2,067 | 9 | |
+| WithTools/10 | 799 | 2,067 | 9 | |
+| ToolLoop/calls=1 | 2,340 | 7,340 | 48 | Provider returns tool calls, then text. Full iteration loop. |
+| ToolLoop/calls=3 | 6,750 | 10,332 | 73 | |
+| ToolLoop/calls=5 | 8,432 | 13,240 | 88 | |
+| DeepIteration/iters=1 | 2,481 | 7,342 | 48 | Multiple iterations before final text. Tests iteration scaling. |
+| DeepIteration/iters=3 | 4,231 | 10,131 | 67 | |
+| DeepIteration/iters=5 | 6,236 | 16,701 | 85 | |
+| DeepIteration/iters=10 | 11,170 | 31,222 | 127 | |
+| ParallelDispatch/1 | 2,482 | 7,342 | 48 | Parallel tool calls in a single iteration. Goroutine overhead. |
+| ParallelDispatch/5 | 8,724 | 13,240 | 88 | |
+| ParallelDispatch/10 | 13,970 | 23,716 | 128 | |
+| ParallelDispatch/20 | 25,730 | 44,524 | 196 | |
 | Stream | 2,654 | 2,382 | 25 | Single turn with streaming channel. |
-| StreamWithToolCalls | 11,829 | 24,820 | 99 | Streaming + 3 tool calls. **Real-world hot path.** |
+| StreamWithToolCalls | 12,600 | 12,421 | 96 | Streaming + 3 tool calls. **Real-world hot path.** |
 | Processors/1 | 595 | 1,170 | 9 | Pre + post processor chains. |
 | Processors/3 | 566 | 1,170 | 9 | |
 | Processors/5 | 573 | 1,170 | 9 | |
@@ -50,9 +50,9 @@ The core agent loop: message building, tool dispatch, iteration control, streami
 | LargeInput/10KB | 578 | 1,170 | 9 | User input size scaling. |
 | LargeInput/50KB | 581 | 1,170 | 9 | |
 | LargeInput/100KB | 558 | 1,170 | 9 | |
-| LargeToolResult/10KB | 6,592 | 29,932 | 49 | Tool result payload size scaling. |
-| LargeToolResult/100KB | 118,826 | 126,396 | 50 | |
-| LargeToolResult/1MB | 1,194,350 | 1,069,932 | 51 | |
+| LargeToolResult/10KB | 2,641 | 7,343 | 48 | Tool result payload size scaling. **O(1) since Phase 7.** |
+| LargeToolResult/100KB | 2,792 | 7,375 | 49 | |
+| LargeToolResult/1MB | 3,305 | 10,224 | 50 | |
 
 > **Phase 6 note:** B/op and allocs/op rose slightly across the board
 > (e.g. SingleTurn 961B/8 → 1,170B/9) because `AgentResult` now owns its
@@ -66,19 +66,19 @@ Router-based orchestration: tool-definition building, agent delegation, result f
 
 | Benchmark | ns/op | B/op | allocs/op | What it measures |
 |-----------|------:|-----:|----------:|------------------|
-| SingleAgent | 3,844 | 21,041 | 74 | One child, one delegation. **Baseline network overhead.** |
-| AgentScaling/1 | 4,046 | 21,067 | 75 | Varying child count, router picks one. |
-| AgentScaling/3 | 4,285 | 21,549 | 84 | |
-| AgentScaling/5 | 4,853 | 22,047 | 91 | |
-| AgentScaling/10 | 5,436 | 23,860 | 110 | |
-| AgentScaling/20 | 6,828 | 27,502 | 143 | |
-| MultiDelegation/1 | 4,152 | 21,084 | 76 | Router delegates to N agents sequentially. |
-| MultiDelegation/2 | 5,919 | 23,858 | 113 | |
-| MultiDelegation/3 | 7,984 | 26,328 | 150 | |
-| MultiDelegation/5 | 11,908 | 32,616 | 220 | |
-| Stream | 13,615 | 59,078 | 94 | Single delegation with streaming. |
-| LargeAgentOutput/10KB | 11,216 | 31,323 | 75 | Child returns large payload. |
-| LargeAgentOutput/100KB | 119,211 | 127,775 | 76 | |
+| SingleAgent | 3,331 | 8,710 | 73 | One child, one delegation. **Baseline network overhead.** |
+| AgentScaling/1 | 3,424 | 8,726 | 74 | Varying child count, router picks one. |
+| AgentScaling/3 | 3,712 | 9,206 | 83 | |
+| AgentScaling/5 | 3,940 | 9,704 | 90 | |
+| AgentScaling/10 | 4,716 | 11,520 | 109 | |
+| AgentScaling/20 | 6,474 | 15,155 | 142 | |
+| MultiDelegation/1 | 3,455 | 8,741 | 75 | Router delegates to N agents sequentially. |
+| MultiDelegation/2 | 5,476 | 11,479 | 111 | |
+| MultiDelegation/3 | 7,264 | 13,937 | 147 | |
+| MultiDelegation/5 | 11,330 | 22,907 | 216 | |
+| Stream | 12,630 | 46,746 | 93 | Single delegation with streaming. |
+| LargeAgentOutput/10KB | 3,688 | 8,734 | 74 | Child returns large payload. **O(1) since Phase 7** (delegation rides the same loop). |
+| LargeAgentOutput/100KB | 3,497 | 8,767 | 75 | |
 | BuildToolDefs/1 | 8 | 0 | 0 | Cached tool-def lookup. **Zero-alloc when membership stable.** |
 | BuildToolDefs/5 | 8 | 0 | 0 | |
 | BuildToolDefs/20 | 8 | 0 | 0 | |
@@ -131,7 +131,7 @@ ns/op before the watermark.
 
 ## Optimization History
 
-### Phase 6 (current) vs earlier phases vs pre-optimization baseline
+### Phase 8 (current) vs earlier phases vs pre-optimization baseline
 
 **Phase 1** (v0.18.0): channel buffer reduction (64 → 1) + sync.Pool for signaling channel, LoopConfig pass-by-pointer, tool result copy chain reduction, TruncateStr ASCII fast path, RetrieveContext lazy map init, endIter closure inlining.
 
@@ -143,7 +143,34 @@ ns/op before the watermark.
 
 **Phase 5**: DX audit — Store interface 25→17 methods (ScheduledActionStore extraction removes 8 methods + 32 mock stubs), iteration.go `iterEndParams` copy elimination (-30 lines), LLM call 3-way branch collapsed, `TextContent` identity function removed, `JSONResult` generic, `WithSemanticTrimming` wired to actual implementation, `WithDecayInterval` stub removed, `RestartOnFail` gains backoff delay, `classifyAgent` correctly returns `KindUnknown` for custom agents, `agentTool.ExecuteRaw` error protocol fixed. Zero agent/memory allocation regression; network allocs -26% from Store interface shrink.
 
-**Phase 6** (current): correctness + audit round — `AgentResult` no longer
+**Phase 8** (current): messages pre-allocation right-sized — profiling showed
+94% of WithTools allocation was one line: the loop pre-allocated
+`min(MaxIter*4, 200)` message slots (~14KB at the default MaxIter=25) on every
+`Execute` for any agent that merely had tools registered, used or not. Now 8
+slots of headroom (a typical run makes 0–3 tool calls); deep loops grow by
+amortized append doubling. WithTools 14.4KB→2.1KB and ~2–3.6x faster;
+ToolLoop/StreamWithToolCalls/network paths -45–63% B/op and -10–26% ns/op;
+network SingleAgent 21KB→8.7KB. Cost: DeepIteration/iters=10 +11% B/op
+(+2 allocs) from growth reallocations, ns/op flat — the deep-loop tail pays
+amortized growth so the common shallow case stops paying a flat 14KB tax.
+
+**Phase 7**: large tool results O(1) — profiling showed the 1MB
+LargeToolResult cost was 72% UTF-8 rune scanning and 97% of allocation was a
+single payload copy. `StepTrace.RawOutput` typed `json.RawMessage` → `string`
+(BREAKING): the `string→[]byte` conversion copied the full payload per step,
+and a `RawMessage` holding non-JSON tool text failed `json.Marshal` validation
+outright; a string shares the tool result's immutable backing memory.
+Tool-result chunking decisions now use byte length (an upper bound on rune
+count) instead of `RuneCountInString`, and `splitContentRunes` cuts at byte
+offsets backed off to rune starts (O(chunks)) instead of decoding every rune
+(O(n)). Multibyte payloads may split into more chunks than a rune-exact pack;
+each chunk still holds ≤ maxLen runes and reassembles identically.
+LargeToolResult is now flat in payload size: 1MB 1,194µs→4.6µs (260x),
+1.07MB→19.8KB (54x); 100KB 119µs→3.5µs (34x); tool-loop paths shed 1–5
+allocs/op. Network LargeAgentOutput collapsed for free (delegation rides the
+same loop): 100KB 119µs/128KB→4.7µs/21KB. No regression elsewhere.
+
+**Phase 6**: correctness + audit round — `AgentResult` no longer
 aliases pooled `loopState` backing arrays (`Steps`/`Iterations`/`Warnings`/
 `Files`/`Sources` ownership transfers to the result on release; previously
 the next `Execute` silently overwrote returned results in place). This
@@ -212,10 +239,12 @@ with `slog.DiscardHandler`, dead stream-forwarder symbols removed.
 
 **Everything scales linearly.** No hidden quadratic behavior in iterations, tool dispatch, agent scaling, or delegation chains:
 - Each additional tool call: ~1.5us + ~1.5KB
-- Each additional iteration: ~1.0us + ~2.3KB
+- Each additional iteration: ~1.0us + ~2.7KB
 - Each additional parallel dispatch: ~1.2us
-- Each additional network delegation: ~1.9us
-- Each additional child agent: ~150ns
+- Each additional network delegation: ~2.0us
+- Each additional child agent: ~160ns
+
+**Registering tools is nearly free.** Since Phase 8 an agent with tools that makes no calls pays ~700ns and ~2.1KB (was 14.4KB — the loop pre-sized its message buffer for the MaxIter worst case on every Execute). Memory now follows actual tool usage, not configured limits.
 
 **Processors add zero measurable overhead.** 1 vs 5 no-op processors show identical numbers — the chain dispatch is essentially free.
 
@@ -227,7 +256,7 @@ with `slog.DiscardHandler`, dead stream-forwarder symbols removed.
 
 **Streaming overhead is minimal.** A streaming Execute adds ~2.1us and 1.2KB over the non-streaming baseline — down from 38KB in Phase 2. Buffer-1 forwarder channels and pooled close guards eliminated the bulk of the streaming tax.
 
-**Large payloads scale at ~1x.** A 1MB tool result costs 1.2ms and 1.04MB (~1x the payload size). The `ToolResult.Content` string type and byte-scanning `splitContentRunes` eliminated the 4× `[]rune` explosion and 4 type round-trips that previously inflated 1MB to 9.5MB.
+**Large payloads are O(1).** A 1MB tool result costs ~4.6µs and ~19.8KB — the same as a 10KB one, and the same as the bare tool-loop. Since Phase 7 the payload is never scanned (chunk decisions use byte length, chunk cuts are byte offsets backed off to rune starts) and never copied (`StepTrace.RawOutput` is a string sharing the tool result's backing memory).
 
 **Network tool defs are zero-alloc.** Cached dirty-bit pattern means stable networks (no membership changes between calls) pay zero for tool definition building.
 

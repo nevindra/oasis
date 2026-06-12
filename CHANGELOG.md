@@ -6,6 +6,40 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `core.StepTrace.RawOutput` is now `string` (was
+  `json.RawMessage`). Tool content is arbitrary text, not guaranteed JSON —
+  a `RawMessage` holding plain text failed `json.Marshal` validation, and
+  the `string→[]byte` conversion copied the full payload into every step
+  trace. Call sites doing `json.Unmarshal(s.RawOutput, &v)` become
+  `json.Unmarshal([]byte(s.RawOutput), &v)`; the JSON wire shape of
+  serialized traces changes from embedded raw JSON to a quoted string.
+  `AgentResult.ToolResults()` is unaffected.
+
+### Performance
+
+- **Message buffer pre-allocation follows usage, not limits.** The agent
+  loop pre-allocated `min(MaxIter*4, 200)` message slots (~14KB at the
+  default `MaxIter` 25) on every `Execute` for any agent with tools
+  registered, whether or not a tool fired (profiled: 94% of the
+  tools-registered-no-calls allocation). Headroom is now 8 slots — enough
+  for a typical 0–3-call run — and deeper loops grow by amortized append
+  doubling. Tools-registered-idle: 14.4KB → 2.1KB B/op and ~2–3x faster;
+  tool-loop, streaming, and network delegation paths: -45–63% B/op,
+  -10–26% ns/op. Deep loops (10+ iterations) trade +~11% B/op in growth
+  reallocations, time unchanged.
+- **Large tool results are O(1) in the agent loop** (profiled: 72% of the
+  1MB benchmark was UTF-8 rune scanning, 97% of allocation one payload
+  copy). Chunking decisions use byte length (an upper bound on rune count)
+  instead of `utf8.RuneCountInString`, `splitContentRunes` cuts at byte
+  offsets backed off to rune starts instead of decoding every rune, and the
+  `RawOutput` type change above removes the per-step payload copy.
+  `LargeToolResult/1MB`: 1,194µs → 4.6µs (260x), 1.07MB → 19.8KB (54x);
+  `100KB`: 119µs → 3.5µs (34x). Multibyte payloads near the chunk limit may
+  split into more chunks than a rune-exact pack (each still ≤ `MaxToolResultLen`
+  runes, same call ID, identical reassembly); ASCII chunking is unchanged.
+
 ## [0.20.0] - 2026-06-12
 
 ### Changed

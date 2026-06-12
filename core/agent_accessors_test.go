@@ -153,7 +153,7 @@ func TestAgentResult_ToolResults_RoundTripLargePayload(t *testing.T) {
 				Type:      "tool",
 				Input:     "{}",
 				Output:    string(raw[:500]), // mimics TruncateStr(output, 500)
-				RawOutput: json.RawMessage(raw),
+				RawOutput: string(raw),
 				Duration:  time.Millisecond,
 			},
 		},

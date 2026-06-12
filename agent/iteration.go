@@ -582,7 +582,13 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 				}
 			}
 		}
-		if utf8.RuneCountInString(content) > maxLen {
+		// Why byte length, not RuneCountInString: byte count is an upper
+		// bound on rune count, so len <= maxLen guarantees no split is
+		// needed without scanning the payload (O(1) vs O(n)). Multibyte
+		// payloads in the (maxLen runes, maxLen bytes] band split one
+		// message earlier than a rune-exact check would — an extra
+		// same-call-ID chunk the LLM still sees as one logical result.
+		if len(content) > maxLen {
 			for _, chunk := range splitContentRunes(content, maxLen) {
 				state.messages = append(state.messages, core.ToolResultMessage(tc.ID, chunk))
 				if state.compressThreshold > 0 {
@@ -818,24 +824,37 @@ func finalizeIterationStop(ctx context.Context, cfg *LoopConfig, ch chan<- core.
 // Splitting is rune-safe: chunks never break in the middle of a multi-byte
 // UTF-8 sequence. If s fits within maxRunes, a single-element slice is
 // returned. maxRunes must be > 0.
+//
+// Why byte-offset chunking: a chunk of at most maxRunes BYTES can never hold
+// more than maxRunes runes, so cutting at byte maxRunes and backing off to
+// the nearest rune start satisfies the contract in O(chunks) — no per-rune
+// decode of the payload. Multi-byte content yields slightly more chunks than
+// a rune-exact split; the contract is only an upper bound per chunk.
 func splitContentRunes(s string, maxRunes int) []string {
-	totalRunes := utf8.RuneCountInString(s)
-	if totalRunes <= maxRunes {
+	if len(s) <= maxRunes {
 		return []string{s}
 	}
-	chunks := make([]string, 0, (totalRunes+maxRunes-1)/maxRunes)
-	for len(s) > 0 {
-		n := 0
-		byteIdx := 0
-		for byteIdx < len(s) && n < maxRunes {
-			_, size := utf8.DecodeRuneInString(s[byteIdx:])
-			byteIdx += size
-			n++
+	chunks := make([]string, 0, len(s)/maxRunes+1)
+	for len(s) > maxRunes {
+		cut := maxRunes
+		// A valid UTF-8 rune start is at most 3 bytes back from any offset.
+		for back := 0; back < 3 && cut > 0 && !utf8.RuneStart(s[cut]); back++ {
+			cut--
 		}
-		chunks = append(chunks, s[:byteIdx])
-		s = s[byteIdx:]
+		if !utf8.RuneStart(s[cut]) {
+			// Invalid UTF-8: no boundary within reach, nothing to preserve.
+			cut = maxRunes
+		}
+		if cut == 0 {
+			// maxRunes < 4 with a wider rune up front: emit the whole rune
+			// to guarantee progress (still within bound — the chunk is 1 rune).
+			_, size := utf8.DecodeRuneInString(s)
+			cut = size
+		}
+		chunks = append(chunks, s[:cut])
+		s = s[cut:]
 	}
-	return chunks
+	return append(chunks, s)
 }
 
 // iterEndParams bundles the inputs to endIteration so helpers like

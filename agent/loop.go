@@ -63,11 +63,16 @@ func runLoop(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<- cor
 		messages = cfg.ResumeMessages
 	} else {
 		initial := cfg.Mem.BuildMessages(ctx, cfg.Name, cfg.SystemPrompt, task)
-		var preAllocCap int
-		if len(cfg.Tools) == 0 {
-			preAllocCap = 2
-		} else {
-			preAllocCap = min(cfg.MaxIter*4, 200)
+		// Why a small constant headroom instead of sizing for MaxIter: a
+		// typical run makes 0–3 tool calls, while MaxIter-proportional
+		// capacity (~100 slots ≈ 14KB at the default MaxIter=25) taxed every
+		// Execute on every agent that merely had tools registered. 8 slots
+		// absorb the common case (per iteration: one assistant tool-call
+		// message + one result message per call); deep loops grow by
+		// amortized append doubling, which costs less than the flat tax did.
+		preAllocCap := 2
+		if len(cfg.Tools) > 0 {
+			preAllocCap = 8
 		}
 		messages = make([]core.ChatMessage, len(initial), len(initial)+preAllocCap)
 		copy(messages, initial)
