@@ -43,6 +43,8 @@ type EmbeddingProvider = core.EmbeddingProvider
 type AnyTool = core.AnyTool
 type Tool[In, Out any] = core.Tool[In, Out]
 type ToolResult = core.ToolResult
+type UIComponent = core.UIComponent
+type UIRenderable = core.UIRenderable
 type RunOption = core.RunOption
 type ChatMessage = core.ChatMessage
 type ChatRequest = core.ChatRequest
@@ -146,6 +148,7 @@ var (
 	EventTextDelta       = core.EventTextDelta
 	EventToolCallStart   = core.EventToolCallStart
 	EventToolCallResult  = core.EventToolCallResult
+	EventUIComponent     = core.EventUIComponent
 	EventToolCallDelta   = core.EventToolCallDelta
 	EventToolProgress    = core.EventToolProgress
 	EventAgentStart      = core.EventAgentStart
@@ -211,6 +214,10 @@ func Func[In, Out any](name, desc string, fn func(context.Context, In) (Out, err
 
 // Erase converts a typed [Tool] into [AnyTool]. See [core.Erase].
 func Erase[In, Out any](t core.Tool[In, Out]) core.AnyTool { return core.Erase(t) }
+
+// UIResult re-exports core.UIResult: build a ToolResult that renders as the
+// named frontend component.
+func UIResult[T any](name string, props T) core.ToolResult { return core.UIResult(name, props) }
 
 // TextResult is a convenience for tools producing plain text. See [core.TextResult].
 var TextResult = core.TextResult

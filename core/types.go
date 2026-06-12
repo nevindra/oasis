@@ -89,6 +89,14 @@ type BlobStore interface {
 	DeleteBlob(ctx context.Context, ref string) error
 }
 
+// UIComponent describes a frontend component to render in place of (or
+// alongside) a tool result's text. Name is a registry key the frontend
+// resolves to a renderer; Props is the typed payload the renderer receives.
+type UIComponent struct {
+	Name  string          `json:"name"`
+	Props json.RawMessage `json:"props"`
+}
+
 // ToolResult is the outcome of a tool execution.
 // Content holds the result as a string. For plain text, use TextResult.
 // For JSON output, use JSONResult (which marshals to a JSON string).
@@ -97,6 +105,10 @@ type ToolResult struct {
 	Content     string       `json:"content,omitempty"`
 	Error       string       `json:"error,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"` // multimodal content (images, PDFs, etc.) passed to the LLM
+	// UI, when non-nil, instructs consumers to render the result as the named
+	// frontend component instead of (or alongside) Content. Set via UIResult
+	// or by an Out type implementing UIRenderable.
+	UI *UIComponent `json:"ui,omitempty"`
 }
 
 // ToolRegistry holds all registered atomic tools and dispatches execution.

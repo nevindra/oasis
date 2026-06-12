@@ -24,6 +24,21 @@ func JSONResult[T any](v T) ToolResult {
 	return ToolResult{Content: string(b)}
 }
 
+// UIResult builds a ToolResult that renders as the named frontend component.
+// props is marshaled to JSON for both UI.Props and Content, so the LLM still
+// "sees" the data it rendered and the loop can continue with context. Panics
+// on marshal failure — a programming error, matching JSONResult's convention.
+func UIResult[T any](name string, props T) ToolResult {
+	b, err := json.Marshal(props)
+	if err != nil {
+		panic("core.UIResult: json.Marshal failed: " + err.Error())
+	}
+	return ToolResult{
+		Content: string(b),
+		UI:      &UIComponent{Name: name, Props: b},
+	}
+}
+
 // ErrorResult returns a ToolResult carrying msg as the error string and no
 // content. Use this when a tool execution fails and the error should be
 // surfaced to the LLM as a tool result rather than returned as a Go error.

@@ -23,7 +23,7 @@ func toolResultToDispatch(result core.ToolResult, err error) DispatchResult {
 	if result.Error != "" {
 		return DispatchResult{Content: "error: " + result.Error, IsError: true}
 	}
-	return DispatchResult{Content: result.Content, Attachments: result.Attachments}
+	return DispatchResult{Content: result.Content, Attachments: result.Attachments, UI: result.UI}
 }
 
 // DispatchTool executes a tool via the given executor and converts the result
@@ -124,6 +124,7 @@ type toolExecResult struct {
 	attachments []core.Attachment
 	duration    time.Duration
 	isError     bool
+	ui          *core.UIComponent
 }
 
 // indexedResult pairs a tool execution result with its position in the
@@ -160,7 +161,7 @@ func dispatchParallel(ctx context.Context, calls []core.ToolCall, dispatch Dispa
 	if len(calls) == 1 {
 		start := time.Now()
 		dr := safeDispatch(ctx, calls[0], dispatch)
-		return []toolExecResult{{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
+		return []toolExecResult{{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError, ui: dr.UI}}
 	}
 
 	resultCh := make(chan indexedResult, len(calls))
@@ -190,7 +191,7 @@ func dispatchParallel(ctx context.Context, calls []core.ToolCall, dispatch Dispa
 				}
 				start := time.Now()
 				dr := safeDispatch(ctx, w.tc, dispatch)
-				resultCh <- indexedResult{w.idx, toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError}}
+				resultCh <- indexedResult{w.idx, toolExecResult{content: dr.Content, usage: dr.Usage, attachments: dr.Attachments, duration: time.Since(start), isError: dr.IsError, ui: dr.UI}}
 			}
 		}()
 	}

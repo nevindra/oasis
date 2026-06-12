@@ -14,6 +14,9 @@ type DispatchResult struct {
 	Attachments []core.Attachment
 	// IsError signals that Content represents an error message.
 	IsError bool
+	// UI, when non-nil, carries a renderable component descriptor produced by
+	// the tool. Copied from ToolResult.UI on the success path.
+	UI *core.UIComponent
 }
 
 // DispatchFunc executes a single tool call and returns the result.

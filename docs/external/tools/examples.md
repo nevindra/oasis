@@ -240,3 +240,40 @@ a := agent.New(provider,
 **Variations:**
 - Use `toolhttp.Tool.Fetch(ctx, url)` directly in your own tool implementation if you want to embed URL fetching as one step in a larger operation.
 - Add `LoggingMiddleware` to observe every URL the agent accesses.
+
+## Generative UI: render a component instead of text
+
+A tool can return a UI component descriptor instead of plain text. The agent
+emits an `EventUIComponent` directly after the tool result; a frontend maps the
+component `Name` to a renderer and validates `Props`.
+
+```go
+// Helper path — for func/RawTool/hand-rolled AnyTool:
+func searchFlights(ctx context.Context, in FlightQuery) (core.ToolResult, error) {
+    return core.UIResult("FlightCard", lookup(in)), nil
+}
+
+// Interface path — a typed Tool[In, Out] whose Out opts in:
+type FlightResults struct {
+    Flights []Flight `json:"flights"`
+}
+
+func (FlightResults) UIComponent() string { return "FlightCard" } // implements core.UIRenderable
+// Erase detects UIRenderable and sets ToolResult.UI automatically.
+```
+
+**Plain-English walkthrough:**
+- `core.UIResult(name, props)` marshals `props` to JSON and sets `ToolResult.UI`
+  (it also mirrors the JSON into `Content` so the LLM still "sees" the rendered
+  data and the loop can continue).
+- Alternatively, a typed tool's `Out` type implements `core.UIRenderable` (one
+  method, `UIComponent() string`); `Erase`/`EraseStreaming` detect it and set
+  `ToolResult.UI` for you — no helper call needed.
+- On the wire the agent emits, in order: `EventToolCallResult` then
+  `EventUIComponent{ID: <call id>, Name: "FlightCard", Object: <props json>}`.
+
+**Variations:**
+- The component `Name` is just a registry key — the frontend owns the catalog
+  of renderers and decides how to validate `Props` and what to do on a miss.
+- All four symbols are re-exported on the root umbrella: `oasis.UIResult`,
+  `oasis.UIComponent`, `oasis.UIRenderable`, `oasis.EventUIComponent`.

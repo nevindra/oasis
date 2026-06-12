@@ -141,6 +141,7 @@ Key event types:
 | `EventTextDelta` | Incremental LLM text chunk |
 | `EventToolCallStart` | Tool about to execute; `Name`+`Args` identify it |
 | `EventToolCallResult` | Tool finished; `Content` carries the result |
+| `EventUIComponent` | Tool produced a renderable component; `Name`/`Object` carry the component name + props JSON, `ID` correlates to the tool call |
 | `EventIterationStart/Finish` | One LLM call iteration began/ended |
 | `EventRunFinish` | Last event; `FinishReason` says why the run stopped |
 | `EventToolCallSuspended` | Tool returned a `Suspend` error |

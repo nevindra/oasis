@@ -129,6 +129,11 @@ const (
 	// untyped Suspend); SuspendPayload carries the bytes from Suspend().
 	// Content carries the processor kind: "pre", "post", or "post-tool".
 	EventProcessorSuspended StreamEventType = "processor-suspended"
+	// EventUIComponent signals a tool produced a renderable UI component.
+	// ID correlates with the preceding EventToolCallStart/Result; Name carries
+	// the component name; Object carries the props JSON. Emitted directly after
+	// the tool's EventToolCallResult on the success path only.
+	EventUIComponent StreamEventType = "ui-component"
 )
 
 // AllStreamEventTypes returns every StreamEventType constant defined by the
@@ -139,6 +144,7 @@ func AllStreamEventTypes() []StreamEventType {
 		EventTextDelta,
 		EventToolCallStart,
 		EventToolCallResult,
+		EventUIComponent,
 		EventThinking,
 		EventAgentStart,
 		EventAgentFinish,

@@ -472,6 +472,19 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 			}
 		}
 
+		// Emit ui-component event when the tool produced a renderable component.
+		if ch != nil && results[j].ui != nil {
+			select {
+			case ch <- core.StreamEvent{
+				Type:   core.EventUIComponent,
+				ID:     tc.ID,
+				Name:   results[j].ui.Name,
+				Object: results[j].ui.Props,
+			}:
+			case <-ctx.Done():
+			}
+		}
+
 		// Build step trace.
 		trace := buildStepTrace(tc, results[j])
 		state.steps = appendStepBounded(state.steps, trace, cfg.MaxStepsResolved)

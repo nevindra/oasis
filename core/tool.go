@@ -59,3 +59,11 @@ type StreamingTool[In, Out any] interface {
 	Tool[In, Out]
 	ExecuteStream(ctx context.Context, in In, ch chan<- StreamEvent) (Out, error)
 }
+
+// UIRenderable is the optional capability a typed tool's Out type implements to
+// render as a frontend component. When present, Erase/EraseStreaming set
+// ToolResult.UI to {Name: Out.UIComponent(), Props: <marshaled Out>}. Mirrors
+// the OutSchemaProvider opt-in pattern.
+type UIRenderable interface {
+	UIComponent() string
+}

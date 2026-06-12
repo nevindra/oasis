@@ -8,6 +8,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Added
 
+- **Generative UI primitive.** A tool can mark its output as a renderable
+  frontend component: `core.UIResult(name, props)` (helper) or a typed tool's
+  `Out` implementing `core.UIRenderable`. The agent emits a new
+  `core.EventUIComponent` stream event (carrying the component name in `Name`
+  and props JSON in `Object`) directly after `EventToolCallResult`. Re-exported
+  on the root umbrella as `oasis.UIComponent`, `oasis.UIRenderable`,
+  `oasis.UIResult`, and `oasis.EventUIComponent`. Core loop event emission is
+  unchanged; consumers opt in by handling the new event. Zero new dependencies.
 - **`a2a/` package: A2A (Agent2Agent) v1.0 protocol support.** `a2a.NewServer`
   exposes any `core.Agent` as an A2A server: JSON-RPC 2.0 + SSE + REST
   transports, agent card at `/.well-known/agent-card.json`, bounded in-memory
