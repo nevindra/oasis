@@ -148,6 +148,46 @@ func (c *HTTPClient) CallTool(ctx context.Context, name string, args json.RawMes
 	return &res, nil
 }
 
+func (c *HTTPClient) listResources(ctx context.Context) ([]ResourceInfo, error) {
+	raw, err := c.call(ctx, "resources/list", json.RawMessage(`{}`))
+	if err != nil {
+		return nil, err
+	}
+	return decodeResourceList(raw)
+}
+
+func (c *HTTPClient) readResource(ctx context.Context, uri string) ([]ResourceContent, error) {
+	params, _ := json.Marshal(map[string]string{"uri": uri})
+	raw, err := c.call(ctx, "resources/read", params)
+	if err != nil {
+		return nil, err
+	}
+	return decodeResourceRead(raw)
+}
+
+func (c *HTTPClient) listPrompts(ctx context.Context) ([]Prompt, error) {
+	raw, err := c.call(ctx, "prompts/list", json.RawMessage(`{}`))
+	if err != nil {
+		return nil, err
+	}
+	return decodePromptsList(raw)
+}
+
+func (c *HTTPClient) getPrompt(ctx context.Context, name string, args map[string]string) (*PromptResult, error) {
+	params, _ := json.Marshal(map[string]any{"name": name, "arguments": args})
+	raw, err := c.call(ctx, "prompts/get", params)
+	if err != nil {
+		return nil, err
+	}
+	return decodePromptGet(raw)
+}
+
+func (c *HTTPClient) setLogLevel(ctx context.Context, level LogLevel) error {
+	params, _ := json.Marshal(map[string]string{"level": string(level)})
+	_, err := c.call(ctx, "logging/setLevel", params)
+	return err
+}
+
 // Close releases idle connections. HTTP is stateless so no active connections
 // to close; this is a best-effort cleanup.
 func (c *HTTPClient) Close(_ context.Context) error {

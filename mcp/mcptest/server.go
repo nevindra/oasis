@@ -47,6 +47,18 @@ type Server struct {
 	// notifications/tools/list_changed notification to the client.
 	ListChangedCh chan struct{}
 
+	// Capabilities is the capabilities object returned by initialize. If nil,
+	// defaults to {"tools":{"listChanged":true}}.
+	Capabilities map[string]interface{}
+
+	// OnResourcesList / OnResourceRead handle resources/list and resources/read.
+	OnResourcesList func() []map[string]interface{}
+	OnResourceRead  func(uri string) []map[string]interface{}
+
+	// OnPromptsList / OnPromptGet handle prompts/list and prompts/get.
+	OnPromptsList func() []map[string]interface{}
+	OnPromptGet   func(name string, args map[string]string) map[string]interface{}
+
 	serverReads  *io.PipeReader // server reads incoming client requests here
 	serverWrites *io.PipeWriter // server writes responses here
 	clientReads  *io.PipeReader // client reads server output from this end
@@ -138,20 +150,17 @@ func (s *Server) serve() {
 			if s.InitDelay > 0 {
 				time.Sleep(s.InitDelay)
 			}
+			caps := s.Capabilities
+			if caps == nil {
+				caps = map[string]interface{}{"tools": map[string]interface{}{"listChanged": true}}
+			}
 			s.writeResp(map[string]interface{}{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
 				"result": map[string]interface{}{
 					"protocolVersion": "2024-11-05",
-					"capabilities": map[string]interface{}{
-						"tools": map[string]interface{}{
-							"listChanged": true,
-						},
-					},
-					"serverInfo": map[string]interface{}{
-						"name":    "mcptest",
-						"version": "0.0.1",
-					},
+					"capabilities":    caps,
+					"serverInfo":      map[string]interface{}{"name": "mcptest", "version": "0.0.1"},
 				},
 			})
 
@@ -206,6 +215,64 @@ func (s *Server) serve() {
 				"result":  res,
 			})
 
+		case "resources/list":
+			var list []map[string]interface{}
+			if s.OnResourcesList != nil {
+				list = s.OnResourcesList()
+			}
+			s.writeResp(map[string]interface{}{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]interface{}{"resources": list},
+			})
+
+		case "resources/read":
+			var p struct {
+				URI string `json:"uri"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			var contents []map[string]interface{}
+			if s.OnResourceRead != nil {
+				contents = s.OnResourceRead(p.URI)
+			}
+			s.writeResp(map[string]interface{}{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]interface{}{"contents": contents},
+			})
+
+		case "resources/subscribe", "resources/unsubscribe":
+			s.writeResp(map[string]interface{}{
+				"jsonrpc": "2.0", "id": req.ID, "result": map[string]interface{}{},
+			})
+
+		case "prompts/list":
+			var list []map[string]interface{}
+			if s.OnPromptsList != nil {
+				list = s.OnPromptsList()
+			}
+			s.writeResp(map[string]interface{}{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]interface{}{"prompts": list},
+			})
+
+		case "prompts/get":
+			var p struct {
+				Name      string            `json:"name"`
+				Arguments map[string]string `json:"arguments"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			var result map[string]interface{}
+			if s.OnPromptGet != nil {
+				result = s.OnPromptGet(p.Name, p.Arguments)
+			} else {
+				result = map[string]interface{}{"messages": []interface{}{}}
+			}
+			s.writeResp(map[string]interface{}{"jsonrpc": "2.0", "id": req.ID, "result": result})
+
+		case "logging/setLevel":
+			s.writeResp(map[string]interface{}{
+				"jsonrpc": "2.0", "id": req.ID, "result": map[string]interface{}{},
+			})
+
 		default:
 			s.writeResp(map[string]interface{}{
 				"jsonrpc": "2.0",
@@ -232,6 +299,16 @@ func (s *Server) watchListChanged() {
 			"params":  map[string]interface{}{},
 		})
 	}
+}
+
+// SendNotification pushes a JSON-RPC notification (no id) to the client. Safe
+// to call after Pipes(). Used to test client-side notification routing.
+func (s *Server) SendNotification(method string, params interface{}) {
+	s.writeResp(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+	})
 }
 
 // Stop shuts down the server gracefully, closing both pipe ends. Idempotent.

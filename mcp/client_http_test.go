@@ -137,6 +137,35 @@ func TestHTTPClient_ExtraHeaders(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_Resources(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		var result string
+		switch req.Method {
+		case "resources/list":
+			result = `{"resources":[{"uri":"u","name":"n"}]}`
+		case "resources/read":
+			result = `{"contents":[{"uri":"u","text":"hi"}]}`
+		}
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":%s}`, req.ID, result)
+	}))
+	defer ts.Close()
+
+	c := NewHTTPClient(ts.URL, nil, nil, 0)
+	list, err := c.listResources(context.Background())
+	if err != nil || len(list) != 1 || list[0].Name != "n" {
+		t.Fatalf("list=%+v err=%v", list, err)
+	}
+	contents, err := c.readResource(context.Background(), "u")
+	if err != nil || len(contents) != 1 || contents[0].Text != "hi" {
+		t.Fatalf("contents=%+v err=%v", contents, err)
+	}
+}
+
 // TestHTTPClient_Initialize_ProtocolVersion asserts that the outbound
 // initialize request carries the package-level protocolVersion constant,
 // not any hard-coded legacy string.

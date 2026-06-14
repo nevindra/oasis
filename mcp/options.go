@@ -49,6 +49,14 @@ func WithDeferredSchemas(opts ...DeferOption) RegistryOption {
 	}
 }
 
+// WithProgressEvents enables tool-call progress reporting. When set, MCP tool
+// calls advertise a progressToken and the registry emits EventProgress as the
+// server reports progress. OFF by default: the tool-dispatch hot path is
+// unchanged (no token, no extra allocation) unless this option is set.
+func WithProgressEvents() RegistryOption {
+	return func(r *Registry) { r.progressEnabled = true }
+}
+
 // NewRegistry constructs a fresh registry. Multiple agents can share one
 // registry by passing the same *Registry pointer to each agent's
 // WithTools(reg.Tools()...) at construction.

@@ -244,6 +244,14 @@ Opts the Registry into deferred schema loading. MCP tools are advertised to the 
 
 When enabled, prepend `DeferredToolsPromptSection()` to the agent's system prompt so the model knows how to use `ToolSearch`.
 
+### `WithProgressEvents`
+
+```go
+func WithProgressEvents() RegistryOption
+```
+
+Enables opt-in tool-call progress reporting. When set, `CallTool` encodes a `progressToken` in each request and the Registry emits `EventProgress` events as the server sends `notifications/progress`. Off by default — the tool-dispatch hot path is unchanged unless this option is set. Progress notifications only arrive over stdio transports; HTTP servers that return progress via polling are not affected by this option.
+
 ### `(*Registry).Register`
 
 ```go
@@ -316,6 +324,244 @@ Returns a buffered channel (capacity 64) of lifecycle events. When the channel i
 
 ---
 
+## Client primitives
+
+The Registry exposes flat methods for consuming MCP server capabilities beyond tools. All methods resolve the server entry fresh on each call and are safe for concurrent use alongside in-flight tool calls.
+
+### Capability matrix
+
+| Method | Stdio | HTTP | Notes |
+|---|---|---|---|
+| `ListResources` | yes | yes | request/response only |
+| `ReadResource` | yes | yes | request/response only |
+| `SubscribeResource` | yes | **no** | requires persistent read loop |
+| `UnsubscribeResource` | yes | **no** | requires persistent read loop |
+| `ListPrompts` | yes | yes | request/response only |
+| `GetPrompt` | yes | yes | request/response only |
+| `SetLogLevel` | yes | yes | log events arrive only over stdio |
+| Progress notifications | yes | **no** | requires persistent read loop |
+| Roots (`StdioConfig.Roots`) | yes | **no** | answers `roots/list` from server |
+
+Calling a method marked **no** over an HTTP transport returns `ErrUnsupported`. Calling any method for an unknown server returns `ErrServerNotFound`.
+
+### Error sentinels
+
+```go
+var ErrUnsupported  = errors.New("mcp: capability not supported by server or transport")
+var ErrServerNotFound = errors.New("MCP server not found")
+```
+
+`ErrUnsupported` is returned when the server did not advertise the capability during `initialize`, or when the transport cannot support it (subscribe/progress/roots over HTTP). `ErrServerNotFound` is returned for all capability methods when the server name is not registered. Both wrap cleanly with `errors.Is`.
+
+### `(*Registry).ListResources`
+
+```go
+func (r *Registry) ListResources(ctx context.Context, server string) ([]ResourceInfo, error)
+```
+
+Returns the resources advertised by the named MCP server (`resources/list`). Concurrent-safe; does not hold the tool-call mutex.
+
+```go
+resources, err := reg.ListResources(ctx, "fs")
+if errors.Is(err, mcp.ErrUnsupported) {
+    // server did not advertise resources capability
+}
+for _, res := range resources {
+    fmt.Println(res.URI, res.Name, res.MimeType)
+}
+```
+
+### `(*Registry).ReadResource`
+
+```go
+func (r *Registry) ReadResource(ctx context.Context, server, uri string) ([]ResourceContent, error)
+```
+
+Reads a resource by URI (`resources/read`). Returns one or more `ResourceContent` items; exactly one of `Text` or `Blob` is populated per item.
+
+```go
+contents, err := reg.ReadResource(ctx, "fs", "file:///project/README.md")
+for _, c := range contents {
+    fmt.Println(c.Text) // or base64-decode c.Blob for binary
+}
+```
+
+### `(*Registry).SubscribeResource`
+
+```go
+func (r *Registry) SubscribeResource(ctx context.Context, server, uri string) error
+```
+
+Subscribes to change notifications for a resource URI. When the server pushes `notifications/resources/updated`, the Registry emits `EventResourceUpdated` on the `Subscribe()` channel with `Event.URI` set. **Stdio only** — returns `ErrUnsupported` over HTTP.
+
+### `(*Registry).UnsubscribeResource`
+
+```go
+func (r *Registry) UnsubscribeResource(ctx context.Context, server, uri string) error
+```
+
+Cancels a resource subscription. **Stdio only.**
+
+### `(*Registry).ListPrompts`
+
+```go
+func (r *Registry) ListPrompts(ctx context.Context, server string) ([]Prompt, error)
+```
+
+Returns the prompt templates advertised by the named server (`prompts/list`).
+
+```go
+prompts, err := reg.ListPrompts(ctx, "docs")
+for _, p := range prompts {
+    fmt.Println(p.Name, p.Description)
+    for _, arg := range p.Arguments {
+        fmt.Printf("  arg: %s (required=%v)\n", arg.Name, arg.Required)
+    }
+}
+```
+
+### `(*Registry).GetPrompt`
+
+```go
+func (r *Registry) GetPrompt(ctx context.Context, server, name string, args map[string]string) (*PromptResult, error)
+```
+
+Fetches a rendered prompt by name with string-valued arguments (`prompts/get`).
+
+```go
+result, err := reg.GetPrompt(ctx, "docs", "summarize", map[string]string{"tone": "concise"})
+for _, msg := range result.Messages {
+    fmt.Println(msg.Role, msg.Content.Text)
+}
+```
+
+### `(*Registry).SetLogLevel`
+
+```go
+func (r *Registry) SetLogLevel(ctx context.Context, server string, level LogLevel) error
+```
+
+Asks the server to emit log messages at or above `level` (`logging/setLevel`). The request/response works over both transports. Log messages arrive only over stdio as `EventLog` events on `Subscribe()`.
+
+```go
+_ = reg.SetLogLevel(ctx, "myserver", mcp.LogLevelWarning)
+
+// in a separate goroutine:
+for e := range reg.Subscribe() {
+    if e.Type == mcp.EventLog {
+        fmt.Printf("[%s] %s: %s\n", e.Server, e.Level, e.Message)
+    }
+}
+```
+
+---
+
+## Client primitive types
+
+### `ResourceInfo`
+
+```go
+type ResourceInfo struct {
+    URI         string
+    Name        string
+    Description string
+    MimeType    string
+}
+```
+
+A resource advertised by an MCP server (`resources/list` entry).
+
+### `ResourceContent`
+
+```go
+type ResourceContent struct {
+    URI      string
+    MimeType string
+    Text     string // populated for text resources
+    Blob     string // base64-encoded; populated for binary resources
+}
+```
+
+One content item returned by `ReadResource`. Exactly one of `Text` or `Blob` is populated.
+
+### `Prompt`
+
+```go
+type Prompt struct {
+    Name        string
+    Description string
+    Arguments   []PromptArgument
+}
+```
+
+A prompt template advertised by an MCP server (`prompts/list` entry).
+
+### `PromptArgument`
+
+```go
+type PromptArgument struct {
+    Name        string
+    Description string
+    Required    bool
+}
+```
+
+A single argument accepted by a prompt template.
+
+### `PromptResult`
+
+```go
+type PromptResult struct {
+    Description string
+    Messages    []PromptMessage
+}
+```
+
+The result of `GetPrompt`.
+
+### `PromptMessage`
+
+```go
+type PromptMessage struct {
+    Role    string // "user" or "assistant"
+    Content ContentBlock
+}
+```
+
+One message in a prompt result.
+
+### `LogLevel`
+
+```go
+type LogLevel string
+
+const (
+    LogLevelDebug     LogLevel = "debug"
+    LogLevelInfo      LogLevel = "info"
+    LogLevelNotice    LogLevel = "notice"
+    LogLevelWarning   LogLevel = "warning"
+    LogLevelError     LogLevel = "error"
+    LogLevelCritical  LogLevel = "critical"
+    LogLevelAlert     LogLevel = "alert"
+    LogLevelEmergency LogLevel = "emergency"
+)
+```
+
+RFC 5424 syslog severity levels. Pass to `SetLogLevel`; received on `Event.Level` for `EventLog` events.
+
+### `Root`
+
+```go
+type Root struct {
+    URI  string // must be a file:// URI
+    Name string
+}
+```
+
+A filesystem boundary advertised to an MCP server via `StdioConfig.Roots`. The Registry announces the roots capability during `initialize` and returns the configured list in response to server `roots/list` requests.
+
+---
+
 ## ServerConfig types
 
 ### `StdioConfig`
@@ -330,10 +576,11 @@ type StdioConfig struct {
     Disabled bool
     Filter   *ToolFilter
     Aliases  map[string]string // raw tool name → registry short name
+    Roots    []Root            // filesystem roots; stdio only
 }
 ```
 
-Configuration for an MCP server launched as a child process. `Env` entries are appended to the current environment. `Disabled: true` causes `Register` to silently skip the server. `Aliases` maps the server's raw tool names to shorter names in the registry.
+Configuration for an MCP server launched as a child process. `Env` entries are appended to the current environment. `Disabled: true` causes `Register` to silently skip the server. `Aliases` maps the server's raw tool names to shorter names in the registry. `Roots`, when non-empty, advertises the roots capability during `initialize` and answers server-initiated `roots/list` requests. This field is ignored on `HTTPConfig` — roots require a persistent read loop.
 
 ### `HTTPConfig`
 
@@ -404,10 +651,16 @@ type Event struct {
     Tool      string    // populated for tool-related events
     Err       error
     Timestamp time.Time
+
+    URI      string   // EventResourceUpdated: the resource URI that changed
+    Progress float64  // EventProgress: fraction complete (0–1)
+    Total    float64  // EventProgress: total units (0 = unknown)
+    Level    LogLevel // EventLog: the severity level reported by the server
+    Message  string   // EventProgress / EventLog: human-readable message
 }
 ```
 
-A single lifecycle event emitted by the Registry. Read from `reg.Subscribe()`.
+A single lifecycle event emitted by the Registry. Read from `reg.Subscribe()`. Fields below `Timestamp` are zero-valued for event types that do not use them.
 
 ### `EventType`
 
@@ -415,11 +668,16 @@ A single lifecycle event emitted by the Registry. Read from `reg.Subscribe()`.
 type EventType int
 
 const (
-    EventConnected    EventType = iota // server connected or reconnected
-    EventDisconnected                  // server disconnected
-    EventReconnecting                  // reconnect loop started
-    EventToolCall                      // tool invocation dispatched to server
-    EventToolResult                    // tool invocation returned
+    EventConnected          EventType = iota // server connected or reconnected
+    EventDisconnected                        // server disconnected
+    EventReconnecting                        // reconnect loop started
+    EventToolCall                            // tool invocation dispatched to server
+    EventToolResult                          // tool invocation returned
+    EventProgress                            // tool-call progress (opt-in via WithProgressEvents)
+    EventLog                                 // server logging/message (after SetLogLevel)
+    EventResourceUpdated                     // a subscribed resource changed (stdio only)
+    EventResourceListChanged                 // server's resource list changed (stdio only)
+    EventPromptListChanged                   // server's prompt list changed (stdio only)
 )
 ```
 

@@ -24,6 +24,37 @@ type framer struct {
 	in       io.Writer // server stdin (we write here)
 	out      io.Reader // server stdout (we read here)
 	readDone chan struct{}
+
+	notifyHandler  atomic.Value // notifyFn — server-initiated notifications
+	requestHandler atomic.Value // requestFn — server-initiated requests
+}
+
+type notifyFn func(method string, params json.RawMessage)
+type requestFn func(method string, params json.RawMessage) (any, *rpcError)
+
+// onNotify registers the handler for inbound notifications (no id). The handler
+// runs inline on the read loop and MUST NOT block — it should do a non-blocking
+// emit only. Replaces any previous handler.
+func (f *framer) onNotify(fn notifyFn) { f.notifyHandler.Store(fn) }
+
+// onRequest registers the handler for inbound server→client requests (with id).
+// The handler runs inline on the read loop; its return value is written back as
+// the JSON-RPC response. Handlers must be fast/non-blocking.
+// Why: the only inbound requests today (roots/list, ping) are instant. Adding
+// elicitation (which blocks on human input) will require moving this dispatch
+// off the read loop to a bounded goroutine.
+func (f *framer) onRequest(fn requestFn) { f.requestHandler.Store(fn) }
+
+// inboundMessage is a single decoded JSON-RPC line from the server. It is the
+// union of a response (method==""), a notification (method!="" && id==nil),
+// and a server→client request (method!="" && id!=nil).
+type inboundMessage struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      interface{}     `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 func newFramer(out io.Reader, in io.Writer) *framer {
@@ -48,35 +79,50 @@ func (f *framer) readLoop() {
 		if len(line) == 0 {
 			continue
 		}
-		var resp rpcResponse
-		if err := json.Unmarshal(line, &resp); err != nil {
-			// Malformed response: log via readErr and continue (don't block other in-flight).
-			f.readErr.Store(fmt.Errorf("malformed response: %w", err))
+		var msg inboundMessage
+		if err := json.Unmarshal(line, &msg); err != nil {
+			f.readErr.Store(fmt.Errorf("malformed message: %w", err))
 			continue
 		}
-		// Match by ID. Notifications from server (no ID) are ignored at this layer
-		// (handled separately by client's notification subscriber).
-		if resp.ID == nil {
+
+		// RESPONSE (hot path: tool-call results). Method is empty.
+		if msg.Method == "" {
+			if msg.ID == nil {
+				continue
+			}
+			var id int64
+			switch v := msg.ID.(type) {
+			case float64:
+				id = int64(v)
+			case int64:
+				id = v
+			default:
+				continue
+			}
+			f.pendMu.Lock()
+			ch, ok := f.pending[id]
+			if ok {
+				delete(f.pending, id)
+			}
+			f.pendMu.Unlock()
+			if ok {
+				ch <- rpcResponse{JSONRPC: msg.JSONRPC, ID: msg.ID, Result: msg.Result, Error: msg.Error}
+			}
 			continue
 		}
-		var id int64
-		switch v := resp.ID.(type) {
-		case float64:
-			id = int64(v)
-		case int64:
-			id = v
-		default:
+
+		// NOTIFICATION (no id). Handler runs inline; must be non-blocking.
+		if msg.ID == nil {
+			if v := f.notifyHandler.Load(); v != nil {
+				if fn, _ := v.(notifyFn); fn != nil {
+					fn(msg.Method, msg.Params)
+				}
+			}
 			continue
 		}
-		f.pendMu.Lock()
-		ch, ok := f.pending[id]
-		if ok {
-			delete(f.pending, id)
-		}
-		f.pendMu.Unlock()
-		if ok {
-			ch <- resp
-		}
+
+		// SERVER→CLIENT REQUEST (has id + method). Answer inline.
+		f.handleServerRequest(msg.ID, msg.Method, msg.Params)
 	}
 	if err := scanner.Err(); err != nil {
 		f.readErr.Store(err)
@@ -150,4 +196,45 @@ func (f *framer) Notify(ctx context.Context, method string, params json.RawMessa
 // Close marks the framer closed. Caller is responsible for closing underlying io.
 func (f *framer) Close() {
 	f.closed.Store(true)
+}
+
+func (f *framer) handleServerRequest(id interface{}, method string, params json.RawMessage) {
+	var result any
+	var rerr *rpcError
+	// Why: if no request handler is registered (or it's nil), the server asked
+	// for something we don't support — answer method-not-found. Otherwise the
+	// handler owns the (result, rerr) outcome.
+	if v := f.requestHandler.Load(); v != nil {
+		if fn, _ := v.(requestFn); fn != nil {
+			result, rerr = fn(method, params)
+		} else {
+			rerr = &rpcError{Code: errCodeMethodNotFound, Message: "method not found: " + method}
+		}
+	} else {
+		rerr = &rpcError{Code: errCodeMethodNotFound, Message: "method not found: " + method}
+	}
+	f.respond(id, result, rerr)
+}
+
+// respond writes a JSON-RPC response to a server-initiated request, serialized
+// via encMu (shared with Call/Notify so framing stays atomic).
+func (f *framer) respond(id interface{}, result any, rerr *rpcError) {
+	resp := rpcOutResponse{JSONRPC: "2.0", ID: id, Result: result, Error: rerr}
+	f.encMu.Lock()
+	if err := f.enc.Encode(&resp); err != nil {
+		// Why: respond has no caller to return to (it runs on the read loop). A
+		// write failure means the transport is broken, so surface it via readErr —
+		// the same channel readLoop uses — instead of swallowing it.
+		f.readErr.Store(fmt.Errorf("write response: %w", err))
+	}
+	f.encMu.Unlock()
+}
+
+// rpcOutResponse is an outgoing JSON-RPC response (client answering a
+// server-initiated request).
+type rpcOutResponse struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id"`
+	Result  any         `json:"result,omitempty"`
+	Error   *rpcError   `json:"error,omitempty"`
 }

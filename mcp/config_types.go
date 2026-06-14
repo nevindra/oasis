@@ -19,6 +19,9 @@ type StdioConfig struct {
 	Disabled bool
 	Filter   *ToolFilter
 	Aliases  map[string]string // raw tool name → registry short name
+	// Roots, when non-empty, advertises the roots capability during initialize
+	// and answers server-initiated roots/list requests. Stdio only.
+	Roots []Root
 }
 
 func (c StdioConfig) serverName() string { return c.Name }

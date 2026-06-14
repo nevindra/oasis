@@ -37,6 +37,13 @@ below are one-time corrections made deliberately before the freeze.
 - **`agent.WithSkillCatalog`** (re-exported as `oasis.WithSkillCatalog`) —
   injects available-skill summaries into the system prompt each request;
   complements the lazy `skill_discover`/`skill_search` tools.
+- **MCP client: resource primitives.** `Registry.ListResources(ctx, server)` and `Registry.ReadResource(ctx, server, uri)` work over both stdio and HTTP transports. `Registry.SubscribeResource(ctx, server, uri)` and `Registry.UnsubscribeResource(ctx, server, uri)` are stdio-only (stateless HTTP cannot receive server-push notifications). New types: `ResourceInfo`, `ResourceContent`. Change notifications arrive as `EventResourceUpdated` / `EventResourceListChanged` on `Registry.Subscribe()`.
+- **MCP client: prompt primitives.** `Registry.ListPrompts(ctx, server)` and `Registry.GetPrompt(ctx, server, name, args)` work over both transports. New types: `Prompt`, `PromptArgument`, `PromptResult`, `PromptMessage`. Prompt-list change notifications arrive as `EventPromptListChanged`.
+- **MCP client: logging.** `Registry.SetLogLevel(ctx, server, level LogLevel)` sends `logging/setLevel` to the server (both transports). Server log messages arrive as `EventLog` on `Subscribe()` over stdio. New type: `LogLevel` (string alias). Constants: `LogLevelDebug`, `LogLevelInfo`, `LogLevelNotice`, `LogLevelWarning`, `LogLevelError`, `LogLevelCritical`, `LogLevelAlert`, `LogLevelEmergency` (RFC 5424 severity).
+- **MCP client: opt-in progress events.** `WithProgressEvents() RegistryOption` enables tool-call progress tracking. When set, `CallTool` encodes a `progressToken` in each request; the server's `notifications/progress` messages arrive as `EventProgress` on `Subscribe()`. Off by default — the hot path is unchanged unless this option is used. Stdio only.
+- **MCP client: filesystem roots.** `StdioConfig.Roots []Root` declares filesystem boundaries per server. The client advertises the roots capability during `initialize` and answers server-initiated `roots/list` requests automatically. New type: `Root{URI, Name}`. Stdio only; HTTP ignores the field.
+- **MCP: new client-primitive observability.** New `Event` fields `URI` (for `EventResourceUpdated`), `Progress`/`Total`/`Message` (for `EventProgress`), `Level`/`Message` (for `EventLog`); new `EventType` constants `EventProgress`, `EventLog`, `EventResourceUpdated`, `EventResourceListChanged`, `EventPromptListChanged`; and the `ErrUnsupported` sentinel returned by capability methods when the server didn't advertise the capability or the transport can't support it.
+- **MCP framer: server-initiated message routing.** The stdio framer now classifies inbound messages as responses (existing hot path, unchanged), notifications (no id → `onNotify` hook), or server→client requests (id + method → `onRequest` hook, answered inline). Answers `ping` automatically; answers `roots/list` with the configured roots.
 
 ### Changed
 
@@ -1635,7 +1642,7 @@ DX ergonomics patch addressing friction from real-world migration feedback.
 - `renderers/` directory — PDF, DOCX, XLSX, PPTX renderer scripts removed.
 - `requirements.txt` — Python deps for renderers (library deps remain in Dockerfile for direct agent use).
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.19.0...HEAD
+[1.0.0]: https://github.com/nevindra/oasis/compare/v0.19.0...HEAD
 [0.19.0]: https://github.com/nevindra/oasis/compare/v0.17.4...v0.19.0
 [0.17.4]: https://github.com/nevindra/oasis/compare/v0.17.3...v0.17.4
 [0.17.3]: https://github.com/nevindra/oasis/compare/v0.17.2...v0.17.3

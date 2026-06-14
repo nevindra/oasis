@@ -9,7 +9,8 @@ The `mcp` package is two things at once: a server you expose so AI assistants ca
 | **Server** | Stdio JSON-RPC 2.0 process that exposes tools/resources | You want Claude Code, Cursor, or another AI assistant to call your agent's tools |
 | **StdioClient** | Spawns a subprocess and speaks MCP | Your agent needs to call a locally-installed MCP server (e.g. `npx @modelcontextprotocol/server-github`) |
 | **HTTPClient** | Stateless HTTP/JSON-RPC client | Your agent needs to call a remote MCP endpoint |
-| **Registry** | Pool of MCP connections; exposes them as `[]oasis.AnyTool` | You have multiple MCP servers and want to hand all their tools to an agent in one call |
+| **Registry** | Pool of MCP connections; exposes tools, resources, prompts, and notifications as a unified API | You have multiple MCP servers and want to hand all their tools to an agent in one call |
+| **Client primitives** | `ListResources`, `ReadResource`, `SubscribeResource`, `ListPrompts`, `GetPrompt`, `SetLogLevel` on the Registry | Your agent needs to consume server resources, prompt templates, or log output — not just call tools |
 | **Deferred schemas** | Advertise tools by name only; load input schemas on-demand | You have 20+ MCP tools and want to save context-window tokens |
 
 ---
@@ -43,6 +44,8 @@ The Registry is the high-level entry point for consuming multiple MCP servers. Y
 3. Fetches the server's tool list.
 4. Wraps each tool as an `oasis.AnyTool` with a namespaced name: `mcp__<serverName>__<toolName>`.
 5. Returns the merged list via `reg.Tools()`.
+
+Beyond tools, the Registry exposes flat methods to consume the full breadth of MCP server capabilities: **resources** (`ListResources`, `ReadResource`, `SubscribeResource`, `UnsubscribeResource`), **prompts** (`ListPrompts`, `GetPrompt`), **logging** (`SetLogLevel`), and **opt-in progress notifications** (`WithProgressEvents()`). Filesystem roots are declared per-server via `StdioConfig.Roots`. All of these work alongside tool calls without interfering with the tool-dispatch path.
 
 Tools from the Registry are passed to an agent via `agent.WithTools(reg.Tools()...)`. The agent's tool-calling loop invokes them the same way it invokes any other Oasis tool — no special-casing required.
 
@@ -132,6 +135,9 @@ flowchart LR
 - **Multiple agents share a Registry safely.** `reg.Tools()` returns a snapshot slice; concurrent reads and the reconnect goroutine are all protected by the Registry's internal mutex.
 - **`BearerAuth.EnvVar` is preferred over literal tokens.** Setting `Token` directly works but keeps the secret in process memory as a plain string. `EnvVar` reads it from the environment at call time.
 - **Internal server errors go to the logger.** Use `WithServerLogger` to redirect or suppress the server's diagnostic output (write failures, marshal errors). The default is `slog.Default()`.
+- **Capability methods check server advertisements.** `ListResources`, `ListPrompts`, and `SetLogLevel` return `ErrUnsupported` if the server did not advertise the corresponding capability during `initialize`. Check this error before assuming the server supports the feature.
+- **Subscribe and progress notifications are stdio-only.** `SubscribeResource`, `UnsubscribeResource`, and progress token injection (`WithProgressEvents`) require a persistent read loop; stateless HTTP transports return `ErrUnsupported` for subscribe and never receive server-push notifications. `SetLogLevel` over HTTP succeeds but log messages only arrive if the server also has a stdio channel open.
+- **Roots are stdio-only.** `StdioConfig.Roots` advertises filesystem boundaries during `initialize` and answers server `roots/list` requests. HTTP transports ignore this field because there is no persistent channel for the server to ask.
 
 ---
 

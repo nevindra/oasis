@@ -56,7 +56,7 @@ func (w *toolWrapper) EnsureSchema(ctx context.Context) error {
 			return fmt.Errorf("cannot ensure schema for %q: server not healthy (%s)",
 				w.entry.fullName, state)
 		}
-		list, err := w.server.client.ListTools(ctx)
+		list, err := w.server.loadClient().ListTools(ctx)
 		if err != nil {
 			return fmt.Errorf("list tools: %w", err)
 		}
@@ -102,7 +102,7 @@ func (w *toolWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) (oas
 	}
 
 	w.server.callMu.Lock()
-	res, err := w.server.client.CallTool(callCtx, w.entry.rawName, args)
+	res, err := w.server.loadClient().CallTool(callCtx, w.entry.rawName, args)
 	w.server.callMu.Unlock()
 
 	if err != nil {

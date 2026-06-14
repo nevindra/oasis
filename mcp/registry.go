@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +29,8 @@ type Registry struct {
 	eventsCh chan Event       // buffered 64, drop-oldest
 	logger   *slog.Logger
 	defer_   *deferConfig // nil = deferred mode off
+
+	progressEnabled bool // opt-in: inject _meta.progressToken in CallTool
 
 	// Registry owns its tool list. After extraction, the registry no longer
 	// writes through to the agent's *oasis.ToolRegistry; the user dispenses
@@ -73,6 +76,7 @@ func (r *Registry) isDeferred(serverName string) bool {
 type serverEntry struct {
 	cfg         ServerConfig
 	client      Client
+	clientMu    sync.RWMutex // guards client against the atomic swap on reconnect
 	state       atomic.Int32 // ServerState
 	info        ServerMetadata
 	tools       map[string]*toolEntry
@@ -85,6 +89,26 @@ type serverEntry struct {
 	lastErr     atomic.Value
 	connectAt   atomic.Int64
 	parent      *Registry
+}
+
+// loadClient returns the entry's current transport client. Safe under the
+// atomic swap performed by attemptReconnect.
+//
+// Why: attemptReconnect swaps e.client for a freshly built client on each
+// reconnect. Every post-registration reader must go through this accessor so
+// the swap is synchronized — a bare read of e.client races with storeClient
+// and risks a torn interface value under the Go memory model.
+func (e *serverEntry) loadClient() Client {
+	e.clientMu.RLock()
+	defer e.clientMu.RUnlock()
+	return e.client
+}
+
+// storeClient swaps the entry's transport client (used on reconnect).
+func (e *serverEntry) storeClient(c Client) {
+	e.clientMu.Lock()
+	e.client = c
+	e.clientMu.Unlock()
 }
 
 func (e *serverEntry) reconnectLoop() {
@@ -371,6 +395,11 @@ func (r *Registry) registerWithClient(ctx context.Context, cfg ServerConfig, cli
 		r.markUnhealthy(name, disconnectErr)
 	})
 
+	// Route server-initiated notifications to the event stream. Only transports
+	// with a persistent read loop (stdio) implement setNotificationHandler;
+	// stateless HTTP never receives notifications.
+	r.wireClientHooks(name, client)
+
 	func() {
 		defer func() { _ = recover() }()
 		r.handler.OnConnect(name, entry.info)
@@ -512,7 +541,12 @@ func buildClient(cfg ServerConfig) (Client, error) {
 		if c.WorkDir != "" {
 			cmd.Dir = c.WorkDir
 		}
-		return NewStdioClient(cmd)
+		client, err := NewStdioClient(cmd)
+		if err != nil {
+			return nil, err
+		}
+		client.setRoots(c.Roots)
+		return client, nil
 	case HTTPConfig:
 		timeout := c.Timeout
 		if timeout == 0 {
@@ -548,7 +582,7 @@ func (r *Registry) Unregister(ctx context.Context, name string) error {
 
 	closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	closeErr := entry.client.Close(closeCtx)
+	closeErr := entry.loadClient().Close(closeCtx)
 
 	entry.toolsMu.RLock()
 	toolNames := make([]string, 0, len(entry.tools))
@@ -623,8 +657,8 @@ func (e *serverEntry) attemptReconnect() bool {
 		return false
 	}
 
-	oldClient := e.client
-	e.client = newClient
+	oldClient := e.loadClient()
+	e.storeClient(newClient)
 
 	e.toolsMu.Lock()
 	for _, t := range e.tools {
@@ -636,13 +670,14 @@ func (e *serverEntry) attemptReconnect() bool {
 	if err := e.parent.registerTools(e, list.Tools); err != nil {
 		storeMCPError(&e.lastErr, err)
 		_ = newClient.Close(context.Background())
-		e.client = oldClient
+		e.storeClient(oldClient)
 		return false
 	}
 
 	newClient.OnDisconnect(func(disconnectErr error) {
 		e.parent.markUnhealthy(e.cfg.serverName(), disconnectErr)
 	})
+	e.parent.wireClientHooks(e.cfg.serverName(), newClient)
 	e.state.Store(int32(StateHealthy))
 	e.connectAt.Store(time.Now().UnixNano())
 	e.parent.emit(Event{Type: EventConnected, Server: e.cfg.serverName(), Timestamp: time.Now()})
@@ -719,4 +754,225 @@ func (r *Registry) GetTool(server, tool string) (oasis.AnyTool, bool) {
 // or other in-process Client implementations.
 func (r *Registry) RegisterTestClient(ctx context.Context, cfg ServerConfig, client Client) error {
 	return r.registerWithClient(ctx, cfg, client)
+}
+
+// resolveEntry returns the server entry or ErrServerNotFound. Resolved fresh on
+// every call so capability operations survive the atomic client swap on
+// reconnect (never cache the client pointer).
+//
+// Like toolWrapper.ExecuteRaw, it gates on connection health: a server that is
+// reconnecting or dead yields an actionable health error instead of letting the
+// caller hit a stale/closing client and get a raw "transport closed".
+func (r *Registry) resolveEntry(server string) (*serverEntry, error) {
+	r.mu.RLock()
+	entry, ok := r.servers[server]
+	r.mu.RUnlock()
+	if !ok {
+		return nil, ErrServerNotFound
+	}
+	if st := ServerState(entry.state.Load()); st != StateHealthy {
+		return nil, fmt.Errorf("MCP server %q not healthy (%s)", server, st)
+	}
+	return entry, nil
+}
+
+// ListResources returns the resources advertised by an MCP server (resources/list).
+// Returns ErrServerNotFound for an unknown server, ErrUnsupported if the server
+// did not advertise the resources capability or the transport cannot read
+// resources. Safe for concurrent use; does not serialize behind tool calls.
+func (r *Registry) ListResources(ctx context.Context, server string) ([]ResourceInfo, error) {
+	entry, err := r.resolveEntry(server)
+	if err != nil {
+		return nil, err
+	}
+	if entry.info.Capabilities.Resources == nil {
+		return nil, ErrUnsupported
+	}
+	rc, ok := entry.loadClient().(resourceReader)
+	if !ok {
+		return nil, ErrUnsupported
+	}
+	// Why: read-only discovery — no callMu. The framer is concurrency-safe and
+	// encMu keeps framing atomic, so this runs alongside in-flight tool calls.
+	return rc.listResources(ctx)
+}
+
+// ReadResource reads a resource by URI (resources/read). Errors as ListResources.
+func (r *Registry) ReadResource(ctx context.Context, server, uri string) ([]ResourceContent, error) {
+	entry, err := r.resolveEntry(server)
+	if err != nil {
+		return nil, err
+	}
+	if entry.info.Capabilities.Resources == nil {
+		return nil, ErrUnsupported
+	}
+	rc, ok := entry.loadClient().(resourceReader)
+	if !ok {
+		return nil, ErrUnsupported
+	}
+	return rc.readResource(ctx, uri)
+}
+
+// SubscribeResource subscribes to change notifications for a resource URI.
+// Updates arrive as EventResourceUpdated on Subscribe(). Stdio only — returns
+// ErrUnsupported over stateless HTTP transports.
+func (r *Registry) SubscribeResource(ctx context.Context, server, uri string) error {
+	entry, err := r.resolveEntry(server)
+	if err != nil {
+		return err
+	}
+	if entry.info.Capabilities.Resources == nil {
+		return ErrUnsupported
+	}
+	rs, ok := entry.loadClient().(resourceSubscriber)
+	if !ok {
+		return ErrUnsupported
+	}
+	return rs.subscribeResource(ctx, uri)
+}
+
+// UnsubscribeResource cancels a resource subscription. Stdio only.
+func (r *Registry) UnsubscribeResource(ctx context.Context, server, uri string) error {
+	entry, err := r.resolveEntry(server)
+	if err != nil {
+		return err
+	}
+	if entry.info.Capabilities.Resources == nil {
+		return ErrUnsupported
+	}
+	rs, ok := entry.loadClient().(resourceSubscriber)
+	if !ok {
+		return ErrUnsupported
+	}
+	return rs.unsubscribeResource(ctx, uri)
+}
+
+// ListPrompts returns the prompt templates advertised by a server (prompts/list).
+// ErrServerNotFound / ErrUnsupported as the resource methods.
+func (r *Registry) ListPrompts(ctx context.Context, server string) ([]Prompt, error) {
+	entry, err := r.resolveEntry(server)
+	if err != nil {
+		return nil, err
+	}
+	if entry.info.Capabilities.Prompts == nil {
+		return nil, ErrUnsupported
+	}
+	pc, ok := entry.loadClient().(promptClient)
+	if !ok {
+		return nil, ErrUnsupported
+	}
+	return pc.listPrompts(ctx)
+}
+
+// GetPrompt fetches a prompt template by name with string-valued arguments
+// (prompts/get).
+func (r *Registry) GetPrompt(ctx context.Context, server, name string, args map[string]string) (*PromptResult, error) {
+	entry, err := r.resolveEntry(server)
+	if err != nil {
+		return nil, err
+	}
+	if entry.info.Capabilities.Prompts == nil {
+		return nil, ErrUnsupported
+	}
+	pc, ok := entry.loadClient().(promptClient)
+	if !ok {
+		return nil, ErrUnsupported
+	}
+	return pc.getPrompt(ctx, name, args)
+}
+
+// SetLogLevel asks the server to emit log messages at or above level
+// (logging/setLevel). Messages arrive as EventLog on Subscribe() over stdio.
+func (r *Registry) SetLogLevel(ctx context.Context, server string, level LogLevel) error {
+	entry, err := r.resolveEntry(server)
+	if err != nil {
+		return err
+	}
+	if entry.info.Capabilities.Logging == nil {
+		return ErrUnsupported
+	}
+	ls, ok := entry.loadClient().(logLevelSetter)
+	if !ok {
+		return ErrUnsupported
+	}
+	return ls.setLogLevel(ctx, level)
+}
+
+// wireClientHooks attaches registry-level callbacks to a (re)connected client.
+// Called on initial register AND after each reconnect so hooks survive a client
+// swap.
+func (r *Registry) wireClientHooks(name string, client Client) {
+	if ns, ok := client.(interface {
+		setNotificationHandler(func(method string, params json.RawMessage))
+	}); ok {
+		ns.setNotificationHandler(func(method string, params json.RawMessage) {
+			r.routeNotification(name, method, params)
+		})
+	}
+	if r.progressEnabled {
+		if pe, ok := client.(interface{ setProgressEnabled(bool) }); ok {
+			pe.setProgressEnabled(true)
+		}
+	}
+}
+
+// routeNotification parses a server-initiated notification and emits the
+// corresponding Event. Called from the stdio client's notification hook (wired
+// in wireClientHooks). Unknown methods are ignored. Non-blocking (emit is
+// drop-oldest).
+func (r *Registry) routeNotification(server, method string, params json.RawMessage) {
+	switch method {
+	case "notifications/message":
+		var p struct {
+			Level LogLevel        `json:"level"`
+			Data  json.RawMessage `json:"data"`
+		}
+		_ = json.Unmarshal(params, &p)
+		r.emit(Event{Type: EventLog, Server: server, Level: p.Level,
+			Message: messageFromLogData(p.Data), Timestamp: time.Now()})
+	case "notifications/progress":
+		var p struct {
+			Token    string  `json:"progressToken"`
+			Progress float64 `json:"progress"`
+			Total    float64 `json:"total"`
+			Message  string  `json:"message"`
+		}
+		_ = json.Unmarshal(params, &p)
+		r.emit(Event{Type: EventProgress, Server: server, Tool: toolFromProgressToken(p.Token),
+			Progress: p.Progress, Total: p.Total, Message: p.Message, Timestamp: time.Now()})
+	case "notifications/resources/updated":
+		var p struct {
+			URI string `json:"uri"`
+		}
+		_ = json.Unmarshal(params, &p)
+		r.emit(Event{Type: EventResourceUpdated, Server: server, URI: p.URI, Timestamp: time.Now()})
+	case "notifications/resources/list_changed":
+		r.emit(Event{Type: EventResourceListChanged, Server: server, Timestamp: time.Now()})
+	case "notifications/prompts/list_changed":
+		r.emit(Event{Type: EventPromptListChanged, Server: server, Timestamp: time.Now()})
+	default:
+		// Unknown / unhandled (e.g. tools/list_changed) — ignored.
+	}
+}
+
+// toolFromProgressToken recovers the tool name from a "<tool>#<seq>" progress
+// token (see StdioClient.CallTool). Returns "" if the token isn't in that form.
+func toolFromProgressToken(token string) string {
+	if i := strings.LastIndexByte(token, '#'); i > 0 {
+		return token[:i]
+	}
+	return ""
+}
+
+// messageFromLogData renders a logging/message `data` field as a string: a JSON
+// string is unquoted; anything else is returned as its raw JSON text.
+func messageFromLogData(data json.RawMessage) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		return s
+	}
+	return string(data)
 }

@@ -1,0 +1,50 @@
+package mcp
+
+import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"testing"
+	"time"
+)
+
+func TestRegistry_RouteNotification_Emits(t *testing.T) {
+	r := NewRegistry(WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	events := r.Subscribe()
+
+	cases := []struct {
+		method string
+		params string
+		want   EventType
+		check  func(Event) bool
+	}{
+		{"notifications/message", `{"level":"warning","data":"disk full"}`, EventLog,
+			func(e Event) bool { return e.Level == LogLevelWarning && e.Message == "disk full" }},
+		{"notifications/progress", `{"progressToken":"fetch#3","progress":0.5,"total":1}`, EventProgress,
+			func(e Event) bool { return e.Tool == "fetch" && e.Progress == 0.5 && e.Total == 1 }},
+		{"notifications/resources/updated", `{"uri":"file:///a"}`, EventResourceUpdated,
+			func(e Event) bool { return e.URI == "file:///a" }},
+		{"notifications/resources/list_changed", `{}`, EventResourceListChanged,
+			func(e Event) bool { return true }},
+		{"notifications/prompts/list_changed", `{}`, EventPromptListChanged,
+			func(e Event) bool { return true }},
+	}
+
+	for _, tc := range cases {
+		r.routeNotification("srv", tc.method, json.RawMessage(tc.params))
+		select {
+		case e := <-events:
+			if e.Type != tc.want {
+				t.Errorf("%s: type = %v want %v", tc.method, e.Type, tc.want)
+			}
+			if e.Server != "srv" {
+				t.Errorf("%s: server = %q", tc.method, e.Server)
+			}
+			if !tc.check(e) {
+				t.Errorf("%s: field check failed: %+v", tc.method, e)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s: no event emitted", tc.method)
+		}
+	}
+}

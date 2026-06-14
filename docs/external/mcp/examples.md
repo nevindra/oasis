@@ -255,6 +255,138 @@ When the LLM encounters a deferred `mcp__search__*` tool, it calls `ToolSearch(q
 
 ---
 
+## 8. Client primitives — resources, prompts, logging, progress, and roots
+
+This recipe wires all five new client capabilities in one place: register a stdio server with roots, list and read a resource, subscribe to resource change notifications, fetch a prompt, and enable opt-in progress events.
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+    "fmt"
+    "log"
+
+    "github.com/nevindra/oasis/mcp"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Build the registry with opt-in progress events.
+    reg := mcp.NewRegistry(
+        mcp.WithProgressEvents(),
+    )
+
+    // Register a stdio server and advertise two filesystem roots.
+    // Roots are answered automatically when the server sends roots/list.
+    if err := reg.Register(ctx, mcp.StdioConfig{
+        Name:    "fs",
+        Command: "my-mcp-server",
+        Roots: []mcp.Root{
+            {URI: "file:///home/user/project", Name: "project"},
+            {URI: "file:///home/user/data", Name: "data"},
+        },
+    }); err != nil {
+        log.Fatal(err)
+    }
+
+    // List the server's resources.
+    resources, err := reg.ListResources(ctx, "fs")
+    if errors.Is(err, mcp.ErrUnsupported) {
+        log.Fatal("server did not advertise resources capability")
+    }
+    if err != nil {
+        log.Fatal(err)
+    }
+    for _, r := range resources {
+        fmt.Printf("resource: %s (%s)\n", r.URI, r.MimeType)
+    }
+
+    // Read a specific resource by URI.
+    if len(resources) > 0 {
+        contents, err := reg.ReadResource(ctx, "fs", resources[0].URI)
+        if err != nil {
+            log.Fatal(err)
+        }
+        for _, c := range contents {
+            fmt.Printf("content: %s\n", c.Text)
+        }
+    }
+
+    // Subscribe to change notifications for a resource URI.
+    // Updates arrive as EventResourceUpdated on the Subscribe() channel.
+    // This is stdio-only; returns ErrUnsupported over HTTP.
+    if err := reg.SubscribeResource(ctx, "fs", "file:///home/user/project/config.json"); err != nil && !errors.Is(err, mcp.ErrUnsupported) {
+        log.Fatal(err)
+    }
+
+    // Watch for resource updates, progress, and log events.
+    events := reg.Subscribe()
+    go func() {
+        for e := range events {
+            switch e.Type {
+            case mcp.EventResourceUpdated:
+                fmt.Printf("resource changed: %s on %s\n", e.URI, e.Server)
+            case mcp.EventProgress:
+                fmt.Printf("progress on %s/%s: %.0f%%\n", e.Server, e.Tool, e.Progress*100)
+            case mcp.EventLog:
+                fmt.Printf("[%s] %s: %s\n", e.Server, e.Level, e.Message)
+            }
+        }
+    }()
+
+    // Ask the server to emit warning-level and above log messages.
+    // Log events arrive on Subscribe() as EventLog. Works over both
+    // transports; over HTTP the setLevel request succeeds but log
+    // notifications only arrive if the server also has a stdio channel.
+    if err := reg.SetLogLevel(ctx, "fs", mcp.LogLevelWarning); err != nil && !errors.Is(err, mcp.ErrUnsupported) {
+        log.Fatal(err)
+    }
+
+    // List and fetch a prompt template.
+    prompts, err := reg.ListPrompts(ctx, "fs")
+    if err != nil && !errors.Is(err, mcp.ErrUnsupported) {
+        log.Fatal(err)
+    }
+    if len(prompts) > 0 {
+        p := prompts[0]
+        fmt.Printf("prompt: %s — %s\n", p.Name, p.Description)
+
+        // Build the args map from the prompt's declared arguments.
+        args := make(map[string]string)
+        for _, arg := range p.Arguments {
+            if arg.Required {
+                args[arg.Name] = "example value"
+            }
+        }
+
+        result, err := reg.GetPrompt(ctx, "fs", p.Name, args)
+        if err != nil {
+            log.Fatal(err)
+        }
+        fmt.Printf("prompt description: %s\n", result.Description)
+        for _, msg := range result.Messages {
+            fmt.Printf("  [%s] %s\n", msg.Role, msg.Content.Text)
+        }
+    }
+
+    // The agent still uses reg.Tools() for tool calls, which now also
+    // carries progress tokens when WithProgressEvents() is set.
+    fmt.Println("tools:", len(reg.Tools()))
+}
+```
+
+**Key points:**
+
+- `WithProgressEvents()` is set on the registry, not per-server. All stdio servers automatically inject progress tokens from that point on.
+- `SubscribeResource`, roots, and progress notifications are **stdio-only**. Calling them on an HTTP-registered server returns `mcp.ErrUnsupported`.
+- The `Subscribe()` channel is buffered (capacity 64) and shared across all event types. A single goroutine can handle `EventResourceUpdated`, `EventProgress`, `EventLog`, and the existing lifecycle events (`EventConnected`, `EventToolCall`, etc.) with one `switch`.
+- `SetLogLevel` takes effect immediately on the server. The `LogLevel` constants follow RFC 5424 severity: `LogLevelDebug` through `LogLevelEmergency`.
+
+---
+
 ## See also
 
 - [mcp concept](index.md) — when to use server vs client vs registry

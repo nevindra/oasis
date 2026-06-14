@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	oasis "github.com/nevindra/oasis/core"
@@ -78,6 +79,59 @@ func TestMcpToolWrapper_Execute_TransportError(t *testing.T) {
 	if result.Error == "" {
 		t.Error("expected ToolResult.Error")
 	}
+}
+
+// TestServerEntry_ClientSwap_Race drives a transport read (via ExecuteRaw, which
+// goes through loadClient) concurrently with storeClient swaps — the exact swap
+// attemptReconnect performs on reconnect. Run with -race, it asserts the
+// clientMu accessor synchronizes the interface read/write so no torn read or
+// data race occurs.
+func TestServerEntry_ClientSwap_Race(t *testing.T) {
+	server := &serverEntry{cfg: StdioConfig{Name: "x"}}
+	server.state.Store(int32(StateHealthy))
+	server.storeClient(&stubMCPClient{
+		callRet: &CallToolResult{Content: []ContentBlock{{Type: "text", Text: "ok"}}},
+	})
+	w := &toolWrapper{entry: &toolEntry{rawName: "echo", fullName: "mcp__x__echo"}, server: server}
+
+	stop := make(chan struct{})
+	var swapper sync.WaitGroup
+
+	// Swapper: mimics attemptReconnect replacing the client pointer.
+	swapper.Add(1)
+	go func() {
+		defer swapper.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				server.storeClient(&stubMCPClient{
+					callRet: &CallToolResult{Content: []ContentBlock{{Type: "text", Text: "ok"}}},
+				})
+			}
+		}
+	}()
+
+	// Readers: concurrent transport reads through loadClient.
+	var readers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for j := 0; j < 200; j++ {
+				if _, err := w.ExecuteRaw(context.Background(), json.RawMessage(`{}`)); err != nil {
+					t.Errorf("ExecuteRaw: %v", err)
+					return
+				}
+				_ = server.loadClient()
+			}
+		}()
+	}
+
+	readers.Wait()
+	close(stop)
+	swapper.Wait()
 }
 
 func TestMcpToolWrapper_Definitions(t *testing.T) {

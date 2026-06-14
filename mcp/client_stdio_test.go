@@ -140,6 +140,177 @@ func TestStdioClient_OnDisconnect_OnEOF(t *testing.T) {
 	}
 }
 
+func TestStdioClient_ForwardsNotification(t *testing.T) {
+	p := newFakePipes()
+	c := NewStdioClientFromPipes(p.clientReads, p.clientWrites)
+	defer c.Close(context.Background())
+
+	got := make(chan string, 1)
+	c.setNotificationHandler(func(method string, params json.RawMessage) { got <- method })
+
+	// Server pushes a notification (no id).
+	_, _ = p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info"}}` + "\n"))
+
+	select {
+	case m := <-got:
+		if m != "notifications/message" {
+			t.Errorf("method = %q", m)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("notification not forwarded")
+	}
+}
+
+func TestStdioClient_AnswersPing(t *testing.T) {
+	p := newFakePipes()
+	c := NewStdioClientFromPipes(p.clientReads, p.clientWrites)
+	defer c.Close(context.Background())
+
+	// Server sends a ping request (with id) and reads the client's response.
+	_, _ = p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":7,"method":"ping","params":{}}` + "\n"))
+
+	dec := json.NewDecoder(p.serverReads)
+	var resp struct {
+		ID    float64   `json:"id"`
+		Error *struct{} `json:"error"`
+	}
+	done := make(chan error, 1)
+	go func() { done <- dec.Decode(&resp) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no ping response")
+	}
+	if resp.ID != 7 {
+		t.Errorf("id = %v", resp.ID)
+	}
+}
+
+func TestStdioClient_Roots_AdvertiseAndAnswer(t *testing.T) {
+	p := newFakePipes()
+	c := NewStdioClientFromPipes(p.clientReads, p.clientWrites)
+	c.setRoots([]Root{{URI: "file:///work", Name: "work"}})
+	defer c.Close(context.Background())
+
+	var initCaps map[string]json.RawMessage
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dec := json.NewDecoder(p.serverReads)
+		var req struct {
+			ID     interface{} `json:"id"`
+			Method string      `json:"method"`
+			Params struct {
+				Capabilities map[string]json.RawMessage `json:"capabilities"`
+			} `json:"params"`
+		}
+		dec.Decode(&req) // initialize
+		initCaps = req.Params.Capabilities
+		p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"x","capabilities":{},"serverInfo":{"name":"f","version":"1"}}}` + "\n"))
+		dec.Decode(&req) // notifications/initialized
+	}()
+
+	if _, err := c.Initialize(context.Background()); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	wg.Wait()
+	if _, ok := initCaps["roots"]; !ok {
+		t.Fatalf("roots capability not advertised: %v", initCaps)
+	}
+
+	// Server now asks for roots/list; client must answer from config.
+	p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":50,"method":"roots/list","params":{}}` + "\n"))
+	dec := json.NewDecoder(p.serverReads)
+	var resp struct {
+		ID     float64 `json:"id"`
+		Result struct {
+			Roots []struct {
+				URI  string `json:"uri"`
+				Name string `json:"name"`
+			} `json:"roots"`
+		} `json:"result"`
+	}
+	done := make(chan error, 1)
+	go func() { done <- dec.Decode(&resp) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("decode roots resp: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no roots/list response")
+	}
+	if len(resp.Result.Roots) != 1 || resp.Result.Roots[0].URI != "file:///work" {
+		t.Fatalf("roots = %+v", resp.Result.Roots)
+	}
+}
+
+func TestStdioClient_Progress_OffByDefault(t *testing.T) {
+	p := newFakePipes()
+	got := make(chan json.RawMessage, 1)
+	go func() {
+		dec := json.NewDecoder(p.serverReads)
+		var req struct {
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		dec.Decode(&req) // initialize
+		p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"x","capabilities":{},"serverInfo":{"name":"f","version":"1"}}}` + "\n"))
+		dec.Decode(&req) // notifications/initialized
+		dec.Decode(&req) // tools/call
+		got <- req.Params
+		p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"content":[]}}` + "\n"))
+	}()
+	c := NewStdioClientFromPipes(p.clientReads, p.clientWrites)
+	defer c.Close(context.Background())
+	c.Initialize(context.Background())
+	c.CallTool(context.Background(), "fetch", json.RawMessage(`{}`))
+
+	params := <-got
+	if strings.Contains(string(params), "progressToken") {
+		t.Errorf("default CallTool must not send progressToken, got %s", params)
+	}
+}
+
+func TestStdioClient_Progress_OnInjectsToken(t *testing.T) {
+	p := newFakePipes()
+	got := make(chan json.RawMessage, 1)
+	go func() {
+		dec := json.NewDecoder(p.serverReads)
+		var req struct {
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		dec.Decode(&req)
+		p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"x","capabilities":{},"serverInfo":{"name":"f","version":"1"}}}` + "\n"))
+		dec.Decode(&req)
+		dec.Decode(&req) // tools/call
+		got <- req.Params
+		p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"content":[]}}` + "\n"))
+	}()
+	c := NewStdioClientFromPipes(p.clientReads, p.clientWrites)
+	c.setProgressEnabled(true)
+	defer c.Close(context.Background())
+	c.Initialize(context.Background())
+	c.CallTool(context.Background(), "fetch", json.RawMessage(`{}`))
+
+	var parsed struct {
+		Meta struct {
+			ProgressToken string `json:"progressToken"`
+		} `json:"_meta"`
+	}
+	if err := json.Unmarshal(<-got, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(parsed.Meta.ProgressToken, "fetch#") {
+		t.Errorf("progressToken = %q, want fetch#<n>", parsed.Meta.ProgressToken)
+	}
+}
+
 func TestStdioClient_RejectAfterInit_BadMethod(t *testing.T) {
 	p := newFakePipes()
 	go func() {
