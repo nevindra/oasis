@@ -25,33 +25,47 @@ func mustAttachmentBase64(t *testing.T, mime, encoded string) core.Attachment {
 // Embed this in test-specific store structs to avoid implementing every method.
 type nopStore struct{}
 
-func (nopStore) CreateThread(_ context.Context, _ core.Thread) error                               { return nil }
-func (nopStore) GetThread(_ context.Context, _ string) (core.Thread, error)                        { return core.Thread{}, nil }
-func (nopStore) ListThreads(_ context.Context, _ string, _ int) ([]core.Thread, error)             { return nil, nil }
-func (nopStore) UpdateThread(_ context.Context, _ core.Thread) error                               { return nil }
-func (nopStore) DeleteThread(_ context.Context, _ string) error                               { return nil }
-func (nopStore) StoreMessage(_ context.Context, _ core.Message) error                              { return nil }
-func (nopStore) GetMessages(_ context.Context, _ string, _ int) ([]core.Message, error)            { return nil, nil }
-func (nopStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]core.ScoredMessage, error) { return nil, nil }
-func (nopStore) StoreDocument(_ context.Context, _ core.Document, _ []core.Chunk) error              { return nil }
-func (nopStore) ListDocuments(_ context.Context, _ int) ([]core.Document, error)                { return nil, nil }
-func (nopStore) DeleteDocument(_ context.Context, _ string) error                          { return nil }
-func (nopStore) SearchChunks(_ context.Context, _ []float32, _ int, _ ...core.ChunkFilter) ([]core.ScoredChunk, error) { return nil, nil }
-func (nopStore) GetChunksByIDs(_ context.Context, _ []string) ([]core.Chunk, error)             { return nil, nil }
-func (nopStore) GetConfig(_ context.Context, _ string) (string, error)                        { return "", nil }
-func (nopStore) SetConfig(_ context.Context, _, _ string) error                               { return nil }
-func (nopStore) CreateScheduledAction(_ context.Context, _ core.ScheduledAction) error             { return nil }
-func (nopStore) ListScheduledActions(_ context.Context) ([]core.ScheduledAction, error)            { return nil, nil }
-func (nopStore) GetDueScheduledActions(_ context.Context, _ int64) ([]core.ScheduledAction, error) { return nil, nil }
-func (nopStore) UpdateScheduledAction(_ context.Context, _ core.ScheduledAction) error             { return nil }
-func (nopStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ bool) error       { return nil }
-func (nopStore) DeleteScheduledAction(_ context.Context, _ string) error                      { return nil }
-func (nopStore) DeleteAllScheduledActions(_ context.Context) (int, error)                     { return 0, nil }
+func (nopStore) CreateThread(_ context.Context, _ core.Thread) error { return nil }
+func (nopStore) GetThread(_ context.Context, _ string) (core.Thread, error) {
+	return core.Thread{}, nil
+}
+func (nopStore) ListThreads(_ context.Context, _ string, _ int) ([]core.Thread, error) {
+	return nil, nil
+}
+func (nopStore) UpdateThread(_ context.Context, _ core.Thread) error  { return nil }
+func (nopStore) DeleteThread(_ context.Context, _ string) error       { return nil }
+func (nopStore) StoreMessage(_ context.Context, _ core.Message) error { return nil }
+func (nopStore) GetMessages(_ context.Context, _ string, _ int) ([]core.Message, error) {
+	return nil, nil
+}
+func (nopStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]core.ScoredMessage, error) {
+	return nil, nil
+}
+func (nopStore) StoreDocument(_ context.Context, _ core.Document, _ []core.Chunk) error { return nil }
+func (nopStore) ListDocuments(_ context.Context, _ int) ([]core.Document, error)        { return nil, nil }
+func (nopStore) DeleteDocument(_ context.Context, _ string) error                       { return nil }
+func (nopStore) SearchChunks(_ context.Context, _ []float32, _ int, _ ...core.ChunkFilter) ([]core.ScoredChunk, error) {
+	return nil, nil
+}
+func (nopStore) GetChunksByIDs(_ context.Context, _ []string) ([]core.Chunk, error)    { return nil, nil }
+func (nopStore) GetConfig(_ context.Context, _ string) (string, error)                 { return "", nil }
+func (nopStore) SetConfig(_ context.Context, _, _ string) error                        { return nil }
+func (nopStore) CreateScheduledAction(_ context.Context, _ core.ScheduledAction) error { return nil }
+func (nopStore) ListScheduledActions(_ context.Context) ([]core.ScheduledAction, error) {
+	return nil, nil
+}
+func (nopStore) GetDueScheduledActions(_ context.Context, _ int64) ([]core.ScheduledAction, error) {
+	return nil, nil
+}
+func (nopStore) UpdateScheduledAction(_ context.Context, _ core.ScheduledAction) error  { return nil }
+func (nopStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ bool) error { return nil }
+func (nopStore) DeleteScheduledAction(_ context.Context, _ string) error                { return nil }
+func (nopStore) DeleteAllScheduledActions(_ context.Context) (int, error)               { return 0, nil }
 func (nopStore) ListScheduledActionsByDescription(_ context.Context, _ string) ([]core.ScheduledAction, error) {
 	return nil, nil
 }
 func (nopStore) Init(_ context.Context) error { return nil }
-func (nopStore) Close() error                                                         { return nil }
+func (nopStore) Close() error                 { return nil }
 
 // --- Tool mocks (shared across agent_test.go, workflow_test.go) ---
 //
@@ -61,24 +75,30 @@ func (nopStore) Close() error                                                   
 
 type mockTool struct{}
 
-func (m mockTool) Name() string               { return "greet" }
-func (m mockTool) Definition() core.ToolDefinition { return core.ToolDefinition{Name: "greet", Description: "Say hello"} }
+func (m mockTool) Name() string { return "greet" }
+func (m mockTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "greet", Description: "Say hello"}
+}
 func (m mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult("hello from greet"), nil
 }
 
 type mockToolCalc struct{}
 
-func (m mockToolCalc) Name() string               { return "calc" }
-func (m mockToolCalc) Definition() core.ToolDefinition { return core.ToolDefinition{Name: "calc", Description: "Calculate"} }
+func (m mockToolCalc) Name() string { return "calc" }
+func (m mockToolCalc) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "calc", Description: "Calculate"}
+}
 func (m mockToolCalc) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult("result from calc"), nil
 }
 
 type errTool struct{}
 
-func (e errTool) Name() string               { return "fail" }
-func (e errTool) Definition() core.ToolDefinition { return core.ToolDefinition{Name: "fail", Description: "Always fails"} }
+func (e errTool) Name() string { return "fail" }
+func (e errTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "fail", Description: "Always fails"}
+}
 func (e errTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.ToolResult{}, errors.New("tool broken")
 }
@@ -123,16 +143,20 @@ func (t *contextReadingTool) ExecuteRaw(ctx context.Context, _ json.RawMessage) 
 
 type readTool struct{}
 
-func (readTool) Name() string               { return "read" }
-func (readTool) Definition() core.ToolDefinition { return core.ToolDefinition{Name: "read", Description: "Read file"} }
+func (readTool) Name() string { return "read" }
+func (readTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "read", Description: "Read file"}
+}
 func (readTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult("did read"), nil
 }
 
 type writeTool struct{}
 
-func (writeTool) Name() string               { return "write" }
-func (writeTool) Definition() core.ToolDefinition { return core.ToolDefinition{Name: "write", Description: "Write file"} }
+func (writeTool) Name() string { return "write" }
+func (writeTool) Definition() core.ToolDefinition {
+	return core.ToolDefinition{Name: "write", Description: "Write file"}
+}
 func (writeTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult("did write"), nil
 }

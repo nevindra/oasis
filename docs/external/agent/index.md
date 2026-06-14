@@ -89,7 +89,7 @@ step node that the DAG calls once and waits for. The agent has no knowledge of b
 embedded; the Network/Workflow layer routes inputs and collects outputs.
 
 From a developer's perspective: build one agent per role, not one agent for everything.
-Narrow tools and a focused prompt make the LLM more reliable. Use `RunOptions` to
+Narrow tools and a focused prompt make the LLM more reliable. Use `WithOverrides` to
 handle per-request variation rather than spawning a new agent per user.
 
 ---
@@ -98,37 +98,35 @@ handle per-request variation rather than spawning a new agent per user.
 
 What happens when you call `agent.Execute(ctx, task)`:
 
-1. **Merge run options.** If using `ExecuteWith`, the per-call `RunOptions` are
-   validated first. Any out-of-range field returns `*RunOptionsError` immediately.
-2. **Build the initial message list.** `Memory.BuildMessages` assembles the system
+1. **Build the initial message list.** `Memory.BuildMessages` assembles the system
    prompt, any pinned facts, semantically recalled memories, and the full conversation
    history for the given `ThreadID`. For suspend/resume calls this step is skipped —
    the snapshot messages are used directly.
-3. **Emit `EventRunStart`** into the streaming channel (if streaming is active).
-4. **Enter the iteration loop** (`for i := 0; i < MaxIter; i++`).
-5. **Run pre-processors.** Each registered `PreProcessor` runs in order. Any of them
+2. **Emit `EventRunStart`** into the streaming channel (if `WithStream` is active).
+3. **Enter the iteration loop** (`for i := 0; i < MaxIter; i++`).
+4. **Run pre-processors.** Each registered `PreProcessor` runs in order. Any of them
    can mutate the request, halt with `*ErrHalt`, or pause with `Suspend(payload)`
    which surfaces as `*ErrSuspended` to the caller.
-6. **Call the LLM.** The current message list and resolved tool definitions are sent
+5. **Call the LLM.** The current message list and resolved tool definitions are sent
    to the provider via `Complete`. Text deltas stream into the channel as
    `EventTextDelta` events if streaming is on.
-7. **Inspect the response.** If the model returned a `stop` finish reason with no
-   tool calls, the loop ends and proceeds to step 11. If the model requested tool
-   calls, continue to step 8.
-8. **Dispatch tool calls in parallel.** `dispatchParallel` fans out all requested
-   calls to a bounded worker pool. Each worker calls the tool's `Execute` method, then
-   emits `EventToolCallStart` and `EventToolCallResult` events.
-9. **Run post-tool processors.** Each `PostToolProcessor` sees the tool result before
+6. **Inspect the response.** If the model returned a `stop` finish reason with no
+   tool calls, the loop ends and proceeds to step 10. If the model requested tool
+   calls, continue to step 7.
+7. **Dispatch tool calls in parallel.** `dispatchParallel` fans out all requested
+   calls to a bounded worker pool. Each worker calls the tool's `ExecuteRaw` method,
+   then emits `EventToolCallStart` and `EventToolCallResult` events.
+8. **Run post-tool processors.** Each `PostToolProcessor` sees the tool result before
    it is appended to history. A post-tool processor can transform, redact, or block a
    result.
-10. **Append results to history.** Tool results are added as `tool` role messages.
-    The loop continues at step 5 with the extended message list.
-11. **Finalize.** `EventRunFinish` is emitted with the `FinishReason`. The streaming
+9. **Append results to history.** Tool results are added as `tool` role messages.
+   The loop continues at step 4 with the extended message list.
+10. **Finalize.** `EventRunFinish` is emitted with the `FinishReason`. The streaming
     channel is closed exactly once.
-12. **Persist history in the background.** A goroutine saves the updated conversation
+11. **Persist history in the background.** A goroutine saves the updated conversation
     history to the store (if memory is configured) without blocking the return.
 
-If `MaxIter` is reached without a natural stop, `forceSynthesis` makes one additional
+If `MaxIter` is reached without a natural stop, the agent makes one additional
 LLM call with an explicit instruction to produce a final answer. The result's
 `FinishReason` is `FinishMaxIter`.
 
@@ -136,9 +134,11 @@ LLM call with an explicit instruction to produce a final answer. The result's
 
 ## Streaming
 
-`Execute` blocks until the loop finishes. `ExecuteStream` runs the same loop but
-emits `StreamEvent` values into a channel throughout — you see text as it is generated
-rather than waiting for the complete response.
+`Execute` accepts an optional `core.WithStream(ch)` run option that wires up a
+channel. When passed, the agent emits `StreamEvent` values into that channel
+throughout execution — you see text as it is generated rather than waiting for the
+complete response. `Execute` always closes the channel before returning; do not close
+it from the caller side.
 
 ```mermaid
 sequenceDiagram
@@ -146,7 +146,7 @@ sequenceDiagram
     participant Agent
     participant ch as chan StreamEvent
 
-    Caller->>Agent: ExecuteStream(ctx, task, ch)
+    Caller->>Agent: Execute(ctx, task, core.WithStream(ch))
     Agent-->>ch: EventRunStart
     loop each iteration
         Agent-->>ch: EventIterationStart
@@ -160,19 +160,18 @@ sequenceDiagram
     Agent-->>Caller: AgentResult, error
 ```
 
-The channel **must be buffered** (recommended: 64+). The agent always closes it before
-returning — do not close it from the caller side.
+The channel **must be buffered** (recommended: 64+).
 
 For HTTP delivery, `ServeSSE` handles all the plumbing: it sets SSE headers, runs the
 agent in a background goroutine, and flushes each event to the response writer.
 `WriteSSEEvent` is available for custom SSE loops.
 
 For multi-reader fan-out (multiple websocket connections, analytics sinks, logging),
-use `StartStream`. It wraps `ExecuteStream` in a background goroutine, maintains a
-replay buffer for late subscribers, and exposes typed callbacks:
+use `Subscribe`. It runs the agent in a background goroutine, maintains a replay
+buffer for late subscribers, and exposes typed callbacks:
 
 ```go
-stream := oasis.StartStream(ctx, ag, task)
+stream := oasis.Subscribe(ctx, ag, task)
 stream.OnTextDelta(func(chunk string) { fmt.Print(chunk) })
 result, err := stream.Result() // blocks until done
 ```
@@ -185,15 +184,14 @@ Structured output (set via `WithResponseSchema`) emits `EventObjectDelta` and
 ## Scheduler / time-based execution
 
 There is no built-in `Scheduler` type. Scheduling is a **store-level dispatch
-pattern**: your application reads `ScheduledAction` records from the store and calls
-`agent.Execute` on each due action.
+pattern**: your application reads `core.ScheduledAction` records from a
+`core.ScheduledActionStore` and calls `agent.Execute` on each due action.
 
-`ScheduledAction` is a persistence struct that lives in the `Store`. Your code calls
-`store.GetDueScheduledActions(ctx, time.Now().Unix())` on a ticker, then fires one
-`Execute` call per action:
+`core.ScheduledActionStore` is an optional capability interface — stores that support
+scheduling implement it, and callers discover it via type assertion.
 
 ```go
-func runScheduler(ctx context.Context, store oasis.Store, ag *oasis.LLMAgent) {
+func runScheduler(ctx context.Context, store core.ScheduledActionStore, ag *agent.LLMAgent) {
     ticker := time.NewTicker(1 * time.Minute)
     defer ticker.Stop()
     for {
@@ -203,10 +201,10 @@ func runScheduler(ctx context.Context, store oasis.Store, ag *oasis.LLMAgent) {
         case <-ticker.C:
             actions, _ := store.GetDueScheduledActions(ctx, time.Now().Unix())
             for _, action := range actions {
-                go func(a oasis.ScheduledAction) {
-                    ag.Execute(ctx, oasis.AgentTask{
-                        Input:    a.Task,
-                        ThreadID: a.ID, // per-job memory thread
+                go func(a core.ScheduledAction) {
+                    ag.Execute(ctx, core.AgentTask{
+                        Input:    a.Description,
+                        ThreadID: a.ID,
                     })
                 }(action)
             }
@@ -230,7 +228,7 @@ transaction) you must protect it with a mutex — do not assume serial execution
 **2. `ToolResult.Error` is not a Go error.**
 Business failures from a tool (city not found, API quota exceeded) go in
 `ToolResult.Error` as a string. The LLM sees that string and can adapt. Returning a
-Go error from `Execute` signals an infrastructure failure — network down, timeout,
+Go error from `ExecuteRaw` signals an infrastructure failure — network down, timeout,
 panic recovery. Mixing these up causes the LLM to receive no feedback on tool
 failures, breaking the loop's ability to recover.
 
@@ -240,12 +238,12 @@ Calling `Execute` again with the same `ThreadID` immediately is safe — the mem
 layer handles ordering — but if you shut down the process immediately after
 `Execute` returns you may lose the last turn's history. Allow the process to drain.
 
-**4. `RunOptions` fields use partial-override semantics; `nil` and zero are different.**
-Passing `&RunOptions{Limits: &Limits{MaxIter: 5}}` changes only `MaxIter`; all other
-limits keep the agent's defaults. Passing `&RunOptions{Tools: []AnyTool{}}` (empty
-slice, not nil) replaces the tool set with nothing — the LLM gets no tools for that
-call. Passing `Tools: nil` means "keep the agent's configured tools." This distinction
-matters when you want to strip tools from a single request.
+**4. Per-call overrides use `WithOverrides(opts)`.**
+Pass `core.WithStream(ch)` for streaming, `agent.WithOverrides(&agent.RunOptions{...})`
+for prompt/limits/tool overrides, and `core.WithDeadline(d)` for per-call time caps.
+Passing `Tools: []core.AnyTool{}` (empty slice, not nil) replaces the tool set with
+nothing — the LLM gets no tools for that call. Passing `Tools: nil` means "keep the
+agent's configured tools."
 
 **5. `ErrSuspended` holds a full message snapshot in memory.**
 When `Execute` returns `*ErrSuspended`, the entire conversation history up to the
@@ -266,21 +264,21 @@ import (
     "fmt"
     "os"
 
-    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/agent"
     "github.com/nevindra/oasis/provider/gemini"
 )
 
 func main() {
     llm := gemini.New(os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
 
-    ag := oasis.NewLLMAgent(
+    ag := agent.New(
         "helper",
         "A general-purpose assistant",
         llm,
-        oasis.WithPrompt("You are a helpful assistant."),
+        agent.WithPrompt("You are a helpful assistant."),
     )
 
-    result, err := ag.Execute(context.Background(), oasis.AgentTask{
+    result, err := ag.Execute(context.Background(), core.AgentTask{
         Input: "What is 12 × 7?",
     })
     if err != nil {
@@ -294,9 +292,10 @@ Line-by-line walkthrough:
 
 1. `gemini.New(...)` — creates an LLM provider that speaks to Gemini over raw HTTP.
    No vendor SDK involved.
-2. `oasis.NewLLMAgent(name, description, provider, ...options)` — builds the agent.
+2. `agent.New(name, description, provider, ...options)` — builds the agent.
    Name and description are required; everything else is optional functional options.
-3. `oasis.WithPrompt(...)` — sets the system prompt sent to the LLM on every call.
+   The umbrella package re-exports this as `oasis.NewAgent`.
+3. `agent.WithPrompt(...)` — sets the system prompt sent to the LLM on every call.
 4. `ag.Execute(ctx, task)` — runs the loop and blocks until done. No tools are
    registered here, so the LLM answers on the first iteration without calling
    anything.

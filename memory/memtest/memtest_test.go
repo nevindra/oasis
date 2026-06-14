@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
 	"github.com/nevindra/oasis/memory/memtest"
 )
@@ -12,7 +13,7 @@ import (
 func TestMemStore_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := memtest.New()
-	item := memory.MemoryItem{
+	item := core.MemoryItem{
 		ID:      "a1",
 		Kind:    memory.KindFact,
 		Content: "user's name is Nev",

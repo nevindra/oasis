@@ -34,12 +34,18 @@ func TestPushDelivery(t *testing.T) {
 	task := sendTask(t, rpcCall(t, ts.URL, methodSendMessage, sendParams{
 		Message: Message{MessageID: "m1", Role: RoleUser, Parts: []Part{TextPart("hi")}},
 		Configuration: &SendConfiguration{
-			Blocking:               false,
+			Blocking:               NonBlockingPtr(),
 			PushNotificationConfig: &PushNotificationConfig{URL: hook.URL, Token: "tok-1"},
 		},
 	}))
-	if task.Status.State != TaskStateWorking {
-		t.Fatalf("non-blocking send must return working, got %s", task.Status.State)
+	// A non-blocking send returns the task's current state immediately. That is
+	// normally Working, but a fast agent (echo) may already have settled by the
+	// time the response is read — Completed is equally valid. The point is the
+	// call did not block on the terminal state; blocking-vs-non-blocking
+	// semantics are covered deterministically by TestSendConfigurationBlockingDefault
+	// and TestMessageSendZeroConfigBlocks.
+	if task.Status.State != TaskStateWorking && task.Status.State != TaskStateCompleted {
+		t.Fatalf("non-blocking send must return working or completed, got %s", task.Status.State)
 	}
 
 	// Webhook fires when the background run settles.
@@ -60,6 +66,68 @@ func TestPushDelivery(t *testing.T) {
 	}
 }
 
+// recordingTransport is an http.RoundTripper that flags itself as used and
+// delegates to a real transport, so a test can prove the server delivered a
+// webhook through the injected client rather than a package default.
+type recordingTransport struct {
+	used atomic.Bool
+	next http.RoundTripper
+}
+
+func (rt *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.used.Store(true)
+	return rt.next.RoundTrip(req)
+}
+
+// TestPushUsesInjectedClient verifies WithPushHTTPClient: the server delivers
+// webhooks through the caller-supplied *http.Client, not a package global. The
+// injected client wraps a recording transport; the test asserts that transport
+// saw the delivery request.
+func TestPushUsesInjectedClient(t *testing.T) {
+	var got atomic.Pointer[StreamResponse]
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var sr StreamResponse
+		json.NewDecoder(r.Body).Decode(&sr)
+		got.Store(&sr)
+	}))
+	defer hook.Close()
+
+	rt := &recordingTransport{next: http.DefaultTransport}
+	injected := &http.Client{Transport: rt, Timeout: 5 * time.Second}
+
+	srv := NewServer(
+		a2atest.NewEchoAgent("echo", "echoes"),
+		WithPushNotifications(),
+		WithPushHTTPClient(injected),
+	)
+	defer srv.Close()
+	if srv.pushClient != injected {
+		t.Fatal("server must use the injected push client")
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	sendTask(t, rpcCall(t, ts.URL, methodSendMessage, sendParams{
+		Message: Message{MessageID: "m1", Role: RoleUser, Parts: []Part{TextPart("hi")}},
+		Configuration: &SendConfiguration{
+			Blocking:               NonBlockingPtr(),
+			PushNotificationConfig: &PushNotificationConfig{URL: hook.URL},
+		},
+	}))
+
+	deadline := time.After(2 * time.Second)
+	for got.Load() == nil {
+		select {
+		case <-deadline:
+			t.Fatal("webhook never called")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if !rt.used.Load() {
+		t.Error("push delivery did not go through the injected client's transport")
+	}
+}
+
 // TestPushRejectedWhenDisabled verifies that a non-blocking send with a push
 // config is rejected with codePushNotSupported when the server was not
 // constructed with WithPushNotifications().
@@ -68,8 +136,11 @@ func TestPushRejectedWhenDisabled(t *testing.T) {
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 	resp := rpcCall(t, ts.URL, methodSendMessage, sendParams{
-		Message:       Message{MessageID: "m1", Role: RoleUser, Parts: []Part{TextPart("hi")}},
-		Configuration: &SendConfiguration{PushNotificationConfig: &PushNotificationConfig{URL: "http://x"}},
+		Message: Message{MessageID: "m1", Role: RoleUser, Parts: []Part{TextPart("hi")}},
+		Configuration: &SendConfiguration{
+			Blocking:               NonBlockingPtr(), // explicit non-blocking opt-out
+			PushNotificationConfig: &PushNotificationConfig{URL: "http://x"},
+		},
 	})
 	if resp.Error == nil || resp.Error.Code != codePushNotSupported {
 		t.Errorf("want %d, got %+v", codePushNotSupported, resp.Error)

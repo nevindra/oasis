@@ -39,8 +39,8 @@ func (m *mockSandbox) BrowserScreenshot(context.Context) ([]byte, error) {
 func (m *mockSandbox) BrowserAction(context.Context, sandbox.BrowserAction) (sandbox.BrowserResult, error) {
 	return sandbox.BrowserResult{}, nil
 }
-func (m *mockSandbox) BrowserSnapshot(context.Context, sandbox.SnapshotOpts) (sandbox.BrowserSnapshot, error) {
-	return sandbox.BrowserSnapshot{}, nil
+func (m *mockSandbox) BrowserSnapshot(context.Context, sandbox.SnapshotOpts) (sandbox.PageSnapshot, error) {
+	return sandbox.PageSnapshot{}, nil
 }
 func (m *mockSandbox) BrowserText(context.Context, sandbox.TextOpts) (sandbox.BrowserTextResult, error) {
 	return sandbox.BrowserTextResult{}, nil

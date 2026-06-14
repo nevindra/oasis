@@ -13,51 +13,81 @@ import (
 
 // --- Test doubles for memory wiring ---
 
-// stubStore is a no-op implementation of memory.Store (core.Store + memory.ItemStore)
+// stubStore is a no-op implementation of core.Store + core.MemoryItemStore
 // for embedding in test doubles.
 type stubStore struct{}
 
-func (s *stubStore) Init(_ context.Context) error  { return nil }
-func (s *stubStore) Close() error                   { return nil }
+func (s *stubStore) Init(_ context.Context) error                        { return nil }
+func (s *stubStore) Close() error                                        { return nil }
 func (s *stubStore) CreateThread(_ context.Context, _ core.Thread) error { return nil }
-func (s *stubStore) GetThread(_ context.Context, _ string) (core.Thread, error) { return core.Thread{}, nil }
-func (s *stubStore) ListThreads(_ context.Context, _ string, _ int) ([]core.Thread, error) { return nil, nil }
-func (s *stubStore) UpdateThread(_ context.Context, _ core.Thread) error { return nil }
-func (s *stubStore) DeleteThread(_ context.Context, _ string) error { return nil }
+func (s *stubStore) GetThread(_ context.Context, _ string) (core.Thread, error) {
+	return core.Thread{}, nil
+}
+func (s *stubStore) ListThreads(_ context.Context, _ string, _ int) ([]core.Thread, error) {
+	return nil, nil
+}
+func (s *stubStore) UpdateThread(_ context.Context, _ core.Thread) error  { return nil }
+func (s *stubStore) DeleteThread(_ context.Context, _ string) error       { return nil }
 func (s *stubStore) StoreMessage(_ context.Context, _ core.Message) error { return nil }
-func (s *stubStore) GetMessages(_ context.Context, _ string, _ int) ([]core.Message, error) { return nil, nil }
-func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]core.ScoredMessage, error) { return nil, nil }
-func (s *stubStore) StoreDocument(_ context.Context, _ core.Document, _ []core.Chunk) error { return nil }
-func (s *stubStore) ListDocuments(_ context.Context, _ int) ([]core.Document, error)   { return nil, nil }
-func (s *stubStore) DeleteDocument(_ context.Context, _ string) error             { return nil }
-func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int, _ ...core.ChunkFilter) ([]core.ScoredChunk, error) { return nil, nil }
-func (s *stubStore) GetChunksByIDs(_ context.Context, _ []string) ([]core.Chunk, error) { return nil, nil }
+func (s *stubStore) GetMessages(_ context.Context, _ string, _ int) ([]core.Message, error) {
+	return nil, nil
+}
+func (s *stubStore) SearchMessages(_ context.Context, _ []float32, _ int, _ string) ([]core.ScoredMessage, error) {
+	return nil, nil
+}
+func (s *stubStore) StoreDocument(_ context.Context, _ core.Document, _ []core.Chunk) error {
+	return nil
+}
+func (s *stubStore) ListDocuments(_ context.Context, _ int) ([]core.Document, error) { return nil, nil }
+func (s *stubStore) DeleteDocument(_ context.Context, _ string) error                { return nil }
+func (s *stubStore) SearchChunks(_ context.Context, _ []float32, _ int, _ ...core.ChunkFilter) ([]core.ScoredChunk, error) {
+	return nil, nil
+}
+func (s *stubStore) GetChunksByIDs(_ context.Context, _ []string) ([]core.Chunk, error) {
+	return nil, nil
+}
 func (s *stubStore) GetConfig(_ context.Context, _ string) (string, error) { return "", nil }
-func (s *stubStore) SetConfig(_ context.Context, _, _ string) error { return nil }
-func (s *stubStore) CreateScheduledAction(_ context.Context, _ core.ScheduledAction) error { return nil }
-func (s *stubStore) ListScheduledActions(_ context.Context) ([]core.ScheduledAction, error) { return nil, nil }
-func (s *stubStore) GetDueScheduledActions(_ context.Context, _ int64) ([]core.ScheduledAction, error) { return nil, nil }
-func (s *stubStore) UpdateScheduledAction(_ context.Context, _ core.ScheduledAction) error { return nil }
-func (s *stubStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ bool) error { return nil }
-func (s *stubStore) DeleteScheduledAction(_ context.Context, _ string) error { return nil }
+func (s *stubStore) SetConfig(_ context.Context, _, _ string) error        { return nil }
+func (s *stubStore) CreateScheduledAction(_ context.Context, _ core.ScheduledAction) error {
+	return nil
+}
+func (s *stubStore) ListScheduledActions(_ context.Context) ([]core.ScheduledAction, error) {
+	return nil, nil
+}
+func (s *stubStore) GetDueScheduledActions(_ context.Context, _ int64) ([]core.ScheduledAction, error) {
+	return nil, nil
+}
+func (s *stubStore) UpdateScheduledAction(_ context.Context, _ core.ScheduledAction) error {
+	return nil
+}
+func (s *stubStore) UpdateScheduledActionEnabled(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+func (s *stubStore) DeleteScheduledAction(_ context.Context, _ string) error  { return nil }
 func (s *stubStore) DeleteAllScheduledActions(_ context.Context) (int, error) { return 0, nil }
-func (s *stubStore) ListScheduledActionsByDescription(_ context.Context, _ string) ([]core.ScheduledAction, error) { return nil, nil }
-
-// memory.ItemStore methods (zero-valued no-ops).
-func (s *stubStore) Upsert(_ context.Context, _ memory.MemoryItem) error            { return nil }
-func (s *stubStore) UpsertBatch(_ context.Context, _ []memory.MemoryItem) error     { return nil }
-func (s *stubStore) Delete(_ context.Context, _ string) error                       { return nil }
-func (s *stubStore) DeleteWhere(_ context.Context, _ memory.Filter) (int, error)    { return 0, nil }
-func (s *stubStore) Get(_ context.Context, _ string) (memory.MemoryItem, error)     { return memory.MemoryItem{}, nil }
-func (s *stubStore) List(_ context.Context, _ memory.Filter) ([]memory.MemoryItem, error) { return nil, nil }
-func (s *stubStore) SearchSemantic(_ context.Context, _ []float32, _ memory.Filter, _ int) ([]memory.ScoredItem, error) {
+func (s *stubStore) ListScheduledActionsByDescription(_ context.Context, _ string) ([]core.ScheduledAction, error) {
 	return nil, nil
 }
 
-// Verify stubStore satisfies core.Store + memory.ItemStore at compile time.
+// core.MemoryItemStore methods (zero-valued no-ops).
+func (s *stubStore) Upsert(_ context.Context, _ core.MemoryItem) error               { return nil }
+func (s *stubStore) UpsertBatch(_ context.Context, _ []core.MemoryItem) error        { return nil }
+func (s *stubStore) Delete(_ context.Context, _ string) error                        { return nil }
+func (s *stubStore) DeleteWhere(_ context.Context, _ core.MemoryFilter) (int, error) { return 0, nil }
+func (s *stubStore) Get(_ context.Context, _ string) (core.MemoryItem, error) {
+	return core.MemoryItem{}, nil
+}
+func (s *stubStore) List(_ context.Context, _ core.MemoryFilter) ([]core.MemoryItem, error) {
+	return nil, nil
+}
+func (s *stubStore) SearchSemantic(_ context.Context, _ []float32, _ core.MemoryFilter, _ int) ([]core.ScoredMemoryItem, error) {
+	return nil, nil
+}
+
+// Verify stubStore satisfies core.Store + core.MemoryItemStore at compile time.
 var (
-	_ core.Store      = (*stubStore)(nil)
-	_ memory.ItemStore = (*stubStore)(nil)
+	_ core.Store           = (*stubStore)(nil)
+	_ core.MemoryItemStore = (*stubStore)(nil)
 )
 
 // recordingStore tracks calls to StoreMessage, CreateThread, UpdateThread
@@ -200,7 +230,7 @@ func TestLLMAgentConversationMemory(t *testing.T) {
 	)
 
 	task := AgentTask{
-		Input:   "new question",
+		Input:    "new question",
 		ThreadID: "thread-1",
 	}
 	result, err := agent.Execute(context.Background(), task)
@@ -254,7 +284,7 @@ func TestMaxHistoryOption(t *testing.T) {
 		wantLimit int
 	}{
 		{"default", nil, 10},
-		{"custom", memory.WithMaxHistory(50), 50},
+		{"custom", memory.WithHistory(memory.HistoryConfig{MaxMessages: 50}), 50},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -271,7 +301,7 @@ func TestMaxHistoryOption(t *testing.T) {
 			agent := New("test", "test", provider, WithMemory(memOpts...))
 
 			_, err := agent.Execute(context.Background(), AgentTask{
-				Input:   "hi",
+				Input:    "hi",
 				ThreadID: "t1",
 			})
 			if err != nil {
@@ -330,7 +360,7 @@ func TestAgentConversationMemoryPersists(t *testing.T) {
 	)
 
 	task := AgentTask{
-		Input:   "new input",
+		Input:    "new input",
 		ThreadID: "t1",
 	}
 	result, err := agent.Execute(context.Background(), task)

@@ -13,7 +13,7 @@ import (
 // --- test doubles ---
 
 type mockEmbedding struct {
-	callCount int
+	callCount  int
 	batchSizes []int
 }
 
@@ -41,7 +41,7 @@ func (s *mockStore) StoreDocument(_ context.Context, doc oasis.Document, chunks 
 }
 
 // Stubs for Store interface.
-func (s *mockStore) StoreMessage(context.Context, oasis.Message) error   { return nil }
+func (s *mockStore) StoreMessage(context.Context, oasis.Message) error { return nil }
 func (s *mockStore) GetMessages(context.Context, string, int) ([]oasis.Message, error) {
 	return nil, nil
 }
@@ -57,16 +57,18 @@ func (s *mockStore) GetChunksByIDs(context.Context, []string) ([]oasis.Chunk, er
 func (s *mockStore) ListDocuments(context.Context, int) ([]oasis.Document, error) { return nil, nil }
 func (s *mockStore) DeleteDocument(context.Context, string) error                 { return nil }
 func (s *mockStore) CreateThread(context.Context, oasis.Thread) error             { return nil }
-func (s *mockStore) GetThread(context.Context, string) (oasis.Thread, error)   { return oasis.Thread{}, nil }
+func (s *mockStore) GetThread(context.Context, string) (oasis.Thread, error) {
+	return oasis.Thread{}, nil
+}
 func (s *mockStore) ListThreads(context.Context, string, int) ([]oasis.Thread, error) {
 	return nil, nil
 }
-func (s *mockStore) UpdateThread(context.Context, oasis.Thread) error { return nil }
-func (s *mockStore) DeleteThread(context.Context, string) error       { return nil }
+func (s *mockStore) UpdateThread(context.Context, oasis.Thread) error  { return nil }
+func (s *mockStore) DeleteThread(context.Context, string) error        { return nil }
 func (s *mockStore) GetConfig(context.Context, string) (string, error) { return "", nil }
 func (s *mockStore) SetConfig(context.Context, string, string) error   { return nil }
-func (s *mockStore) Init(context.Context) error { return nil }
-func (s *mockStore) Close() error               { return nil }
+func (s *mockStore) Init(context.Context) error                        { return nil }
+func (s *mockStore) Close() error                                      { return nil }
 
 // --- tests ---
 
@@ -174,8 +176,8 @@ func TestIngestorParentChildStrategy(t *testing.T) {
 	emb := &mockEmbedding{}
 	ing := NewIngestor(store, emb,
 		WithStrategy(StrategyParentChild),
-		WithParentTokens(50),  // 200 chars
-		WithChildTokens(25),   // 100 chars
+		WithParentTokens(50), // 200 chars
+		WithChildTokens(25),  // 100 chars
 	)
 
 	text := strings.Repeat("This is a sentence. ", 50)
@@ -241,7 +243,7 @@ func TestIngestorWithChunker(t *testing.T) {
 
 type panicExtractor struct{}
 
-func (panicExtractor) Extract(_ []byte) (string, error) {
+func (panicExtractor) Extract(_ context.Context, _ []byte) (string, error) {
 	panic("third-party parser exploded")
 }
 
@@ -263,8 +265,8 @@ func TestIngestorExtractorPanicRecovered(t *testing.T) {
 
 type panicMetadataExtractor struct{}
 
-func (panicMetadataExtractor) Extract(_ []byte) (string, error) { return "", nil }
-func (panicMetadataExtractor) ExtractWithMeta(_ []byte) (ExtractResult, error) {
+func (panicMetadataExtractor) Extract(_ context.Context, _ []byte) (string, error) { return "", nil }
+func (panicMetadataExtractor) ExtractWithMeta(_ context.Context, _ []byte) (ExtractResult, error) {
 	panic("metadata extractor exploded")
 }
 
@@ -291,11 +293,11 @@ type metadataExtractorMock struct {
 	result ExtractResult
 }
 
-func (m *metadataExtractorMock) Extract(content []byte) (string, error) {
+func (m *metadataExtractorMock) Extract(_ context.Context, _ []byte) (string, error) {
 	return m.result.Text, nil
 }
 
-func (m *metadataExtractorMock) ExtractWithMeta(content []byte) (ExtractResult, error) {
+func (m *metadataExtractorMock) ExtractWithMeta(_ context.Context, _ []byte) (ExtractResult, error) {
 	return m.result, nil
 }
 

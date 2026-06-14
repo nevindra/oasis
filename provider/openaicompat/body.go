@@ -16,15 +16,14 @@ import (
 // The function is idempotent: setting the same ephemeral marker twice is a no-op.
 func markCacheControl(msg *Message) {
 	cc := &CacheControl{Type: "ephemeral"}
-	switch content := msg.Content.(type) {
-	case string:
-		msg.Content = []ContentBlock{
-			{Type: "text", Text: content, CacheControl: cc},
-		}
-	case []ContentBlock:
-		if len(content) > 0 {
-			content[len(content)-1].CacheControl = cc
-			msg.Content = content
+	switch msg.Content.Kind {
+	case ContentString:
+		msg.Content = BlockContent([]ContentBlock{
+			{Type: "text", Text: msg.Content.String, CacheControl: cc},
+		})
+	case ContentBlocks:
+		if n := len(msg.Content.Blocks); n > 0 {
+			msg.Content.Blocks[n-1].CacheControl = cc
 		}
 	}
 }
@@ -43,7 +42,7 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 		case m.Role == "system":
 			msg := Message{
 				Role:    "system",
-				Content: m.Content,
+				Content: StringContent(m.Content),
 			}
 			if m.CacheCheckpoint {
 				markCacheControl(&msg)
@@ -69,7 +68,7 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 			}
 			// Include text content if present alongside tool calls.
 			if m.Content != "" {
-				msg.Content = m.Content
+				msg.Content = StringContent(m.Content)
 			}
 			if m.CacheCheckpoint {
 				markCacheControl(&msg)
@@ -80,7 +79,7 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 			// Tool result message.
 			msg := Message{
 				Role:       "tool",
-				Content:    m.Content,
+				Content:    StringContent(m.Content),
 				ToolCallID: m.ToolCallID,
 			}
 			if m.CacheCheckpoint {
@@ -120,12 +119,12 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 				}
 				msg = Message{
 					Role:    string(m.Role),
-					Content: blocks,
+					Content: BlockContent(blocks),
 				}
 			} else {
 				msg = Message{
 					Role:    string(m.Role),
-					Content: m.Content,
+					Content: StringContent(m.Content),
 				}
 			}
 			if m.CacheCheckpoint {

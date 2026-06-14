@@ -45,6 +45,7 @@ type DocumentMetaLister interface {
 // ScheduledActionStore is an optional Store capability for scheduled actions.
 // Store implementations that support scheduling can implement this interface;
 // callers discover it via type assertion.
+// Docs: docs/external/store/api.md — listed under "Optional capability interfaces", not in the base Store interface.
 type ScheduledActionStore interface {
 	CreateScheduledAction(ctx context.Context, action ScheduledAction) error
 	ListScheduledActions(ctx context.Context) ([]ScheduledAction, error)

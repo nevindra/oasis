@@ -23,7 +23,6 @@ func TestRunOptions_EmptyValidates(t *testing.T) {
 	}
 }
 
-
 func TestRunOptions_HasOverrides_Empty(t *testing.T) {
 	if (&RunOptions{}).HasOverrides() {
 		t.Fatalf("empty RunOptions: HasOverrides = true, want false")
@@ -35,7 +34,6 @@ func TestRunOptions_HasOverrides_NilIsFalse(t *testing.T) {
 		t.Fatalf("nil RunOptions: HasOverrides = true, want false")
 	}
 }
-
 
 func TestApplyRunOptions_NilNoChange(t *testing.T) {
 	base := &Config{MaxIter: 10}
@@ -55,7 +53,6 @@ func TestApplyRunOptions_EmptyNoChange(t *testing.T) {
 		t.Fatalf("empty opts: applyRunOptions returned different config")
 	}
 }
-
 
 func TestApplyRunOptions_PromptOverride(t *testing.T) {
 	base := &Config{SystemPrompt: "agent-default"}

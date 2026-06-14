@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -20,7 +21,7 @@ type CSVExtractor struct{}
 func NewCSVExtractor() *CSVExtractor { return &CSVExtractor{} }
 
 // Extract converts CSV content to labeled paragraphs.
-func (e *CSVExtractor) Extract(content []byte) (string, error) {
+func (e *CSVExtractor) Extract(_ context.Context, content []byte) (string, error) {
 	content = bytes.TrimPrefix(content, []byte("\xef\xbb\xbf"))
 	if len(bytes.TrimSpace(content)) == 0 {
 		return "", nil

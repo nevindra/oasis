@@ -15,12 +15,12 @@
 //	    "github.com/nevindra/oasis/memory"
 //	)
 //
-//	agent := oasis.NewLLMAgent(name, desc, provider,
+//	agent := oasis.NewAgent(name, desc, provider,
 //		oasis.WithMemory(
 //			memory.WithStore(store),
 //			memory.WithEmbedding(embedding),
-//			memory.WithMaxHistory(10),      // last 10 messages
-//			memory.WithSemanticRecall(),    // cross-thread recall
+//			memory.WithHistory(memory.HistoryConfig{MaxMessages: 10}),
+//			memory.WithSemanticRecall(), // cross-thread recall
 //		),
 //	)
 //

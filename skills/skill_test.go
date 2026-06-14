@@ -161,7 +161,7 @@ description: Beta skill
 Beta instructions.
 `)
 
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	summaries, err := p.Discover(context.Background())
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
@@ -187,7 +187,7 @@ Beta instructions.
 
 func TestFileSkillProvider_DiscoverEmpty(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	summaries, err := p.Discover(context.Background())
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
@@ -212,7 +212,7 @@ description: Beta in dir2
 ---
 `)
 
-	p := NewFileSkillProvider(dir1, dir2)
+	p := FromDir(dir1, dir2)
 	summaries, err := p.Discover(context.Background())
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
@@ -263,7 +263,7 @@ description: A real skill
 ---
 `)
 
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	summaries, err := p.Discover(context.Background())
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
@@ -291,7 +291,7 @@ Do something useful.
 This is the second line.
 `)
 
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	skill, err := p.Activate(context.Background(), "my-skill")
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
@@ -326,7 +326,7 @@ This is the second line.
 
 func TestFileSkillProvider_ActivateNotFound(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	_, err := p.Activate(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent skill, got nil")
@@ -344,7 +344,7 @@ description: In second dir
 Instructions from dir2.
 `)
 
-	p := NewFileSkillProvider(dir1, dir2)
+	p := FromDir(dir1, dir2)
 	skill, err := p.Activate(context.Background(), "remote-skill")
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
@@ -361,7 +361,7 @@ Instructions from dir2.
 
 func TestFileSkillProvider_CreateSkill(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 
 	skill := Skill{
 		Name:         "new-skill",
@@ -412,7 +412,7 @@ func TestFileSkillProvider_CreateSkill(t *testing.T) {
 
 func TestFileSkillProvider_CreateSkillAlreadyExists(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 
 	skill := Skill{Name: "dup-skill", Description: "first"}
 	if err := mustWriter(t, p).CreateSkill(context.Background(), skill); err != nil {
@@ -426,7 +426,7 @@ func TestFileSkillProvider_CreateSkillAlreadyExists(t *testing.T) {
 }
 
 func TestFileSkillProvider_CreateSkillNoDirs(t *testing.T) {
-	p := NewFileSkillProvider() // no dirs
+	p := FromDir() // no dirs
 	err := mustWriter(t, p).CreateSkill(context.Background(), Skill{Name: "test"})
 	if err == nil {
 		t.Fatal("expected error with no dirs configured, got nil")
@@ -435,7 +435,7 @@ func TestFileSkillProvider_CreateSkillNoDirs(t *testing.T) {
 
 func TestFileSkillProvider_UpdateSkill(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 
 	writeSkillFile(t, dir, "updatable", `---
 name: updatable
@@ -468,7 +468,7 @@ Original instructions.
 
 func TestFileSkillProvider_UpdateSkillNotFound(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	err := mustWriter(t, p).UpdateSkill(context.Background(), "ghost", Skill{Name: "ghost"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent skill, got nil")
@@ -477,7 +477,7 @@ func TestFileSkillProvider_UpdateSkillNotFound(t *testing.T) {
 
 func TestFileSkillProvider_DeleteSkill(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 
 	writeSkillFile(t, dir, "to-delete", `---
 name: to-delete
@@ -509,7 +509,7 @@ Bye.
 
 func TestFileSkillProvider_DeleteSkillNotFound(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	err := mustWriter(t, p).DeleteSkill(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent skill, got nil")
@@ -534,7 +534,7 @@ metadata:
 Do full things.
 `)
 
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	skill, err := p.Activate(context.Background(), "full-skill")
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
@@ -598,7 +598,7 @@ body
 
 func TestFileSkillProvider_CreateSkillNewFields(t *testing.T) {
 	dir := t.TempDir()
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 
 	skill := Skill{
 		Name:          "roundtrip-skill",
@@ -658,7 +658,7 @@ references: [base-knowledge]
 Generate PDF reports using Go.
 `)
 
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	skill, err := ActivateWithReferences(context.Background(), p, "pdf-gen")
 	if err != nil {
 		t.Fatalf("ActivateWithReferences: %v", err)
@@ -693,7 +693,7 @@ references: [nonexistent]
 I stand alone.
 `)
 
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	skill, err := ActivateWithReferences(context.Background(), p, "lonely-skill")
 	if err != nil {
 		t.Fatalf("ActivateWithReferences: %v", err)
@@ -714,7 +714,7 @@ description: No references at all
 Just me.
 `)
 
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	skill, err := ActivateWithReferences(context.Background(), p, "no-refs")
 	if err != nil {
 		t.Fatalf("ActivateWithReferences: %v", err)
@@ -736,7 +736,7 @@ Config lives at {dir}/config.yaml
 Run {dir}/scripts/setup.sh to initialize.
 `)
 
-	p := NewFileSkillProvider(dir)
+	p := FromDir(dir)
 	skill, err := p.Activate(context.Background(), "dir-skill")
 	if err != nil {
 		t.Fatalf("Activate: %v", err)

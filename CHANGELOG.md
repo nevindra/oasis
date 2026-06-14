@@ -6,8 +6,58 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-14
+
+First stable release — the exported API is now frozen under semantic
+versioning. This release includes a coordinated API-freeze pass: deprecated
+symbols removed, `any` eliminated from exported boundaries, interfaces
+right-sized, and documentation fully synced to the code. The breaking changes
+below are one-time corrections made deliberately before the freeze.
+
+### Added
+
+- **`sandbox.BrowserSandbox`** — the 9 browser methods are now an optional
+  interface; light/headless sandboxes implement only the 14-method core
+  `Sandbox`. `Tools()` registers browser tools via a capability assertion.
+- **Umbrella re-exports:** `oasis.ToolMeta`, `oasis.Ptr`,
+  `oasis.RateLimitMiddleware`, `oasis.TPM` (plus the new `core.Ptr` helper).
+- **`mcp.WithServerLogger`** to redirect/suppress server logs; typed
+  `mcp.ServerCapabilities` replaces an untyped capability map.
+- **`provider/dashscope`** functional options (`WithHTTPClient`, `WithName`)
+  plus `httptest`-based unit coverage.
+- **`workflow.ErrSuspended.Resume`/`ResumeStream`** (previously documented but
+  missing) and the `workflow.ErrOverridesUnsupported` sentinel.
+- **`network.Quorum`** now validates its threshold at construction.
+- **MCP external documentation** under `docs/external/mcp/`.
+
 ### Changed
 
+- **Breaking:** `core.AgentResult` and `core.AgentTask` JSON keys are now
+  snake_case (`Output`→`output`, `Thinking`→`thinking`,
+  `Attachments`→`attachments`, `Usage`→`usage`, `Steps`→`steps`; `AgentTask`:
+  `Input`→`input`, `ThreadID`→`thread_id`, `UserID`→`user_id`,
+  `ChatID`→`chat_id`, `Extra`→`extra`). Several fields are now `omitempty`.
+- **Breaking:** `sandbox.Sandbox` shrinks to 14 methods + `Close` (browser
+  methods moved to `BrowserSandbox`); the `BrowserSnapshot` return *type* is
+  renamed `PageSnapshot` (the method name is unchanged); `MCPRequest.Args`
+  is now `json.RawMessage` (was `map[string]any`).
+- **Breaking:** `any` removed from exported boundaries —
+  `openaicompat.Message.Content`→`MessageContent`,
+  `WithToolChoice(ToolChoice)` (was `any`), `EmbedRequest` unexported;
+  `mcp` capability maps → typed `ServerCapabilities`;
+  `tools/data.Condition.Value`→`ConditionValue`. All JSON wire formats preserved.
+- **Breaking:** `context.Context` is now the first parameter of
+  `agent.SuspendProtocol.Resume`/`ResumeStream` and
+  `ingest.Extractor.Extract`/`MetadataExtractor.ExtractWithMeta`.
+- **Breaking:** `a2a.SendConfiguration.Blocking` is now `*bool` — a zero-value
+  config is *blocking* (matching the documented default). Use
+  `a2a.BlockingPtr()`/`NonBlockingPtr()`; the `blocking` wire key is unchanged.
+- **Breaking:** `provider/dashscope.New` now takes `opts ...Option`.
+- Minimum Go version lowered from 1.26.1 to **1.25** (the floor imposed by
+  otel, pgx, `golang.org/x/*`, and modernc-sqlite).
+- `core.SpanAttr` gained typed accessors (`Str`/`Int`/`Float`/`Bool`); the
+  package-level godoc and the single-module structure docs (CLAUDE.md,
+  PHILOSOPHY.md, `docs/external/*`) were corrected to match the code.
 - **Breaking:** `core.StepTrace.RawOutput` is now `string` (was
   `json.RawMessage`). Tool content is arbitrary text, not guaranteed JSON —
   a `RawMessage` holding plain text failed `json.Marshal` validation, and
@@ -16,6 +66,39 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   `json.Unmarshal([]byte(s.RawOutput), &v)`; the JSON wire shape of
   serialized traces changes from embedded raw JSON to a quoted string.
   `AgentResult.ToolResults()` is unaffected.
+
+### Removed
+
+- **Breaking:** `oasis.NewLLMAgent` → use `oasis.NewAgent`.
+- **Breaking:** `ratelimit.WithRateLimit` → use `RateLimitMiddleware`
+  (with `RPM`/`TPM`).
+- **Breaking:** `memory` deprecated type aliases (`Kind`, `ScopeKind`, `Scope`,
+  `Source`, `MemoryItem`, `ScoredItem`, `ItemStore`, `Filter`) → use the
+  `core.*` equivalents (`core.MemoryKind`, `core.MemoryItem`,
+  `core.MemoryItemStore`, …).
+- **Breaking:** `memory` deprecated options (`WithMaxHistory`, `WithMaxTokens`,
+  `WithSemanticTrimming`, `WithSemanticTrimEmbedding`, `WithKeepRecent`) → use
+  `WithHistory`.
+- **Breaking:** `skills.ChainSkillProviders`/`NewFileSkillProvider`/
+  `NewBuiltinSkillProvider` → use `Chain`/`FromDir`/`Builtin`.
+
+### Fixed
+
+- `ingest`: nil-channel panic on the LLM-failure path; `defer cancel()`
+  accumulation in worker goroutines (the per-call timeout was leaking rather
+  than bounding a single call); `similar_to` graph relations were silently
+  dropped.
+- `store/sqlite.UpsertBatch` now writes inside its transaction (it was writing
+  via the connection pool and committing an empty transaction — atomicity is
+  restored).
+- `mcp` clients now send protocol version `2025-03-26`, matching the server
+  (was `2024-11-05`).
+- `provider/gemini` streaming honors context cancellation (goroutine-leak fix)
+  and validates split SSE payloads with `json.Valid`.
+- `provider/catalog.List` surfaces per-provider fetch errors instead of
+  silently swallowing them.
+- `store/postgres.Open` now calls `Init`, matching its documented behavior.
+- `core.Func` now derives `OutputSchema`, matching `Erase`/`EraseStreaming`.
 
 ### Performance
 

@@ -26,24 +26,24 @@
 //
 // Basic usage:
 //
-//     c := compaction.NewStructuredCompactor(provider)
-//     out, err := c.Compact(ctx, oasis.CompactRequest{
-//         Messages:  history,
-//         FocusHint: "focus on user decisions",
-//     })
+//	c := compaction.NewStructuredCompactor(provider)
+//	out, err := c.Compact(ctx, oasis.CompactRequest{
+//	    Messages:  history,
+//	    FocusHint: "focus on user decisions",
+//	})
 //
 // Pair with oasis.WithCompaction to wire automatic compaction into the
 // agent's conversation memory:
 //
-//     agent := oasis.NewLLMAgent("agent", "...", provider,
-//         oasis.WithConversationMemory(store,
-//             oasis.MaxTokens(100_000),
-//             oasis.WithCompaction(
-//                 compaction.NewStructuredCompactor(summarizer),
-//                 0.80,
-//             ),
-//         ),
-//     )
+//	agent := oasis.NewAgent("agent", "...", provider,
+//	    oasis.WithConversationMemory(store,
+//	        oasis.MaxTokens(100_000),
+//	        oasis.WithCompaction(
+//	            compaction.NewStructuredCompactor(summarizer),
+//	            0.80,
+//	        ),
+//	    ),
+//	)
 //
 // All exported types and functions are safe for concurrent use except
 // where noted on individual symbols.

@@ -3,6 +3,7 @@ package ingest
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ import (
 
 func TestDOCXExtractEmpty(t *testing.T) {
 	e := NewDOCXExtractor()
-	_, err := e.Extract(nil)
+	_, err := e.Extract(context.Background(), nil)
 	if err == nil {
 		t.Error("expected error for nil content")
 	}
@@ -18,7 +19,7 @@ func TestDOCXExtractEmpty(t *testing.T) {
 
 func TestDOCXExtractInvalid(t *testing.T) {
 	e := NewDOCXExtractor()
-	_, err := e.Extract([]byte("not a zip"))
+	_, err := e.Extract(context.Background(), []byte("not a zip"))
 	if err == nil {
 		t.Error("expected error for invalid content")
 	}
@@ -31,7 +32,7 @@ func TestDOCXExtractMinimalDocx(t *testing.T) {
 	})
 
 	e := NewDOCXExtractor()
-	out, err := e.Extract(content)
+	out, err := e.Extract(context.Background(), content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestDOCXExtractWithHeadings(t *testing.T) {
 	})
 
 	e := NewDOCXExtractor()
-	result, err := e.ExtractWithMeta(content)
+	result, err := e.ExtractWithMeta(context.Background(), content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestDOCXExtractHeadingByteOffsets(t *testing.T) {
 	})
 
 	e := NewDOCXExtractor()
-	result, err := e.ExtractWithMeta(content)
+	result, err := e.ExtractWithMeta(context.Background(), content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestDOCXExtractWithTable(t *testing.T) {
 	)
 
 	e := NewDOCXExtractor()
-	out, err := e.Extract(content)
+	out, err := e.Extract(context.Background(), content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestDOCXExtractTableEmptyCells(t *testing.T) {
 	)
 
 	e := NewDOCXExtractor()
-	out, err := e.Extract(content)
+	out, err := e.Extract(context.Background(), content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func TestDOCXExtractWithImage(t *testing.T) {
 	content := buildTestDocxWithImage(t, "image1.png", []byte{0x89, 0x50, 0x4E, 0x47})
 
 	e := NewDOCXExtractor()
-	result, err := e.ExtractWithMeta(content)
+	result, err := e.ExtractWithMeta(context.Background(), content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestDOCXExtractMissingDocumentXML(t *testing.T) {
 	zw.Close()
 
 	e := NewDOCXExtractor()
-	_, err := e.Extract(buf.Bytes())
+	_, err := e.Extract(context.Background(), buf.Bytes())
 	if err == nil {
 		t.Error("expected error for missing document.xml")
 	}

@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 func TestCSVExtractBasic(t *testing.T) {
 	input := "Name,Age,City\nJohn,30,NYC\nJane,25,LA\n"
 	e := NewCSVExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +27,7 @@ func TestCSVExtractBasic(t *testing.T) {
 func TestCSVExtractEmptyCells(t *testing.T) {
 	input := "Name,Age\nJohn,\n,25\n"
 	e := NewCSVExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestCSVExtractEmptyCells(t *testing.T) {
 func TestCSVExtractQuotedFields(t *testing.T) {
 	input := "Name,Description\n\"John\",\"Has a comma, here\"\n"
 	e := NewCSVExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func TestCSVExtractQuotedFields(t *testing.T) {
 func TestCSVExtractSingleColumn(t *testing.T) {
 	input := "Value\n42\n99\n"
 	e := NewCSVExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestCSVExtractSingleColumn(t *testing.T) {
 func TestCSVExtractBOM(t *testing.T) {
 	input := "\xef\xbb\xbfName,Age\nJohn,30\n"
 	e := NewCSVExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestCSVExtractBOM(t *testing.T) {
 
 func TestCSVExtractEmpty(t *testing.T) {
 	e := NewCSVExtractor()
-	out, err := e.Extract([]byte(""))
+	out, err := e.Extract(context.Background(), []byte(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestCSVExtractEmpty(t *testing.T) {
 
 func TestCSVExtractHeaderOnly(t *testing.T) {
 	e := NewCSVExtractor()
-	out, err := e.Extract([]byte("Name,Age\n"))
+	out, err := e.Extract(context.Background(), []byte("Name,Age\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 )
@@ -29,41 +30,6 @@ type Sandbox interface {
 	// DownloadFile returns a reader for a file inside the sandbox.
 	// The caller must close the returned reader.
 	DownloadFile(ctx context.Context, path string) (io.ReadCloser, error)
-
-	// BrowserNavigate navigates the sandbox browser to a URL.
-	BrowserNavigate(ctx context.Context, url string) error
-
-	// BrowserScreenshot captures a screenshot of the sandbox browser.
-	// Returns PNG image data.
-	BrowserScreenshot(ctx context.Context) ([]byte, error)
-
-	// BrowserAction sends an interaction to the sandbox browser.
-	BrowserAction(ctx context.Context, action BrowserAction) (BrowserResult, error)
-
-	// BrowserSnapshot returns the accessibility tree of the current page.
-	// Each interactive element has a Ref that can be passed to BrowserAction
-	// for precise interaction without pixel coordinates.
-	BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error)
-
-	// BrowserText extracts readable text content from the current page.
-	// Uses readability-style extraction by default; set Raw to true for innerText.
-	BrowserText(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
-
-	// BrowserPDF exports the current page as a PDF document.
-	// Returns raw PDF bytes.
-	BrowserPDF(ctx context.Context) ([]byte, error)
-
-	// BrowserEval executes JavaScript in the current browser tab and returns the result.
-	BrowserEval(ctx context.Context, expression string) (string, error)
-
-	// BrowserFind uses natural-language matching to find the best element ref
-	// for a given query (e.g., "submit button", "email input").
-	BrowserFind(ctx context.Context, query string) (BrowserFindResult, error)
-
-	// BrowserWait blocks until a page condition is met or the timeout elapses.
-	// A timeout is NOT an error: the result has Satisfied=false and a Detail
-	// explaining what was being waited on.
-	BrowserWait(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error)
 
 	// MCPCall invokes a tool on an MCP server running inside the sandbox.
 	MCPCall(ctx context.Context, req MCPRequest) (MCPResult, error)
@@ -95,6 +61,58 @@ type Sandbox interface {
 	// Close releases resources held by this sandbox instance. Container
 	// lifecycle (stop, remove) is managed by Manager, not by Close.
 	Close() error
+}
+
+// BrowserSandbox is an OPTIONAL capability that a Sandbox implementation MAY
+// expose to indicate it drives a headed browser. When a sandbox satisfies
+// this interface, Tools() registers the browser_* tool set (browser,
+// screenshot, snapshot, page_text, export_pdf, browser_eval, browser_find,
+// browser_wait); when it does not, those tools are omitted so the model is
+// never offered tools that would fail.
+//
+// Keeping the nine browser methods out of the core Sandbox interface lets
+// light/headless sandbox runtimes implement Sandbox without stubbing browser
+// methods, and lets the framework grow the browser surface without breaking
+// every Sandbox implementer.
+//
+// To opt in: a sandbox implementation provides methods that satisfy this
+// interface. Tools() checks for it via a type assertion (mirroring the
+// FilesystemMounter pattern in mounter.go).
+type BrowserSandbox interface {
+	// BrowserNavigate navigates the sandbox browser to a URL.
+	BrowserNavigate(ctx context.Context, url string) error
+
+	// BrowserScreenshot captures a screenshot of the sandbox browser.
+	// Returns PNG image data.
+	BrowserScreenshot(ctx context.Context) ([]byte, error)
+
+	// BrowserAction sends an interaction to the sandbox browser.
+	BrowserAction(ctx context.Context, action BrowserAction) (BrowserResult, error)
+
+	// BrowserSnapshot returns the accessibility tree of the current page.
+	// Each interactive element has a Ref that can be passed to BrowserAction
+	// for precise interaction without pixel coordinates.
+	BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (PageSnapshot, error)
+
+	// BrowserText extracts readable text content from the current page.
+	// Uses readability-style extraction by default; set Raw to true for innerText.
+	BrowserText(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
+
+	// BrowserPDF exports the current page as a PDF document.
+	// Returns raw PDF bytes.
+	BrowserPDF(ctx context.Context) ([]byte, error)
+
+	// BrowserEval executes JavaScript in the current browser tab and returns the result.
+	BrowserEval(ctx context.Context, expression string) (string, error)
+
+	// BrowserFind uses natural-language matching to find the best element ref
+	// for a given query (e.g., "submit button", "email input").
+	BrowserFind(ctx context.Context, query string) (BrowserFindResult, error)
+
+	// BrowserWait blocks until a page condition is met or the timeout elapses.
+	// A timeout is NOT an error: the result has Satisfied=false and a Detail
+	// explaining what was being waited on.
+	BrowserWait(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error)
 }
 
 // ShellRequest is the input for Shell.
@@ -169,8 +187,8 @@ type SnapshotOpts struct {
 	Depth    int    // traversal depth; 0 = unlimited
 }
 
-// BrowserSnapshot is the accessibility tree of the current page.
-type BrowserSnapshot struct {
+// PageSnapshot is the accessibility tree of the current page.
+type PageSnapshot struct {
 	URL   string         // current page URL
 	Title string         // page title
 	Nodes []SnapshotNode // accessibility tree nodes
@@ -222,9 +240,9 @@ type BrowserTextResult struct {
 
 // MCPRequest is the input for MCPCall.
 type MCPRequest struct {
-	Server string         // MCP server name
-	Tool   string         // tool name
-	Args   map[string]any // tool arguments
+	Server string          // MCP server name
+	Tool   string          // tool name
+	Args   json.RawMessage // tool arguments (raw JSON object)
 }
 
 // MCPResult is the output of MCPCall.
@@ -314,7 +332,7 @@ type WebSearchRequest struct {
 
 // WebSearchResult is the output of WebSearch.
 type WebSearchResult struct {
-	Query   string              `json:"query"`
+	Query   string                `json:"query"`
 	Results []WebSearchResultItem `json:"results"`
 }
 
@@ -338,8 +356,8 @@ type WorkspaceInfoResult struct {
 // Implementations decide where to store (S3, disk, GCS, etc.).
 //
 // Deprecated: Use FilesystemMount with MountWriteOnly mode instead.
-// FileDelivery remains supported for backward compatibility but new code
-// should use the more general mount system. See WithMounts and the
+// FileDelivery remains supported and will not be removed before v2.0.0.
+// New code should use the more general mount system. See WithMounts and the
 // FilesystemMount interface in mount.go.
 type FileDelivery interface {
 	Deliver(ctx context.Context, name, mimeType string, size int64, data io.Reader) (url string, err error)

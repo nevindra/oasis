@@ -2,9 +2,27 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 )
+
+// errNoBrowser is returned by a lazy sandbox's browser methods when the
+// resolved inner sandbox does not implement BrowserSandbox.
+var errNoBrowser = errors.New("sandbox: underlying sandbox has no browser capability")
+
+// browser resolves the inner sandbox and asserts it implements BrowserSandbox.
+func (l *lazySandbox) browser(ctx context.Context) (BrowserSandbox, error) {
+	sb, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bsb, ok := sb.(BrowserSandbox)
+	if !ok {
+		return nil, errNoBrowser
+	}
+	return bsb, nil
+}
 
 // Lazy returns a Sandbox that defers creation until the first method call.
 // The create function is called at most once; subsequent calls reuse the
@@ -21,6 +39,14 @@ type lazySandbox struct {
 	mu     sync.Mutex
 	sb     Sandbox
 }
+
+// A lazy sandbox forwards the full surface, so it advertises BrowserSandbox.
+// Browser calls assert the resolved inner sandbox and return errNoBrowser if
+// it lacks browser support.
+var (
+	_ Sandbox        = (*lazySandbox)(nil)
+	_ BrowserSandbox = (*lazySandbox)(nil)
+)
 
 func (l *lazySandbox) get(ctx context.Context) (Sandbox, error) {
 	l.mu.Lock()
@@ -85,75 +111,75 @@ func (l *lazySandbox) DownloadFile(ctx context.Context, path string) (io.ReadClo
 }
 
 func (l *lazySandbox) BrowserNavigate(ctx context.Context, url string) error {
-	sb, err := l.get(ctx)
+	bsb, err := l.browser(ctx)
 	if err != nil {
 		return err
 	}
-	return sb.BrowserNavigate(ctx, url)
+	return bsb.BrowserNavigate(ctx, url)
 }
 
 func (l *lazySandbox) BrowserScreenshot(ctx context.Context) ([]byte, error) {
-	sb, err := l.get(ctx)
+	bsb, err := l.browser(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return sb.BrowserScreenshot(ctx)
+	return bsb.BrowserScreenshot(ctx)
 }
 
 func (l *lazySandbox) BrowserAction(ctx context.Context, action BrowserAction) (BrowserResult, error) {
-	sb, err := l.get(ctx)
+	bsb, err := l.browser(ctx)
 	if err != nil {
 		return BrowserResult{}, err
 	}
-	return sb.BrowserAction(ctx, action)
+	return bsb.BrowserAction(ctx, action)
 }
 
-func (l *lazySandbox) BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error) {
-	sb, err := l.get(ctx)
+func (l *lazySandbox) BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (PageSnapshot, error) {
+	bsb, err := l.browser(ctx)
 	if err != nil {
-		return BrowserSnapshot{}, err
+		return PageSnapshot{}, err
 	}
-	return sb.BrowserSnapshot(ctx, opts)
+	return bsb.BrowserSnapshot(ctx, opts)
 }
 
 func (l *lazySandbox) BrowserText(ctx context.Context, opts TextOpts) (BrowserTextResult, error) {
-	sb, err := l.get(ctx)
+	bsb, err := l.browser(ctx)
 	if err != nil {
 		return BrowserTextResult{}, err
 	}
-	return sb.BrowserText(ctx, opts)
+	return bsb.BrowserText(ctx, opts)
 }
 
 func (l *lazySandbox) BrowserPDF(ctx context.Context) ([]byte, error) {
-	sb, err := l.get(ctx)
+	bsb, err := l.browser(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return sb.BrowserPDF(ctx)
+	return bsb.BrowserPDF(ctx)
 }
 
 func (l *lazySandbox) BrowserEval(ctx context.Context, expression string) (string, error) {
-	sb, err := l.get(ctx)
+	bsb, err := l.browser(ctx)
 	if err != nil {
 		return "", err
 	}
-	return sb.BrowserEval(ctx, expression)
+	return bsb.BrowserEval(ctx, expression)
 }
 
 func (l *lazySandbox) BrowserFind(ctx context.Context, query string) (BrowserFindResult, error) {
-	sb, err := l.get(ctx)
+	bsb, err := l.browser(ctx)
 	if err != nil {
 		return BrowserFindResult{}, err
 	}
-	return sb.BrowserFind(ctx, query)
+	return bsb.BrowserFind(ctx, query)
 }
 
 func (l *lazySandbox) BrowserWait(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error) {
-	sb, err := l.get(ctx)
+	bsb, err := l.browser(ctx)
 	if err != nil {
 		return BrowserWaitResult{}, err
 	}
-	return sb.BrowserWait(ctx, opts)
+	return bsb.BrowserWait(ctx, opts)
 }
 
 func (l *lazySandbox) MCPCall(ctx context.Context, req MCPRequest) (MCPResult, error) {

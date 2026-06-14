@@ -168,11 +168,35 @@ type resourceReadResult struct {
 
 // --- Client-side response types ---
 
+// ServerCapabilities describes the optional features an MCP server advertises
+// during the initialize handshake.  Each field corresponds to a top-level key
+// in the MCP capabilities object; absent fields are omitted from the wire.
+//
+// Known extensions (e.g. vendor-specific keys) that are not covered by the
+// fields below are silently ignored on unmarshal — forward-compatibility is
+// preserved by the struct's use of omitempty and standard JSON decoding rules.
+type ServerCapabilities struct {
+	// Tools indicates the server supports tools/list and tools/call.
+	Tools *CapabilityFlag `json:"tools,omitempty"`
+	// Resources indicates the server supports resources/list and resources/read.
+	Resources *CapabilityFlag `json:"resources,omitempty"`
+	// Prompts indicates the server supports prompts/list and prompts/get.
+	Prompts *CapabilityFlag `json:"prompts,omitempty"`
+	// Logging indicates the server supports the logging/setLevel notification.
+	Logging *CapabilityFlag `json:"logging,omitempty"`
+}
+
+// CapabilityFlag is the per-feature object inside ServerCapabilities.
+// ListChanged reports whether the server emits list-changed notifications.
+type CapabilityFlag struct {
+	ListChanged bool `json:"listChanged,omitempty"`
+}
+
 // InitializeResult is the parsed server response to an MCP initialize request.
 type InitializeResult struct {
-	ProtocolVersion string                 `json:"protocolVersion"`
-	Capabilities    map[string]interface{} `json:"capabilities"`
-	ServerInfo      ServerInfo             `json:"serverInfo"`
+	ProtocolVersion string             `json:"protocolVersion"`
+	Capabilities    ServerCapabilities `json:"capabilities"`
+	ServerInfo      ServerInfo         `json:"serverInfo"`
 }
 
 // ServerInfo holds the name and version reported by an MCP server.
@@ -202,7 +226,7 @@ type CallToolResult struct {
 type ContentBlock struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
-	Data     string `json:"data,omitempty"`    // base64-encoded for images
+	Data     string `json:"data,omitempty"` // base64-encoded for images
 	MimeType string `json:"mimeType,omitempty"`
 	URI      string `json:"uri,omitempty"`
 }
@@ -212,8 +236,8 @@ type ContentBlock struct {
 // rpcRequest is an outgoing JSON-RPC 2.0 request or notification used by the
 // MCP client. Notifications omit the ID field (nil).
 type rpcRequest struct {
-	JSONRPC string          `json:"jsonrpc"`       // always "2.0"
-	ID      interface{}     `json:"id,omitempty"`  // nil for notifications
+	JSONRPC string          `json:"jsonrpc"`      // always "2.0"
+	ID      interface{}     `json:"id,omitempty"` // nil for notifications
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }

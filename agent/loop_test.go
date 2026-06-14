@@ -296,7 +296,7 @@ func TestPlanExecutionMaxStepsCap(t *testing.T) {
 	// execute_plan should reject plans with more than maxPlanSteps.
 	steps := make([]json.RawMessage, maxPlanSteps+1)
 	for i := range steps {
-		steps[i] = json.RawMessage(fmt.Sprintf(`{"tool":"greet","args":{}}`, ))
+		steps[i] = json.RawMessage(fmt.Sprintf(`{"tool":"greet","args":{}}`))
 	}
 	stepsJSON, _ := json.Marshal(struct {
 		Steps []json.RawMessage `json:"steps"`

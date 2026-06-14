@@ -12,20 +12,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Changing...              | Start from                                                  |
 |--------------------------|-------------------------------------------------------------|
-| LLMAgent / streaming / scheduler | [docs/agent/](docs/agent/index.md)                  |
-| Multi-agent collaboration | [docs/network/](docs/network/index.md)                     |
-| Workflow / DAG           | [docs/workflow/](docs/workflow/index.md)                    |
-| Conversation history / facts / recall | [docs/memory/](docs/memory/index.md)            |
-| RAG / ingestion / retrieval | [docs/rag/](docs/rag/index.md)                           |
-| Skills                   | [docs/skills/](docs/skills/index.md)                        |
-| Tools (built-in / custom) | [docs/tools/](docs/tools/index.md)                         |
-| Sandbox                  | [docs/sandbox/](docs/sandbox/index.md)                      |
-| LLM providers            | [docs/providers/](docs/providers/index.md)                  |
-| Observability / tracing  | [docs/observability/](docs/observability/index.md)          |
-| Processors / guardrails / HITL | [docs/processors/](docs/processors/index.md)          |
-| Storage backends         | [docs/store/](docs/store/index.md)                          |
-| Getting started flow     | [docs/getting-started/](docs/getting-started/index.md)      |
-| A2A protocol (server/client) | [docs/a2a/](docs/a2a/index.md)                          |
+| LLMAgent / streaming / scheduler | [docs/external/agent/](docs/external/agent/index.md)                  |
+| Multi-agent collaboration | [docs/external/network/](docs/external/network/index.md)                     |
+| Workflow / DAG           | [docs/external/workflow/](docs/external/workflow/index.md)                    |
+| Conversation history / facts / recall | [docs/external/memory/](docs/external/memory/index.md)            |
+| RAG / ingestion / retrieval | [docs/external/rag/](docs/external/rag/index.md)                           |
+| Skills                   | [docs/external/skills/](docs/external/skills/index.md)                        |
+| Tools (built-in / custom) | [docs/external/tools/](docs/external/tools/index.md)                         |
+| Sandbox                  | [docs/external/sandbox/](docs/external/sandbox/index.md)                      |
+| LLM providers            | [docs/external/providers/](docs/external/providers/index.md)                  |
+| Observability / tracing  | [docs/external/observability/](docs/external/observability/index.md)          |
+| Processors / guardrails / HITL | [docs/external/processors/](docs/external/processors/index.md)          |
+| Storage backends         | [docs/external/store/](docs/external/store/index.md)                          |
+| Getting started flow     | [docs/external/getting-started/](docs/external/getting-started/index.md)      |
+| A2A protocol (server/client) | [docs/external/a2a/](docs/external/a2a/index.md)                          |
+| MCP client integration   | [docs/external/mcp/](docs/external/mcp/index.md)                              |
 
 When your change affects multiple areas, search for all docs referencing the component name and update each one. Keep docs in sync with code.
 
@@ -36,27 +37,30 @@ Oasis is a high-performance Go framework for AI agent systems — fast, reliable
 ## Build & Test
 
 ```bash
-go build ./...                                # build root module
-go test ./...                                 # run root tests
-cd <satellite> && go test ./...               # run a satellite's tests
+go build ./...                                # build all packages
+go test ./...                                 # run all tests
 golangci-lint run ./...                       # enforce depguard rules
 ```
 
 ## Project Structure
 
-The repo is a hybrid architecture: a single curated root package
-(`github.com/nevindra/oasis`) re-exports protocol types and the most common
-APIs from focused subpackages. Heavy or optional-dep code lives in
-satellite modules with their own `go.mod` — users opt in by importing
-the satellite directly.
+The repo is a **single Go module** (`github.com/nevindra/oasis`, one `go.mod`).
+A curated root package (`oasis.go`) re-exports protocol types and the most
+common APIs from focused subpackages. Optional or heavy-dependency packages live
+in their own subdirectories within the same module — consumers import them
+directly rather than opting into a separate module.
+
+> Because every subpackage is part of one module, importing any subpackage
+> (e.g. `oasis/observer`, `oasis/store/postgres`) pulls in the full module
+> dependency set: otel, pgx, modernc-sqlite, pdf, and go-readability.
 
 ```
-oasis/                              # FRAMEWORK
+oasis/                              # FRAMEWORK — single module
 |-- oasis.go                        # Re-export umbrella (curated public surface)
 |-- doc.go                          # Top-level package documentation
 |-- batch.go                        # Batch primitives (BatchJob, BatchStats)
 |
-|-- core/                           # Protocol types + interfaces + Erase helper (leaf package — depends on nothing in oasis)
+|-- core/                           # Protocol types + interfaces + Erase helper (leaf package — no internal deps)
 |-- agent/                          # LLMAgent + Spawn + functional options
 |-- workflow/                       # DAG-based orchestration
 |-- network/                        # Multi-agent peer networks
@@ -71,14 +75,15 @@ oasis/                              # FRAMEWORK
 |-- tools/{data,http,...}/          # Tool implementations
 |-- cmd/{mcp-docs,modelgen}/        # CLI utilities
 |
-|-- (satellites — each its own go.mod, opt-in via direct import)
+|-- (optional/heavy packages — same module, import directly)
 |   |-- mcp/                        # MCP client integration
 |   |-- store/{sqlite,postgres}/    # Storage backends (sqlite driver / pgx)
-|   |-- provider/{gemini,openaicompat}/  # LLM providers (own evolution cadence)
+|   |-- provider/{gemini,openaicompat}/  # LLM provider implementations
 |   |-- observer/                   # OTEL observability (full OTEL SDK)
 |   |-- ingest/                     # Document ingestion (PDF, DOCX, embeddings)
-|   |-- sandbox/                    # Sandbox interface + Tools() (implementations in separate repos)
+|   |-- sandbox/                    # Sandbox interface + Tools()
 |   |-- rag/                        # Retrieval-augmented generation
+|   |-- a2a/                        # A2A protocol (server, client, RemoteAgent)
 
 Sandbox implementations live in their own repos:
   - github.com/nevindra/oasis-sandbox-ix — Docker-backed ix sandbox
@@ -94,4 +99,4 @@ subpackage and callers import that subpackage directly.
 - **Versioning** (semver, v0.x.x): patch = bug fix, minor = new features or breaking changes, major = reserved for v1.0.0+. Strict rule: patch releases must NEVER introduce new types, interfaces, or exported functions — only bug fixes. New interfaces/types always require a minor bump.
 - **Tagging**: `git tag vX.Y.Z && git push origin master vX.Y.Z`. Go proxy indexes automatically.
 - **Immutable**: once tagged on `proxy.golang.org`, never re-tag — always bump version.
-- **Minimum Go**: 1.24.
+- **Minimum Go**: 1.25 (dependency-constrained — otel, pgx, `golang.org/x/*`, and modernc-sqlite all require go 1.25).

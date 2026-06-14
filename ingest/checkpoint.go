@@ -239,12 +239,12 @@ func (ing *Ingestor) resumeFromCheckpoint(ctx context.Context, cp oasis.IngestCh
 func (ing *Ingestor) extractWithRetry(ctx context.Context, extractor Extractor, content []byte) (string, error) {
 	maxAttempts := ing.extractRetries
 	if maxAttempts <= 1 {
-		return safeExtract(extractor, content)
+		return safeExtract(ctx, extractor, content)
 	}
 	base := time.Second
 	var last error
 	for i := 0; i < maxAttempts; i++ {
-		text, err := safeExtract(extractor, content)
+		text, err := safeExtract(ctx, extractor, content)
 		if err == nil {
 			return text, nil
 		}
@@ -268,12 +268,12 @@ func (ing *Ingestor) extractWithRetry(ctx context.Context, extractor Extractor, 
 func (ing *Ingestor) extractWithMetaRetry(ctx context.Context, me MetadataExtractor, content []byte) (ExtractResult, error) {
 	maxAttempts := ing.extractRetries
 	if maxAttempts <= 1 {
-		return safeExtractWithMeta(me, content)
+		return safeExtractWithMeta(ctx, me, content)
 	}
 	base := time.Second
 	var last error
 	for i := 0; i < maxAttempts; i++ {
-		result, err := safeExtractWithMeta(me, content)
+		result, err := safeExtractWithMeta(ctx, me, content)
 		if err == nil {
 			return result, nil
 		}

@@ -50,10 +50,10 @@ type Store struct {
 	// Bounded vector index: when maxVecEntries > 0, the in-memory index is
 	// capped. Oldest documents are evicted FIFO. Evicted chunks are still
 	// searchable via a slower disk-based fallback path.
-	maxVecEntries int              // 0 = unlimited (default)
-	docOrder      []string         // FIFO insertion order of docIDs
-	docChunkCount map[string]int   // chunk count per docID in vecIndex
-	evictedDocs   map[string]bool  // docIDs evicted from in-memory index
+	maxVecEntries int             // 0 = unlimited (default)
+	docOrder      []string        // FIFO insertion order of docIDs
+	docChunkCount map[string]int  // chunk count per docID in vecIndex
+	evictedDocs   map[string]bool // docIDs evicted from in-memory index
 
 	// ItemStore (memory items) — initialized lazily on first Memory() call.
 	memoryOnce sync.Once

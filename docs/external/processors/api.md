@@ -309,20 +309,23 @@ Rate limiting applies to the provider, not to individual processors. It is
 relevant here because it controls what enters the processor pipeline.
 
 ```go
-func WithRateLimit(p Provider, opts ...RateLimitOption) Provider
+func RateLimitMiddleware(opts ...RateLimitOption) provider.Middleware
 
 func RPM(n int) RateLimitOption  // max requests per minute
 func TPM(n int) RateLimitOption  // max tokens per minute (input + output, soft limit)
 ```
 
 ```go
-provider = oasis.WithRateLimit(provider, oasis.RPM(60), oasis.TPM(100_000))
+limited := provider.Chain(oasis.RateLimitMiddleware(oasis.RPM(60), oasis.TPM(100_000)))(base)
 ```
 
-`WithRateLimit` wraps the provider and blocks the calling goroutine until the
-rolling-window budget allows a new request. Context cancellation during a wait
-returns `ctx.Err()`. Composes with `WithRetry`:
+`RateLimitMiddleware` wraps the provider and blocks the calling goroutine until
+the rolling-window budget allows a new request. Context cancellation during a
+wait returns `ctx.Err()`. Compose with other middleware via `provider.Chain`:
 
 ```go
-provider = oasis.WithRateLimit(oasis.WithRetry(provider), oasis.RPM(60))
+limited := provider.Chain(
+    agent.RetryMiddleware(),
+    oasis.RateLimitMiddleware(oasis.RPM(60)),
+)(base)
 ```

@@ -126,8 +126,8 @@ func TestToolApproval_EmitsPendingEvent(t *testing.T) {
 		_, _ = ag.Tools().Execute(ctx, "rec", json.RawMessage(`{}`))
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		resultCh <- struct{}{}
 	}()

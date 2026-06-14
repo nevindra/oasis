@@ -23,21 +23,22 @@ func TestEmbedding_Embed(t *testing.T) {
 			t.Errorf("unexpected auth: %s", r.Header.Get("Authorization"))
 		}
 
-		var req EmbedRequest
+		// Decode into the wire shape: text-only input is a JSON array of strings.
+		var req struct {
+			Model string   `json:"model"`
+			Input []string `json:"input"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
 		if req.Model != "text-embedding-3-small" {
 			t.Errorf("expected model text-embedding-3-small, got %s", req.Model)
 		}
-
-		// Input should be array of strings for text-only.
-		inputs, ok := req.Input.([]any)
-		if !ok {
-			t.Fatalf("expected []any input, got %T", req.Input)
+		if len(req.Input) != 2 {
+			t.Fatalf("expected 2 inputs, got %d", len(req.Input))
 		}
-		if len(inputs) != 2 {
-			t.Fatalf("expected 2 inputs, got %d", len(inputs))
+		if req.Input[0] != "hello" || req.Input[1] != "world" {
+			t.Errorf("unexpected text inputs: %v", req.Input)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -105,18 +106,15 @@ func TestEmbedding_HTTPError(t *testing.T) {
 
 func TestEmbedding_EmbedMultimodal(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req EmbedRequest
+		// Multimodal input is a JSON array of chat-message objects.
+		var req struct {
+			Input []json.RawMessage `json:"input"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-
-		// Multimodal input should be array of message objects.
-		inputs, ok := req.Input.([]any)
-		if !ok {
-			t.Fatalf("expected []any input, got %T", req.Input)
-		}
-		if len(inputs) != 2 {
-			t.Fatalf("expected 2 inputs, got %d", len(inputs))
+		if len(req.Input) != 2 {
+			t.Fatalf("expected 2 inputs, got %d", len(req.Input))
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -182,6 +180,43 @@ func TestEmbedding_EmbedMultimodal_RequestFormat(t *testing.T) {
 	if msg["role"] != "user" {
 		t.Errorf("expected role 'user', got %v", msg["role"])
 	}
+}
+
+func TestEmbedInput_WireShape(t *testing.T) {
+	// Text input must stay a JSON array of strings.
+	textRaw, err := json.Marshal(embedRequest{Model: "m", Input: textInput([]string{"a", "b"})})
+	if err != nil {
+		t.Fatalf("marshal text input: %v", err)
+	}
+	if want := `{"model":"m","input":["a","b"]}`; string(textRaw) != want {
+		t.Fatalf("text input wire = %s, want %s", textRaw, want)
+	}
+
+	// Multimodal input must stay a JSON array of chat messages.
+	msgRaw, err := json.Marshal(embedRequest{
+		Model: "m",
+		Input: messageInput([]Message{{Role: "user", Content: StringContent("hi")}}),
+	})
+	if err != nil {
+		t.Fatalf("marshal message input: %v", err)
+	}
+	if want := `{"model":"m","input":[{"role":"user","content":"hi"}]}`; string(msgRaw) != want {
+		t.Fatalf("message input wire = %s, want %s", msgRaw, want)
+	}
+
+	// Dimensions is omitted when zero.
+	if want := `{"model":"m","input":[]}`; string(mustMarshal(t, embedRequest{Model: "m", Input: textInput(nil)})) != want {
+		t.Fatalf("nil-text input wire mismatch")
+	}
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return data
 }
 
 // Compile-time interface checks.

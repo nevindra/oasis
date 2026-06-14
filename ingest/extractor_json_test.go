@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 func TestJSONExtractFlatObject(t *testing.T) {
 	input := `{"name": "John", "age": 30}`
 	e := NewJSONExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +24,7 @@ func TestJSONExtractFlatObject(t *testing.T) {
 func TestJSONExtractNestedObject(t *testing.T) {
 	input := `{"user": {"name": "John", "address": {"city": "NYC"}}}`
 	e := NewJSONExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestJSONExtractNestedObject(t *testing.T) {
 func TestJSONExtractArray(t *testing.T) {
 	input := `{"tags": ["go", "ai", "rag"]}`
 	e := NewJSONExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func TestJSONExtractArray(t *testing.T) {
 func TestJSONExtractArrayOfObjects(t *testing.T) {
 	input := `{"users": [{"name": "John"}, {"name": "Jane"}]}`
 	e := NewJSONExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestJSONExtractArrayOfObjects(t *testing.T) {
 func TestJSONExtractTopLevelArray(t *testing.T) {
 	input := `[{"name": "John"}, {"name": "Jane"}]`
 	e := NewJSONExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func TestJSONExtractTopLevelArray(t *testing.T) {
 
 func TestJSONExtractEmpty(t *testing.T) {
 	e := NewJSONExtractor()
-	out, err := e.Extract([]byte("{}"))
+	out, err := e.Extract(context.Background(), []byte("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestJSONExtractEmpty(t *testing.T) {
 
 func TestJSONExtractInvalid(t *testing.T) {
 	e := NewJSONExtractor()
-	_, err := e.Extract([]byte("not json"))
+	_, err := e.Extract(context.Background(), []byte("not json"))
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -96,7 +97,7 @@ func TestJSONExtractInvalid(t *testing.T) {
 func TestJSONExtractBoolAndNull(t *testing.T) {
 	input := `{"active": true, "deleted": false, "note": null}`
 	e := NewJSONExtractor()
-	out, err := e.Extract([]byte(input))
+	out, err := e.Extract(context.Background(), []byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func TestJSONExtractDepthLimit(t *testing.T) {
 	}
 
 	e := NewJSONExtractor()
-	out, err := e.Extract([]byte(b.String()))
+	out, err := e.Extract(context.Background(), []byte(b.String()))
 	if err != nil {
 		t.Fatal(err)
 	}

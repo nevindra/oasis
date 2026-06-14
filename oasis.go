@@ -42,6 +42,7 @@ type Provider = core.Provider
 type EmbeddingProvider = core.EmbeddingProvider
 type AnyTool = core.AnyTool
 type Tool[In, Out any] = core.Tool[In, Out]
+type ToolMeta = core.ToolMeta
 type ToolResult = core.ToolResult
 type UIComponent = core.UIComponent
 type UIRenderable = core.UIRenderable
@@ -63,23 +64,18 @@ type ErrSuspended = agent.ErrSuspended
 
 // --- Protocol types ---
 
-type Store                = core.Store
+type Store = core.Store
 type ScheduledActionStore = core.ScheduledActionStore
-type ToolDefinition       = core.ToolDefinition
-type StreamEvent      = core.StreamEvent
-type StreamEventType  = core.StreamEventType
-type FinishReason     = core.FinishReason
-type InputHandler     = agent.InputHandler
+type ToolDefinition = core.ToolDefinition
+type StreamEvent = core.StreamEvent
+type StreamEventType = core.StreamEventType
+type FinishReason = core.FinishReason
+type InputHandler = agent.InputHandler
 
 // --- Constructors ---
 
 // NewAgent constructs an LLM-driven Agent. See [agent.New] for the full contract.
 var NewAgent = agent.New
-
-// NewLLMAgent is the legacy spelling of [NewAgent]. Prefer NewAgent in new code.
-//
-// Deprecated: use [NewAgent].
-var NewLLMAgent = agent.New
 
 // NewNetwork constructs a multi-agent coordinator. See [network.New].
 var NewNetwork = network.New
@@ -88,12 +84,15 @@ var NewNetwork = network.New
 var NewWorkflow = workflow.New
 
 // NewToolRegistry creates an empty tool registry. See [core.NewToolRegistry].
+// Why: generic funcs can't be aliased as vars.
 func NewToolRegistry() *core.ToolRegistry { return core.NewToolRegistry() }
 
 // NewProcessorChain creates an empty processor chain. See [processor.NewChain].
+// Why: generic funcs can't be aliased as vars.
 func NewProcessorChain() *processor.Chain { return processor.NewChain() }
 
 // NewSuspendProtocol declares a typed HITL contract. See [agent.NewSuspendProtocol].
+// Why: generic funcs can't be aliased as vars.
 func NewSuspendProtocol[Req, Resp any](name string) SuspendProtocol[Req, Resp] {
 	return agent.NewSuspendProtocol[Req, Resp](name)
 }
@@ -190,7 +189,7 @@ var (
 
 // --- Additional agent options ---
 
-var WithSandbox             = agent.WithSandbox
+var WithSandbox = agent.WithSandbox
 var InputHandlerFromContext = agent.InputHandlerFromContext
 
 // --- Convenience functions ---
@@ -201,28 +200,39 @@ var Chat = core.Chat
 
 // --- Provider wrappers ---
 
-var WithRateLimit = ratelimit.WithRateLimit
+// RateLimitMiddleware adds proactive RPM/TPM rate limiting. Compose with
+// [provider.Chain]. See [ratelimit.RateLimitMiddleware].
+var RateLimitMiddleware = ratelimit.RateLimitMiddleware
+
+// RPM caps requests per minute for [RateLimitMiddleware]. See [ratelimit.RPM].
 var RPM = ratelimit.RPM
+
+// TPM caps tokens per minute (input + output) for [RateLimitMiddleware]. See [ratelimit.TPM].
+var TPM = ratelimit.TPM
 
 // --- Tool helpers ---
 
 // Func creates an [AnyTool] from a plain function. Schema is derived from In
 // by reflection; Out is marshaled to JSON on each call. See [core.Func].
+// Why: generic funcs can't be aliased as vars.
 func Func[In, Out any](name, desc string, fn func(context.Context, In) (Out, error)) AnyTool {
 	return core.Func[In, Out](name, desc, fn)
 }
 
 // Erase converts a typed [Tool] into [AnyTool]. See [core.Erase].
+// Why: generic funcs can't be aliased as vars.
 func Erase[In, Out any](t core.Tool[In, Out]) core.AnyTool { return core.Erase(t) }
 
 // UIResult re-exports core.UIResult: build a ToolResult that renders as the
 // named frontend component.
+// Why: generic funcs can't be aliased as vars.
 func UIResult[T any](name string, props T) core.ToolResult { return core.UIResult(name, props) }
 
 // TextResult is a convenience for tools producing plain text. See [core.TextResult].
 var TextResult = core.TextResult
 
 // JSONResult marshals v into a ToolResult. See [core.JSONResult].
+// Why: generic funcs can't be aliased as vars.
 func JSONResult[T any](v T) ToolResult { return core.JSONResult(v) }
 
 // ErrorResult returns a ToolResult with the Error field set. See [core.ErrorResult].
@@ -231,3 +241,8 @@ var ErrorResult = core.ErrorResult
 // RawTool creates an AnyTool from a name, description, JSON schema, and raw
 // execution function. See [core.RawTool].
 var RawTool = core.RawTool
+
+// Ptr returns a pointer to v, for setting optional pointer fields from a literal
+// (e.g. Generation{Temperature: oasis.Ptr(0.2)}). See [core.Ptr].
+// Why: generic funcs can't be aliased as vars.
+func Ptr[T any](v T) *T { return core.Ptr(v) }

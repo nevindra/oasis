@@ -52,7 +52,7 @@ func main() {
         "https://api.openai.com/v1",
     )
 
-    agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    agent := oasis.NewAgent("assistant", "Helpful assistant", llm,
         oasis.WithPrompt("You are a helpful assistant."),
     )
 
@@ -77,7 +77,7 @@ OPENAI_API_KEY=sk-... go run main.go
 | Line | What it does |
 |------|--------------|
 | `openaicompat.NewProvider(key, model, baseURL)` | Creates an LLM provider. Swap `baseURL` to `"http://localhost:11434/v1"` for Ollama with no API key. |
-| `oasis.NewLLMAgent(name, description, llm, opts...)` | Builds the agent. Name and description are visible to LLM routers in multi-agent setups. |
+| `oasis.NewAgent(name, description, llm, opts...)` | Builds the agent. Name and description are visible to LLM routers in multi-agent setups. |
 | `oasis.WithPrompt(...)` | System prompt — sets the agent's persona and instructions. |
 | `agent.Execute(ctx, AgentTask{Input: "..."})` | Runs the loop: the LLM generates a response; if it wants to call tools, those run and the loop continues; once the LLM produces a plain text response, Execute returns. |
 | `result.Output` | The final text response. `result.Steps` contains per-tool timing and token counts. |
@@ -120,7 +120,7 @@ func (c *CalcTool) Execute(ctx context.Context, in CalcInput) (string, error) {
 Register it with the agent:
 
 ```go
-agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+agent := oasis.NewAgent("assistant", "Helpful assistant", llm,
     oasis.WithPrompt("You are a helpful assistant with a calculator."),
     oasis.WithTools(oasis.Erase(new(CalcTool))),
 )
@@ -150,7 +150,7 @@ if err != nil {
 }
 defer store.Close()
 
-agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+agent := oasis.NewAgent("assistant", "Helpful assistant", llm,
     oasis.WithPrompt("You are a helpful assistant."),
     oasis.WithMemory(
         memory.WithStore(store),
@@ -186,7 +186,7 @@ func main() {
     store, _ := sqlite.Open("./agent.db")
     defer store.Close()
 
-    agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    agent := oasis.NewAgent("assistant", "Helpful assistant", llm,
         oasis.WithPrompt("You are a helpful assistant with a calculator."),
         oasis.WithTools(oasis.Erase(new(CalcTool))),
         oasis.WithMemory(

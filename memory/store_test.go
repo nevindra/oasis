@@ -8,11 +8,11 @@ import (
 )
 
 func TestFilter_ZeroValue(t *testing.T) {
-	var f Filter
+	var f core.MemoryFilter
 	if len(f.Kinds) != 0 || f.Scope != nil || f.Pinned != nil || f.Limit != 0 || f.IncludeExp {
-		t.Fatalf("zero Filter not empty: %+v", f)
+		t.Fatalf("zero MemoryFilter not empty: %+v", f)
 	}
 }
 
-// Compile-time assertion that ItemStore is an alias for core.MemoryItemStore.
-var _ ItemStore = (core.MemoryItemStore)(nil)
+// Compile-time assertion that core.MemoryItemStore is usable as the store interface.
+var _ core.MemoryItemStore = (core.MemoryItemStore)(nil)

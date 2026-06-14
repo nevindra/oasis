@@ -69,16 +69,16 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 						"prompt_bytes", len(prompt))
 				}
 				callCtx := ctx
+				cancel := context.CancelFunc(func() {})
 				if llmTimeout > 0 {
-					var cancel context.CancelFunc
 					callCtx, cancel = context.WithTimeout(ctx, llmTimeout)
-					defer cancel()
 				}
 				resp, err := oasis.Chat(callCtx, provider, oasis.ChatRequest{
 					Messages: []oasis.ChatMessage{
 						{Role: "user", Content: prompt},
 					},
 				})
+				cancel() // release per-call context immediately, not at goroutine exit
 				if err != nil {
 					failed.Add(1)
 					if logger != nil {

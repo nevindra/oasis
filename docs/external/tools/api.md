@@ -30,7 +30,7 @@ type StreamingTool[In, Out any] interface {
 }
 ```
 
-Extends `Tool[In, Out]` for tools that emit intermediate events. The `ch` channel accepts `StreamEvent` values that are forwarded to the agent's stream sink as they arrive. The final `Out` value is still returned normally. Use `EraseStreaming` instead of `Erase` to register.
+Extends `Tool[In, Out]` for tools that emit intermediate events. The `ch` channel accepts `StreamEvent` values that are forwarded to the agent's stream sink as they arrive. The final `Out` value is still returned normally. Use `core.EraseStreaming` instead of `core.Erase` to register.
 
 **Important:** streaming tools bypass `ToolPolicy` entirely — retrying a partially-streamed call would duplicate events.
 
@@ -74,9 +74,10 @@ The full definition sent to the LLM. `Parameters` is the JSON Schema derived fro
 
 ```go
 type ToolResult struct {
-    Content     json.RawMessage
+    Content     string
     Error       string
     Attachments []Attachment
+    UI          *UIComponent
 }
 ```
 
@@ -84,9 +85,10 @@ The outcome of a tool call.
 
 | Field | When populated |
 |-------|---------------|
-| `Content` | Successful result. JSON-encoded bytes. For plain text use `TextResult`; for already-encoded JSON use `JSONContent`. |
+| `Content` | Successful result as a plain string. For human-readable text use `core.TextResult`; for structured data use `core.JSONResult` (marshals to a JSON string); for pre-encoded JSON bytes use `core.JSONContent(raw []byte) string`. |
 | `Error` | Business failure message. Sent back to the LLM verbatim. Set by `Erase` when `Execute` returns a non-nil error, or by hand for `AnyTool` implementations. |
 | `Attachments` | Multimodal content (images, PDFs) to include in the next LLM turn. |
+| `UI` | Non-nil instructs consumers to render the result as the named frontend component. Set via `core.UIResult` or by returning a type that implements `core.UIRenderable`. |
 
 `Content` and `Error` are mutually exclusive by convention: set one or the other, not both.
 
@@ -108,8 +110,8 @@ Attached to a tool via `WithToolPolicy` or `WithToolPolicyMatch`. The policy wra
 
 ```go
 type ToolResultStore interface {
-    Put(ctx context.Context, content json.RawMessage) (id string, err error)
-    Get(ctx context.Context, id string, offset, length int) (content json.RawMessage, total int, err error)
+    Put(ctx context.Context, content string) (id string, err error)
+    Get(ctx context.Context, id string, offset, length int) (content string, total int, err error)
 }
 ```
 
@@ -175,15 +177,29 @@ Applies a chain in order: first entry is innermost (closest to the tool), last i
 func WithTools(tools ...AnyTool) AgentOption
 ```
 
-Registers one or more erased tools with the agent. Cumulative — call multiple times to add more tools.
+(`oasis.WithTools` / `agent.WithTools`) — Registers one or more erased tools with the agent. Cumulative — call multiple times to add more tools.
 
-### `WithToolMiddleware`
+### `WithToolConfig`
 
 ```go
-func WithToolMiddleware(mws ...core.ToolMiddleware) AgentOption
+func WithToolConfig(tc agent.ToolConfig) AgentOption
 ```
 
-Registers middlewares applied to every tool at build time. Wrapping order:
+(`oasis.WithToolConfig`) — Configures the tool subsystem in one option. Use this when you need middleware, policies, approval gates, or a custom result store. Fields on `agent.ToolConfig`:
+
+```go
+type ToolConfig struct {
+    Tools          []core.AnyTool                // appended to any WithTools registrations
+    Middleware      []core.ToolMiddleware          // innermost first; applied to every tool
+    Policies        map[string]core.ToolPolicy     // keyed by exact tool name
+    PolicyMatchers  []agent.ToolPolicyMatcher      // fallback predicate-based policies
+    Approvals       []agent.ApprovalConfig         // use agent.Approval(...) helper
+    ResultStore     core.ToolResultStore           // nil = use default in-memory store
+    ResultStoreExplicit bool                       // set true when explicitly disabling the store
+}
+```
+
+Wrapping order for middleware:
 
 ```
 [tool] → [user middleware, innermost first] → [tool policy] → [approval] → dispatch
@@ -191,39 +207,11 @@ Registers middlewares applied to every tool at build time. Wrapping order:
 
 User middleware sits inside `ToolPolicy` so each retry invokes the middleware chain once — the middleware sees one full attempt.
 
-### `WithToolPolicy`
+`agent.Approval(toolName, opts...)` builds an `agent.ApprovalConfig`. Approval options:
+- `agent.ApprovalPrompt(fn func(core.ToolCall) string)` — custom question shown to the human.
+- `agent.OnDeny(action)` — `agent.DenyAskLLMToRevise` (default) puts an error in `ToolResult.Error`; `agent.DenyHalt` stops the run.
 
-```go
-func WithToolPolicy(name string, p ToolPolicy) AgentOption
-```
-
-Attaches a timeout/retry policy to the tool registered under `name`. Last call for the same name wins.
-
-### `WithToolPolicyMatch`
-
-```go
-func WithToolPolicyMatch(matcher func(name string) bool, p ToolPolicy) AgentOption
-```
-
-Attaches a policy to every tool whose name satisfies `matcher`. Matchers are scanned in registration order; exact-name entries from `WithToolPolicy` take precedence.
-
-### `WithToolResultStore`
-
-```go
-func WithToolResultStore(s ToolResultStore) AgentOption
-```
-
-Overrides the default in-memory result store. Pass `nil` to disable result paging (oversized results get a legacy truncation marker; `read_full_result` is not registered).
-
-### `WithToolApproval`
-
-```go
-func WithToolApproval(toolName string, opts ...ApprovalOption) AgentOption
-```
-
-Requires explicit human approval before `toolName` runs. The agent must also configure `WithInputHandler`. The approval middleware sits outermost so retries do not re-prompt. Options:
-- `ApprovalPrompt(fn func(ToolCall) string)` — custom question shown to the human.
-- `OnDeny(action DenyAction)` — `DenyAskLLMToRevise` (default) puts an error in `ToolResult.Error`; `DenyHalt` stops the run with `*core.ErrHalt`.
+The agent must also configure `oasis.WithInputHandler` when approval gates are active — the approval gate sends the prompt through the `InputHandler`.
 
 ---
 
@@ -270,12 +258,36 @@ agent.New(provider, oasis.WithTools(tools...))
 
 ## Helpers
 
-```go
-func TextResult(s string) ToolResult  // plain string result
-func TextContent(s string) json.RawMessage  // for building ToolResult.Content by hand
-func JSONContent(raw []byte) json.RawMessage  // for already-encoded JSON
+All helpers below live in `github.com/nevindra/oasis/core`.
 
-func RetryableError(err error) error  // marks err for automatic retry
-func DefaultRetryOn(err error) bool   // the default retry predicate (timeout + net.Error.Timeout + Retryable)
-func BackoffDelay(base, max time.Duration, attempt int) time.Duration  // exponential backoff formula
+```go
+// ToolResult constructors (core package)
+func core.TextResult(s string) ToolResult          // ToolResult with Content set to s
+func core.JSONResult[T any](v T) ToolResult        // marshals v to JSON string in Content; panics on marshal failure
+func core.JSONContent(raw []byte) string           // converts pre-encoded JSON bytes to a string for ToolResult.Content
+func core.UIResult[T any](name string, props T) ToolResult  // ToolResult with UI component descriptor set
+```
+
+```go
+// Retry / error helpers (core package)
+func core.RetryableError(err error) error          // marks err for automatic retry by ToolPolicy
+func core.DefaultRetryOn(err error) bool           // default predicate: context deadline + net timeout + Retryable interface
+func core.BackoffDelay(base, max time.Duration, attempt int) time.Duration  // delay = base << attempt, capped at max
+```
+
+```go
+// Infrastructure-error propagation (core package)
+func core.InfraError(err error) error   // wraps err to signal an infrastructure failure (distinct from business errors)
+func core.IsInfraError(err error) bool  // reports whether err was wrapped with InfraError
+```
+
+`InfraError` and `IsInfraError` give tool authors a second error tier below `RetryableError`. An infra error signals that the failure is structural (storage down, network unreachable) rather than transient — the dispatch layer can inspect it to make skip-vs-abort decisions rather than retry decisions. `RetryableError` is the opt-in retry signal; `InfraError` is the opt-in abort signal; plain `fmt.Errorf` is treated as neither (goes to `ToolResult.Error` and the LLM adapts).
+
+**Middleware helpers** live in `github.com/nevindra/oasis/agent`:
+
+```go
+func agent.LoggingMiddleware(logger *slog.Logger) core.ToolMiddleware
+func agent.TimingMiddleware() core.ToolMiddleware
+func agent.OTelSpanMiddleware(tracer core.Tracer) core.ToolMiddleware
+func agent.TransformMiddleware(fn func(name string, r core.ToolResult) core.ToolResult) core.ToolMiddleware
 ```

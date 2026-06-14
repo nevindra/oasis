@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -22,7 +23,7 @@ func NewJSONExtractor() *JSONExtractor { return &JSONExtractor{} }
 const maxJSONDepth = 100
 
 // Extract converts JSON content to readable key-value text.
-func (e *JSONExtractor) Extract(content []byte) (string, error) {
+func (e *JSONExtractor) Extract(_ context.Context, content []byte) (string, error) {
 	content = bytes.TrimSpace(content)
 	if len(content) == 0 {
 		return "", nil

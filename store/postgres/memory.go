@@ -14,10 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/nevindra/oasis/core"
-	"github.com/nevindra/oasis/memory"
 )
 
-// ItemStore is a PostgreSQL-backed implementation of memory.ItemStore.
+// ItemStore is a PostgreSQL-backed implementation of core.MemoryItemStore.
 // Embeddings are stored as JSONB; similarity is computed in-process using
 // brute-force cosine similarity (sufficient for sub-100k row counts).
 type ItemStore struct {
@@ -67,7 +66,7 @@ func (s *ItemStore) Init(ctx context.Context) error {
 	return nil
 }
 
-func (s *ItemStore) Upsert(ctx context.Context, it memory.MemoryItem) error {
+func (s *ItemStore) Upsert(ctx context.Context, it core.MemoryItem) error {
 	if it.ID == "" {
 		return errors.New("postgres: item ID required")
 	}
@@ -105,7 +104,7 @@ func (s *ItemStore) Upsert(ctx context.Context, it memory.MemoryItem) error {
 	return nil
 }
 
-func (s *ItemStore) UpsertBatch(ctx context.Context, items []memory.MemoryItem) error {
+func (s *ItemStore) UpsertBatch(ctx context.Context, items []core.MemoryItem) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres: begin tx: %w", err)
@@ -119,7 +118,7 @@ func (s *ItemStore) UpsertBatch(ctx context.Context, items []memory.MemoryItem) 
 	return tx.Commit(ctx)
 }
 
-func (s *ItemStore) upsertTx(ctx context.Context, tx pgx.Tx, it memory.MemoryItem) error {
+func (s *ItemStore) upsertTx(ctx context.Context, tx pgx.Tx, it core.MemoryItem) error {
 	if it.ID == "" {
 		return errors.New("postgres: item ID required")
 	}
@@ -162,7 +161,7 @@ func (s *ItemStore) Delete(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *ItemStore) DeleteWhere(ctx context.Context, f memory.Filter) (int, error) {
+func (s *ItemStore) DeleteWhere(ctx context.Context, f core.MemoryFilter) (int, error) {
 	if f.IsEmpty() {
 		return 0, errors.New("postgres: refuse delete with empty filter")
 	}
@@ -174,23 +173,23 @@ func (s *ItemStore) DeleteWhere(ctx context.Context, f memory.Filter) (int, erro
 	return int(tag.RowsAffected()), nil
 }
 
-func (s *ItemStore) Get(ctx context.Context, id string) (memory.MemoryItem, error) {
+func (s *ItemStore) Get(ctx context.Context, id string) (core.MemoryItem, error) {
 	row := s.pool.QueryRow(ctx, baseSelectPg()+" WHERE id = $1", id)
 	it, err := scanItemPg(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return memory.MemoryItem{}, core.ErrNotFound
+		return core.MemoryItem{}, core.ErrNotFound
 	}
 	return it, err
 }
 
-func (s *ItemStore) List(ctx context.Context, f memory.Filter) ([]memory.MemoryItem, error) {
+func (s *ItemStore) List(ctx context.Context, f core.MemoryFilter) ([]core.MemoryItem, error) {
 	q, args := buildWherePg(baseSelectPg(), f, true)
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []memory.MemoryItem
+	var out []core.MemoryItem
 	for rows.Next() {
 		it, err := scanItemPg(rows)
 		if err != nil {
@@ -201,17 +200,17 @@ func (s *ItemStore) List(ctx context.Context, f memory.Filter) ([]memory.MemoryI
 	return out, rows.Err()
 }
 
-func (s *ItemStore) SearchSemantic(ctx context.Context, emb []float32, f memory.Filter, topK int) ([]memory.ScoredItem, error) {
+func (s *ItemStore) SearchSemantic(ctx context.Context, emb []float32, f core.MemoryFilter, topK int) ([]core.ScoredMemoryItem, error) {
 	items, err := s.List(ctx, f)
 	if err != nil {
 		return nil, err
 	}
-	scored := make([]memory.ScoredItem, 0, len(items))
+	scored := make([]core.ScoredMemoryItem, 0, len(items))
 	for _, it := range items {
 		if len(it.Embedding) == 0 {
 			continue
 		}
-		scored = append(scored, memory.ScoredItem{
+		scored = append(scored, core.ScoredMemoryItem{
 			Item:  it,
 			Score: core.CosineSimilarity(emb, it.Embedding),
 		})
@@ -232,8 +231,8 @@ func baseSelectPg() string {
 
 type pgRowScanner interface{ Scan(dest ...any) error }
 
-func scanItemPg(r pgRowScanner) (memory.MemoryItem, error) {
-	var it memory.MemoryItem
+func scanItemPg(r pgRowScanner) (core.MemoryItem, error) {
+	var it core.MemoryItem
 	var tagsJSON, embJSON []byte
 	var srcKind, srcRef, srcAgent *string
 	if err := r.Scan(
@@ -242,7 +241,7 @@ func scanItemPg(r pgRowScanner) (memory.MemoryItem, error) {
 		&tagsJSON, &embJSON,
 		&it.CreatedAt, &it.UpdatedAt, &it.ExpiresAt,
 	); err != nil {
-		return memory.MemoryItem{}, err
+		return core.MemoryItem{}, err
 	}
 	if srcKind != nil {
 		it.Source.Kind = *srcKind
@@ -262,7 +261,7 @@ func scanItemPg(r pgRowScanner) (memory.MemoryItem, error) {
 	return it, nil
 }
 
-func buildWherePg(base string, f memory.Filter, withOrderLimit bool) (string, []any) {
+func buildWherePg(base string, f core.MemoryFilter, withOrderLimit bool) (string, []any) {
 	var sb strings.Builder
 	sb.WriteString(base)
 	var args []any

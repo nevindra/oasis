@@ -3,6 +3,7 @@ package ingest
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
@@ -31,7 +32,7 @@ func NewDOCXExtractor() *DOCXExtractor { return &DOCXExtractor{} }
 
 // Extract extracts plain text from a DOCX document.
 // Unlike ExtractWithMeta, this skips image loading for efficiency.
-func (e *DOCXExtractor) Extract(content []byte) (string, error) {
+func (e *DOCXExtractor) Extract(_ context.Context, content []byte) (string, error) {
 	docData, err := docxReadDocumentXML(content)
 	if err != nil {
 		return "", err
@@ -46,7 +47,7 @@ func (e *DOCXExtractor) Extract(content []byte) (string, error) {
 // ExtractWithMeta extracts text and structured metadata (headings, images)
 // from a DOCX document. Tables are converted to labeled "Header: Value" format.
 // Headings produce PageMeta entries with byte offsets into the returned text.
-func (e *DOCXExtractor) ExtractWithMeta(content []byte) (ExtractResult, error) {
+func (e *DOCXExtractor) ExtractWithMeta(_ context.Context, content []byte) (ExtractResult, error) {
 	if len(content) == 0 {
 		return ExtractResult{}, fmt.Errorf("empty docx content")
 	}

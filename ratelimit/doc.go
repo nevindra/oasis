@@ -5,13 +5,13 @@
 // resuming as soon as the rolling-window budget frees up. Both RPM and
 // TPM are tracked independently; either can block on its own.
 //
-// Basic usage:
+// Basic usage — compose RateLimitMiddleware with provider.Chain:
 //
-//	provider := someProvider()
-//	limited := ratelimit.WithRateLimit(provider,
+//	base := someProvider()
+//	limited := provider.Chain(ratelimit.RateLimitMiddleware(
 //	    ratelimit.RPM(60),
 //	    ratelimit.TPM(100_000),
-//	)
+//	))(base)
 //
 // limited satisfies oasis.Provider and can be passed anywhere a Provider
 // is expected. The decorator is safe for concurrent use.

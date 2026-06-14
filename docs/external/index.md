@@ -16,7 +16,7 @@ Go primitives for building AI agent systems that run in production.
 
 ## Why Oasis
 
-- **Ten lines to a running agent.** The minimal case is genuinely minimal — one provider, one call to `NewLLMAgent`, one `Execute`. No boilerplate, no config files.
+- **Ten lines to a running agent.** The minimal case is genuinely minimal — one provider, one call to `NewAgent`, one `Execute`. No boilerplate, no config files.
 - **Every primitive composes with every other.** An `LLMAgent` is an `Agent`. A `Network` of agents is an `Agent`. A `Workflow` containing both is an `Agent`. Nest them arbitrarily.
 - **No LLM SDK dependencies.** Providers speak raw HTTP. Adding a new model means writing one file, not learning a vendor SDK.
 - **Production concerns are built in.** Rate limiting, retry with backoff, graceful shutdown, bounded memory, structured logging — on by default, not bolted on later.
@@ -42,7 +42,7 @@ import (
 func main() {
     llm := gemini.New(os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
 
-    agent := oasis.NewLLMAgent("assistant", "Helpful assistant", llm,
+    agent := oasis.NewAgent("assistant", "Helpful assistant", llm,
         oasis.WithPrompt("You are a helpful assistant."),
     )
 
@@ -61,7 +61,7 @@ func main() {
 | Line | What it does |
 |------|--------------|
 | `gemini.New(...)` | Creates a Gemini LLM provider — just an API key and model name. |
-| `oasis.NewLLMAgent(...)` | Builds the agent. `"assistant"` is the name the LLM sees; `"Helpful assistant"` is how it describes itself to routers. |
+| `oasis.NewAgent(...)` | Builds the agent. `"assistant"` is the name the LLM sees; `"Helpful assistant"` is how it describes itself to routers. |
 | `oasis.WithPrompt(...)` | Sets the system prompt. |
 | `agent.Execute(...)` | Runs the tool-calling loop until the LLM returns a final text response. |
 | `result.Output` | The final text. `result.Steps` has per-tool timing if you need it. |
@@ -95,3 +95,4 @@ func main() {
 | **Operations** | [observability](./observability/index.md) | Structured logging, tracing, and OTEL integration |
 | | [processors](./processors/index.md) | Pre/post hooks for guardrails, PII redaction, and HITL |
 | | [store](./store/index.md) | Persistent storage backends (SQLite, PostgreSQL + pgvector) |
+| **Integrations** | [mcp](./mcp/index.md) | MCP client/server — expose tools to AI assistants; consume external MCP servers |

@@ -22,14 +22,6 @@ type builtinSkillProvider struct{}
 //
 //	provider := skills.Builtin()
 func Builtin() SkillProvider {
-	return NewBuiltinSkillProvider()
-}
-
-// NewBuiltinSkillProvider returns a provider that reads the framework's
-// embedded skills (oasis-pdf, oasis-docx, oasis-xlsx, oasis-pptx, etc.).
-//
-// Deprecated: use skills.Builtin instead. Will be removed in next major.
-func NewBuiltinSkillProvider() SkillProvider {
 	return &builtinSkillProvider{}
 }
 

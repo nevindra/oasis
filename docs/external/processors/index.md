@@ -24,7 +24,7 @@ approval without touching the loop itself.
 |---|---|
 | Per-LLM-call safety / transform | Processor |
 | LLM call retries (429, 503) | `oasis.WithRetry(provider)` |
-| Request-rate and token-rate limiting | `oasis.WithRateLimit(provider, oasis.RPM(n))` |
+| Request-rate and token-rate limiting | `provider.Chain(oasis.RateLimitMiddleware(oasis.RPM(n)))(base)` |
 | Workflow step retries | `oasis.Retry(n, delay)` on the step |
 | Distributed tracing / metrics | `observer` package (OTEL) |
 | Post-run execution traces | `result.Steps` |
@@ -210,10 +210,11 @@ Use `Suspend` when the human is offline or the approval is asynchronous. Use
   `ContentGuard`) so they can block before any transformer runs. Put loggers last
   so they see the final state.
 
-- **Rate limiting wraps the provider, not the processor list.** `WithRateLimit`
-  sits at the provider level and sleeps before the LLM call budget is exhausted.
-  It is not a `PreProcessor`. Wrapping order matters:
-  `oasis.WithRateLimit(oasis.WithRetry(base), oasis.RPM(60))`.
+- **Rate limiting wraps the provider, not the processor list.**
+  `RateLimitMiddleware` sits at the provider level and sleeps before the LLM
+  call budget is exhausted. It is not a `PreProcessor`. Chain order matters
+  (earlier middleware wrap later ones):
+  `provider.Chain(agent.RetryMiddleware(), oasis.RateLimitMiddleware(oasis.RPM(60)))(base)`.
 
 - **Suspend payload persistence is your responsibility.** The snapshot lives in
   memory. If your process restarts while a suspend is in flight, the

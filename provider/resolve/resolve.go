@@ -10,10 +10,10 @@ import (
 
 // Config holds provider-agnostic configuration for creating a chat Provider.
 type Config struct {
-	Provider string  // "gemini", "openai", "groq", "deepseek", "together", "mistral", "ollama", "qwen", "qwen-cn"
+	Provider string // "gemini", "openai", "groq", "deepseek", "together", "mistral", "ollama", "qwen", "qwen-cn"
 	APIKey   string
 	Model    string
-	BaseURL  string  // required for openai-compat; auto-filled for known providers
+	BaseURL  string // required for openai-compat; auto-filled for known providers
 
 	// Common cross-provider options (nil = use provider default).
 	Temperature *float64

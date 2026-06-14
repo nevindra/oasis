@@ -66,7 +66,7 @@ func (s *otelSpan) End() {
 // toOTELAttr converts an oasis.SpanAttr to an OTEL attribute.KeyValue.
 // Val() returns one of string/int/float64/bool per the core constructors;
 // the default branch is unreachable via core-constructed attrs and is kept
-// only as a defensive catch for future or out-of-module SpanAttr extensions.
+// only as a defensive catch should the core constructor set ever grow.
 func toOTELAttr(a oasis.SpanAttr) attribute.KeyValue {
 	switch v := a.Val().(type) {
 	case string:

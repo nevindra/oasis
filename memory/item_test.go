@@ -3,17 +3,19 @@ package memory
 
 import (
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 func TestMemoryItem_ZeroValueIsUsable(t *testing.T) {
-	var item MemoryItem
+	var item core.MemoryItem
 	if item.ID != "" || item.Kind != "" || item.Pinned {
 		t.Fatalf("zero value not clean: %+v", item)
 	}
 }
 
 func TestKindConstants(t *testing.T) {
-	cases := map[Kind]string{
+	cases := map[core.MemoryKind]string{
 		KindFact:       "fact",
 		KindNote:       "note",
 		KindEvent:      "event",
@@ -29,7 +31,7 @@ func TestKindConstants(t *testing.T) {
 }
 
 func TestScopeConstants(t *testing.T) {
-	cases := map[ScopeKind]string{
+	cases := map[core.MemoryScopeKind]string{
 		ScopeThread:   "thread",
 		ScopeResource: "resource",
 		ScopeAgent:    "agent",
@@ -50,9 +52,9 @@ func TestScopedHelper(t *testing.T) {
 }
 
 func TestUserExtensibleKind(t *testing.T) {
-	// Kind is a string type; users can define their own kinds.
-	const KindDecision Kind = "decision"
-	item := MemoryItem{Kind: KindDecision, Content: "go with sqlite"}
+	// core.MemoryKind is a string type; users can define their own kinds.
+	const KindDecision core.MemoryKind = "decision"
+	item := core.MemoryItem{Kind: KindDecision, Content: "go with sqlite"}
 	if string(item.Kind) != "decision" {
 		t.Fatalf("user-defined kind not preserved: %q", item.Kind)
 	}

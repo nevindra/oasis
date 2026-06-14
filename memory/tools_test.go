@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/nevindra/oasis/core"
 )
 
 func TestRememberTool_WritesItem(t *testing.T) {
@@ -25,7 +27,7 @@ func TestRememberTool_WritesItem(t *testing.T) {
 		t.Fatalf("tool error: %s", res.Error)
 	}
 	// At least one item should now be in the store with that content.
-	items, _ := store.List(context.Background(), Filter{Kinds: []Kind{KindFact}})
+	items, _ := store.List(context.Background(), core.MemoryFilter{Kinds: []core.MemoryKind{KindFact}})
 	if len(items) != 1 || items[0].Content != "User likes Tailwind" {
 		t.Fatalf("expected 1 item, got %+v", items)
 	}
@@ -33,7 +35,7 @@ func TestRememberTool_WritesItem(t *testing.T) {
 
 func TestRecallTool_ReturnsItems(t *testing.T) {
 	store := newConformanceStore(t)
-	must(t, store.Upsert(context.Background(), MemoryItem{
+	must(t, store.Upsert(context.Background(), core.MemoryItem{
 		ID: "f1", Kind: KindFact, Content: "User likes dark mode",
 		Scope: Scoped(ScopeResource, "c1"), Embedding: []float32{1, 0, 0},
 	}))

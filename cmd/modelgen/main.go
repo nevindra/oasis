@@ -61,17 +61,17 @@ type modelsDevModel struct {
 }
 
 type modelEntry struct {
-	ID, Provider, DisplayName, Family      string
+	ID, Provider, DisplayName, Family       string
 	InputContext, OutputContext             int
-	InputModalities, OutputModalities      []string
-	Chat, Vision, ToolUse, Embedding       bool
+	InputModalities, OutputModalities       []string
+	Chat, Vision, ToolUse, Embedding        bool
 	Reasoning, StructuredOutput, Attachment bool
-	OpenWeights                            bool
-	KnowledgeCutoff, ReleaseDate           string
-	Deprecated                             bool
-	HasPricing                             bool
-	InputPricing, OutputPricing            float64
-	CacheReadPricing, CacheWritePricing    float64
+	OpenWeights                             bool
+	KnowledgeCutoff, ReleaseDate            string
+	Deprecated                              bool
+	HasPricing                              bool
+	InputPricing, OutputPricing             float64
+	CacheReadPricing, CacheWritePricing     float64
 }
 
 type platformEntry struct {

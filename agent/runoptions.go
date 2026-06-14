@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/internal/runtime"
 )
 
 // RunOptions, Generation, Limits, Unbounded, and the HasOverrides/Validate methods

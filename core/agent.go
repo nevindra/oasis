@@ -47,24 +47,24 @@ type Agent interface {
 // AgentTask is the input to an Agent.
 type AgentTask struct {
 	// Input is the natural language task description.
-	Input string
+	Input string `json:"input"`
 	// Attachments carries optional multimodal content (photos, PDFs, documents, etc.) to pass to the LLM.
 	// Providers that support multimodal input will attach these to the user message as inline data.
 	// Providers that don't support it will ignore this field.
-	Attachments []Attachment
+	Attachments []Attachment `json:"attachments,omitempty"`
 	// ThreadID identifies the conversation thread. Empty when no thread is set.
 	// Memory uses this to scope history loading and persistence.
-	ThreadID string
+	ThreadID string `json:"thread_id,omitempty"`
 	// UserID identifies the end user. Empty when no user is set.
 	// Dynamic prompts/models/tools may inspect this for per-user behavior.
-	UserID string
+	UserID string `json:"user_id,omitempty"`
 	// ChatID identifies the chat/channel for messaging integrations (Telegram, Slack, etc.).
 	// Empty when no chat is set.
-	ChatID string
+	ChatID string `json:"chat_id,omitempty"`
 	// Extra carries arbitrary app-defined metadata. The framework never reads
 	// this map; it is opaque pass-through for dynamic resolvers and processors.
 	// Use ThreadID/UserID/ChatID for framework-recognized identifiers.
-	Extra map[string]any
+	Extra map[string]any `json:"extra,omitempty"`
 }
 
 // WithThreadID sets the conversation thread ID on the task and returns it.
@@ -79,20 +79,20 @@ func (t AgentTask) WithChatID(id string) AgentTask { t.ChatID = id; return t }
 // AgentResult is the output of an Agent.
 type AgentResult struct {
 	// Output is the agent's final response text.
-	Output string
+	Output string `json:"output"`
 	// Thinking carries the LLM's reasoning/chain-of-thought from the final response.
 	// Populated when the provider returns thinking content (e.g. Gemini thought parts).
 	// Empty when the provider does not support thinking or thinking is disabled.
-	Thinking string
+	Thinking string `json:"thinking"`
 	// Attachments carries optional multimodal content (images, audio, etc.) from the LLM response.
 	// Populated when the provider returns media alongside or instead of text.
-	Attachments []Attachment
+	Attachments []Attachment `json:"attachments,omitempty"`
 	// Usage tracks aggregate token usage across all LLM calls.
-	Usage Usage
+	Usage Usage `json:"usage"`
 	// Steps records per-tool and per-agent execution traces in chronological order.
 	// Populated by LLMAgent (tool calls) and Network (tool + agent delegations).
 	// Nil when no tools were called.
-	Steps []StepTrace
+	Steps []StepTrace `json:"steps,omitempty"`
 
 	// FinishReason indicates why the run ended. Zero value is empty string.
 	FinishReason FinishReason `json:"finish_reason,omitempty"`

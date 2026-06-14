@@ -538,7 +538,7 @@ func TestGraphRetriever_Bidirectional(t *testing.T) {
 				"c2": {ID: "c2", DocumentID: "d1", Content: "seed"},
 			},
 		},
-		edges:         map[string][]core.ChunkEdge{},
+		edges: map[string][]core.ChunkEdge{},
 		incomingEdges: map[string][]core.ChunkEdge{
 			"c2": {{ID: "e1", SourceID: "c1", TargetID: "c2", Relation: core.RelReferences, Weight: 0.8}},
 		},

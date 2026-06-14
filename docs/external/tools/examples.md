@@ -67,7 +67,7 @@ func main() {
 
 **Variations:**
 - Return a struct for `Out` instead of `string` — the LLM gets structured JSON it can reason about.
-- Use `oasis.EraseStreaming` if you want to emit progress events via a `chan<- StreamEvent`.
+- Use `core.EraseStreaming` if you want to emit progress events via a `chan<- core.StreamEvent`.
 - Pass multiple tools in one `WithTools(a, b, c)` call.
 
 ---
@@ -80,7 +80,7 @@ func main() {
 import (
     "log/slog"
     "os"
-    oasis "github.com/nevindra/oasis"
+    oasis  "github.com/nevindra/oasis"
     "github.com/nevindra/oasis/agent"
 )
 
@@ -88,22 +88,24 @@ logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 a := agent.New(provider,
     oasis.WithTools(myTool1, myTool2),
-    oasis.WithToolMiddleware(
-        oasis.LoggingMiddleware(logger),   // innermost: closest to tool
-        oasis.TimingMiddleware(),           // outermost: wraps logging
-    ),
+    oasis.WithToolConfig(agent.ToolConfig{
+        Middleware: []core.ToolMiddleware{
+            agent.LoggingMiddleware(logger), // innermost: closest to tool
+            agent.TimingMiddleware(),        // outermost: wraps logging
+        },
+    }),
 )
 ```
 
 **Plain-English walkthrough:**
-- `WithToolMiddleware` applies the same chain to every registered tool at build time.
-- First entry in the list is innermost — `LoggingMiddleware` sees each attempt; `TimingMiddleware` measures total elapsed time including any retry overhead.
+- `WithToolConfig` with `Middleware` applies the same chain to every registered tool at build time.
+- First entry in the slice is innermost — `agent.LoggingMiddleware` sees each attempt; `agent.TimingMiddleware` measures total elapsed time including any retry overhead.
 - Both are no-ops when `logger` is nil / when timing output isn't needed.
 
 **Variations:**
-- Write a `TransformMiddleware` to redact sensitive fields in `ToolResult.Content` before they reach the LLM conversation history.
-- Compose `OTelSpanMiddleware(tracer)` to emit OpenTelemetry spans per tool call.
-- Custom middleware: implement a function of type `func(AnyTool) AnyTool` and pass it directly.
+- Write an `agent.TransformMiddleware` to redact sensitive fields in `ToolResult.Content` before they reach the LLM conversation history.
+- Compose `agent.OTelSpanMiddleware(tracer)` to emit OpenTelemetry spans per tool call.
+- Custom middleware: implement a function of type `func(core.AnyTool) core.AnyTool` and include it in `ToolConfig.Middleware`.
 
 ---
 
@@ -115,7 +117,8 @@ a := agent.New(provider,
 import (
     "fmt"
     "time"
-    oasis "github.com/nevindra/oasis"
+    oasis  "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/agent"
     "github.com/nevindra/oasis/core"
 )
 
@@ -134,7 +137,7 @@ func (w *WeatherTool) Execute(ctx context.Context, in WeatherInput) (string, err
     if err != nil {
         if isTransient(err) {
             // Mark the error retryable so the ToolPolicy will retry it.
-            return "", oasis.RetryableError(fmt.Errorf("weather API: %w", err))
+            return "", core.RetryableError(fmt.Errorf("weather API: %w", err))
         }
         return "", err // not retryable; goes to LLM as ToolResult.Error
     }
@@ -143,24 +146,28 @@ func (w *WeatherTool) Execute(ctx context.Context, in WeatherInput) (string, err
 
 a := agent.New(provider,
     oasis.WithTools(oasis.Erase[WeatherInput, string](&WeatherTool{})),
-    oasis.WithToolPolicy("get_weather", oasis.ToolPolicy{
-        Timeout:       3 * time.Second, // per-attempt timeout
-        Retries:       2,               // up to 3 total attempts
-        RetryDelay:    500 * time.Millisecond,
-        MaxRetryDelay: 5 * time.Second,
+    oasis.WithToolConfig(agent.ToolConfig{
+        Policies: map[string]core.ToolPolicy{
+            "get_weather": {
+                Timeout:       3 * time.Second, // per-attempt timeout
+                Retries:       2,               // up to 3 total attempts
+                RetryDelay:    500 * time.Millisecond,
+                MaxRetryDelay: 5 * time.Second,
+            },
+        },
     }),
 )
 ```
 
 **Plain-English walkthrough:**
-- `RetryableError` wraps the error so the policy recognizes it as retryable. Plain `fmt.Errorf` errors are not retried — they go straight to `ToolResult.Error`.
-- `ToolPolicy.Timeout` is the per-attempt deadline. If the third attempt also times out, the final error lands in `ToolResult.Error`.
-- `WithToolPolicy("get_weather", ...)` binds the policy to the exact tool name.
+- `core.RetryableError` wraps the error so the policy recognizes it as retryable. Plain `fmt.Errorf` errors are not retried — they go straight to `ToolResult.Error`.
+- `core.ToolPolicy.Timeout` is the per-attempt deadline. If the third attempt also times out, the final error lands in `ToolResult.Error`.
+- `agent.ToolConfig.Policies` maps exact tool names to their policies.
 - The backoff formula: `RetryDelay << attempt`, capped at `MaxRetryDelay`. Attempt 0 → 500ms, attempt 1 → 1s, attempt 2 → 2s.
 
 **Variations:**
-- Use `WithToolPolicyMatch(func(name string) bool { return strings.HasPrefix(name, "mcp__") }, policy)` to apply one policy to a whole family of tools by name prefix.
-- Compose `DefaultRetryOn` in a custom predicate: `RetryOn: func(err error) bool { return oasis.DefaultRetryOn(err) || errors.Is(err, myErr) }`.
+- Use `PolicyMatchers` in `agent.ToolConfig` with a predicate like `func(name string) bool { return strings.HasPrefix(name, "mcp__") }` to apply one policy to a whole family of tools by name prefix.
+- Compose `core.DefaultRetryOn` in a custom predicate: `RetryOn: func(err error) bool { return core.DefaultRetryOn(err) || errors.Is(err, myErr) }`.
 
 ---
 
@@ -171,8 +178,10 @@ a := agent.New(provider,
 ```go
 import (
     "context"
-    oasis "github.com/nevindra/oasis"
+    "fmt"
+    oasis  "github.com/nevindra/oasis"
     "github.com/nevindra/oasis/agent"
+    "github.com/nevindra/oasis/core"
 )
 
 type DeleteInput struct {
@@ -192,25 +201,29 @@ func (d *DeleteTool) Execute(ctx context.Context, in DeleteInput) (string, error
 a := agent.New(provider,
     oasis.WithTools(oasis.Erase[DeleteInput, string](&DeleteTool{})),
     oasis.WithInputHandler(myHumanInputHandler), // required for approval gates
-    oasis.WithToolApproval("delete_record",
-        oasis.ApprovalPrompt(func(call oasis.ToolCall) string {
-            return fmt.Sprintf("Agent wants to delete record %s. Approve?", call.Args)
-        }),
-        oasis.OnDeny(oasis.DenyAskLLMToRevise), // LLM gets to try another approach
-    ),
+    oasis.WithToolConfig(agent.ToolConfig{
+        Approvals: []agent.ApprovalConfig{
+            agent.Approval("delete_record",
+                agent.ApprovalPrompt(func(call core.ToolCall) string {
+                    return fmt.Sprintf("Agent wants to delete record %s. Approve?", call.Args)
+                }),
+                agent.OnDeny(agent.DenyAskLLMToRevise), // LLM gets to try another approach
+            ),
+        },
+    }),
 )
 ```
 
 **Plain-English walkthrough:**
-- `WithInputHandler` provides the channel through which the approval question reaches a human (CLI, Slack, web UI — whatever your `InputHandler` implementation does).
-- `WithToolApproval` adds an outermost middleware that intercepts calls to `delete_record`, sends the prompt to the `InputHandler`, and waits for `"approve"` or `"deny"`.
-- `ApprovalPrompt` customizes the question; the default is `"Approve call to <name>?"`.
-- `DenyAskLLMToRevise` puts a `ToolResult.Error` back in the conversation so the LLM knows it was denied and can propose a different action. Use `DenyHalt` if denial must stop the run entirely.
+- `oasis.WithInputHandler` provides the channel through which the approval question reaches a human (CLI, Slack, web UI — whatever your `InputHandler` implementation does).
+- `agent.Approval("delete_record", ...)` builds an `agent.ApprovalConfig` that intercepts calls to `delete_record`, sends the prompt to the `InputHandler`, and waits for approval or denial.
+- `agent.ApprovalPrompt` customizes the question; the default is `"Approve call to <name>?"`.
+- `agent.DenyAskLLMToRevise` puts a `ToolResult.Error` back in the conversation so the LLM knows it was denied and can propose a different action. Use `agent.DenyHalt` if denial must stop the run entirely.
 - The approval wrapper sits outermost so retries (if any policy is configured) do not re-prompt the human.
 
 **Variations:**
-- Gate multiple tools by calling `WithToolApproval` once per tool name.
-- Use `DenyHalt` for compliance-mandated stops where continuing after a denial is not acceptable.
+- Gate multiple tools by adding more `agent.Approval(...)` entries to the `Approvals` slice.
+- Use `agent.DenyHalt` for compliance-mandated stops where continuing after a denial is not acceptable.
 
 ---
 
@@ -239,7 +252,7 @@ a := agent.New(provider,
 
 **Variations:**
 - Use `toolhttp.Tool.Fetch(ctx, url)` directly in your own tool implementation if you want to embed URL fetching as one step in a larger operation.
-- Add `LoggingMiddleware` to observe every URL the agent accesses.
+- Add `agent.LoggingMiddleware` to observe every URL the agent accesses.
 
 ## Generative UI: render a component instead of text
 
@@ -267,8 +280,8 @@ func (FlightResults) UIComponent() string { return "FlightCard" } // implements 
   (it also mirrors the JSON into `Content` so the LLM still "sees" the rendered
   data and the loop can continue).
 - Alternatively, a typed tool's `Out` type implements `core.UIRenderable` (one
-  method, `UIComponent() string`); `Erase`/`EraseStreaming` detect it and set
-  `ToolResult.UI` for you — no helper call needed.
+  method, `UIComponent() string`); `core.Erase`/`core.EraseStreaming` detect it and set
+  `ToolResult.UI` for you automatically — no helper call needed.
 - On the wire the agent emits, in order: `EventToolCallResult` then
   `EventUIComponent{ID: <call id>, Name: "FlightCard", Object: <props json>}`.
 

@@ -63,6 +63,29 @@ func TestMessageSendCompletes(t *testing.T) {
 	}
 }
 
+// TestMessageSendZeroConfigBlocks proves the freeze-shape fix end-to-end: a
+// send carrying an explicit but zero-value SendConfiguration{} (Blocking unset)
+// runs the inline blocking path and returns a settled COMPLETED task — not a
+// WORKING task as a non-blocking default would. Even with a push config present
+// and push enabled, the absence of an explicit non-blocking opt-out keeps it
+// on the blocking path.
+func TestMessageSendZeroConfigBlocks(t *testing.T) {
+	ts := httptest.NewServer(NewServer(a2atest.NewEchoAgent("echo", "echoes"), WithPushNotifications()))
+	defer ts.Close()
+
+	task := sendTask(t, rpcCall(t, ts.URL, methodSendMessage, sendParams{
+		Message: Message{MessageID: "m1", Role: RoleUser, Parts: []Part{TextPart("hello")}},
+		Configuration: &SendConfiguration{
+			// Blocking is nil → default → blocking, even though a push config is
+			// supplied and push is enabled on the server.
+			PushNotificationConfig: &PushNotificationConfig{URL: "http://localhost:9/never"},
+		},
+	}))
+	if task.Status.State != TaskStateCompleted {
+		t.Errorf("zero-value SendConfiguration must block: state = %s, want completed", task.Status.State)
+	}
+}
+
 func TestMessageSendAgentError(t *testing.T) {
 	ts := httptest.NewServer(NewServer(a2atest.NewFailingAgent("broken", "always fails")))
 	defer ts.Close()
@@ -171,7 +194,7 @@ func TestPanicAgentNonBlockingPath(t *testing.T) {
 	resp := rpcCall(t, ts.URL, methodSendMessage, sendParams{
 		Message: Message{MessageID: "m1", Role: RoleUser, Parts: []Part{TextPart("trigger bg panic")}},
 		Configuration: &SendConfiguration{
-			Blocking:               false,
+			Blocking:               NonBlockingPtr(),
 			PushNotificationConfig: pushCfg,
 		},
 	})

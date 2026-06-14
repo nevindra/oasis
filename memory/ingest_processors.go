@@ -156,8 +156,8 @@ func (d DecayProbabilistic) Process(ctx context.Context, in *IngestContext) erro
 	}
 	until := core.NowUnix() - age
 	falseVal := false
-	_, err := in.ItemStore.DeleteWhere(ctx, Filter{
-		Kinds:  []Kind{KindFact},
+	_, err := in.ItemStore.DeleteWhere(ctx, core.MemoryFilter{
+		Kinds:  []core.MemoryKind{KindFact},
 		Until:  until,
 		Pinned: &falseVal,
 	})
@@ -254,12 +254,12 @@ func (FactExtractor) Process(ctx context.Context, in *IngestContext) error {
 	raw := parseRawFacts(resp.Content)
 	scope := scopeForKind(in.Task, KindFact)
 	for _, r := range sanitizeRawFacts(raw) {
-		in.Candidates = append(in.Candidates, MemoryItem{
+		in.Candidates = append(in.Candidates, core.MemoryItem{
 			ID:      core.NewID(),
 			Kind:    KindFact,
 			Content: r.Fact,
 			Scope:   scope,
-			Source: Source{
+			Source: core.MemorySource{
 				Kind:    "extraction",
 				Ref:     in.Task.ThreadID,
 				AgentID: in.AgentName,
@@ -330,8 +330,8 @@ func shouldExtractFacts(text string) bool {
 	return true
 }
 
-// scopeForKind returns the default scope for a given Kind based on the task.
-func scopeForKind(task core.AgentTask, kind Kind) Scope {
+// scopeForKind returns the default scope for a given MemoryKind based on the task.
+func scopeForKind(task core.AgentTask, kind core.MemoryKind) core.MemoryScope {
 	switch kind {
 	case KindNote, KindPlaybook:
 		ref := task.ChatID
@@ -375,7 +375,7 @@ func (Deduper) Process(ctx context.Context, in *IngestContext) error {
 		return nil
 	}
 	for _, e := range embs {
-		results, err := in.ItemStore.SearchSemantic(ctx, e, Filter{Kinds: []Kind{KindFact}}, 5)
+		results, err := in.ItemStore.SearchSemantic(ctx, e, core.MemoryFilter{Kinds: []core.MemoryKind{KindFact}}, 5)
 		if err != nil {
 			continue
 		}
@@ -432,12 +432,12 @@ func (EventRecorder) Process(_ context.Context, in *IngestContext) error {
 	if in.AsstText == "" {
 		return nil
 	}
-	in.Candidates = append(in.Candidates, MemoryItem{
+	in.Candidates = append(in.Candidates, core.MemoryItem{
 		ID:        core.NewID(),
 		Kind:      KindEvent,
 		Content:   truncateStr(in.AsstText, 500),
 		Scope:     scopeForKind(in.Task, KindEvent),
-		Source:    Source{Kind: "agent", Ref: in.Task.ThreadID, AgentID: in.AgentName},
+		Source:    core.MemorySource{Kind: "agent", Ref: in.Task.ThreadID, AgentID: in.AgentName},
 		Tags:      []string{"turn-event"},
 		CreatedAt: core.NowUnix(),
 	})

@@ -147,10 +147,10 @@ type capturedSpan struct {
 
 type capturedSpanRef struct{ parent *spanCaptureTracer }
 
-func (s *capturedSpanRef) SetAttr(attrs ...core.SpanAttr)          {}
+func (s *capturedSpanRef) SetAttr(attrs ...core.SpanAttr)            {}
 func (s *capturedSpanRef) Event(name string, attrs ...core.SpanAttr) {}
-func (s *capturedSpanRef) Error(err error)                    {}
-func (s *capturedSpanRef) End()                               {}
+func (s *capturedSpanRef) Error(err error)                           {}
+func (s *capturedSpanRef) End()                                      {}
 
 func (t *spanCaptureTracer) Start(ctx context.Context, name string, attrs ...core.SpanAttr) (context.Context, core.Span) {
 	t.mu.Lock()

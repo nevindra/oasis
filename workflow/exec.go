@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -44,12 +43,12 @@ func (s *executionState) getResult(name string) (StepResult, bool) {
 // Optional RunOption values configure per-call behaviour (streaming, deadline).
 func (w *Workflow) Execute(ctx context.Context, task core.AgentTask, opts ...core.RunOption) (core.AgentResult, error) {
 	rcfg := core.ApplyRunOptions(opts...)
-	// Workflow does not propagate RunOptions to its steps yet — error on any non-stream override.
+	// Workflow does not propagate per-call overrides to its steps — reject any.
 	if rcfg.Overrides != nil {
 		if rcfg.Stream != nil {
 			close(rcfg.Stream)
 		}
-		return core.AgentResult{}, fmt.Errorf("workflow: per-call overrides not yet supported (Plan C)")
+		return core.AgentResult{}, ErrOverridesUnsupported
 	}
 	if rcfg.Deadline > 0 {
 		var cancel context.CancelFunc
@@ -606,4 +605,3 @@ func (w *Workflow) safeCallback(fn func()) {
 	}()
 	fn()
 }
-

@@ -10,8 +10,10 @@ import (
 // the methods they care about.
 type nopStore struct{}
 
-func (nopStore) CreateThread(_ context.Context, _ core.Thread) error              { return nil }
-func (nopStore) GetThread(_ context.Context, _ string) (core.Thread, error)       { return core.Thread{}, nil }
+func (nopStore) CreateThread(_ context.Context, _ core.Thread) error { return nil }
+func (nopStore) GetThread(_ context.Context, _ string) (core.Thread, error) {
+	return core.Thread{}, nil
+}
 func (nopStore) ListThreads(_ context.Context, _ string, _ int) ([]core.Thread, error) {
 	return nil, nil
 }
@@ -61,6 +63,8 @@ func (m *mockProvider) ChatStream(_ context.Context, _ core.ChatRequest, ch chan
 	}
 	resp := m.responses[m.idx]
 	m.idx++
-	ch <- core.StreamEvent{Type: core.EventTextDelta, Content: resp.Content}
+	if ch != nil {
+		ch <- core.StreamEvent{Type: core.EventTextDelta, Content: resp.Content}
+	}
 	return resp, nil
 }

@@ -25,10 +25,10 @@ const (
 // searchIndex is a BM25-scored inverted index built from documentation.
 type searchIndex struct {
 	entries   []docEntry
-	postings  map[string][]posting      // term -> doc postings
-	headTerms map[string]map[int]bool   // term -> docIdx set (terms in headings)
-	docLens   []int                     // token count per doc
-	avgDL     float64                   // average document length in tokens
+	postings  map[string][]posting    // term -> doc postings
+	headTerms map[string]map[int]bool // term -> docIdx set (terms in headings)
+	docLens   []int                   // token count per doc
+	avgDL     float64                 // average document length in tokens
 }
 
 // posting records a term's frequency in a single document.

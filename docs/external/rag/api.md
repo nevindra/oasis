@@ -325,7 +325,7 @@ Same signature as `HybridRetriever.Retrieve`. Also implements `core.Sourced`.
 ## Thread Safety
 
 - `Ingestor` methods are safe to call concurrently on separate documents.
-- `HybridRetriever.Retrieve` and `GraphRetriever.Retrieve` are safe to call concurrently. `Sources()` returns the result of the most recently completed call; concurrent callers may observe interleaved updates.
+- `HybridRetriever.Retrieve` and `GraphRetriever.Retrieve` are safe to call concurrently. `Sources()` is thread-safe; concurrent callers may observe results from any completed Retrieve call.
 - `ScoreReranker` and `LLMReranker` are stateless; all methods are safe to call concurrently.
 
 ---

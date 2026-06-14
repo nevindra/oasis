@@ -12,7 +12,10 @@
 // (BuildBody, StreamSSE, ParseResponse) to build a custom oasis.Provider.
 package openaicompat
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // --- Request types ---
 
@@ -30,7 +33,7 @@ type ChatRequest struct {
 	Stop             []string        `json:"stop,omitempty"`
 	Seed             *int            `json:"seed,omitempty"`
 	ResponseFormat   *ResponseFormat `json:"response_format,omitempty"`
-	ToolChoice       any             `json:"tool_choice,omitempty"`
+	ToolChoice       *ToolChoice     `json:"tool_choice,omitempty"`
 	// Modalities requests output modalities (e.g. ["text","image"]). Providers
 	// that support image generation (OpenRouter, image-capable gateways) return
 	// generated images when "image" is present. Omitted = text only.
@@ -39,9 +42,87 @@ type ChatRequest struct {
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
 }
 
+// ToolChoiceMode is the set of string tool-selection modes the OpenAI chat API
+// accepts for `tool_choice`.
+type ToolChoiceMode string
+
+const (
+	// ToolChoiceNone disables tool calls for this request.
+	ToolChoiceNone ToolChoiceMode = "none"
+	// ToolChoiceAuto lets the model decide whether to call a tool.
+	ToolChoiceAuto ToolChoiceMode = "auto"
+	// ToolChoiceRequired forces the model to call at least one tool.
+	ToolChoiceRequired ToolChoiceMode = "required"
+)
+
+// ToolChoice controls how the model selects tools. It marshals to the OpenAI
+// `tool_choice` wire shape: a bare string ("none"/"auto"/"required") for a mode,
+// or an object {"type":"function","function":{"name":"..."}} when a specific
+// function is named. Use ToolChoiceModeValue or ToolChoiceFunction to build one.
+type ToolChoice struct {
+	// Mode is the string selection mode. Used when FunctionName is empty.
+	Mode ToolChoiceMode
+	// FunctionName, when non-empty, forces the named function and overrides Mode.
+	FunctionName string
+}
+
+// ToolChoiceModeValue builds a string-mode tool choice ("none"/"auto"/"required").
+func ToolChoiceModeValue(mode ToolChoiceMode) ToolChoice {
+	return ToolChoice{Mode: mode}
+}
+
+// ToolChoiceFunction forces the model to call the named function. It marshals to
+// {"type":"function","function":{"name":name}}.
+func ToolChoiceFunction(name string) ToolChoice {
+	return ToolChoice{FunctionName: name}
+}
+
+// toolChoiceFunctionWire is the object wire shape for a specific-function choice.
+type toolChoiceFunctionWire struct {
+	Type     string `json:"type"` // always "function"
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+// MarshalJSON emits the OpenAI wire shape: a JSON string for a mode choice, or a
+// {"type":"function","function":{"name":...}} object for a named-function choice.
+func (tc ToolChoice) MarshalJSON() ([]byte, error) {
+	if tc.FunctionName != "" {
+		var w toolChoiceFunctionWire
+		w.Type = "function"
+		w.Function.Name = tc.FunctionName
+		return json.Marshal(w)
+	}
+	return json.Marshal(string(tc.Mode))
+}
+
+// UnmarshalJSON parses either a JSON string mode or a function-choice object.
+func (tc *ToolChoice) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*tc = ToolChoice{}
+		return nil
+	}
+	if trimmed[0] == '{' {
+		var w toolChoiceFunctionWire
+		if err := json.Unmarshal(trimmed, &w); err != nil {
+			return err
+		}
+		*tc = ToolChoice{FunctionName: w.Function.Name}
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(trimmed, &s); err != nil {
+		return err
+	}
+	*tc = ToolChoice{Mode: ToolChoiceMode(s)}
+	return nil
+}
+
 // ResponseFormat controls the output format (e.g. structured JSON).
 type ResponseFormat struct {
-	Type       string      `json:"type"`                  // "json_schema"
+	Type       string      `json:"type"` // "json_schema"
 	JSONSchema *JSONSchema `json:"json_schema,omitempty"`
 }
 
@@ -59,11 +140,93 @@ type StreamOptions struct {
 
 // Message is a single message in the OpenAI chat format.
 type Message struct {
-	Role       string          `json:"role"`
-	Content    any             `json:"content"`                // string or []ContentBlock
+	Role       string            `json:"role"`
+	Content    MessageContent    `json:"content"` // marshals to a JSON string or an array of content blocks
 	ToolCalls  []ToolCallRequest `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"`
+	Name       string            `json:"name,omitempty"`
+}
+
+// MessageContentKind discriminates the two OpenAI message-content wire shapes:
+// a plain string or an array of typed content blocks.
+type MessageContentKind uint8
+
+const (
+	// ContentString is plain-text content. It marshals to a JSON string.
+	ContentString MessageContentKind = iota
+	// ContentBlocks is multimodal content. It marshals to a JSON array of ContentBlock.
+	ContentBlocks
+)
+
+// MessageContent is a tagged union over the two OpenAI message-content wire
+// shapes. The OpenAI chat format accepts `content` as either a plain string or
+// an array of typed content blocks (text/image_url/file); MessageContent models
+// both without an untyped any. Use StringContent or BlockContent to construct it.
+//
+// The zero value marshals to an empty JSON string ("") — the same shape a plain
+// empty-string message produces — so an unset Content is wire-compatible with
+// the historical any-typed default.
+type MessageContent struct {
+	Kind   MessageContentKind
+	String string
+	Blocks []ContentBlock
+}
+
+// StringContent builds plain-text message content.
+func StringContent(s string) MessageContent {
+	return MessageContent{Kind: ContentString, String: s}
+}
+
+// BlockContent builds multimodal message content from typed content blocks.
+func BlockContent(blocks []ContentBlock) MessageContent {
+	return MessageContent{Kind: ContentBlocks, Blocks: blocks}
+}
+
+// IsString reports whether the content is the plain-string variant.
+func (c MessageContent) IsString() bool { return c.Kind == ContentString }
+
+// IsBlocks reports whether the content is the content-block-array variant.
+func (c MessageContent) IsBlocks() bool { return c.Kind == ContentBlocks }
+
+// MarshalJSON emits the OpenAI wire shape: a JSON string for ContentString, or a
+// JSON array of content blocks for ContentBlocks. A nil block slice still emits
+// an empty array ([]) so the array variant is preserved on the wire.
+func (c MessageContent) MarshalJSON() ([]byte, error) {
+	if c.Kind == ContentBlocks {
+		blocks := c.Blocks
+		if blocks == nil {
+			blocks = []ContentBlock{}
+		}
+		return json.Marshal(blocks)
+	}
+	return json.Marshal(c.String)
+}
+
+// UnmarshalJSON parses either a JSON string (→ ContentString) or a JSON array of
+// content blocks (→ ContentBlocks). A JSON null leaves the zero value (empty
+// string content) so a missing/null content field round-trips safely.
+func (c *MessageContent) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*c = MessageContent{}
+		return nil
+	}
+	switch trimmed[0] {
+	case '[':
+		var blocks []ContentBlock
+		if err := json.Unmarshal(trimmed, &blocks); err != nil {
+			return err
+		}
+		*c = MessageContent{Kind: ContentBlocks, Blocks: blocks}
+		return nil
+	default:
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return err
+		}
+		*c = MessageContent{Kind: ContentString, String: s}
+		return nil
+	}
 }
 
 // ContentBlock represents a typed content block for multimodal messages.
@@ -143,14 +306,14 @@ type FunctionCall struct {
 
 // ChatResponse is the OpenAI chat completions response.
 type ChatResponse struct {
-	ID                string   `json:"id"`
-	Choices           []Choice `json:"choices"`
-	Usage             *Usage   `json:"usage,omitempty"`
+	ID      string   `json:"id"`
+	Choices []Choice `json:"choices"`
+	Usage   *Usage   `json:"usage,omitempty"`
 	// SystemFingerprint is an OpenAI-specific opaque string identifying the
 	// backend configuration used for the request. Present on most OpenAI
 	// responses; absent on other providers. Propagated into
 	// oasis.ChatResponse.ProviderMeta as {"system_fingerprint":"..."}.
-	SystemFingerprint string   `json:"system_fingerprint,omitempty"`
+	SystemFingerprint string `json:"system_fingerprint,omitempty"`
 }
 
 // Choice is a single completion choice.
@@ -184,10 +347,10 @@ type ImageOut struct {
 // Anthropic populates CacheReadInputTokens (hits) and CacheCreationInputTokens
 // (warming cost) as top-level fields on the same object instead.
 type Usage struct {
-	PromptTokens             int                  `json:"prompt_tokens"`
-	CompletionTokens         int                  `json:"completion_tokens"`
-	TotalTokens              int                  `json:"total_tokens"`
-	PromptTokensDetails      *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	PromptTokens        int                  `json:"prompt_tokens"`
+	CompletionTokens    int                  `json:"completion_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
 	// Anthropic-specific top-level cache fields.
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`

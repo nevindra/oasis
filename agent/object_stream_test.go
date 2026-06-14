@@ -14,8 +14,8 @@ func TestObjectDeltaEmitted(t *testing.T) {
 		ch <- core.StreamEvent{Type: core.EventTextDelta, Content: `"intro","summary"]}`}
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{
 			Content:      `{"title":"Q3 Report","sections":["intro","summary"]}`,
@@ -60,8 +60,8 @@ func TestElementDeltaForTopLevelArray(t *testing.T) {
 		ch <- core.StreamEvent{Type: core.EventTextDelta, Content: `{"name":"c"}]`}
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{
 			Content:      `[{"name":"a"},{"name":"b"},{"name":"c"}]`,

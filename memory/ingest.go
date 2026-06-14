@@ -22,14 +22,14 @@ type IngestProcessor interface {
 // IngestContext carries everything an ingest processor needs to do its job.
 type IngestContext struct {
 	AgentName string
-	Task      core.AgentTask    // user input, attachments, thread/chat IDs
+	Task      core.AgentTask // user input, attachments, thread/chat IDs
 	UserText  string
 	AsstText  string
 	Steps     []core.StepTrace
 
 	// Candidates is the working set of items being prepared for upsert.
 	// Processors append; the terminal Upserter writes them all.
-	Candidates []MemoryItem
+	Candidates []core.MemoryItem
 
 	// Output flags set by processors.
 	ThreadCreated bool // set by EnsureThread when a new row was created

@@ -141,8 +141,8 @@ func TestStream_OnTextDelta(t *testing.T) {
 			{Type: core.EventTextDelta, Content: "y"},
 			{Type: core.EventToolCallStart, Name: "ignored"},
 		},
-		final:  AgentResult{Output: "xy"},
-		delay:  10 * time.Millisecond, // Ensure callback is registered before events start
+		final: AgentResult{Output: "xy"},
+		delay: 10 * time.Millisecond, // Ensure callback is registered before events start
 	}
 	s := Subscribe(context.Background(), ag, AgentTask{})
 
@@ -162,8 +162,8 @@ func TestStream_OnReasoningDelta(t *testing.T) {
 			{Type: core.EventReasoningDelta, Content: "think2"},
 			{Type: core.EventTextDelta, Content: "ignored"},
 		},
-		final:  AgentResult{Thinking: "think1think2"},
-		delay:  10 * time.Millisecond,
+		final: AgentResult{Thinking: "think1think2"},
+		delay: 10 * time.Millisecond,
 	}
 	s := Subscribe(context.Background(), ag, AgentTask{})
 
@@ -181,8 +181,8 @@ func TestStream_OnToolCall(t *testing.T) {
 		events: []core.StreamEvent{
 			{Type: core.EventToolCallStart, ID: "1", Name: "search"},
 		},
-		final:  AgentResult{},
-		delay:  10 * time.Millisecond,
+		final: AgentResult{},
+		delay: 10 * time.Millisecond,
 	}
 	s := Subscribe(context.Background(), ag, AgentTask{})
 
@@ -201,8 +201,8 @@ func TestStream_OnToolResult(t *testing.T) {
 			{Type: core.EventToolCallResult, Content: "result1"},
 			{Type: core.EventToolCallResult, Content: "result2"},
 		},
-		final:  AgentResult{},
-		delay:  10 * time.Millisecond,
+		final: AgentResult{},
+		delay: 10 * time.Millisecond,
 	}
 	s := Subscribe(context.Background(), ag, AgentTask{})
 
@@ -222,8 +222,8 @@ func TestStream_OnEvent(t *testing.T) {
 			{Type: core.EventToolCallStart, Name: "tool1"},
 			{Type: core.EventTextDelta, Content: "text2"},
 		},
-		final:  AgentResult{},
-		delay:  10 * time.Millisecond,
+		final: AgentResult{},
+		delay: 10 * time.Millisecond,
 	}
 	s := Subscribe(context.Background(), ag, AgentTask{})
 
@@ -260,14 +260,14 @@ func TestStreamBlockingAccessors(t *testing.T) {
 	ag := &emitterAgent{
 		events: []core.StreamEvent{},
 		final: AgentResult{
-			Output:       "done",
-			FinishReason: core.FinishStop,
-			Warnings:     []string{"x"},
-			ProviderMeta: json.RawMessage(`{"a":1}`),
-			Sources:      nil,
-			Files:        nil,
+			Output:         "done",
+			FinishReason:   core.FinishStop,
+			Warnings:       []string{"x"},
+			ProviderMeta:   json.RawMessage(`{"a":1}`),
+			Sources:        nil,
+			Files:          nil,
 			SuspendPayload: nil,
-			Iterations:   []core.IterationTrace{
+			Iterations: []core.IterationTrace{
 				{Iter: 0, Model: "test", Usage: core.Usage{}},
 			},
 		},

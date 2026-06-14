@@ -180,7 +180,6 @@ func TestLLMAgentStreamingInterfaceCompliance(t *testing.T) {
 	var _ core.Agent = agent
 }
 
-
 func TestLLMAgentExecuteStreamProviderError(t *testing.T) {
 	agent := New("broken", "Broken", &errProvider{
 		name: "fail",
@@ -332,7 +331,7 @@ type nonFlusher struct {
 	header http.Header
 }
 
-func (n *nonFlusher) Header() http.Header        { return n.header }
+func (n *nonFlusher) Header() http.Header         { return n.header }
 func (n *nonFlusher) Write(b []byte) (int, error) { return len(b), nil }
 func (n *nonFlusher) WriteHeader(int)             {}
 
@@ -685,7 +684,7 @@ func TestNoThinkingEventWhenEmpty(t *testing.T) {
 // alwaysToolProvider is a Provider that always returns a single ToolCall so
 // the loop keeps requesting tools until it hits maxIter.
 type alwaysToolProvider struct {
-	toolName string
+	toolName  string
 	synthResp core.ChatResponse
 }
 
@@ -754,4 +753,3 @@ func (t *configuredFakeAgentTool) Definition() core.ToolDefinition {
 func (t *configuredFakeAgentTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (core.ToolResult, error) {
 	return core.TextResult(t.output), nil
 }
-

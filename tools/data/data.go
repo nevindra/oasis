@@ -228,11 +228,124 @@ func extractColumns(records []map[string]any) []string {
 
 // --- data_filter ---
 
+// ConditionValueKind identifies which field of ConditionValue is populated.
+type ConditionValueKind uint8
+
+const (
+	// ConditionValueString holds a single string scalar.
+	ConditionValueString ConditionValueKind = iota + 1
+	// ConditionValueNumber holds a single numeric scalar.
+	ConditionValueNumber
+	// ConditionValueStrings holds an array of strings (used with the "in" operator).
+	ConditionValueStrings
+)
+
+// ConditionValue is a discriminated union for a filter condition value.
+// Exactly one of String, Number, or Strings is populated depending on Kind.
+// JSON unmarshalling is handled transparently: a bare string, number, or
+// JSON array decodes into the correct variant so LLM-generated tool calls
+// need no special wrapping.
+type ConditionValue struct {
+	Kind    ConditionValueKind
+	String  *string  // populated when Kind == ConditionValueString
+	Number  *float64 // populated when Kind == ConditionValueNumber
+	Strings []string // populated when Kind == ConditionValueStrings
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+// A JSON string → ConditionValueString.
+// A JSON number → ConditionValueNumber.
+// A JSON array  → ConditionValueStrings (elements are stringified).
+func (cv *ConditionValue) UnmarshalJSON(b []byte) error {
+	// Determine the JSON token kind from the first non-whitespace byte.
+	trimmed := strings.TrimSpace(string(b))
+	if len(trimmed) == 0 {
+		return fmt.Errorf("conditionvalue: empty JSON")
+	}
+	switch trimmed[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return fmt.Errorf("conditionvalue: %w", err)
+		}
+		cv.Kind = ConditionValueString
+		cv.String = &s
+	case '[':
+		// Decode as a generic slice first, then stringify each element so that
+		// mixed-type arrays (e.g. numbers alongside strings) still work for "in".
+		var raw []any
+		if err := json.Unmarshal(b, &raw); err != nil {
+			return fmt.Errorf("conditionvalue: %w", err)
+		}
+		strs := make([]string, len(raw))
+		for i, item := range raw {
+			strs[i] = fmt.Sprintf("%v", item)
+		}
+		cv.Kind = ConditionValueStrings
+		cv.Strings = strs
+	default:
+		// Treat as number (covers integers, floats, json.Number).
+		var f float64
+		if err := json.Unmarshal(b, &f); err != nil {
+			return fmt.Errorf("conditionvalue: expected string, number, or array, got: %s", trimmed)
+		}
+		cv.Kind = ConditionValueNumber
+		cv.Number = &f
+	}
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler so ConditionValue round-trips cleanly.
+func (cv ConditionValue) MarshalJSON() ([]byte, error) {
+	switch cv.Kind {
+	case ConditionValueString:
+		if cv.String == nil {
+			return []byte(`""`), nil
+		}
+		return json.Marshal(*cv.String)
+	case ConditionValueNumber:
+		if cv.Number == nil {
+			return []byte(`0`), nil
+		}
+		return json.Marshal(*cv.Number)
+	case ConditionValueStrings:
+		return json.Marshal(cv.Strings)
+	default:
+		return []byte(`null`), nil
+	}
+}
+
+// asAny returns the underlying value as an any for use with the existing
+// compareValues / valueIn helpers.
+func (cv ConditionValue) asAny() any {
+	switch cv.Kind {
+	case ConditionValueString:
+		if cv.String != nil {
+			return *cv.String
+		}
+		return ""
+	case ConditionValueNumber:
+		if cv.Number != nil {
+			return *cv.Number
+		}
+		return float64(0)
+	case ConditionValueStrings:
+		// valueIn expects []any.
+		out := make([]any, len(cv.Strings))
+		for i, s := range cv.Strings {
+			out[i] = s
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 // Condition is one row of the filter where-clause.
 type Condition struct {
-	Column string `json:"column" describe:"column name to test"`
-	Op     string `json:"op" enum:"==,!=,>,<,>=,<=,contains,in" describe:"comparison operator"`
-	Value  any    `json:"value" describe:"value to compare against (any JSON-marshalable value, or array for 'in')"`
+	Column string         `json:"column" describe:"column name to test"`
+	Op     string         `json:"op" enum:"==,!=,>,<,>=,<=,contains,in" describe:"comparison operator"`
+	Value  ConditionValue `json:"value" describe:"value to compare against: string scalar, numeric scalar, or array of strings for 'in'"`
 }
 
 // FilterInput is the input payload for data_filter.
@@ -293,26 +406,27 @@ func matchCondition(rec map[string]any, c Condition) bool {
 		return false
 	}
 
+	cv := c.Value.asAny()
 	switch c.Op {
 	case "==":
-		return compareValues(val, c.Value) == 0
+		return compareValues(val, cv) == 0
 	case "!=":
-		return compareValues(val, c.Value) != 0
+		return compareValues(val, cv) != 0
 	case ">":
-		return compareValues(val, c.Value) > 0
+		return compareValues(val, cv) > 0
 	case "<":
-		return compareValues(val, c.Value) < 0
+		return compareValues(val, cv) < 0
 	case ">=":
-		return compareValues(val, c.Value) >= 0
+		return compareValues(val, cv) >= 0
 	case "<=":
-		return compareValues(val, c.Value) <= 0
+		return compareValues(val, cv) <= 0
 	case "contains":
 		return strings.Contains(
 			strings.ToLower(fmt.Sprintf("%v", val)),
-			strings.ToLower(fmt.Sprintf("%v", c.Value)),
+			strings.ToLower(fmt.Sprintf("%v", cv)),
 		)
 	case "in":
-		return valueIn(val, c.Value)
+		return valueIn(val, cv)
 	default:
 		return false
 	}

@@ -81,6 +81,47 @@ func TestFunc_SchemaMatchesDeriveSchema(t *testing.T) {
 	}
 }
 
+func TestFunc_OutputSchemaMatchesErase(t *testing.T) {
+	// Func must derive the same OutputSchema as Erase for the same Out type,
+	// so the published tool shape is identical regardless of the authoring path.
+	fnTool := Func("lookup", "Look up a user",
+		func(_ context.Context, in struct {
+			ID string `json:"id"`
+		}) (lookupResult, error) {
+			return lookupResult{ID: in.ID}, nil
+		})
+
+	erased := Erase[struct {
+		ID string `json:"id"`
+	}, lookupResult](structOutTool{})
+
+	got := fnTool.Definition().OutputSchema
+	want := erased.Definition().OutputSchema
+	if len(got) == 0 {
+		t.Fatal("expected non-empty Func OutputSchema")
+	}
+	if string(got) != string(want) {
+		t.Errorf("OutputSchema mismatch:\n  Func:  %s\n  Erase: %s", got, want)
+	}
+	// Also pin it directly to DeriveSchema[Out] (the documented derivation).
+	if derived := DeriveSchema[lookupResult](); string(got) != string(derived) {
+		t.Errorf("OutputSchema != DeriveSchema[Out]:\n  Func:   %s\n  Derive: %s", got, derived)
+	}
+}
+
+// structOutTool is a minimal Tool[In, Out] used to compare Func's derived
+// OutputSchema against Erase's for the same Out type.
+type structOutTool struct{}
+
+func (structOutTool) Definition() ToolMeta {
+	return ToolMeta{Name: "lookup", Description: "Look up a user"}
+}
+func (structOutTool) Execute(_ context.Context, _ struct {
+	ID string `json:"id"`
+}) (lookupResult, error) {
+	return lookupResult{}, nil
+}
+
 func TestFunc_NameAndDefinition(t *testing.T) {
 	tool := Func("mytool", "My description",
 		func(_ context.Context, _ struct{}) (string, error) { return "", nil })

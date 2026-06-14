@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	oasis "github.com/nevindra/oasis/core"
 )
@@ -34,7 +35,9 @@ func (m *mockContextProvider) Name() string { return "mock-context" }
 type mockErrorProvider struct{}
 
 func (m *mockErrorProvider) ChatStream(_ context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
-	close(ch)
+	if ch != nil {
+		close(ch)
+	}
 	return oasis.ChatResponse{}, fmt.Errorf("llm unavailable")
 }
 func (m *mockErrorProvider) Name() string { return "mock-error" }
@@ -184,6 +187,50 @@ func TestIngestorNoContextualEnrichment(t *testing.T) {
 	for _, c := range store.chunks {
 		if strings.Contains(c.Content, "\n\n") {
 			t.Errorf("chunk has unexpected prefix separator: %q", c.Content)
+		}
+	}
+}
+
+// blockingProviderCtx blocks until ctx.Done(), exercising per-call timeouts.
+type blockingProviderCtx struct{}
+
+func (m *blockingProviderCtx) ChatStream(ctx context.Context, _ oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
+	if ch != nil {
+		defer close(ch)
+	}
+	<-ctx.Done()
+	return oasis.ChatResponse{}, ctx.Err()
+}
+
+func (m *blockingProviderCtx) Name() string { return "mock-blocking-ctx" }
+
+// TestEnrichChunksWithContext_PerCallTimeout verifies that llmTimeout bounds each
+// individual LLM call and that cancel() is released immediately after each call.
+// Uses a provider that blocks until ctx.Done() to make per-call timeouts observable.
+// With 4 chunks processed serially (workers=1) each timing out at 50ms, the total
+// should be ~200ms, well under 2s — proving each call gets a fresh 50ms budget.
+func TestEnrichChunksWithContext_PerCallTimeout(t *testing.T) {
+	chunks := []oasis.Chunk{
+		{ID: "c1", Content: "First chunk."},
+		{ID: "c2", Content: "Second chunk."},
+		{ID: "c3", Content: "Third chunk."},
+		{ID: "c4", Content: "Fourth chunk."},
+	}
+
+	start := time.Now()
+	enrichChunksWithContext(context.Background(), &blockingProviderCtx{}, chunks, "doc", 1, 50*time.Millisecond, nil)
+	elapsed := time.Since(start)
+
+	// 4 chunks * 50ms each = ~200ms total. Must finish well under 2s.
+	if elapsed >= 2*time.Second {
+		t.Errorf("enrichChunksWithContext took %v, want < 2s (per-call timeout not working)", elapsed)
+	}
+	// Each call must have gotten its own per-call timeout (not inherited expired ctx).
+	// Original content must be preserved on timeout error.
+	for i, c := range chunks {
+		orig := fmt.Sprintf("%s chunk.", []string{"First", "Second", "Third", "Fourth"}[i])
+		if c.Content != orig {
+			t.Errorf("chunks[%d].Content changed to %q, want %q", i, c.Content, orig)
 		}
 	}
 }

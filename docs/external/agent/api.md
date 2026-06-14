@@ -1,8 +1,8 @@
 # Agent API
 
-All symbols below live in `github.com/nevindra/oasis` (the root package umbrella).
-Import that package to use them; you do not need to import `agent/` or `core/` directly
-unless you are building framework extensions.
+All symbols below live in `github.com/nevindra/oasis/agent` unless noted otherwise.
+The root umbrella package (`github.com/nevindra/oasis`) re-exports the most common
+ones — see the table at the bottom of the Options section.
 
 ---
 
@@ -11,16 +11,16 @@ unless you are building framework extensions.
 ### `LLMAgent`
 
 ```go
-type LLMAgent struct { /* unexported */ }
+type LLMAgent struct { /* unexported fields */ }
 ```
 
-The standard LLM-driven agent. Implements `Agent`, `StreamingAgent`,
-`AgentWithOptions`, and `StreamingAgentWithOptions`. Safe for concurrent calls from
-multiple goroutines — each `Execute` call is independent.
+The standard LLM-driven agent. Implements `core.Agent`. Safe for concurrent calls
+from multiple goroutines — each `Execute` call is independent.
 
 ### `AgentTask`
 
 ```go
+// github.com/nevindra/oasis/core
 type AgentTask struct {
     Input       string
     Attachments []Attachment
@@ -41,6 +41,7 @@ Builder methods return a copy (value receiver, safe to chain):
 ### `AgentResult`
 
 ```go
+// github.com/nevindra/oasis/core
 type AgentResult struct {
     Output          string
     Thinking        string
@@ -69,9 +70,9 @@ Convenience methods: `Text()` (= `Output`), `Reasoning()` (= `Thinking`),
 
 ### `StepTrace`
 
-One entry per tool call: `Name`, `Type` ("tool" or "agent"), `Input` (truncated to 200
-chars), `Output` (truncated to 500 chars), `Usage`, `Duration`. Agent delegations strip
-the `agent_` prefix from `Name`. Also aliased as `ToolCallTrace`.
+One entry per tool call: `Name`, `Type`, `Input` (truncated to 200 chars),
+`Output` (truncated to 500 chars), `RawArgs`, `RawOutput` (untruncated), `Usage`,
+`Duration`. Agent delegations strip the `agent_` prefix from `Name`.
 
 ### `Limits`
 
@@ -89,9 +90,8 @@ type Limits struct {
 ```
 
 Resource-budget knobs. Zero value = keep the agent's default. Pass to `WithLimits`.
-Partial-override semantics: only non-zero fields take effect, so you can override
-one knob without touching the rest. Use `Unbounded` (= -1) for `MaxSteps` when you
-want no cap on step retention.
+Partial-override semantics: only non-zero fields take effect.
+Use `Unbounded` (= -1) for `MaxSteps` when you want no cap on step retention.
 
 Default values: `MaxIter=25`, `MaxSteps=100`, `MaxPlanSteps=50`,
 `MaxParallelDispatch=10`, `MaxAttachmentBytes=50MB`, `MaxToolResultLen=100_000 runes`.
@@ -99,6 +99,7 @@ Default values: `MaxIter=25`, `MaxSteps=100`, `MaxPlanSteps=50`,
 ### `Generation`
 
 ```go
+// alias of core.GenerationParams
 type Generation struct {
     Temperature *float64
     TopP        *float64
@@ -108,30 +109,79 @@ type Generation struct {
 ```
 
 LLM sampling parameters. All fields are pointers — nil means "use provider default".
-Pass to `WithGeneration`. Use `oasis.Ptr(v)` to get a pointer from a literal.
+Pass to `WithGeneration`. Use `oasis.Ptr(v)` to obtain a typed pointer from a literal
+(e.g. `oasis.Ptr(0.7)` gives `*float64`).
+
+### `Processors`
+
+```go
+type Processors struct {
+    Pre      []core.PreProcessor
+    Post     []core.PostProcessor
+    PostTool []core.PostToolProcessor
+}
+```
+
+Groups the processor-chain hooks fired by the run loop. Pass to `WithProcessors`.
+Fields are additive: multiple `WithProcessors` calls append rather than replace.
+
+### `Hooks`
+
+```go
+type Hooks struct {
+    PrepareStep         PrepareStep         // func(ctx, iter int, ctrl *StepControl) error
+    OnIterationComplete OnIterationComplete // func(ctx, iter int, snap *IterationSnapshot) (IterationDecision, error)
+    OnError             OnError             // func(ctx, iter int, err error) (ErrorDecision, error)
+}
+```
+
+Groups mid-iteration callbacks invoked by the run loop. Pass to `WithHooks`.
+Nil fields leave the corresponding hook untouched, so multiple `WithHooks` calls
+compose per-field rather than replacing the whole bundle.
+
+### `ToolConfig`
+
+```go
+type ToolConfig struct {
+    Tools               []core.AnyTool
+    Middleware           []core.ToolMiddleware
+    Policies            map[string]core.ToolPolicy
+    PolicyMatchers      []ToolPolicyMatcher
+    Approvals           []ApprovalConfig
+    ResultStore         core.ToolResultStore
+    ResultStoreExplicit bool
+}
+```
+
+Groups the tool subsystem's knobs into one typed sub-config. Use `WithTools` for
+simple tool registration; use `WithToolConfig` when you need middleware, policies,
+approval gates, or a custom result store. Fields are additive: `Tools`,
+`Middleware`, `Approvals`, and `PolicyMatchers` append; `Policies` merges;
+`ResultStore` replaces.
 
 ### `RunOptions`
 
-Per-call overrides passed to `ExecuteWith` / `ExecuteStreamWith`. `nil` and
-`&RunOptions{}` are both equivalent to "use all agent defaults."
+Per-call overrides passed to `Execute` via `agent.WithOverrides(opts)`.
+`nil` and `&RunOptions{}` are both equivalent to "use all agent defaults."
 
-Key fields: `Prompt *string`, `Generation *Generation`, `ResponseSchema *ResponseSchema`,
-`Limits *Limits`, `Tools []AnyTool` (replaces full set when non-nil),
-`PreProcessors / PostProcessors / PostToolProcessors []...` (replace when non-nil),
-`PrepareStep / OnIterationComplete / OnError` (replace when non-nil),
-`Memory *memory.AgentMemory`, `InputHandler`, `Tracer`, `Logger *slog.Logger`,
-`Metadata map[string]any` (shallow-merged; call-site wins on conflict),
-`StreamReplayLimit int` (replay buffer cap for `StartStream`).
+Key fields: `Prompt *string`, `Generation *Generation`, `ResponseSchema *core.ResponseSchema`,
+`Limits *Limits`, `Tools []core.AnyTool` (replaces full set when non-nil),
+`ActiveSkills []skills.Skill`, `PreProcessors / PostProcessors / PostToolProcessors`
+(replace when non-nil), `PrepareStep / OnIterationComplete / OnError` (replace when
+non-nil), `Memory *memory.AgentMemory`, `InputHandler`, `Tracer`, `Logger *slog.Logger`,
+`Metadata map[string]string` (shallow-merged; call-site wins on conflict),
+`StreamReplayLimit int` (replay buffer cap for `Subscribe`).
 
 `Validate()` returns `*RunOptionsError` when a field is out of range. Called
-automatically by `ExecuteWith` before anything else runs.
+automatically by `WithOverrides` before anything else runs.
 
 ### `StreamEvent` / `StreamEventType`
 
-Events emitted by `ExecuteStream`. The `Type` field selects the event kind. Key fields:
-`Content` (text delta or result), `Name` (tool/agent name), `Args` (tool call args),
-`Usage` (token counts), `FinishReason` (on `EventRunFinish`), `Object` (structured
-output), `SuspendPayload` (on suspend events).
+Events emitted into the channel wired by `core.WithStream`. The `Type` field
+selects the event kind. Key fields: `Content` (text delta or result),
+`Name` (tool/agent name), `Args` (tool call args), `Usage` (token counts),
+`FinishReason` (on `EventRunFinish`), `Object` (structured output),
+`SuspendPayload` (on suspend events).
 
 Key event types:
 
@@ -147,6 +197,8 @@ Key event types:
 | `EventToolCallSuspended` | Tool returned a `Suspend` error |
 | `EventProcessorSuspended` | Processor returned a `Suspend` error |
 | `EventObjectDelta/Finish` | Partial/final structured output (with `WithResponseSchema`) |
+| `EventThinking` | LLM reasoning/chain-of-thought content |
+| `EventReasoningDelta` | Incremental reasoning chunk (extended thinking) |
 
 ### `FinishReason`
 
@@ -181,11 +233,10 @@ behavior.
 
 ### `Stream`
 
-Multi-reader fan-out wrapper around `ExecuteStream`. Constructed via `StartStream` or
-`StartStreamWith`. Safe for concurrent use.
+Multi-reader fan-out wrapper. Constructed via `Subscribe`. Safe for concurrent use.
 
-Key methods: `Events() <-chan StreamEvent` (subscribe; late subscribers receive replay),
-`OnTextDelta(fn)`, `OnToolCall(fn)`, `OnToolResult(fn)`, `OnEvent(fn)` (typed
+Key methods: `Events() <-chan core.StreamEvent` (subscribe; late subscribers receive
+replay), `OnTextDelta(fn)`, `OnToolCall(fn)`, `OnToolResult(fn)`, `OnEvent(fn)` (typed
 callbacks), `Done() <-chan struct{}`, `Result() (AgentResult, error)`,
 `Text() string`, `Usage()`, `FinishReason()`, `Suspended()`, `SuspendPayload()`.
 
@@ -193,34 +244,39 @@ callbacks), `Done() <-chan struct{}`, `Result() (AgentResult, error)`,
 
 ## Constructors
 
-### `NewLLMAgent`
+### `New` / `oasis.NewAgent`
 
 ```go
-func NewLLMAgent(name, description string, provider Provider, opts ...AgentOption) *LLMAgent
+func New(name, description string, provider core.Provider, opts ...AgentOption) *LLMAgent
 ```
 
 Builds an `LLMAgent`. `name` and `description` are required (empty strings are
 accepted but produce poor logs and network routing). `provider` must be non-nil.
-Returns `*LLMAgent` which implements all four agent interfaces. Construction is not
-goroutine-safe; build agents once and share them after.
+Returns `*LLMAgent` which implements `core.Agent`. Construction is not goroutine-safe;
+build agents once and share them after.
 
-### `StartStream`
+The umbrella package (`github.com/nevindra/oasis`) re-exports this as `oasis.NewAgent`.
 
-```go
-func StartStream(ctx context.Context, ag StreamingAgent, task AgentTask) *Stream
-```
-
-Runs `ag.ExecuteStream` in a background goroutine and returns a `Stream` immediately.
-The `Stream` is ready to subscribe to before the goroutine produces its first event.
-
-### `StartStreamWith`
+### `Subscribe` / `oasis.Subscribe`
 
 ```go
-func StartStreamWith(ctx context.Context, ag StreamingAgentWithOptions, task AgentTask, opts *RunOptions) *Stream
+func Subscribe(ctx context.Context, ag core.Agent, task AgentTask, opts ...core.RunOption) *Stream
 ```
 
-Like `StartStream` but applies per-call `RunOptions`. Honors `opts.StreamReplayLimit`
-(clamped to `[1, 4096]`; default 256 when unset).
+Runs `ag.Execute` in a background goroutine with `core.WithStream` wired up, and
+returns a `Stream` the caller may subscribe to or query for the final result. Pass
+additional `core.RunOption` values to layer overrides or deadlines. The `Stream` is
+ready to subscribe to before the goroutine produces its first event.
+
+### `Spawn` / `oasis.Spawn`
+
+```go
+func Spawn(ctx context.Context, agent Agent, task AgentTask, opts ...SpawnOption) *AgentHandle
+```
+
+Launches `agent.Execute` in a background goroutine. Returns immediately with an
+`AgentHandle` for tracking, awaiting, and cancelling. The parent `ctx` controls the
+agent's lifetime.
 
 ---
 
@@ -229,7 +285,7 @@ Like `StartStream` but applies per-call `RunOptions`. Honors `opts.StreamReplayL
 ### `LLMAgent.Execute`
 
 ```go
-func (a *LLMAgent) Execute(ctx context.Context, task AgentTask) (AgentResult, error)
+func (a *LLMAgent) Execute(ctx context.Context, task AgentTask, opts ...core.RunOption) (AgentResult, error)
 ```
 
 Runs the tool-calling loop and blocks until it finishes. Returns the final result or
@@ -239,34 +295,13 @@ LLM call is aborted and an error is returned.
 
 Thread-safe: multiple goroutines may call `Execute` concurrently on the same agent.
 
-### `LLMAgent.ExecuteStream`
+Pass `core.RunOption` values to customize per-call behavior:
 
-```go
-func (a *LLMAgent) ExecuteStream(ctx context.Context, task AgentTask, ch chan<- StreamEvent) (AgentResult, error)
-```
-
-Like `Execute` but emits `StreamEvent` values into `ch` throughout execution. `ch`
-MUST be a buffered channel (recommended: 64+). The implementation always closes `ch`
-before returning — do not close it yourself. Range over `ch` in a separate goroutine
-or use `Stream` for ergonomic fan-out.
-
-### `LLMAgent.ExecuteWith`
-
-```go
-func (a *LLMAgent) ExecuteWith(ctx context.Context, task AgentTask, opts *RunOptions) (AgentResult, error)
-```
-
-Like `Execute` with per-call overrides from `opts`. Validates `opts` first;
-returns `*RunOptionsError` if any field is out of range. `nil` opts = plain `Execute`.
-
-### `LLMAgent.ExecuteStreamWith`
-
-```go
-func (a *LLMAgent) ExecuteStreamWith(ctx context.Context, task AgentTask, ch chan<- StreamEvent, opts *RunOptions) (AgentResult, error)
-```
-
-Like `ExecuteStream` with per-call `RunOptions`. On validation failure the channel is
-closed immediately and a `*RunOptionsError` is returned.
+| Run option | Effect |
+|-----------|--------|
+| `core.WithStream(ch)` | Attach a buffered `chan<- core.StreamEvent`; agent closes it before returning |
+| `agent.WithOverrides(opts)` | Apply `*RunOptions` overrides (prompt, limits, tools, processors, etc.) |
+| `core.WithDeadline(d)` | Add a per-call wall-clock cap |
 
 ### `LLMAgent.Memory`
 
@@ -287,19 +322,28 @@ func (e *ErrSuspended) Resume(ctx context.Context, data json.RawMessage) (AgentR
 Continues the suspended run with the human's response. Single-use. Returns an error
 if called after `Release()` or TTL expiry.
 
+### `ErrSuspended.ResumeStream`
+
+```go
+func (e *ErrSuspended) ResumeStream(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (AgentResult, error)
+```
+
+Like `Resume` but emits `StreamEvent` values into `ch` throughout. `ch` must be
+buffered. The agent closes it before returning.
+
 ### `ErrSuspended.WithSuspendTTL`
 
 ```go
 func (e *ErrSuspended) WithSuspendTTL(d time.Duration)
 ```
 
-Sets an automatic expiry. After `d` elapses the snapshot is freed and `Resume` returns
-an error. Override the default 30-minute TTL here.
+Sets an automatic expiry. After `d` elapses the snapshot is freed and `Resume`
+returns an error. Override the default 30-minute TTL here.
 
 ### `ServeSSE`
 
 ```go
-func ServeSSE(ctx context.Context, w http.ResponseWriter, agent StreamingAgent, task AgentTask) (AgentResult, error)
+func ServeSSE(ctx context.Context, w http.ResponseWriter, agent core.Agent, task AgentTask) (AgentResult, error)
 ```
 
 Streams the agent over HTTP as Server-Sent Events. Validates that `w` implements
@@ -312,47 +356,40 @@ Client disconnection via `ctx` cancellation propagates to the agent.
 
 ## Options
 
-Construction-time options (all are `AgentOption`, pass to `NewLLMAgent`):
+Construction-time options (all are `AgentOption`, pass to `New`):
 
 **Prompt and model**
 - `WithPrompt(s)` — static system prompt (default: none).
 - `WithDynamicPrompt(fn PromptFunc)` — per-call prompt resolver; overrides `WithPrompt`.
-- `WithDynamicModel(fn ModelFunc)` — per-call provider swap.
+- `WithDynamicModel(fn core.ModelFunc)` — per-call provider swap.
 - `WithDynamicTools(fn ToolsFunc)` — per-call tool replacement (replaces, not appends).
 
 **Tools and limits**
 - `WithTools(tools...)` — registers tools the LLM can call.
+- `WithToolConfig(tc ToolConfig)` — registers tools together with middleware, policies, approval gates, and result-store override in one call.
 - `WithLimits(lim Limits)` — resource-budget knobs; see `Limits` type for defaults.
 - `WithGeneration(g Generation)` — sampling params (temperature, top-p, top-k, max-tokens).
-- `WithToolPolicy(name, p)` — per-tool timeout + retry; exact name wins over matchers.
-- `WithToolPolicyMatch(fn, p)` — predicate-matched policy (e.g. `mcp__*` prefix).
-- `WithToolApproval(name, opts...)` — human-approval gate before a named tool runs.
-- `WithToolResultStore(s)` — override paging store; `nil` disables result paging.
-- `WithToolMiddleware(mws...)` — wrap all tools; first in list = innermost.
 - `WithPlanExecution()` — enables built-in `execute_plan` parallel-batching tool.
-- `WithSubAgentSpawning(opts...)` — enables built-in `spawn_agent` tool.
-- `WithSandbox(sb, tools...)` — attaches a sandbox and auto-registers its tools.
+- `WithSandbox(sb core.Sandbox, tools ...core.AnyTool)` — attaches a sandbox and auto-registers its tools.
 
 **Memory and knowledge**
 - `WithMemory(opts...)` — wires store, history, recall, compaction, compression.
-- `WithEmbedding(e)` — embedding provider for semantic recall.
+- `WithEmbedding(e core.EmbeddingProvider)` — embedding provider for semantic recall.
 - `WithActiveSkills(skills...)` — pre-activates skills appended to every system prompt.
-- `WithSkills(p)` — runtime skill discovery via `skill_discover`/`skill_activate` tools.
+- `WithSkills(p skills.SkillProvider)` — runtime skill discovery via `skill_discover`/`skill_activate` tools.
 
 **Processors and hooks**
-- `WithPreProcessors(...)` — run before each LLM call.
-- `WithPostProcessors(...)` — run after each LLM response.
-- `WithPostToolProcessors(...)` — run after each tool result.
-- `WithPrepareStep(fn)` — mutate the per-iteration request, model, or tool set.
-- `WithOnIterationComplete(fn)` — control loop continuation after each iteration.
-- `WithOnError(fn)` — mid-loop error recovery decisions.
+- `WithProcessors(p Processors)` — wire `Pre`, `Post`, and `PostTool` processor chains in one call.
+- `WithHooks(h Hooks)` — wire `PrepareStep`, `OnIterationComplete`, and `OnError` callbacks in one call.
 
 **Infrastructure**
-- `WithInputHandler(h)` — enables `ask_user` tool + HITL suspend/resume.
-- `WithResponseSchema(s)` — structured JSON output enforcement.
-- `WithTracer(t)` — OTEL-backed span emission; auto-wires `OTelSpanMiddleware`.
+- `WithInputHandler(h InputHandler)` — enables `ask_user` tool + HITL suspend/resume.
+- `WithResponseSchema(s *core.ResponseSchema)` — structured JSON output enforcement.
+- `WithTracer(t core.Tracer)` — OTEL-backed span emission; auto-wires `OTelSpanMiddleware`.
 - `WithLogger(l *slog.Logger)` — structured logging; default is no-op.
-- `WithMetadata(kv)` — static metadata merged into traces, hooks, and logs.
+- `WithMetadata(kv map[string]string)` — static metadata merged into traces, hooks, and logs.
+- `WithMiddleware(mws ...Middleware)` — wraps the agent's `Execute` method.
+- `WithoutPromptCaching()` — opts the agent out of automatic cache-breakpoint placement.
 
 ### Tool middleware constructors
 
@@ -363,16 +400,42 @@ Construction-time options (all are `AgentOption`, pass to `NewLLMAgent`):
 | `OTelSpanMiddleware(tracer)` | Emits a `tool.execute` span; auto-wired when `WithTracer` is set |
 | `TransformMiddleware(fn)` | Applies `fn` to the `ToolResult` before it returns to the LLM |
 
-### Provider decorators
+### Provider retry decorator
 
-| Function | What it does |
-|----------|-------------|
-| `WithRetry(p, opts...)` | Wraps any `Provider` with retry on HTTP 429/503 |
-| `WithEmbeddingRetry(p, opts...)` | Same for `EmbeddingProvider` |
+```go
+// Wrap any Provider with retry on HTTP 429/503:
+p := provider.Chain(agent.RetryMiddleware(agent.RetryMaxAttempts(3)))(base)
+
+// Wrap an EmbeddingProvider:
+ep := agent.WithEmbeddingRetry(embedder, agent.RetryMaxAttempts(3))
+```
 
 `RetryOption` values: `RetryMaxAttempts(n)` (default 3), `RetryBaseDelay(d)` (default
 1s), `RetryTimeout(d)` (total cap across all attempts; 0 = no cap),
 `RetryLogger(l)`.
+
+### Umbrella re-exports
+
+The `github.com/nevindra/oasis` package re-exports these agent symbols:
+
+| Umbrella name | Agent package source |
+|--------------|---------------------|
+| `oasis.NewAgent` | `agent.New` |
+| `oasis.Subscribe` | `agent.Subscribe` |
+| `oasis.Spawn` | `agent.Spawn` |
+| `oasis.WithStream` | `core.WithStream` |
+| `oasis.WithOverrides` | `agent.WithOverrides` |
+| `oasis.WithDeadline` | `core.WithDeadline` |
+| `oasis.Ptr[T](v)` | generic helper (not aliasable as var) |
+| `oasis.WithProcessors` | `agent.WithProcessors` |
+| `oasis.WithHooks` | `agent.WithHooks` |
+| `oasis.WithToolConfig` | `agent.WithToolConfig` |
+| `oasis.WithTools` | `agent.WithTools` |
+| `oasis.WithPrompt` | `agent.WithPrompt` |
+| `oasis.WithGeneration` | `agent.WithGeneration` |
+| `oasis.WithLimits` | `agent.WithLimits` |
+| `oasis.WithMemory` | `agent.WithMemory` |
+| `oasis.RetryMiddleware` | `agent.RetryMiddleware` |
 
 ---
 
@@ -382,12 +445,10 @@ Construction-time options (all are `AgentOption`, pass to `NewLLMAgent`):
 |-------|--------------|
 | `*ErrSuspended` | Detect with `errors.As`; call `Resume` or `Release` |
 | `*RunOptionsError` | Field validation failed; log `err.Field` + `err.Message`, fix the value |
-| `*ErrHTTP` | HTTP-level failure from a provider; `Status` and `Body` carry details |
-| `*ErrLLM` | LLM-level failure; `Provider` and `Message` carry details |
 | `context.Canceled / context.DeadlineExceeded` | Caller cancelled or timed out; propagated as-is |
-| `*ErrHalt` | Processor signalled a graceful halt; the run returns `AgentResult{Output: halt.Response}` with no error |
+| `*core.ErrHalt` | Processor signalled a graceful halt; the run returns `AgentResult{Output: halt.Response}` with no error |
 
 `ToolResult.Error` (a string field on `ToolResult`) is NOT a Go error — it is a
-business failure returned to the LLM so it can adapt. `Tool.Execute` (via `AnyTool`)
-always returns nil Go error for tool-level outcomes; Go errors from tools signal
-infrastructure failures only.
+business failure returned to the LLM so it can adapt. `ExecuteRaw` always returns
+nil Go error for tool-level outcomes; Go errors from tools signal infrastructure
+failures only.

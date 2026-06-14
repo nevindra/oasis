@@ -177,4 +177,3 @@ func (s *Store) scanEdges(ctx context.Context, query string, args []any) ([]oasi
 	}
 	return edges, rows.Err()
 }
-

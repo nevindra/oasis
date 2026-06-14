@@ -57,6 +57,59 @@ func jsonEqual(a, b any) bool {
 	return string(aj) == string(bj)
 }
 
+// TestSendConfigurationBlockingDefault pins the zero-value semantics: a
+// zero-value SendConfiguration (and a nil/true Blocking) means blocking — the
+// documented A2A default — while only an explicit *false opts out. This guards
+// the freeze-shape trap where a plain `bool` would have defaulted to
+// non-blocking.
+func TestSendConfigurationBlockingDefault(t *testing.T) {
+	cases := []struct {
+		name           string
+		cfg            *SendConfiguration
+		wantNonBlock   bool
+		wantWireHasKey bool // whether marshaled JSON carries the "blocking" key
+	}{
+		{"nil config", nil, false, false},
+		{"zero value", &SendConfiguration{}, false, false},
+		{"explicit blocking", &SendConfiguration{Blocking: BlockingPtr()}, false, true},
+		{"explicit non-blocking", &SendConfiguration{Blocking: NonBlockingPtr()}, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.isNonBlocking(); got != tc.wantNonBlock {
+				t.Errorf("isNonBlocking() = %v, want %v", got, tc.wantNonBlock)
+			}
+			if tc.cfg == nil {
+				return
+			}
+			raw, err := json.Marshal(tc.cfg)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			// Wire key must stay "blocking" (A2A v1.0 SendMessageConfiguration),
+			// and must be omitted entirely when Blocking is nil so a default
+			// config round-trips as a blocking one.
+			hasKey := strings.Contains(string(raw), `"blocking"`)
+			if hasKey != tc.wantWireHasKey {
+				t.Errorf("wire = %s; blocking-key present = %v, want %v", raw, hasKey, tc.wantWireHasKey)
+			}
+			if strings.Contains(string(raw), "nonBlocking") {
+				t.Errorf("wire must use the spec key \"blocking\", not \"nonBlocking\": %s", raw)
+			}
+
+			// A config decoded from JSON with no "blocking" key must come back
+			// blocking (Blocking == nil).
+			var rt SendConfiguration
+			if err := json.Unmarshal(raw, &rt); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if rt.isNonBlocking() != tc.wantNonBlock {
+				t.Errorf("round-trip isNonBlocking() = %v, want %v", rt.isNonBlocking(), tc.wantNonBlock)
+			}
+		})
+	}
+}
+
 func TestTaskStateTerminal(t *testing.T) {
 	for _, tc := range []struct {
 		s    TaskState

@@ -320,11 +320,18 @@ Enables the `spawn_agent` tool on the router LLM. When the router calls
 ### `RestartOnFail`
 
 ```go
-func RestartOnFail(maxRestarts int) SupervisorPolicy
+func RestartOnFail(maxRestarts int, delay ...time.Duration) SupervisorPolicy
 ```
 
 Retries the child up to `maxRestarts` times before propagating the failure.
-`maxRestarts = 0` means no retries (one attempt total).
+`maxRestarts = 0` means no retries (one attempt total). The optional `delay`
+sets a fixed pause between restart attempts; if omitted the child is restarted
+immediately.
+
+```go
+// restart up to 3 times, waiting 2 seconds between each attempt
+policy := network.RestartOnFail(3, 2*time.Second)
+```
 
 ---
 

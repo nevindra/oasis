@@ -32,22 +32,35 @@ type Provider struct {
 	model   string
 	baseURL string
 	client  *http.Client
+	name    string
 }
 
 // New creates a DashScope image provider. baseURL is the API base, e.g.
 // "https://dashscope-intl.aliyuncs.com/api/v1" (Singapore) or
 // "https://dashscope.aliyuncs.com/api/v1" (Beijing).
-func New(apiKey, model, baseURL string) *Provider {
-	return &Provider{
+//
+// Use functional options to customise the provider:
+//
+//	dashscope.New(key, model, baseURL,
+//	    dashscope.WithHTTPClient(myClient),
+//	    dashscope.WithName("dashscope-intl"),
+//	)
+func New(apiKey, model, baseURL string, opts ...Option) *Provider {
+	p := &Provider{
 		apiKey:  apiKey,
 		model:   model,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{},
+		name:    "dashscope",
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
-// Name returns the provider name.
-func (p *Provider) Name() string { return "dashscope" }
+// Name returns the provider name (default "dashscope", overridable via WithName).
+func (p *Provider) Name() string { return p.name }
 
 // --- request/response shapes ---
 

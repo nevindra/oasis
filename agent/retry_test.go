@@ -298,7 +298,7 @@ type stubRetryEmbedResult struct {
 	err        error
 }
 
-func (s *stubRetryEmbed) Name() string   { return "stub-embed" }
+func (s *stubRetryEmbed) Name() string    { return "stub-embed" }
 func (s *stubRetryEmbed) Dimensions() int { return 3 }
 func (s *stubRetryEmbed) Embed(_ context.Context, texts []string) ([][]float32, error) {
 	i := s.calls

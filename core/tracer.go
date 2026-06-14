@@ -37,12 +37,29 @@ type SpanAttr struct {
 // Val returns the attribute value. The dynamic type is always one of
 // string, int, float64, or bool — enforced by the constructors.
 //
-// Why: observer is a separate Go module and cannot access unexported fields
-// across module boundaries, so the accessor must be exported. Returning any
-// from an accessor whose godoc documents the closed type set is the accepted
-// shape here — the construction boundary (not the accessor type) is what
-// enforces type safety.
+// Why: the value field is unexported so construction must go through the typed
+// constructors (StringAttr/IntAttr/Float64Attr/BoolAttr); an exported accessor
+// is the only way other packages (e.g. the observer's OTEL bridge) can read it.
+// The returned type is any because the bridge type-switches over the closed set
+// to map each to its OTEL counterpart. Callers that already know the type should
+// prefer the typed accessors (Str/Int/Float/Bool), which avoid the assertion.
 func (a SpanAttr) Val() any { return a.value }
+
+// Str returns the value as a string and ok=true when the attribute was built
+// with StringAttr; otherwise ("", false). It never panics.
+func (a SpanAttr) Str() (string, bool) { v, ok := a.value.(string); return v, ok }
+
+// Int returns the value as an int and ok=true when the attribute was built with
+// IntAttr; otherwise (0, false). It never panics.
+func (a SpanAttr) Int() (int, bool) { v, ok := a.value.(int); return v, ok }
+
+// Float returns the value as a float64 and ok=true when the attribute was built
+// with Float64Attr; otherwise (0, false). It never panics.
+func (a SpanAttr) Float() (float64, bool) { v, ok := a.value.(float64); return v, ok }
+
+// Bool returns the value as a bool and ok=true when the attribute was built with
+// BoolAttr; otherwise (false, false). It never panics.
+func (a SpanAttr) Bool() (bool, bool) { v, ok := a.value.(bool); return v, ok }
 
 // StringAttr creates a string-typed span attribute.
 func StringAttr(k, v string) SpanAttr {

@@ -123,7 +123,7 @@ func (p SuspendProtocol[Req, Resp]) PayloadFrom(e *ErrSuspended) (Req, error) {
 // Returns an error if e is nil, has a different protocol tag, or any
 // error the underlying (*ErrSuspended).Resume would return (released,
 // expired, marshal failure on data, etc.).
-func (p SuspendProtocol[Req, Resp]) Resume(e *ErrSuspended, ctx context.Context, data Resp) (AgentResult, error) {
+func (p SuspendProtocol[Req, Resp]) Resume(ctx context.Context, e *ErrSuspended, data Resp) (AgentResult, error) {
 	if e == nil {
 		return AgentResult{}, errors.New("Resume: nil suspended err")
 	}
@@ -143,7 +143,7 @@ func (p SuspendProtocol[Req, Resp]) Resume(e *ErrSuspended, ctx context.Context,
 // ResumeStream is the streaming form of Resume. Same tag check, same
 // JSON marshaling; events are emitted on ch by the engine throughout
 // the post-resume loop. The engine closes ch when streaming completes.
-func (p SuspendProtocol[Req, Resp]) ResumeStream(e *ErrSuspended, ctx context.Context, data Resp, ch chan<- core.StreamEvent) (AgentResult, error) {
+func (p SuspendProtocol[Req, Resp]) ResumeStream(ctx context.Context, e *ErrSuspended, data Resp, ch chan<- core.StreamEvent) (AgentResult, error) {
 	if e == nil {
 		return AgentResult{}, errors.New("ResumeStream: nil suspended err")
 	}

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 )
@@ -29,6 +29,15 @@ type Resource struct {
 	Read func() string
 }
 
+// ServerOption configures a Server at construction time.
+type ServerOption func(*Server)
+
+// WithServerLogger sets the slog.Logger used by the server for internal error
+// logging (failed marshals, write errors). Defaults to slog.Default().
+func WithServerLogger(l *slog.Logger) ServerOption {
+	return func(s *Server) { s.logger = l }
+}
+
 // Server is an MCP server that communicates over stdio using JSON-RPC 2.0.
 // Register tools and resources before calling Serve.
 type Server struct {
@@ -42,16 +51,23 @@ type Server struct {
 	reader io.Reader
 	writer io.Writer
 	mu     sync.Mutex // protects writes
+
+	logger *slog.Logger
 }
 
 // New creates an MCP server with the given name and version.
-func New(name, version string) *Server {
-	return &Server{
+func New(name, version string, opts ...ServerOption) *Server {
+	s := &Server{
 		name:    name,
 		version: version,
 		reader:  os.Stdin,
 		writer:  os.Stdout,
+		logger:  slog.Default(),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // AddTool registers a tool handler. Must be called before Serve.
@@ -247,7 +263,7 @@ func (s *Server) respondError(id json.RawMessage, code int, message string) *res
 func (s *Server) writeResponse(resp response) {
 	data, err := json.Marshal(resp)
 	if err != nil {
-		log.Printf(" [mcp] marshal response: %v", err)
+		s.logger.Error("mcp: marshal response", "err", err)
 		return
 	}
 
@@ -255,6 +271,6 @@ func (s *Server) writeResponse(resp response) {
 	defer s.mu.Unlock()
 	data = append(data, '\n')
 	if _, err := s.writer.Write(data); err != nil {
-		log.Printf(" [mcp] write response: %v", err)
+		s.logger.Error("mcp: write response", "err", err)
 	}
 }

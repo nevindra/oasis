@@ -280,7 +280,7 @@ func TestExtractGraphEdges_WithDocContext(t *testing.T) {
 	var capturedPrompt string
 	provider := &mockGraphProvider{
 		response: `{"edges":[{"source":"c2","target":"c1","relation":"depends_on","weight":0.9,"description":"retry depends on error handling"}]}`,
-		onChat: func() {},
+		onChat:   func() {},
 	}
 	provider.capturePrompt = &capturedPrompt
 
@@ -337,6 +337,25 @@ func TestExtractGraphEdges_WithoutDocContext(t *testing.T) {
 	}
 	if !strings.Contains(capturedPrompt, "[c1]") {
 		t.Error("prompt should contain chunk IDs")
+	}
+}
+
+// TestParseEdgeResponse_SimilarTo verifies that edges with relation "similar_to"
+// are recognized as oasis.RelSimilarTo and not silently dropped.
+func TestParseEdgeResponse_SimilarTo(t *testing.T) {
+	chunks := []oasis.Chunk{
+		{ID: "c1", Content: "A"},
+		{ID: "c2", Content: "B"},
+	}
+	edges, err := parseEdgeResponse(`{"edges":[{"source":"c1","target":"c2","relation":"similar_to","weight":0.75,"description":"semantically similar"}]}`, chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("got %d edges, want 1 (similar_to was dropped)", len(edges))
+	}
+	if edges[0].Relation != oasis.RelSimilarTo {
+		t.Errorf("Relation = %q, want %q", edges[0].Relation, oasis.RelSimilarTo)
 	}
 }
 

@@ -73,17 +73,17 @@ type openaiModel struct {
 	MaxCompletionTokens int   `json:"max_completion_tokens,omitempty"`
 
 	// Together extensions
-	DisplayName   string          `json:"display_name,omitempty"`
-	Type          string          `json:"type,omitempty"` // "chat", "embedding", "image", etc.
-	ContextLength int             `json:"context_length,omitempty"`
+	DisplayName   string           `json:"display_name,omitempty"`
+	Type          string           `json:"type,omitempty"` // "chat", "embedding", "image", etc.
+	ContextLength int              `json:"context_length,omitempty"`
 	Pricing       *togetherPricing `json:"pricing,omitempty"`
 
 	// Mistral extensions
-	Name               string           `json:"name,omitempty"`
-	MaxContextLength   int              `json:"max_context_length,omitempty"`
-	Capabilities       *mistralCaps     `json:"capabilities,omitempty"`
-	Deprecation        *string          `json:"deprecation,omitempty"`
-	DefaultModelTemp   *float64         `json:"default_model_temperature,omitempty"`
+	Name             string       `json:"name,omitempty"`
+	MaxContextLength int          `json:"max_context_length,omitempty"`
+	Capabilities     *mistralCaps `json:"capabilities,omitempty"`
+	Deprecation      *string      `json:"deprecation,omitempty"`
+	DefaultModelTemp *float64     `json:"default_model_temperature,omitempty"`
 }
 
 type togetherPricing struct {
@@ -294,8 +294,8 @@ func normalizeGemini(models []geminiModel) []oasis.ModelInfo {
 			ID:            id,
 			Provider:      "gemini",
 			DisplayName:   m.DisplayName,
-			InputContext:   m.InputTokenLimit,
-			OutputContext:  m.OutputTokenLimit,
+			InputContext:  m.InputTokenLimit,
+			OutputContext: m.OutputTokenLimit,
 			Status:        oasis.ModelStatusAvailable,
 		}
 

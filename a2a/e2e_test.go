@@ -299,7 +299,7 @@ func TestE2ENonBlockingPush(t *testing.T) {
 
 	// SendMessage with non-blocking config and push webhook.
 	task, err := remote.Client().SendMessage(context.Background(), msg, &a2a.SendConfiguration{
-		Blocking: false,
+		Blocking: a2a.NonBlockingPtr(),
 		PushNotificationConfig: &a2a.PushNotificationConfig{
 			URL:   hook.URL,
 			Token: "e2e-token",

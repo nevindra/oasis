@@ -21,6 +21,10 @@ func Func[In, Out any](name, description string,
 			Name:        name,
 			Description: description,
 			Parameters:  DeriveSchema[In](),
+			// Derive the output schema the same way Erase/EraseStreaming do.
+			// Func takes a plain function, so there is no OutSchemaProvider hook
+			// to override it — a plain derive is the whole story here.
+			OutputSchema: DeriveSchema[Out](),
 		},
 		fn: fn,
 	}

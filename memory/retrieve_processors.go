@@ -53,7 +53,7 @@ func (LoadPinned) Process(ctx context.Context, in *RetrieveContext) error {
 	}
 	yes := true
 	sc := scopeForKind(in.Task, KindFact) // ScopeResource by default
-	items, err := in.Store.List(ctx, Filter{Pinned: &yes, Scope: &sc})
+	items, err := in.Store.List(ctx, core.MemoryFilter{Pinned: &yes, Scope: &sc})
 	if err != nil {
 		return err
 	}
@@ -73,8 +73,8 @@ func (LoadPinned) Process(ctx context.Context, in *RetrieveContext) error {
 // and renders per-Kind prompt slots. Replaces today's separate fact /
 // event / note recall calls.
 type BatchedRecall struct {
-	Kinds []Kind // empty = [KindFact]
-	TopK  int    // 0 = defaultRecallTopK
+	Kinds []core.MemoryKind // empty = [KindFact]
+	TopK  int               // 0 = defaultRecallTopK
 }
 
 func (b BatchedRecall) Process(ctx context.Context, in *RetrieveContext) error {
@@ -83,32 +83,32 @@ func (b BatchedRecall) Process(ctx context.Context, in *RetrieveContext) error {
 	}
 	kinds := b.Kinds
 	if len(kinds) == 0 {
-		kinds = []Kind{KindFact}
+		kinds = []core.MemoryKind{KindFact}
 	}
 	topK := b.TopK
 	if topK <= 0 {
 		topK = defaultRecallTopK
 	}
 	sc := scopeForKind(in.Task, KindFact)
-	results, err := in.Store.SearchSemantic(ctx, in.Embedding, Filter{
+	results, err := in.Store.SearchSemantic(ctx, in.Embedding, core.MemoryFilter{
 		Kinds: kinds, Scope: &sc,
 	}, topK)
 	if err != nil {
 		return err
 	}
 	// Split by Kind into prompt slots.
-	byKind := map[Kind][]MemoryItem{}
+	byKind := map[core.MemoryKind][]core.MemoryItem{}
 	for _, r := range results {
 		byKind[r.Item.Kind] = append(byKind[r.Item.Kind], r.Item)
 	}
 	if in.Selected == nil {
-		in.Selected = make(map[Kind][]MemoryItem)
+		in.Selected = make(map[core.MemoryKind][]core.MemoryItem)
 	}
 	for k, items := range byKind {
 		in.Selected[k] = items
 	}
 
-	headerFor := func(k Kind) string {
+	headerFor := func(k core.MemoryKind) string {
 		switch k {
 		case KindFact:
 			return "Known facts about the user:"
@@ -182,10 +182,10 @@ func (r RecallCrossThread) Process(ctx context.Context, in *RetrieveContext) err
 
 // TrimToBudget trims History to Budget tokens (semantic or oldest-first).
 type TrimToBudget struct {
-	Budget    int
-	Semantic  bool
-	Embedder  core.EmbeddingProvider // nil = fall back to oldest-first
-	TrimCache *embeddingCache        // nil-safe; lazily created if needed
+	Budget     int
+	Semantic   bool
+	Embedder   core.EmbeddingProvider // nil = fall back to oldest-first
+	TrimCache  *embeddingCache        // nil-safe; lazily created if needed
 	KeepRecent int
 }
 

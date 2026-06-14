@@ -54,7 +54,7 @@ type CachedContent struct {
 
 // CachedContentPart represents content to cache (text, inline data, or file references).
 type CachedContentPart struct {
-	Role  string          `json:"role,omitempty"`
+	Role  string           `json:"role,omitempty"`
 	Parts []map[string]any `json:"parts"`
 }
 

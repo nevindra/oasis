@@ -162,6 +162,43 @@ Known provider strings: `"gemini"`, `"openai"`, `"groq"`, `"deepseek"`, `"togeth
 
 Same pattern as `resolve.Provider` but for embeddings. Known embedding providers: `"gemini"`, `"openai"`, `"vllm"`, `"ollama"`, `"together"`, `"mistral"`, `"qwen"`, `"qwen-cn"`.
 
+### `dashscope.New(apiKey, model, baseURL string, opts ...Option) *Provider`
+
+Creates a DashScope image-generation provider (Alibaba Qwen-Image models). DashScope
+uses a bespoke request/response format — not the OpenAI-compatible endpoint — so this
+is a dedicated satellite, not `openaicompat`.
+
+```go
+import "github.com/nevindra/oasis/provider/dashscope"
+
+p := dashscope.New(
+    os.Getenv("DASHSCOPE_API_KEY"),
+    "wanx-v1",
+    "https://dashscope.aliyuncs.com/api/v1",
+)
+```
+
+With options:
+
+```go
+p := dashscope.New(
+    apiKey, model, baseURL,
+    dashscope.WithHTTPClient(myClient),  // custom *http.Client (timeouts, proxies)
+    dashscope.WithName("dashscope"),     // overrides Provider.Name()
+)
+```
+
+The provider downloads generated image URLs and returns them as inline `Attachment`
+values on `ChatResponse`, so callers can persist images to their own storage. Image
+URLs returned by DashScope are valid for approximately 24 hours.
+
+#### DashScope options (`dashscope.Option`)
+
+| Option | Default | Notes |
+|--------|---------|-------|
+| `dashscope.WithHTTPClient(c *http.Client)` | `&http.Client{}` | Custom HTTP client for timeouts or proxies. |
+| `dashscope.WithName(name string)` | `"dashscope"` | Sets `Provider.Name()`. Use to distinguish providers in logs. |
+
 ---
 
 ## Options

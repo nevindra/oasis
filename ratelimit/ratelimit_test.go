@@ -50,12 +50,12 @@ var _ core.Provider = (*stubProvider)(nil)
 
 // --- RPM tests (Task 4) ---
 
-func TestWithRateLimit_RPM_AllowsWithinLimit(t *testing.T) {
+func TestRateLimitMiddleware_RPM_AllowsWithinLimit(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{resp: core.ChatResponse{Content: "a"}},
 		{resp: core.ChatResponse{Content: "b"}},
 	}}
-	p := WithRateLimit(stub, RPM(60))
+	p := RateLimitMiddleware(RPM(60))(stub)
 
 	resp, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
@@ -66,13 +66,13 @@ func TestWithRateLimit_RPM_AllowsWithinLimit(t *testing.T) {
 	}
 }
 
-func TestWithRateLimit_RPM_BlocksWhenExceeded(t *testing.T) {
+func TestRateLimitMiddleware_RPM_BlocksWhenExceeded(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{resp: core.ChatResponse{Content: "a"}},
 		{resp: core.ChatResponse{Content: "b"}},
 	}}
 	// RPM(1) = 1 request per minute. Second call should block.
-	p := WithRateLimit(stub, RPM(1))
+	p := RateLimitMiddleware(RPM(1))(stub)
 
 	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
@@ -88,9 +88,9 @@ func TestWithRateLimit_RPM_BlocksWhenExceeded(t *testing.T) {
 	}
 }
 
-func TestWithRateLimit_Name(t *testing.T) {
+func TestRateLimitMiddleware_Name(t *testing.T) {
 	stub := &stubProvider{}
-	p := WithRateLimit(stub, RPM(10))
+	p := RateLimitMiddleware(RPM(10))(stub)
 	if p.Name() != "stub" {
 		t.Errorf("Name() = %q, want %q", p.Name(), "stub")
 	}
@@ -98,12 +98,12 @@ func TestWithRateLimit_Name(t *testing.T) {
 
 // --- TPM tests (Task 5) ---
 
-func TestWithRateLimit_TPM_AllowsWithinLimit(t *testing.T) {
+func TestRateLimitMiddleware_TPM_AllowsWithinLimit(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{resp: core.ChatResponse{Content: "a", Usage: core.Usage{InputTokens: 100, OutputTokens: 50}}},
 		{resp: core.ChatResponse{Content: "b", Usage: core.Usage{InputTokens: 100, OutputTokens: 50}}},
 	}}
-	p := WithRateLimit(stub, TPM(1000))
+	p := RateLimitMiddleware(TPM(1000))(stub)
 
 	// First call: 150 tokens, well within 1000 TPM.
 	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
@@ -120,13 +120,13 @@ func TestWithRateLimit_TPM_AllowsWithinLimit(t *testing.T) {
 	}
 }
 
-func TestWithRateLimit_TPM_BlocksWhenExceeded(t *testing.T) {
+func TestRateLimitMiddleware_TPM_BlocksWhenExceeded(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{resp: core.ChatResponse{Content: "a", Usage: core.Usage{InputTokens: 500, OutputTokens: 500}}},
 		{resp: core.ChatResponse{Content: "b", Usage: core.Usage{InputTokens: 100, OutputTokens: 100}}},
 	}}
 	// TPM(1000). First call uses 1000 tokens = at limit.
-	p := WithRateLimit(stub, TPM(1000))
+	p := RateLimitMiddleware(TPM(1000))(stub)
 
 	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
@@ -142,13 +142,13 @@ func TestWithRateLimit_TPM_BlocksWhenExceeded(t *testing.T) {
 	}
 }
 
-func TestWithRateLimit_RPMAndTPM(t *testing.T) {
+func TestRateLimitMiddleware_RPMAndTPM(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{resp: core.ChatResponse{Content: "a", Usage: core.Usage{InputTokens: 10, OutputTokens: 10}}},
 		{resp: core.ChatResponse{Content: "b", Usage: core.Usage{InputTokens: 10, OutputTokens: 10}}},
 	}}
 	// RPM high, TPM low — TPM should be the bottleneck after first call fills budget.
-	p := WithRateLimit(stub, RPM(100), TPM(20))
+	p := RateLimitMiddleware(RPM(100), TPM(20))(stub)
 
 	_, err := core.Chat(context.Background(), p, core.ChatRequest{})
 	if err != nil {
@@ -166,11 +166,11 @@ func TestWithRateLimit_RPMAndTPM(t *testing.T) {
 
 // --- Chat with tools and ChatStream tests ---
 
-func TestWithRateLimit_ChatWithToolsOnRequest(t *testing.T) {
+func TestRateLimitMiddleware_ChatWithToolsOnRequest(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{resp: core.ChatResponse{Content: "ok", Usage: core.Usage{InputTokens: 50, OutputTokens: 50}}},
 	}}
-	p := WithRateLimit(stub, RPM(60))
+	p := RateLimitMiddleware(RPM(60))(stub)
 
 	resp, err := core.Chat(context.Background(), p, core.ChatRequest{
 		Tools: []core.ToolDefinition{{Name: "test"}},
@@ -183,11 +183,11 @@ func TestWithRateLimit_ChatWithToolsOnRequest(t *testing.T) {
 	}
 }
 
-func TestWithRateLimit_ChatStream(t *testing.T) {
+func TestRateLimitMiddleware_ChatStream(t *testing.T) {
 	stub := &stubProvider{results: []stubResult{
 		{tokens: []string{"hel", "lo"}, resp: core.ChatResponse{Content: "hello", Usage: core.Usage{InputTokens: 30, OutputTokens: 20}}},
 	}}
-	p := WithRateLimit(stub, RPM(60), TPM(1000))
+	p := RateLimitMiddleware(RPM(60), TPM(1000))(stub)
 
 	ch := make(chan core.StreamEvent, 8)
 	resp, err := p.ChatStream(context.Background(), core.ChatRequest{}, ch)

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/compaction"
+	"github.com/nevindra/oasis/core"
 )
 
 // canonProvider returns a fixed canonical compaction response.

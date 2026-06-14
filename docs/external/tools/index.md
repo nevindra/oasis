@@ -54,11 +54,11 @@ The wrapping order is fixed and intentional. The approval gate sits outermost so
 
 **Two kinds of failure.** `Tool.Execute` returns `(Out, error)`. The Go `error` is for infrastructure failures — a dropped connection, a context cancellation, anything the retry policy should act on. Business failures — "city not found", "quota exceeded", "invalid input" — belong in `ToolResult.Error`, a plain string fed back to the LLM verbatim. The LLM reads that string and adapts. Never return a business failure as a Go `error`; the framework treats Go errors as infrastructure and may retry them.
 
-**Middleware composes at build time.** A `ToolMiddleware` is `func(AnyTool) AnyTool`. You supply a list to `WithToolMiddleware`; Oasis applies them in order (first = innermost) to every registered tool when the agent is constructed. Logging, timing, OpenTelemetry spans, result redaction — all implemented as middleware, all wired once, all zero overhead per-call once built.
+**Middleware composes at build time.** A `ToolMiddleware` is `func(AnyTool) AnyTool`. You supply a list in `agent.ToolConfig.Middleware` via `oasis.WithToolConfig`; Oasis applies them in order (first = innermost) to every registered tool when the agent is constructed. Logging, timing, OpenTelemetry spans, result redaction — all implemented as middleware, all wired once, all zero overhead per-call once built.
 
 **Streaming tools emit progress events.** A tool that implements `StreamingTool[In, Out]` can push intermediate `StreamEvent` values over a `chan<- StreamEvent` while `Execute` is still running. These events surface in the agent's stream sink in real time — useful for long-running operations where you want the user to see partial output immediately. Register with `EraseStreaming` instead of `Erase`. Note that streaming tools bypass `ToolPolicy` entirely: retrying a partially-streamed call would duplicate events, so the policy wrapper is not applied.
 
-**`ToolResult` is the framework's internal envelope.** `Content` holds the successful result as `json.RawMessage`. `Error` holds a business failure as a plain string. `Attachments` holds multimodal payloads — images, PDFs — that should appear in the LLM's next turn. `Content` and `Error` are mutually exclusive by convention: a result is either successful or failed, never both. `Attachments` can accompany either. When `Out` is a plain `string`, `Erase` wraps it as a JSON-encoded string so `Content` is always valid JSON regardless of `Out`'s type.
+**`ToolResult` is the framework's internal envelope.** `Content` holds the successful result as a `string`. `Error` holds a business failure as a plain string. `Attachments` holds multimodal payloads — images, PDFs — that should appear in the LLM's next turn. `Content` and `Error` are mutually exclusive by convention: a result is either successful or failed, never both. `Attachments` can accompany either. For plain text results use `core.TextResult`; for structured JSON use `core.JSONResult` (marshals any value); for pre-encoded JSON bytes use `core.JSONContent` (returns the `string` for `Content`).
 
 **Parallel dispatch is the default.** When the LLM emits multiple tool calls in one response, the loop dispatches them concurrently. `Execute` must be safe for concurrent calls. If your tool holds shared mutable state, protect it with a mutex. If two tools must not run at the same time, enforce that constraint at the application level — the framework does not provide a tool-level serialization primitive.
 
@@ -67,10 +67,10 @@ The wrapping order is fixed and intentional. The approval gate sits outermost so
 1. LLM responds with a `tool_calls` array, each entry naming a tool and providing a JSON argument object.
 2. The loop iterates the array. For each call, it looks up the registered `AnyTool` by name (O(1) map lookup). Unknown names produce a `ToolResult.Error` without calling your code.
 3. Pre-tool processors run (e.g., guardrails). If a processor halts, the call does not reach the tool.
-4. The approval gate (if configured via `WithToolApproval`) pauses the call, surfaces the prompt to the `InputHandler`, and waits for human confirmation. A denial writes `ToolResult.Error` or halts the run.
+4. The approval gate (if configured via `agent.ToolConfig.Approvals`) pauses the call, surfaces the prompt to the `InputHandler`, and waits for human confirmation. A denial writes `ToolResult.Error` or halts the run.
 5. The `ToolPolicy` wrapper starts a per-attempt timer. If `Timeout` is set, a child context with that deadline wraps the rest of the chain.
 6. User middleware runs outermost-first, innermost-last. Each middleware calls the next in the chain and wraps the result.
-7. `AnyTool.ExecuteRaw` deserializes the JSON arguments into `In`, calls your `Tool.Execute`, and serializes `Out` back to `json.RawMessage`, populating `ToolResult.Content` on success or `ToolResult.Error` on non-nil `error`.
+7. `AnyTool.ExecuteRaw` deserializes the JSON arguments into `In`, calls your `Tool.Execute`, and marshals `Out` to a JSON string in `ToolResult.Content` on success, or copies `err.Error()` to `ToolResult.Error` on non-nil `error`.
 8. The innermost middleware returns. Each outer middleware layer post-processes in reverse order (e.g., the timing middleware records elapsed time here).
 9. If `Execute` returned a `core.RetryableError` and the policy has retries remaining, the policy wrapper backs off and loops back to step 5 with a fresh attempt timer.
 10. If `ToolResultStore` is configured and the result exceeds `Limits.MaxToolResultLen`, the loop calls `Store.Put`, replaces the content with a reference ID, and registers `read_full_result` (a built-in tool) so the LLM can page through the full output.
@@ -82,21 +82,21 @@ The wrapping order is fixed and intentional. The approval gate sits outermost so
 
 Large outputs — think full webpage text, big JSON documents, hundreds of CSV rows — would bloat the context window if sent verbatim. The `ToolResultStore` solves this: when a result exceeds the configured length limit, the loop stores the raw bytes, gives the LLM a short reference ID, and auto-registers the `read_full_result` built-in tool so the LLM can page through the content on demand.
 
-Opt in by calling `WithToolResultStore` at agent construction:
+Opt in by providing a `ResultStore` in `agent.ToolConfig` at agent construction:
 
 ```go
 agent.New(provider,
     oasis.WithTools(myTool),
-    oasis.WithToolResultStore(
-        core.NewInMemoryToolResultStore(
+    oasis.WithToolConfig(agent.ToolConfig{
+        ResultStore: core.NewInMemoryToolResultStore(
             core.WithToolResultMaxBytes(20 * 1024 * 1024), // 20 MiB cap
             core.WithToolResultTTL(10 * time.Minute),
         ),
-    ),
+    }),
 )
 ```
 
-Pass `nil` to `WithToolResultStore` to disable paging entirely (oversized results get a truncation marker instead).
+Set `ResultStore: nil` and `ResultStoreExplicit: true` in `agent.ToolConfig` to disable paging entirely (oversized results get a truncation marker instead).
 
 The default store is in-memory (10 MiB, 5-minute TTL, FIFO eviction). Configure it with:
 - `WithToolResultMaxBytes(n)` — total byte cap across all entries; FIFO eviction on overflow.
@@ -115,7 +115,7 @@ For multi-agent or persistent scenarios, provide your own `ToolResultStore` impl
 
 **`ToolPolicy` retry vs. middleware retry.** `ToolPolicy` retries the full middleware chain — logging, timing, the whole stack — for each attempt. If you write a retry loop inside a middleware, you get nested retries. Pick one layer: use `ToolPolicy` for the general case, middleware retry only when you need custom retry logic invisible to the policy.
 
-**Human approval sits outermost.** `WithToolApproval` adds the approval gate outside `ToolPolicy`. This is intentional: if the policy retries a denied call, the human would be prompted again. The current design prompts once per logical call, then the policy retries internally if the attempt fails after approval.
+**Human approval sits outermost.** Configuring `agent.ToolConfig.Approvals` adds an approval gate outside `ToolPolicy`. This is intentional: if the policy retries a denied call, the human would be prompted again. The current design prompts once per logical call, then the policy retries internally if the attempt fails after approval.
 
 **Middleware must preserve `StreamingAnyTool`.** If your middleware wraps a streaming tool, check whether the inner tool implements `core.StreamingAnyTool` and forward `ExecuteStream` if so. Middleware that drops the streaming interface silently falls back to non-streaming dispatch.
 

@@ -100,9 +100,9 @@ func (ing *Ingestor) runBatch(ctx context.Context, items []BatchItem, completed 
 	}
 
 	var (
-		mu          sync.Mutex
-		succeeded   []IngestResult
-		failed      []BatchError
+		mu           sync.Mutex
+		succeeded    []IngestResult
+		failed       []BatchError
 		completedIDs []string
 	)
 

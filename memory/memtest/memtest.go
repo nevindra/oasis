@@ -18,17 +18,17 @@ import (
 // ItemStore is a goroutine-safe in-memory ItemStore for tests.
 type ItemStore struct {
 	mu    sync.Mutex
-	items map[string]memory.MemoryItem
+	items map[string]core.MemoryItem
 }
 
 // New returns a fresh in-memory ItemStore.
 func New() *ItemStore {
-	return &ItemStore{items: map[string]memory.MemoryItem{}}
+	return &ItemStore{items: map[string]core.MemoryItem{}}
 }
 
 func (s *ItemStore) Init(context.Context) error { return nil }
 
-func (s *ItemStore) Upsert(_ context.Context, it memory.MemoryItem) error {
+func (s *ItemStore) Upsert(_ context.Context, it core.MemoryItem) error {
 	if it.ID == "" {
 		return errors.New("memtest: item ID required")
 	}
@@ -45,7 +45,7 @@ func (s *ItemStore) Upsert(_ context.Context, it memory.MemoryItem) error {
 	return nil
 }
 
-func (s *ItemStore) UpsertBatch(ctx context.Context, items []memory.MemoryItem) error {
+func (s *ItemStore) UpsertBatch(ctx context.Context, items []core.MemoryItem) error {
 	for _, it := range items {
 		if err := s.Upsert(ctx, it); err != nil {
 			return err
@@ -61,7 +61,7 @@ func (s *ItemStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (s *ItemStore) DeleteWhere(_ context.Context, f memory.Filter) (int, error) {
+func (s *ItemStore) DeleteWhere(_ context.Context, f core.MemoryFilter) (int, error) {
 	if f.IsEmpty() {
 		return 0, errors.New("memtest: refuse to delete with empty filter")
 	}
@@ -77,20 +77,20 @@ func (s *ItemStore) DeleteWhere(_ context.Context, f memory.Filter) (int, error)
 	return n, nil
 }
 
-func (s *ItemStore) Get(_ context.Context, id string) (memory.MemoryItem, error) {
+func (s *ItemStore) Get(_ context.Context, id string) (core.MemoryItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	it, ok := s.items[id]
 	if !ok {
-		return memory.MemoryItem{}, core.ErrNotFound
+		return core.MemoryItem{}, core.ErrNotFound
 	}
 	return it, nil
 }
 
-func (s *ItemStore) List(_ context.Context, f memory.Filter) ([]memory.MemoryItem, error) {
+func (s *ItemStore) List(_ context.Context, f core.MemoryFilter) ([]core.MemoryItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]memory.MemoryItem, 0, len(s.items))
+	out := make([]core.MemoryItem, 0, len(s.items))
 	for _, it := range s.items {
 		if matches(it, f) {
 			out = append(out, it)
@@ -107,15 +107,15 @@ func (s *ItemStore) List(_ context.Context, f memory.Filter) ([]memory.MemoryIte
 	return out, nil
 }
 
-func (s *ItemStore) SearchSemantic(_ context.Context, emb []float32, f memory.Filter, topK int) ([]memory.ScoredItem, error) {
+func (s *ItemStore) SearchSemantic(_ context.Context, emb []float32, f core.MemoryFilter, topK int) ([]core.ScoredMemoryItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	scored := make([]memory.ScoredItem, 0, len(s.items))
+	scored := make([]core.ScoredMemoryItem, 0, len(s.items))
 	for _, it := range s.items {
 		if !matches(it, f) || len(it.Embedding) == 0 {
 			continue
 		}
-		scored = append(scored, memory.ScoredItem{Item: it, Score: core.CosineSimilarity(emb, it.Embedding)})
+		scored = append(scored, core.ScoredMemoryItem{Item: it, Score: core.CosineSimilarity(emb, it.Embedding)})
 	}
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
 	if topK > 0 && len(scored) > topK {
@@ -127,7 +127,7 @@ func (s *ItemStore) SearchSemantic(_ context.Context, emb []float32, f memory.Fi
 // ConformanceTest runs every ItemStore contract test against the given store.
 // Satellite stores (sqlite, postgres) import this package and call
 // ConformanceTest from their own test files to verify identical behavior.
-func ConformanceTest(t *testing.T, newStore func(t *testing.T) memory.ItemStore) {
+func ConformanceTest(t *testing.T, newStore func(t *testing.T) core.MemoryItemStore) {
 	t.Helper()
 	t.Run("UpsertGet", func(t *testing.T) { testUpsertGet(t, newStore(t)) })
 	t.Run("UpsertOverwrites", func(t *testing.T) { testUpsertOverwrites(t, newStore(t)) })
@@ -139,10 +139,10 @@ func ConformanceTest(t *testing.T, newStore func(t *testing.T) memory.ItemStore)
 	t.Run("GetMissingReturnsNotFound", func(t *testing.T) { testGetMissing(t, newStore(t)) })
 }
 
-func testUpsertGet(t *testing.T, s memory.ItemStore) {
+func testUpsertGet(t *testing.T, s core.MemoryItemStore) {
 	t.Helper()
 	ctx := context.Background()
-	it := memory.MemoryItem{ID: "x1", Kind: memory.KindFact, Content: "hello", Scope: memory.Scoped(memory.ScopeResource, "u1")}
+	it := core.MemoryItem{ID: "x1", Kind: memory.KindFact, Content: "hello", Scope: memory.Scoped(memory.ScopeResource, "u1")}
 	if err := s.Upsert(ctx, it); err != nil {
 		t.Fatal(err)
 	}
@@ -158,17 +158,17 @@ func testUpsertGet(t *testing.T, s memory.ItemStore) {
 	}
 }
 
-func testUpsertOverwrites(t *testing.T, s memory.ItemStore) {
+func testUpsertOverwrites(t *testing.T, s core.MemoryItemStore) {
 	t.Helper()
 	ctx := context.Background()
-	first := memory.MemoryItem{ID: "x1", Kind: memory.KindFact, Content: "v1", Scope: memory.Scoped(memory.ScopeResource, "u1")}
+	first := core.MemoryItem{ID: "x1", Kind: memory.KindFact, Content: "v1", Scope: memory.Scoped(memory.ScopeResource, "u1")}
 	if err := s.Upsert(ctx, first); err != nil {
 		t.Fatal(err)
 	}
 	got1, _ := s.Get(ctx, "x1")
 	created := got1.CreatedAt
 
-	second := memory.MemoryItem{ID: "x1", Kind: memory.KindFact, Content: "v2", Scope: memory.Scoped(memory.ScopeResource, "u1")}
+	second := core.MemoryItem{ID: "x1", Kind: memory.KindFact, Content: "v2", Scope: memory.Scoped(memory.ScopeResource, "u1")}
 	if err := s.Upsert(ctx, second); err != nil {
 		t.Fatal(err)
 	}
@@ -184,12 +184,12 @@ func testUpsertOverwrites(t *testing.T, s memory.ItemStore) {
 	}
 }
 
-func testListByKind(t *testing.T, s memory.ItemStore) {
+func testListByKind(t *testing.T, s core.MemoryItemStore) {
 	t.Helper()
 	ctx := context.Background()
-	mustT(t, s.Upsert(ctx, memory.MemoryItem{ID: "a", Kind: memory.KindFact, Scope: memory.Scoped(memory.ScopeResource, "u1")}))
-	mustT(t, s.Upsert(ctx, memory.MemoryItem{ID: "b", Kind: memory.KindEvent, Scope: memory.Scoped(memory.ScopeResource, "u1")}))
-	got, err := s.List(ctx, memory.Filter{Kinds: []memory.Kind{memory.KindFact}})
+	mustT(t, s.Upsert(ctx, core.MemoryItem{ID: "a", Kind: memory.KindFact, Scope: memory.Scoped(memory.ScopeResource, "u1")}))
+	mustT(t, s.Upsert(ctx, core.MemoryItem{ID: "b", Kind: memory.KindEvent, Scope: memory.Scoped(memory.ScopeResource, "u1")}))
+	got, err := s.List(ctx, core.MemoryFilter{Kinds: []core.MemoryKind{memory.KindFact}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,13 +198,13 @@ func testListByKind(t *testing.T, s memory.ItemStore) {
 	}
 }
 
-func testListByScope(t *testing.T, s memory.ItemStore) {
+func testListByScope(t *testing.T, s core.MemoryItemStore) {
 	t.Helper()
 	ctx := context.Background()
-	mustT(t, s.Upsert(ctx, memory.MemoryItem{ID: "a", Kind: memory.KindFact, Scope: memory.Scoped(memory.ScopeResource, "u1")}))
-	mustT(t, s.Upsert(ctx, memory.MemoryItem{ID: "b", Kind: memory.KindFact, Scope: memory.Scoped(memory.ScopeResource, "u2")}))
+	mustT(t, s.Upsert(ctx, core.MemoryItem{ID: "a", Kind: memory.KindFact, Scope: memory.Scoped(memory.ScopeResource, "u1")}))
+	mustT(t, s.Upsert(ctx, core.MemoryItem{ID: "b", Kind: memory.KindFact, Scope: memory.Scoped(memory.ScopeResource, "u2")}))
 	sc := memory.Scoped(memory.ScopeResource, "u1")
-	got, err := s.List(ctx, memory.Filter{Scope: &sc})
+	got, err := s.List(ctx, core.MemoryFilter{Scope: &sc})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,32 +213,32 @@ func testListByScope(t *testing.T, s memory.ItemStore) {
 	}
 }
 
-func testListByPinned(t *testing.T, s memory.ItemStore) {
+func testListByPinned(t *testing.T, s core.MemoryItemStore) {
 	t.Helper()
 	ctx := context.Background()
-	mustT(t, s.Upsert(ctx, memory.MemoryItem{ID: "a", Kind: memory.KindFact, Pinned: true}))
-	mustT(t, s.Upsert(ctx, memory.MemoryItem{ID: "b", Kind: memory.KindFact, Pinned: false}))
+	mustT(t, s.Upsert(ctx, core.MemoryItem{ID: "a", Kind: memory.KindFact, Pinned: true}))
+	mustT(t, s.Upsert(ctx, core.MemoryItem{ID: "b", Kind: memory.KindFact, Pinned: false}))
 	yes := true
-	got, _ := s.List(ctx, memory.Filter{Pinned: &yes})
+	got, _ := s.List(ctx, core.MemoryFilter{Pinned: &yes})
 	if len(got) != 1 || got[0].ID != "a" {
 		t.Fatalf("got %+v", got)
 	}
 }
 
-func testDeleteWhereEmpty(t *testing.T, s memory.ItemStore) {
+func testDeleteWhereEmpty(t *testing.T, s core.MemoryItemStore) {
 	t.Helper()
-	_, err := s.DeleteWhere(context.Background(), memory.Filter{})
+	_, err := s.DeleteWhere(context.Background(), core.MemoryFilter{})
 	if err == nil {
 		t.Fatal("expected error on empty filter")
 	}
 }
 
-func testSearchSemantic(t *testing.T, s memory.ItemStore) {
+func testSearchSemantic(t *testing.T, s core.MemoryItemStore) {
 	t.Helper()
 	ctx := context.Background()
-	mustT(t, s.Upsert(ctx, memory.MemoryItem{ID: "near", Kind: memory.KindFact, Content: "near", Embedding: []float32{1, 0, 0}}))
-	mustT(t, s.Upsert(ctx, memory.MemoryItem{ID: "far", Kind: memory.KindFact, Content: "far", Embedding: []float32{0, 1, 0}}))
-	got, err := s.SearchSemantic(ctx, []float32{1, 0, 0}, memory.Filter{}, 2)
+	mustT(t, s.Upsert(ctx, core.MemoryItem{ID: "near", Kind: memory.KindFact, Content: "near", Embedding: []float32{1, 0, 0}}))
+	mustT(t, s.Upsert(ctx, core.MemoryItem{ID: "far", Kind: memory.KindFact, Content: "far", Embedding: []float32{0, 1, 0}}))
+	got, err := s.SearchSemantic(ctx, []float32{1, 0, 0}, core.MemoryFilter{}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func testSearchSemantic(t *testing.T, s memory.ItemStore) {
 		t.Fatalf("expected 'near' first: %+v", got)
 	}
 	// sanity: results are sorted descending
-	sortedCopy := make([]memory.ScoredItem, len(got))
+	sortedCopy := make([]core.ScoredMemoryItem, len(got))
 	copy(sortedCopy, got)
 	sort.Slice(sortedCopy, func(i, j int) bool { return sortedCopy[i].Score > sortedCopy[j].Score })
 	for i := range got {
@@ -256,7 +256,7 @@ func testSearchSemantic(t *testing.T, s memory.ItemStore) {
 	}
 }
 
-func testGetMissing(t *testing.T, s memory.ItemStore) {
+func testGetMissing(t *testing.T, s core.MemoryItemStore) {
 	t.Helper()
 	_, err := s.Get(context.Background(), "does-not-exist")
 	if err == nil {
@@ -267,9 +267,14 @@ func testGetMissing(t *testing.T, s memory.ItemStore) {
 	}
 }
 
-func mustT(t *testing.T, err error) { t.Helper(); if err != nil { t.Fatal(err) } }
+func mustT(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
-func matches(it memory.MemoryItem, f memory.Filter) bool {
+func matches(it core.MemoryItem, f core.MemoryFilter) bool {
 	if len(f.Kinds) > 0 {
 		var ok bool
 		for _, k := range f.Kinds {

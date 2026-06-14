@@ -26,8 +26,8 @@ func TestBuildBody_SystemMessages(t *testing.T) {
 	if req.Messages[0].Role != "system" {
 		t.Errorf("expected role 'system', got %q", req.Messages[0].Role)
 	}
-	if req.Messages[0].Content != "You are a helpful assistant." {
-		t.Errorf("unexpected system content: %v", req.Messages[0].Content)
+	if c := req.Messages[0].Content; !c.IsString() || c.String != "You are a helpful assistant." {
+		t.Errorf("unexpected system content: %+v", req.Messages[0].Content)
 	}
 
 	// User message.
@@ -55,8 +55,8 @@ func TestBuildBody_UserAndAssistant(t *testing.T) {
 	if req.Messages[1].Role != "assistant" {
 		t.Errorf("expected role 'assistant', got %q", req.Messages[1].Role)
 	}
-	if req.Messages[1].Content != "Hello!" {
-		t.Errorf("unexpected assistant content: %v", req.Messages[1].Content)
+	if c := req.Messages[1].Content; !c.IsString() || c.String != "Hello!" {
+		t.Errorf("unexpected assistant content: %+v", req.Messages[1].Content)
 	}
 	if req.Messages[2].Role != "user" {
 		t.Errorf("expected role 'user', got %q", req.Messages[2].Role)
@@ -89,8 +89,8 @@ func TestBuildBody_AssistantWithToolCalls(t *testing.T) {
 	if assistantMsg.Role != "assistant" {
 		t.Errorf("expected role 'assistant', got %q", assistantMsg.Role)
 	}
-	if assistantMsg.Content != "Let me search for that." {
-		t.Errorf("unexpected content: %v", assistantMsg.Content)
+	if c := assistantMsg.Content; !c.IsString() || c.String != "Let me search for that." {
+		t.Errorf("unexpected content: %+v", assistantMsg.Content)
 	}
 	if len(assistantMsg.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(assistantMsg.ToolCalls))
@@ -130,8 +130,8 @@ func TestBuildBody_ToolResult(t *testing.T) {
 	if msg.Role != "tool" {
 		t.Errorf("expected role 'tool', got %q", msg.Role)
 	}
-	if msg.Content != "Found 10 results about cats" {
-		t.Errorf("unexpected content: %v", msg.Content)
+	if c := msg.Content; !c.IsString() || c.String != "Found 10 results about cats" {
+		t.Errorf("unexpected content: %+v", msg.Content)
 	}
 	if msg.ToolCallID != "call_123" {
 		t.Errorf("expected tool_call_id 'call_123', got %q", msg.ToolCallID)
@@ -152,10 +152,10 @@ func TestBuildBody_ImageInlineData(t *testing.T) {
 	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	msg := req.Messages[0]
-	blocks, ok := msg.Content.([]ContentBlock)
-	if !ok {
-		t.Fatalf("expected content to be []ContentBlock, got %T", msg.Content)
+	if !msg.Content.IsBlocks() {
+		t.Fatalf("expected content to be blocks, got %+v", msg.Content)
 	}
+	blocks := msg.Content.Blocks
 	if len(blocks) != 2 {
 		t.Fatalf("expected 2 content blocks (text + image), got %d", len(blocks))
 	}
@@ -187,7 +187,7 @@ func TestBuildBody_ImageURL(t *testing.T) {
 	}
 
 	req := BuildBody(messages, nil, "gpt-4o", nil)
-	blocks := req.Messages[0].Content.([]ContentBlock)
+	blocks := req.Messages[0].Content.Blocks
 
 	if blocks[1].Type != "image_url" {
 		t.Errorf("expected 'image_url', got %q", blocks[1].Type)
@@ -209,7 +209,7 @@ func TestBuildBody_VideoFile(t *testing.T) {
 	}
 
 	req := BuildBody(messages, nil, "gpt-4o", nil)
-	blocks := req.Messages[0].Content.([]ContentBlock)
+	blocks := req.Messages[0].Content.Blocks
 
 	if len(blocks) != 2 {
 		t.Fatalf("expected 2 blocks, got %d", len(blocks))
@@ -237,7 +237,7 @@ func TestBuildBody_InlineBase64Attachment(t *testing.T) {
 	}
 
 	req := BuildBody(messages, nil, "gpt-4o", nil)
-	blocks := req.Messages[0].Content.([]ContentBlock)
+	blocks := req.Messages[0].Content.Blocks
 
 	if blocks[1].Type != "image_url" {
 		t.Errorf("expected 'image_url' for base64 attachment, got %q", blocks[1].Type)
@@ -466,11 +466,65 @@ func TestBuildBody_WithToolChoice(t *testing.T) {
 	}
 
 	req := BuildBody(messages, tools, "gpt-4o", nil,
-		WithToolChoice("required"),
+		WithToolChoice(ToolChoiceModeValue(ToolChoiceRequired)),
 	)
 
-	if req.ToolChoice != "required" {
-		t.Errorf("expected toolChoice 'required', got %v", req.ToolChoice)
+	if req.ToolChoice == nil || req.ToolChoice.Mode != ToolChoiceRequired {
+		t.Errorf("expected toolChoice 'required', got %+v", req.ToolChoice)
+	}
+
+	// Wire shape: a string-mode choice must marshal to a bare JSON string.
+	data, err := json.Marshal(req.ToolChoice)
+	if err != nil {
+		t.Fatalf("marshal tool_choice: %v", err)
+	}
+	if string(data) != `"required"` {
+		t.Errorf("expected tool_choice wire %q, got %s", `"required"`, data)
+	}
+}
+
+func TestToolChoice_WireRoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		tc   ToolChoice
+		wire string
+	}{
+		{"none", ToolChoiceModeValue(ToolChoiceNone), `"none"`},
+		{"auto", ToolChoiceModeValue(ToolChoiceAuto), `"auto"`},
+		{"required", ToolChoiceModeValue(ToolChoiceRequired), `"required"`},
+		{"function", ToolChoiceFunction("get_weather"), `{"type":"function","function":{"name":"get_weather"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.tc)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(data) != tc.wire {
+				t.Fatalf("wire mismatch: got %s, want %s", data, tc.wire)
+			}
+			var back ToolChoice
+			if err := json.Unmarshal(data, &back); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if back != tc.tc {
+				t.Fatalf("round-trip mismatch: got %+v, want %+v", back, tc.tc)
+			}
+		})
+	}
+
+	// Omitted when nil: the *ToolChoice field carries omitempty.
+	req := ChatRequest{Model: "m"}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if _, ok := parsed["tool_choice"]; ok {
+		t.Errorf("expected tool_choice omitted when nil, got %s", data)
 	}
 }
 
@@ -509,10 +563,10 @@ func TestBuildBody_CacheCheckpointStringContent(t *testing.T) {
 	req := BuildBody(messages, nil, "gpt-4o", nil)
 
 	msg := req.Messages[0]
-	blocks, ok := msg.Content.([]ContentBlock)
-	if !ok {
-		t.Fatalf("expected []ContentBlock for CacheCheckpoint string message, got %T", msg.Content)
+	if !msg.Content.IsBlocks() {
+		t.Fatalf("expected blocks for CacheCheckpoint string message, got %+v", msg.Content)
 	}
+	blocks := msg.Content.Blocks
 	if len(blocks) != 1 {
 		t.Fatalf("expected 1 content block, got %d", len(blocks))
 	}
@@ -546,10 +600,10 @@ func TestBuildBody_CacheCheckpointBlockContent(t *testing.T) {
 
 	req := BuildBody(messages, nil, "gpt-4o", nil)
 
-	blocks, ok := req.Messages[0].Content.([]ContentBlock)
-	if !ok {
-		t.Fatalf("expected []ContentBlock, got %T", req.Messages[0].Content)
+	if !req.Messages[0].Content.IsBlocks() {
+		t.Fatalf("expected blocks, got %+v", req.Messages[0].Content)
 	}
+	blocks := req.Messages[0].Content.Blocks
 	if len(blocks) != 2 {
 		t.Fatalf("expected 2 blocks (text + image), got %d", len(blocks))
 	}
@@ -575,11 +629,11 @@ func TestBuildBody_CacheCheckpointFalse(t *testing.T) {
 
 	msg := req.Messages[0]
 	// Content should remain a plain string — no block promotion.
-	if _, ok := msg.Content.([]ContentBlock); ok {
-		t.Error("expected plain string content when CacheCheckpoint is false, got []ContentBlock")
+	if msg.Content.IsBlocks() {
+		t.Error("expected plain string content when CacheCheckpoint is false, got blocks")
 	}
-	if msg.Content != "Hello" {
-		t.Errorf("expected content 'Hello', got %v", msg.Content)
+	if !msg.Content.IsString() || msg.Content.String != "Hello" {
+		t.Errorf("expected content 'Hello', got %+v", msg.Content)
 	}
 }
 
@@ -592,10 +646,10 @@ func TestBuildBody_CacheCheckpointComposesWithOption(t *testing.T) {
 
 	req := BuildBody(messages, nil, "gpt-4o", nil, WithCacheControl(0))
 
-	blocks, ok := req.Messages[0].Content.([]ContentBlock)
-	if !ok {
-		t.Fatalf("expected []ContentBlock, got %T", req.Messages[0].Content)
+	if !req.Messages[0].Content.IsBlocks() {
+		t.Fatalf("expected blocks, got %+v", req.Messages[0].Content)
 	}
+	blocks := req.Messages[0].Content.Blocks
 	if len(blocks) != 1 {
 		t.Fatalf("expected 1 content block, got %d", len(blocks))
 	}
@@ -715,5 +769,109 @@ func TestBuildBody_EmptyContentCacheCheckpointKeepsTextField(t *testing.T) {
 		if _, ok := blk["text"].(string); !ok {
 			t.Fatalf("text block must carry a string \"text\" field; got %s", raw)
 		}
+	}
+}
+
+func TestMessageContent_WireShape(t *testing.T) {
+	// String content must stay a JSON string; block content must stay a JSON array.
+	strRaw, err := json.Marshal(StringContent("hello"))
+	if err != nil {
+		t.Fatalf("marshal string content: %v", err)
+	}
+	if string(strRaw) != `"hello"` {
+		t.Fatalf("string content wire = %s, want %q", strRaw, `"hello"`)
+	}
+
+	blkRaw, err := json.Marshal(BlockContent([]ContentBlock{{Type: "text", Text: "hi"}}))
+	if err != nil {
+		t.Fatalf("marshal block content: %v", err)
+	}
+	if len(blkRaw) == 0 || blkRaw[0] != '[' {
+		t.Fatalf("block content must marshal to a JSON array, got %s", blkRaw)
+	}
+
+	// The zero value (unset Content) marshals to an empty JSON string, matching
+	// the historical any-typed default where a missing string was "".
+	zeroRaw, err := json.Marshal(MessageContent{})
+	if err != nil {
+		t.Fatalf("marshal zero content: %v", err)
+	}
+	if string(zeroRaw) != `""` {
+		t.Fatalf("zero content wire = %s, want %q", zeroRaw, `""`)
+	}
+}
+
+func TestMessageContent_UnmarshalRoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		in   MessageContent
+		wire string
+	}{
+		{"string", StringContent("hello"), `"hello"`},
+		{"empty-string", StringContent(""), `""`},
+		{
+			"blocks",
+			BlockContent([]ContentBlock{
+				{Type: "text", Text: "describe"},
+				{Type: "image_url", ImageURL: &ImageURL{URL: "https://x/y.png"}},
+			}),
+			`[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://x/y.png"}}]`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.in)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(data) != tc.wire {
+				t.Fatalf("wire = %s, want %s", data, tc.wire)
+			}
+			var back MessageContent
+			if err := json.Unmarshal(data, &back); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if back.Kind != tc.in.Kind {
+				t.Fatalf("kind = %v, want %v", back.Kind, tc.in.Kind)
+			}
+			if tc.in.IsString() && back.String != tc.in.String {
+				t.Fatalf("string = %q, want %q", back.String, tc.in.String)
+			}
+			if tc.in.IsBlocks() && len(back.Blocks) != len(tc.in.Blocks) {
+				t.Fatalf("blocks len = %d, want %d", len(back.Blocks), len(tc.in.Blocks))
+			}
+		})
+	}
+
+	// A JSON null content unmarshals to the zero (empty-string) value.
+	var nullContent MessageContent
+	if err := json.Unmarshal([]byte("null"), &nullContent); err != nil {
+		t.Fatalf("unmarshal null: %v", err)
+	}
+	if !nullContent.IsString() || nullContent.String != "" {
+		t.Fatalf("null content should be empty string, got %+v", nullContent)
+	}
+}
+
+// TestMessage_WireUnchanged proves the full Message JSON shape is byte-identical
+// to what the previous any-typed Content produced: a string message stays
+// {"role":...,"content":"..."} and a block message stays {"content":[...]}.
+func TestMessage_WireUnchanged(t *testing.T) {
+	strMsg := Message{Role: "user", Content: StringContent("hi")}
+	got, err := json.Marshal(strMsg)
+	if err != nil {
+		t.Fatalf("marshal string message: %v", err)
+	}
+	if want := `{"role":"user","content":"hi"}`; string(got) != want {
+		t.Fatalf("string message wire = %s, want %s", got, want)
+	}
+
+	blkMsg := Message{Role: "user", Content: BlockContent([]ContentBlock{{Type: "text", Text: "hi"}})}
+	got2, err := json.Marshal(blkMsg)
+	if err != nil {
+		t.Fatalf("marshal block message: %v", err)
+	}
+	if want := `{"role":"user","content":[{"type":"text","text":"hi"}]}`; string(got2) != want {
+		t.Fatalf("block message wire = %s, want %s", got2, want)
 	}
 }

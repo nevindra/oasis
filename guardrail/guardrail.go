@@ -103,7 +103,7 @@ var zeroWidthChars = strings.NewReplacer(
 	"\ufeff", " ", // zero-width no-break space (BOM)
 	"\u2060", " ", // word joiner
 	"\u180e", " ", // Mongolian vowel separator
-	"\u00ad", "",  // soft hyphen (removed, not replaced)
+	"\u00ad", "", // soft hyphen (removed, not replaced)
 )
 
 // InjectionGuard is a PreProcessor that detects prompt injection attempts

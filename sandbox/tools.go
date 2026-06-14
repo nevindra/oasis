@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	oasis "github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/core"
+	oasis "github.com/nevindra/oasis/core"
 )
 
 // toolImpl wraps a single tool definition and its execute function.
@@ -31,8 +31,8 @@ func newTool(name, description, schema string, exec func(ctx context.Context, ar
 	}
 }
 
-func (t toolImpl) Name() string                       { return t.def.Name }
-func (t toolImpl) Definition() oasis.ToolDefinition   { return t.def }
+func (t toolImpl) Name() string                     { return t.def.Name }
+func (t toolImpl) Definition() oasis.ToolDefinition { return t.def }
 
 func (t toolImpl) ExecuteRaw(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 	return t.execute(ctx, args)
@@ -211,9 +211,9 @@ type webSearchArgs struct {
 }
 
 type mcpCallArgs struct {
-	Server string         `json:"server" describe:"MCP server name"`
-	Tool   string         `json:"tool" describe:"Tool name"`
-	Args   map[string]any `json:"args,omitempty" describe:"Tool arguments"`
+	Server string          `json:"server" describe:"MCP server name"`
+	Tool   string          `json:"tool" describe:"Tool name"`
+	Args   json.RawMessage `json:"args,omitempty" describe:"Tool arguments"`
 }
 
 type deliverFileArgs struct {
@@ -243,16 +243,20 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 		webSearchTool(sb),
 	}
 
-	if !cfg.noBrowser {
+	// Browser tools are registered only when the sandbox actually drives a
+	// browser (satisfies the optional BrowserSandbox interface) and the
+	// caller has not opted out via WithoutBrowser. Mirrors the
+	// FilesystemMounter assertion pattern in mounter.go.
+	if b, ok := sb.(BrowserSandbox); ok && !cfg.noBrowser {
 		tools = append(tools,
-			browserTool(sb),
-			screenshotTool(sb),
-			snapshotTool(sb),
-			pageTextTool(sb),
-			exportPDFTool(sb),
-			browserEvalTool(sb),
-			browserFindTool(sb),
-			browserWaitTool(sb),
+			browserTool(b),
+			screenshotTool(b),
+			snapshotTool(b),
+			pageTextTool(b),
+			exportPDFTool(b),
+			browserEvalTool(b),
+			browserFindTool(b),
+			browserWaitTool(b),
 		)
 	}
 
@@ -549,7 +553,7 @@ func workspaceInfoTool(sb Sandbox) toolImpl {
 		})
 }
 
-func browserTool(sb Sandbox) toolImpl {
+func browserTool(sb BrowserSandbox) toolImpl {
 	return newTool("browser",
 		"Interact with the sandbox browser. Use element refs from the snapshot tool for precise interactions. IMPORTANT: click, type, fill, hover, focus, and select actions REQUIRE a ref (element reference) or coordinates — there is no implicit focus.",
 		string(core.DeriveSchema[browserArgs]()),
@@ -601,7 +605,7 @@ func browserTool(sb Sandbox) toolImpl {
 		})
 }
 
-func screenshotTool(sb Sandbox) toolImpl {
+func screenshotTool(sb BrowserSandbox) toolImpl {
 	return newTool("screenshot",
 		"Take a screenshot of the sandbox browser",
 		string(core.DeriveSchema[emptyArgs]()),
@@ -614,7 +618,7 @@ func screenshotTool(sb Sandbox) toolImpl {
 		})
 }
 
-func snapshotTool(sb Sandbox) toolImpl {
+func snapshotTool(sb BrowserSandbox) toolImpl {
 	return newTool("snapshot",
 		"Get the accessibility tree of the current browser page. Returns element references (e0, e1, ...) that can be used with the browser tool for precise interactions.",
 		string(core.DeriveSchema[snapshotArgs]()),
@@ -640,7 +644,7 @@ func snapshotTool(sb Sandbox) toolImpl {
 		})
 }
 
-func pageTextTool(sb Sandbox) toolImpl {
+func pageTextTool(sb BrowserSandbox) toolImpl {
 	return newTool("page_text",
 		"Extract readable text content from the current browser page. Ideal for RAG and information gathering — much cheaper than screenshots.",
 		string(core.DeriveSchema[pageTextArgs]()),
@@ -657,7 +661,7 @@ func pageTextTool(sb Sandbox) toolImpl {
 		})
 }
 
-func exportPDFTool(sb Sandbox) toolImpl {
+func exportPDFTool(sb BrowserSandbox) toolImpl {
 	return newTool("export_pdf",
 		"Export the current browser page as a PDF document.",
 		string(core.DeriveSchema[emptyArgs]()),
@@ -699,7 +703,7 @@ func webSearchTool(sb Sandbox) toolImpl {
 		})
 }
 
-func browserEvalTool(sb Sandbox) toolImpl {
+func browserEvalTool(sb BrowserSandbox) toolImpl {
 	return newTool("browser_eval",
 		"Execute JavaScript in the current browser tab. Useful for reading form values, checking element states, extracting data, or interacting with page APIs that aren't accessible through the accessibility tree.",
 		string(core.DeriveSchema[browserEvalArgs]()),
@@ -716,7 +720,7 @@ func browserEvalTool(sb Sandbox) toolImpl {
 		})
 }
 
-func browserFindTool(sb Sandbox) toolImpl {
+func browserFindTool(sb BrowserSandbox) toolImpl {
 	return newTool("browser_find",
 		"Find an element ref using a natural-language description instead of manually searching the snapshot. Returns the best matching element ref, confidence level, and score.",
 		string(core.DeriveSchema[browserFindArgs]()),
@@ -733,7 +737,7 @@ func browserFindTool(sb Sandbox) toolImpl {
 		})
 }
 
-func browserWaitTool(sb Sandbox) toolImpl {
+func browserWaitTool(sb BrowserSandbox) toolImpl {
 	return newTool("browser_wait",
 		"Wait for a page condition after navigate/click instead of polling with screenshots. Returns satisfied=false on timeout (never errors) — if not satisfied, take a snapshot to inspect the actual page state.",
 		string(core.DeriveSchema[browserWaitArgs]()),

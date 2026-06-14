@@ -12,7 +12,9 @@ func TestAgentMemory_InitClose(t *testing.T) {
 	var m AgentMemory
 	cfg := AgentMemoryConfig{}
 	m.Init(cfg)
-	if err := m.Close(); err != nil { t.Fatal(err) }
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAgentMemory_CloseWaitsForGoroutines(t *testing.T) {
@@ -57,11 +59,13 @@ func TestAgentMemory_Remember_DefaultScope(t *testing.T) {
 	store := newConformanceStore(t)
 	var m AgentMemory
 	m.Init(AgentMemoryConfig{Store: store, Logger: discardLogger()})
-	err := m.Remember(context.Background(), MemoryItem{
+	err := m.Remember(context.Background(), core.MemoryItem{
 		Kind: KindFact, Content: "x",
 	})
-	if err != nil { t.Fatal(err) }
-	items, _ := store.List(context.Background(), Filter{Kinds: []Kind{KindFact}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, _ := store.List(context.Background(), core.MemoryFilter{Kinds: []core.MemoryKind{KindFact}})
 	if len(items) != 1 || items[0].Source.Kind == "" {
 		t.Fatalf("source not defaulted: %+v", items)
 	}
@@ -69,10 +73,14 @@ func TestAgentMemory_Remember_DefaultScope(t *testing.T) {
 
 func TestAgentMemory_Forget_ByID(t *testing.T) {
 	store := newConformanceStore(t)
-	must(t, store.Upsert(context.Background(), MemoryItem{ID: "x", Kind: KindFact, Content: "y"}))
+	must(t, store.Upsert(context.Background(), core.MemoryItem{ID: "x", Kind: KindFact, Content: "y"}))
 	var m AgentMemory
 	m.Init(AgentMemoryConfig{Store: store, Logger: discardLogger()})
 	n, err := m.Forget(context.Background(), ForgetByID("x"))
-	if err != nil { t.Fatal(err) }
-	if n != 1 { t.Fatalf("n = %d", n) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("n = %d", n)
+	}
 }

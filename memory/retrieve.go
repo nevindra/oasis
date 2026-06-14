@@ -31,8 +31,8 @@ type RetrieveContext struct {
 	Embedding []float32
 
 	History     []core.Message
-	Selected    map[Kind][]MemoryItem // by Kind, set by BatchedRecall
-	Pinned      []MemoryItem
+	Selected    map[core.MemoryKind][]core.MemoryItem // by Kind, set by BatchedRecall
+	Pinned      []core.MemoryItem
 	CrossThread []core.ScoredMessage
 
 	SystemPrompt string

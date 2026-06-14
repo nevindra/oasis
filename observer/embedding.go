@@ -25,8 +25,8 @@ func WrapEmbedding(inner oasis.EmbeddingProvider, model string, inst *Instrument
 	return &ObservedEmbedding{inner: inner, inst: inst, model: model}
 }
 
-func (o *ObservedEmbedding) Name() string       { return o.inner.Name() }
-func (o *ObservedEmbedding) Dimensions() int     { return o.inner.Dimensions() }
+func (o *ObservedEmbedding) Name() string    { return o.inner.Name() }
+func (o *ObservedEmbedding) Dimensions() int { return o.inner.Dimensions() }
 
 func (o *ObservedEmbedding) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	ctx, span := o.inst.Tracer.Start(ctx, "llm.embed", trace.WithAttributes(

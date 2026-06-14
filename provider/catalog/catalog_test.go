@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -365,4 +366,59 @@ func findModel(models []oasis.ModelInfo, id string) *oasis.ModelInfo {
 		}
 	}
 	return nil
+}
+
+// TestListPartialFailure verifies that List surfaces errors from failing
+// providers while still returning models from healthy providers.
+func TestListPartialFailure(t *testing.T) {
+	// good: serves a valid /v1/models response.
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := openaiModelResponse{
+			Object: "list",
+			Data:   []openaiModel{{ID: "good-model", Object: "model"}},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer good.Close()
+
+	// bad: always returns HTTP 500, causing the lister to return an error.
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+
+	cat := NewModelCatalog()
+	if err := cat.AddCustom("good-provider", good.URL+"/v1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.AddCustom("bad-provider", bad.URL+"/v1", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	models, err := cat.List(context.Background())
+
+	// Error must be non-nil because one provider failed.
+	if err == nil {
+		t.Fatal("List: expected non-nil error when a provider fails, got nil")
+	}
+
+	// The error should mention the failing provider.
+	if errStr := err.Error(); !strings.Contains(errStr, "bad-provider") {
+		t.Errorf("error %q does not mention 'bad-provider'", errStr)
+	}
+
+	// Partial results from the healthy provider must still be present.
+	if len(models) == 0 {
+		t.Fatal("List: expected models from healthy provider, got none")
+	}
+	found := false
+	for _, m := range models {
+		if m.ID == "good-model" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("List: 'good-model' not in results: %v", models)
+	}
 }

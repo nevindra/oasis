@@ -60,8 +60,8 @@ type mockTool struct {
 	err    error
 }
 
-func (m *mockTool) Name() string                       { return m.def.Name }
-func (m *mockTool) Definition() oasis.ToolDefinition   { return m.def }
+func (m *mockTool) Name() string                     { return m.def.Name }
+func (m *mockTool) Definition() oasis.ToolDefinition { return m.def }
 func (m *mockTool) ExecuteRaw(_ context.Context, _ json.RawMessage) (oasis.ToolResult, error) {
 	return m.result, m.err
 }
@@ -74,8 +74,8 @@ type mockEmbedding struct {
 	err  error
 }
 
-func (m *mockEmbedding) Name() string                                          { return m.name }
-func (m *mockEmbedding) Dimensions() int                                       { return m.dims }
+func (m *mockEmbedding) Name() string    { return m.name }
+func (m *mockEmbedding) Dimensions() int { return m.dims }
 func (m *mockEmbedding) Embed(_ context.Context, _ []string) ([][]float32, error) {
 	return m.vecs, m.err
 }

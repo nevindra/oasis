@@ -13,8 +13,8 @@ func TestAgentResultFinishReasonNaturalStop(t *testing.T) {
 	provider := newFnProvider(func(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{Content: "done", FinishReason: core.FinishStop}, nil
 	})
@@ -41,8 +41,8 @@ func TestAgentResultWarningsAndProviderMeta(t *testing.T) {
 	provider := newFnProvider(func(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{
 			Content:      "ok",
@@ -70,8 +70,8 @@ func TestAgentResultWarningsAccumulateAcrossIterations(t *testing.T) {
 	provider := newFnProvider(func(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		i := iter
 		iter++
@@ -108,8 +108,8 @@ func TestAgentResultIterationsPopulated(t *testing.T) {
 	provider := newFnProvider(func(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{
 			Content:      "ok",
@@ -148,8 +148,8 @@ func TestAgentResultFilesAggregated(t *testing.T) {
 		}
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{Content: "done", FinishReason: core.FinishStop}, nil
 	})

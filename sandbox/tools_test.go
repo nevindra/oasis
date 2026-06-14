@@ -31,7 +31,7 @@ type mockSandbox struct {
 	screenshotFn   func(ctx context.Context) ([]byte, error)
 	mcpCallFn      func(ctx context.Context, req MCPRequest) (MCPResult, error)
 	downloadFileFn func(ctx context.Context, path string) (io.ReadCloser, error)
-	snapshotFn     func(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error)
+	snapshotFn     func(ctx context.Context, opts SnapshotOpts) (PageSnapshot, error)
 	browserTextFn  func(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
 	browserPDFFn   func(ctx context.Context) ([]byte, error)
 	browserWaitFn  func(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error)
@@ -125,11 +125,11 @@ func (m *mockSandbox) MCPCall(ctx context.Context, req MCPRequest) (MCPResult, e
 	return MCPResult{}, nil
 }
 
-func (m *mockSandbox) BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error) {
+func (m *mockSandbox) BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (PageSnapshot, error) {
 	if m.snapshotFn != nil {
 		return m.snapshotFn(ctx, opts)
 	}
-	return BrowserSnapshot{}, nil
+	return PageSnapshot{}, nil
 }
 
 func (m *mockSandbox) BrowserText(ctx context.Context, opts TextOpts) (BrowserTextResult, error) {
@@ -179,6 +179,57 @@ func (m *mockSandbox) WebSearch(ctx context.Context, req WebSearchRequest) (WebS
 
 func (m *mockSandbox) Close() error { return nil }
 
+// mockSandbox drives a browser, so it satisfies both interfaces.
+var (
+	_ Sandbox        = (*mockSandbox)(nil)
+	_ BrowserSandbox = (*mockSandbox)(nil)
+)
+
+// lightSandbox implements only the core Sandbox interface (no browser
+// methods) — it models a headless/light runtime. Tools() must NOT register
+// the browser_* tool set for it.
+type lightSandbox struct{}
+
+func (lightSandbox) Shell(context.Context, ShellRequest) (ShellResult, error) {
+	return ShellResult{}, nil
+}
+func (lightSandbox) ExecCode(context.Context, CodeRequest) (CodeResult, error) {
+	return CodeResult{}, nil
+}
+func (lightSandbox) ReadFile(context.Context, ReadFileRequest) (FileContent, error) {
+	return FileContent{}, nil
+}
+func (lightSandbox) WriteFile(context.Context, WriteFileRequest) error   { return nil }
+func (lightSandbox) UploadFile(context.Context, string, io.Reader) error { return nil }
+func (lightSandbox) DownloadFile(context.Context, string) (io.ReadCloser, error) {
+	return nil, nil
+}
+func (lightSandbox) MCPCall(context.Context, MCPRequest) (MCPResult, error) {
+	return MCPResult{}, nil
+}
+func (lightSandbox) EditFile(context.Context, EditFileRequest) error { return nil }
+func (lightSandbox) GlobFiles(context.Context, GlobRequest) (GlobResult, error) {
+	return GlobResult{}, nil
+}
+func (lightSandbox) GrepFiles(context.Context, GrepRequest) (GrepResult, error) {
+	return GrepResult{}, nil
+}
+func (lightSandbox) Tree(context.Context, TreeRequest) (TreeResult, error) {
+	return TreeResult{}, nil
+}
+func (lightSandbox) HTTPFetch(context.Context, HTTPFetchRequest) (HTTPFetchResult, error) {
+	return HTTPFetchResult{}, nil
+}
+func (lightSandbox) WebSearch(context.Context, WebSearchRequest) (WebSearchResult, error) {
+	return WebSearchResult{}, nil
+}
+func (lightSandbox) WorkspaceInfo(context.Context) (WorkspaceInfoResult, error) {
+	return WorkspaceInfoResult{}, nil
+}
+func (lightSandbox) Close() error { return nil }
+
+var _ Sandbox = lightSandbox{}
+
 func TestShellToolDispatch(t *testing.T) {
 	var captured ShellRequest
 	sb := &mockSandbox{
@@ -199,26 +250,26 @@ func TestShellToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "shell" {
-				found = true
-				args := json.RawMessage(`{"command":"ls -la","cwd":"/tmp"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if captured.Command != "ls -la" {
-					t.Errorf("command = %q, want %q", captured.Command, "ls -la")
-				}
-				if captured.Cwd != "/tmp" {
-					t.Errorf("cwd = %q, want %q", captured.Cwd, "/tmp")
-				}
-				if decodeContent(t, result) != "hello world" {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), "hello world")
-				}
-				if result.Error != "" {
-					t.Errorf("unexpected error field: %q", result.Error)
-				}
+		if def.Name == "shell" {
+			found = true
+			args := json.RawMessage(`{"command":"ls -la","cwd":"/tmp"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if captured.Command != "ls -la" {
+				t.Errorf("command = %q, want %q", captured.Command, "ls -la")
+			}
+			if captured.Cwd != "/tmp" {
+				t.Errorf("cwd = %q, want %q", captured.Cwd, "/tmp")
+			}
+			if decodeContent(t, result) != "hello world" {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), "hello world")
+			}
+			if result.Error != "" {
+				t.Errorf("unexpected error field: %q", result.Error)
+			}
+		}
 		_ = def
 
 	}
@@ -238,17 +289,17 @@ func TestShellToolNonZeroExit(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "shell" {
-				args := json.RawMessage(`{"command":"false"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				want := "exit code 1\nnot found"
-				if decodeContent(t, result) != want {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), want)
-				}
+		if def.Name == "shell" {
+			args := json.RawMessage(`{"command":"false"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			want := "exit code 1\nnot found"
+			if decodeContent(t, result) != want {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), want)
+			}
+		}
 		_ = def
 
 	}
@@ -267,22 +318,22 @@ func TestExecuteCodeToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "execute_code" {
-				args := json.RawMessage(`{"code":"print(42)","language":"python"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if captured.Code != "print(42)" {
-					t.Errorf("code = %q, want %q", captured.Code, "print(42)")
-				}
-				if captured.Language != "python" {
-					t.Errorf("language = %q, want %q", captured.Language, "python")
-				}
-				if decodeContent(t, result) != "42" {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), "42")
-				}
+		if def.Name == "execute_code" {
+			args := json.RawMessage(`{"code":"print(42)","language":"python"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if captured.Code != "print(42)" {
+				t.Errorf("code = %q, want %q", captured.Code, "print(42)")
+			}
+			if captured.Language != "python" {
+				t.Errorf("language = %q, want %q", captured.Language, "python")
+			}
+			if decodeContent(t, result) != "42" {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), "42")
+			}
+		}
 		_ = def
 
 	}
@@ -301,16 +352,16 @@ func TestExecuteCodeDefaultLanguage(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "execute_code" {
-				args := json.RawMessage(`{"code":"x = 1"}`)
-				_, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if captured.Language != "python" {
-					t.Errorf("language = %q, want default %q", captured.Language, "python")
-				}
+		if def.Name == "execute_code" {
+			args := json.RawMessage(`{"code":"x = 1"}`)
+			_, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if captured.Language != "python" {
+				t.Errorf("language = %q, want default %q", captured.Language, "python")
+			}
+		}
 		_ = def
 
 	}
@@ -327,16 +378,16 @@ func TestExecuteCodeError(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "execute_code" {
-				args := json.RawMessage(`{"code":"print(x)"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if result.Error == "" {
-					t.Error("expected error field to be set")
-				}
+		if def.Name == "execute_code" {
+			args := json.RawMessage(`{"code":"print(x)"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if result.Error == "" {
+				t.Error("expected error field to be set")
+			}
+		}
 		_ = def
 
 	}
@@ -372,25 +423,25 @@ func TestToolDefinitionsComplete(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if _, ok := expected[def.Name]; ok {
-				expected[def.Name] = true
-			} else {
-				t.Errorf("unexpected tool: %q", def.Name)
-			}
+		if _, ok := expected[def.Name]; ok {
+			expected[def.Name] = true
+		} else {
+			t.Errorf("unexpected tool: %q", def.Name)
+		}
 
-			// Verify description is non-empty.
-			if def.Description == "" {
-				t.Errorf("tool %q has empty description", def.Name)
-			}
+		// Verify description is non-empty.
+		if def.Description == "" {
+			t.Errorf("tool %q has empty description", def.Name)
+		}
 
-			// Verify parameters is valid JSON Schema.
-			var schema map[string]any
-			if err := json.Unmarshal(def.Parameters, &schema); err != nil {
-				t.Errorf("tool %q has invalid parameters JSON: %v", def.Name, err)
-			}
-			if schema["type"] != "object" {
-				t.Errorf("tool %q parameters type = %v, want %q", def.Name, schema["type"], "object")
-			}
+		// Verify parameters is valid JSON Schema.
+		var schema map[string]any
+		if err := json.Unmarshal(def.Parameters, &schema); err != nil {
+			t.Errorf("tool %q has invalid parameters JSON: %v", def.Name, err)
+		}
+		if schema["type"] != "object" {
+			t.Errorf("tool %q parameters type = %v, want %q", def.Name, schema["type"], "object")
+		}
 		_ = def
 
 	}
@@ -420,29 +471,29 @@ func TestFileEditToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "file_edit" {
-				found = true
-				args := json.RawMessage(`{"path":"/app/main.py","old_string":"print('hello')","new_string":"print('hello world')"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if captured.Path != "/app/main.py" {
-					t.Errorf("path = %q, want %q", captured.Path, "/app/main.py")
-				}
-				if captured.Old != "print('hello')" {
-					t.Errorf("old = %q, want %q", captured.Old, "print('hello')")
-				}
-				if captured.New != "print('hello world')" {
-					t.Errorf("new = %q, want %q", captured.New, "print('hello world')")
-				}
-				if decodeContent(t, result) != "edited /app/main.py" {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), "edited /app/main.py")
-				}
-				if result.Error != "" {
-					t.Errorf("unexpected error field: %q", result.Error)
-				}
+		if def.Name == "file_edit" {
+			found = true
+			args := json.RawMessage(`{"path":"/app/main.py","old_string":"print('hello')","new_string":"print('hello world')"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if captured.Path != "/app/main.py" {
+				t.Errorf("path = %q, want %q", captured.Path, "/app/main.py")
+			}
+			if captured.Old != "print('hello')" {
+				t.Errorf("old = %q, want %q", captured.Old, "print('hello')")
+			}
+			if captured.New != "print('hello world')" {
+				t.Errorf("new = %q, want %q", captured.New, "print('hello world')")
+			}
+			if decodeContent(t, result) != "edited /app/main.py" {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), "edited /app/main.py")
+			}
+			if result.Error != "" {
+				t.Errorf("unexpected error field: %q", result.Error)
+			}
+		}
 		_ = def
 
 	}
@@ -462,16 +513,16 @@ func TestFileEditToolError(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "file_edit" {
-				args := json.RawMessage(`{"path":"/app/main.py","old_string":"missing","new_string":"new"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if result.Error == "" {
-					t.Error("expected error field to be set")
-				}
+		if def.Name == "file_edit" {
+			args := json.RawMessage(`{"path":"/app/main.py","old_string":"missing","new_string":"new"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if result.Error == "" {
+				t.Error("expected error field to be set")
+			}
+		}
 		_ = def
 
 	}
@@ -491,27 +542,27 @@ func TestFileGlobToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "file_glob" {
-				found = true
-				args := json.RawMessage(`{"pattern":"**/*.py","path":"/app"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if captured.Pattern != "**/*.py" {
-					t.Errorf("pattern = %q, want %q", captured.Pattern, "**/*.py")
-				}
-				if captured.Path != "/app" {
-					t.Errorf("path = %q, want %q", captured.Path, "/app")
-				}
-				want := "/app/main.py\n/app/lib/utils.py"
-				if decodeContent(t, result) != want {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), want)
-				}
-				if result.Error != "" {
-					t.Errorf("unexpected error field: %q", result.Error)
-				}
+		if def.Name == "file_glob" {
+			found = true
+			args := json.RawMessage(`{"pattern":"**/*.py","path":"/app"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if captured.Pattern != "**/*.py" {
+				t.Errorf("pattern = %q, want %q", captured.Pattern, "**/*.py")
+			}
+			if captured.Path != "/app" {
+				t.Errorf("path = %q, want %q", captured.Path, "/app")
+			}
+			want := "/app/main.py\n/app/lib/utils.py"
+			if decodeContent(t, result) != want {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), want)
+			}
+			if result.Error != "" {
+				t.Errorf("unexpected error field: %q", result.Error)
+			}
+		}
 		_ = def
 
 	}
@@ -531,16 +582,16 @@ func TestFileGlobToolNoMatches(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "file_glob" {
-				args := json.RawMessage(`{"pattern":"**/*.rs"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if decodeContent(t, result) != "no files matched" {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), "no files matched")
-				}
+		if def.Name == "file_glob" {
+			args := json.RawMessage(`{"pattern":"**/*.rs"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if decodeContent(t, result) != "no files matched" {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), "no files matched")
+			}
+		}
 		_ = def
 
 	}
@@ -563,30 +614,30 @@ func TestFileGrepToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "file_grep" {
-				found = true
-				args := json.RawMessage(`{"pattern":"def main","path":"/app","glob":"*.py"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if captured.Pattern != "def main" {
-					t.Errorf("pattern = %q, want %q", captured.Pattern, "def main")
-				}
-				if captured.Path != "/app" {
-					t.Errorf("path = %q, want %q", captured.Path, "/app")
-				}
-				if captured.Glob != "*.py" {
-					t.Errorf("glob = %q, want %q", captured.Glob, "*.py")
-				}
-				want := "/app/main.py:42: def main():\n/app/lib/utils.py:10: def main_helper():"
-				if decodeContent(t, result) != want {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), want)
-				}
-				if result.Error != "" {
-					t.Errorf("unexpected error field: %q", result.Error)
-				}
+		if def.Name == "file_grep" {
+			found = true
+			args := json.RawMessage(`{"pattern":"def main","path":"/app","glob":"*.py"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if captured.Pattern != "def main" {
+				t.Errorf("pattern = %q, want %q", captured.Pattern, "def main")
+			}
+			if captured.Path != "/app" {
+				t.Errorf("path = %q, want %q", captured.Path, "/app")
+			}
+			if captured.Glob != "*.py" {
+				t.Errorf("glob = %q, want %q", captured.Glob, "*.py")
+			}
+			want := "/app/main.py:42: def main():\n/app/lib/utils.py:10: def main_helper():"
+			if decodeContent(t, result) != want {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), want)
+			}
+			if result.Error != "" {
+				t.Errorf("unexpected error field: %q", result.Error)
+			}
+		}
 		_ = def
 
 	}
@@ -606,16 +657,16 @@ func TestFileGrepToolNoMatches(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "file_grep" {
-				args := json.RawMessage(`{"pattern":"nonexistent"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if decodeContent(t, result) != "no matches found" {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), "no matches found")
-				}
+		if def.Name == "file_grep" {
+			args := json.RawMessage(`{"pattern":"nonexistent"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if decodeContent(t, result) != "no matches found" {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), "no matches found")
+			}
+		}
 		_ = def
 
 	}
@@ -624,9 +675,9 @@ func TestFileGrepToolNoMatches(t *testing.T) {
 func TestSnapshotToolDispatch(t *testing.T) {
 	var captured SnapshotOpts
 	sb := &mockSandbox{
-		snapshotFn: func(_ context.Context, opts SnapshotOpts) (BrowserSnapshot, error) {
+		snapshotFn: func(_ context.Context, opts SnapshotOpts) (PageSnapshot, error) {
 			captured = opts
-			return BrowserSnapshot{
+			return PageSnapshot{
 				URL:   "https://example.com",
 				Title: "Example",
 				Nodes: []SnapshotNode{
@@ -642,26 +693,26 @@ func TestSnapshotToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "snapshot" {
-				found = true
-				args := json.RawMessage(`{"filter":"interactive"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if captured.Filter != "interactive" {
-					t.Errorf("filter = %q, want %q", captured.Filter, "interactive")
-				}
-				if !strings.Contains(decodeContent(t, result), "[e0] link \"Home\"") {
-					t.Errorf("content missing e0 node: %q", decodeContent(t, result))
-				}
-				if !strings.Contains(decodeContent(t, result), "[e1] button \"Submit\"") {
-					t.Errorf("content missing e1 node: %q", decodeContent(t, result))
-				}
-				if result.Error != "" {
-					t.Errorf("unexpected error: %q", result.Error)
-				}
+		if def.Name == "snapshot" {
+			found = true
+			args := json.RawMessage(`{"filter":"interactive"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if captured.Filter != "interactive" {
+				t.Errorf("filter = %q, want %q", captured.Filter, "interactive")
+			}
+			if !strings.Contains(decodeContent(t, result), "[e0] link \"Home\"") {
+				t.Errorf("content missing e0 node: %q", decodeContent(t, result))
+			}
+			if !strings.Contains(decodeContent(t, result), "[e1] button \"Submit\"") {
+				t.Errorf("content missing e1 node: %q", decodeContent(t, result))
+			}
+			if result.Error != "" {
+				t.Errorf("unexpected error: %q", result.Error)
+			}
+		}
 		_ = def
 
 	}
@@ -688,23 +739,23 @@ func TestPageTextToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "page_text" {
-				found = true
-				args := json.RawMessage(`{"raw":true,"max_chars":500}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !captured.Raw {
-					t.Error("expected raw=true")
-				}
-				if captured.MaxChars != 500 {
-					t.Errorf("max_chars = %d, want 500", captured.MaxChars)
-				}
-				if decodeContent(t, result) != "Welcome to Example." {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), "Welcome to Example.")
-				}
+		if def.Name == "page_text" {
+			found = true
+			args := json.RawMessage(`{"raw":true,"max_chars":500}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if !captured.Raw {
+				t.Error("expected raw=true")
+			}
+			if captured.MaxChars != 500 {
+				t.Errorf("max_chars = %d, want 500", captured.MaxChars)
+			}
+			if decodeContent(t, result) != "Welcome to Example." {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), "Welcome to Example.")
+			}
+		}
 		_ = def
 
 	}
@@ -725,17 +776,17 @@ func TestExportPDFToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "export_pdf" {
-				found = true
-				args := json.RawMessage(`{}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !strings.Contains(decodeContent(t, result), "13 bytes") {
-					t.Errorf("content = %q, want size info", decodeContent(t, result))
-				}
+		if def.Name == "export_pdf" {
+			found = true
+			args := json.RawMessage(`{}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if !strings.Contains(decodeContent(t, result), "13 bytes") {
+				t.Errorf("content = %q, want size info", decodeContent(t, result))
+			}
+		}
 		_ = def
 
 	}
@@ -757,22 +808,22 @@ func TestBrowserToolWithRef(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "browser" {
-				args := json.RawMessage(`{"action":"click","ref":"e5"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if captured.Ref != "e5" {
-					t.Errorf("ref = %q, want %q", captured.Ref, "e5")
-				}
-				if captured.Type != "click" {
-					t.Errorf("type = %q, want %q", captured.Type, "click")
-				}
-				if decodeContent(t, result) != "clicked" {
-					t.Errorf("content = %q, want %q", decodeContent(t, result), "clicked")
-				}
+		if def.Name == "browser" {
+			args := json.RawMessage(`{"action":"click","ref":"e5"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if captured.Ref != "e5" {
+				t.Errorf("ref = %q, want %q", captured.Ref, "e5")
+			}
+			if captured.Type != "click" {
+				t.Errorf("type = %q, want %q", captured.Type, "click")
+			}
+			if decodeContent(t, result) != "clicked" {
+				t.Errorf("content = %q, want %q", decodeContent(t, result), "clicked")
+			}
+		}
 		_ = def
 
 	}
@@ -822,60 +873,60 @@ func TestDeliverFileToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "deliver_file" {
-				found = true
+		if def.Name == "deliver_file" {
+			found = true
 
-				// Test ExecuteStream path.
-				st, ok := tool.(oasis.StreamingAnyTool)
-				if !ok {
-					t.Fatal("deliver_file tool does not implement StreamingAnyTool")
-				}
-
-				ch := make(chan oasis.StreamEvent, 10)
-				args := json.RawMessage(`{"path":"/workspace/report.pdf","name":"My Report.pdf"}`)
-				result, err := st.ExecuteStream(context.Background(), args, ch)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-
-				// Verify delivery was called correctly.
-				if capturedName != "My Report.pdf" {
-					t.Errorf("delivery name = %q, want %q", capturedName, "My Report.pdf")
-				}
-				if capturedMime != "application/pdf" {
-					t.Errorf("delivery mime = %q, want %q", capturedMime, "application/pdf")
-				}
-				if capturedSize != int64(len(fileContent)) {
-					t.Errorf("delivery size = %d, want %d", capturedSize, len(fileContent))
-				}
-				if !bytes.Equal(capturedData, fileContent) {
-					t.Errorf("delivery data mismatch")
-				}
-
-				// Verify tool result.
-				if !strings.Contains(decodeContent(t, result), "delivered My Report.pdf") {
-					t.Errorf("result content = %q, want to contain %q", decodeContent(t, result), "delivered My Report.pdf")
-				}
-				if result.Error != "" {
-					t.Errorf("unexpected error field: %q", result.Error)
-				}
-
-				// Verify file_attachment event was emitted.
-				select {
-				case ev := <-ch:
-					if ev.Type != oasis.EventFileAttachment {
-						t.Errorf("event type = %q, want %q", ev.Type, oasis.EventFileAttachment)
-					}
-					if !strings.Contains(ev.Content, `"url":"/api/files/abc123/download"`) {
-						t.Errorf("event content missing url: %s", ev.Content)
-					}
-					if !strings.Contains(ev.Content, `"name":"My Report.pdf"`) {
-						t.Errorf("event content missing name: %s", ev.Content)
-					}
-				default:
-					t.Error("no file_attachment event emitted")
-				}
+			// Test ExecuteStream path.
+			st, ok := tool.(oasis.StreamingAnyTool)
+			if !ok {
+				t.Fatal("deliver_file tool does not implement StreamingAnyTool")
 			}
+
+			ch := make(chan oasis.StreamEvent, 10)
+			args := json.RawMessage(`{"path":"/workspace/report.pdf","name":"My Report.pdf"}`)
+			result, err := st.ExecuteStream(context.Background(), args, ch)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			// Verify delivery was called correctly.
+			if capturedName != "My Report.pdf" {
+				t.Errorf("delivery name = %q, want %q", capturedName, "My Report.pdf")
+			}
+			if capturedMime != "application/pdf" {
+				t.Errorf("delivery mime = %q, want %q", capturedMime, "application/pdf")
+			}
+			if capturedSize != int64(len(fileContent)) {
+				t.Errorf("delivery size = %d, want %d", capturedSize, len(fileContent))
+			}
+			if !bytes.Equal(capturedData, fileContent) {
+				t.Errorf("delivery data mismatch")
+			}
+
+			// Verify tool result.
+			if !strings.Contains(decodeContent(t, result), "delivered My Report.pdf") {
+				t.Errorf("result content = %q, want to contain %q", decodeContent(t, result), "delivered My Report.pdf")
+			}
+			if result.Error != "" {
+				t.Errorf("unexpected error field: %q", result.Error)
+			}
+
+			// Verify file_attachment event was emitted.
+			select {
+			case ev := <-ch:
+				if ev.Type != oasis.EventFileAttachment {
+					t.Errorf("event type = %q, want %q", ev.Type, oasis.EventFileAttachment)
+				}
+				if !strings.Contains(ev.Content, `"url":"/api/files/abc123/download"`) {
+					t.Errorf("event content missing url: %s", ev.Content)
+				}
+				if !strings.Contains(ev.Content, `"name":"My Report.pdf"`) {
+					t.Errorf("event content missing name: %s", ev.Content)
+				}
+			default:
+				t.Error("no file_attachment event emitted")
+			}
+		}
 		_ = def
 
 	}
@@ -903,20 +954,20 @@ func TestDeliverFileToolDefaultName(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "deliver_file" {
-				// Call without "name" field — should default to basename of path.
-				args := json.RawMessage(`{"path":"/workspace/output/chart.png"}`)
-				result, err := tool.ExecuteRaw(context.Background(), args)
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if capturedName != "chart.png" {
-					t.Errorf("delivery name = %q, want %q", capturedName, "chart.png")
-				}
-				if !strings.Contains(decodeContent(t, result), "delivered chart.png") {
-					t.Errorf("result content = %q, want to contain %q", decodeContent(t, result), "delivered chart.png")
-				}
+		if def.Name == "deliver_file" {
+			// Call without "name" field — should default to basename of path.
+			args := json.RawMessage(`{"path":"/workspace/output/chart.png"}`)
+			result, err := tool.ExecuteRaw(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
+			if capturedName != "chart.png" {
+				t.Errorf("delivery name = %q, want %q", capturedName, "chart.png")
+			}
+			if !strings.Contains(decodeContent(t, result), "delivered chart.png") {
+				t.Errorf("result content = %q, want to contain %q", decodeContent(t, result), "delivered chart.png")
+			}
+		}
 		_ = def
 
 	}
@@ -929,9 +980,9 @@ func TestDeliverFileToolNotRegisteredWithoutDelivery(t *testing.T) {
 	for _, tool := range tools {
 		def := tool.Definition()
 
-			if def.Name == "deliver_file" {
-				t.Error("deliver_file tool should not be registered without any destination")
-			}
+		if def.Name == "deliver_file" {
+			t.Error("deliver_file tool should not be registered without any destination")
+		}
 		_ = def
 
 	}
@@ -1109,6 +1160,30 @@ func TestTools_WithoutBrowserOmitsBrowserTools(t *testing.T) {
 	}
 	if !hasShell || !hasWebSearch {
 		t.Errorf("WithoutBrowser() dropped non-browser tools: shell=%v web_search=%v", hasShell, hasWebSearch)
+	}
+}
+
+func TestTools_NonBrowserSandboxOmitsBrowserTools(t *testing.T) {
+	browserNames := map[string]bool{
+		"browser": true, "screenshot": true, "snapshot": true,
+		"page_text": true, "export_pdf": true, "browser_eval": true,
+		"browser_find": true, "browser_wait": true,
+	}
+
+	tools := Tools(lightSandbox{})
+	for _, tl := range tools {
+		if browserNames[tl.Definition().Name] {
+			t.Errorf("non-browser sandbox registered browser tool %q", tl.Definition().Name)
+		}
+	}
+	// 12 core tools, no browser tools, no deliver_file (no destination).
+	if len(tools) != 12 {
+		t.Errorf("got %d tools for non-browser sandbox, want 12", len(tools))
+	}
+
+	// A browser-capable sandbox still gets the full set.
+	if got := len(Tools(&mockSandbox{})); got != 20 {
+		t.Errorf("got %d tools for browser sandbox, want 20", got)
 	}
 }
 

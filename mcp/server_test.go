@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -133,7 +136,9 @@ func TestToolsCall(t *testing.T) {
 	srv.AddTool(ToolHandler{
 		Definition: ToolDefinition{Name: "echo", Description: "Echo input"},
 		Execute: func(_ context.Context, args json.RawMessage) ToolCallResult {
-			var params struct{ Text string `json:"text"` }
+			var params struct {
+				Text string `json:"text"`
+			}
 			json.Unmarshal(args, &params)
 			return TextResult("echo: " + params.Text)
 		},
@@ -294,3 +299,42 @@ func TestParseError(t *testing.T) {
 		t.Errorf("error code = %d, want %d", resp.Error.Code, errCodeParse)
 	}
 }
+
+func TestWithServerLogger(t *testing.T) {
+	var mu sync.Mutex
+	var records []slog.Record
+	h := &captureHandler{records: &records, mu: &mu}
+	logger := slog.New(h)
+
+	srv := New("test-server", "1.0.0", WithServerLogger(logger))
+
+	// Use a writer that always fails to trigger the write-error path.
+	srv.writer = &failWriter{}
+	srv.writeResponse(response{JSONRPC: "2.0", ID: json.RawMessage("1"), Result: "ok"})
+
+	mu.Lock()
+	n := len(records)
+	mu.Unlock()
+	if n == 0 {
+		t.Fatal("expected logger to receive at least one error record")
+	}
+}
+
+type failWriter struct{}
+
+func (f *failWriter) Write(p []byte) (int, error) { return 0, errors.New("write failed") }
+
+type captureHandler struct {
+	records *[]slog.Record
+	mu      *sync.Mutex
+}
+
+func (c *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (c *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	c.mu.Lock()
+	*c.records = append(*c.records, r)
+	c.mu.Unlock()
+	return nil
+}
+func (c *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return c }
+func (c *captureHandler) WithGroup(name string) slog.Handler       { return c }

@@ -33,16 +33,6 @@ type Store interface {
     GetConfig(ctx context.Context, key string) (string, error)
     SetConfig(ctx context.Context, key, value string) error
 
-    // Scheduled actions
-    CreateScheduledAction(ctx context.Context, action ScheduledAction) error
-    ListScheduledActions(ctx context.Context) ([]ScheduledAction, error)
-    GetDueScheduledActions(ctx context.Context, now int64) ([]ScheduledAction, error)
-    UpdateScheduledAction(ctx context.Context, action ScheduledAction) error
-    UpdateScheduledActionEnabled(ctx context.Context, id string, enabled bool) error
-    DeleteScheduledAction(ctx context.Context, id string) error
-    DeleteAllScheduledActions(ctx context.Context) (int, error)
-    ListScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
-
     // Lifecycle
     Init(ctx context.Context) error
     Close() error
@@ -267,6 +257,31 @@ type CheckpointStore interface {
 ```
 
 Checkpoint statuses (`CheckpointStatus`): `CheckpointExtracting`, `CheckpointChunking`, `CheckpointEnriching`, `CheckpointEmbedding`, `CheckpointStoring`, `CheckpointGraphing`.
+
+### `ScheduledActionStore`
+
+Scheduled-action persistence — used by the cron/scheduler layer to store, query, and update recurring actions. If the store does not implement this interface, scheduled-action features are unavailable.
+
+```go
+type ScheduledActionStore interface {
+    CreateScheduledAction(ctx context.Context, action ScheduledAction) error
+    ListScheduledActions(ctx context.Context) ([]ScheduledAction, error)
+    GetDueScheduledActions(ctx context.Context, now int64) ([]ScheduledAction, error)
+    UpdateScheduledAction(ctx context.Context, action ScheduledAction) error
+    UpdateScheduledActionEnabled(ctx context.Context, id string, enabled bool) error
+    DeleteScheduledAction(ctx context.Context, id string) error
+    DeleteAllScheduledActions(ctx context.Context) (int, error)
+    ListScheduledActionsByDescription(ctx context.Context, pattern string) ([]ScheduledAction, error)
+}
+```
+
+Usage:
+
+```go
+if sas, ok := store.(oasis.ScheduledActionStore); ok {
+    actions, err := sas.GetDueScheduledActions(ctx, time.Now().Unix())
+}
+```
 
 ---
 

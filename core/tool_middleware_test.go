@@ -11,7 +11,7 @@ type stubTool struct {
 	hits *int
 }
 
-func (s *stubTool) Name() string             { return s.name }
+func (s *stubTool) Name() string { return s.name }
 func (s *stubTool) Definition() ToolDefinition {
 	return ToolDefinition{Name: s.name, Description: "stub"}
 }
@@ -31,8 +31,8 @@ type countingWrapper struct {
 	counter *int
 }
 
-func (c *countingWrapper) Name() string                   { return c.inner.Name() }
-func (c *countingWrapper) Definition() ToolDefinition     { return c.inner.Definition() }
+func (c *countingWrapper) Name() string               { return c.inner.Name() }
+func (c *countingWrapper) Definition() ToolDefinition { return c.inner.Definition() }
 func (c *countingWrapper) ExecuteRaw(ctx context.Context, a json.RawMessage) (ToolResult, error) {
 	*c.counter++
 	return c.inner.ExecuteRaw(ctx, a)
@@ -104,7 +104,7 @@ type tagWrapper struct {
 	log   *[]string
 }
 
-func (w *tagWrapper) Name() string             { return w.inner.Name() }
+func (w *tagWrapper) Name() string               { return w.inner.Name() }
 func (w *tagWrapper) Definition() ToolDefinition { return w.inner.Definition() }
 func (w *tagWrapper) ExecuteRaw(ctx context.Context, a json.RawMessage) (ToolResult, error) {
 	*w.log = append(*w.log, w.label+"-pre")

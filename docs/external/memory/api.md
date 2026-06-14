@@ -215,11 +215,7 @@ Pass these to `oasis.WithMemory(...)` or `memory.BuildConfig(...)`.
 | `WithStore(s)` | `nil` | Wires the Store. Disables all persistence and retrieval when unset. |
 | `WithEmbedding(p)` | `nil` | Embedding provider for recall, dedup, and semantic trimming. Required for any semantic feature. |
 | `WithProvider(p)` | `nil` | LLM provider used by the fact extractor and title generator during ingest. |
-| `WithMaxHistory(n)` | `10` | Number of recent messages loaded per thread. |
-| `WithMaxTokens(n)` | `0` (off) | Token budget cap for history in the prompt. Triggers trimming when exceeded. |
-| `WithSemanticTrimming()` | `false` | When over budget, drop the least-relevant messages first instead of the oldest. Requires `WithEmbedding`. |
-| `WithSemanticTrimEmbedding(p)` | `nil` | Use a separate (faster) embedder for trimming only. Falls back to `WithEmbedding` when unset. |
-| `WithKeepRecent(n)` | `3` | Semantic trimming always keeps the `n` most-recent messages, regardless of relevance. |
+| `WithHistory(cfg)` | see below | Configures history loading and trimming. `HistoryConfig` fields: `MaxMessages` (default 10), `MaxTokens` (0=off), `Semantic` (false), `TrimEmbedder` (nil=use main embedder), `KeepRecent` (3 when Semantic=true). |
 | `WithSemanticRecall()` | `false` | Inject semantically relevant messages from other threads into the prompt. Requires `WithEmbedding`. |
 | `WithSemanticRecallMinScore(s)` | `0.60` | Cosine similarity threshold for cross-thread recall. |
 | `WithRecallKinds(kinds...)` | `[KindFact]` | Which `Kind` values are searched during batched recall. |

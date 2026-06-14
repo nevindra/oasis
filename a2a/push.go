@@ -10,10 +10,14 @@ import (
 	"time"
 )
 
-// pushHTTPClient delivers webhook notifications. A tight timeout ensures a
-// dead or slow webhook cannot wedge task settlement — push is best-effort by
+// defaultPushTimeout bounds a single webhook delivery. A tight timeout ensures
+// a dead or slow webhook cannot wedge task settlement — push is best-effort by
 // spec; the client can always poll GetTask for the authoritative state.
-var pushHTTPClient = &http.Client{Timeout: 10 * time.Second}
+const defaultPushTimeout = 10 * time.Second
+
+// newDefaultPushClient builds the *http.Client NewServer uses for webhook
+// delivery when the caller does not inject one via WithPushHTTPClient.
+func newDefaultPushClient() *http.Client { return &http.Client{Timeout: defaultPushTimeout} }
 
 // deliverPush POSTs the settled task to the registered webhook. All failures
 // are logged and never propagated: push delivery is fire-and-forget by the A2A
@@ -45,7 +49,7 @@ func (s *Server) deliverPush(ctx context.Context, cfg *PushNotificationConfig, t
 		req.Header.Set("X-A2A-Notification-Token", cfg.Token)
 	}
 
-	resp, err := pushHTTPClient.Do(req)
+	resp, err := s.pushClient.Do(req)
 	if err != nil {
 		slog.Error("a2a: push: delivery failed", "task", task.ID, "url", cfg.URL, "err", err)
 		return

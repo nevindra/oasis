@@ -34,9 +34,6 @@ type HistoryConfig struct {
 }
 
 // WithHistory configures history loading and trimming from a single HistoryConfig.
-// This is the preferred way to configure history; it replaces the five individual
-// options (WithMaxHistory, WithMaxTokens, WithSemanticTrimming,
-// WithSemanticTrimEmbedding, WithKeepRecent).
 func WithHistory(cfg HistoryConfig) Option {
 	return func(c *AgentMemoryConfig) {
 		if cfg.MaxMessages > 0 {
@@ -51,40 +48,6 @@ func WithHistory(cfg HistoryConfig) Option {
 			c.KeepRecent = cfg.KeepRecent
 		}
 	}
-}
-
-// Deprecated: use WithHistory(HistoryConfig{MaxMessages: n}) instead.
-//
-// WithMaxHistory sets how many recent messages to load (default 10).
-func WithMaxHistory(n int) Option { return func(c *AgentMemoryConfig) { c.MaxHistory = n } }
-
-// Deprecated: use WithHistory instead.
-//
-// WithMaxTokens caps the history portion of the prompt at n tokens.
-func WithMaxTokens(n int) Option { return func(c *AgentMemoryConfig) { c.MaxTokens = n } }
-
-// Deprecated: use WithHistory instead.
-//
-// WithSemanticTrimming enables semantic-similarity trimming when over MaxTokens.
-func WithSemanticTrimming() Option {
-	return func(c *AgentMemoryConfig) { c.SemanticTrimming = true }
-}
-
-// Deprecated: use WithHistory instead.
-//
-// WithSemanticTrimEmbedding configures a separate embedding provider for semantic
-// history trimming, so a smaller/faster model can be used here than for
-// cross-thread recall (WithEmbedding). If unset, WithEmbedding's provider is used.
-func WithSemanticTrimEmbedding(e core.EmbeddingProvider) Option {
-	return func(c *AgentMemoryConfig) { c.TrimmingEmbedding = e }
-}
-
-// Deprecated: use WithHistory instead.
-//
-// WithKeepRecent sets how many recent messages SemanticTrim preserves regardless
-// of relevance. Default 3.
-func WithKeepRecent(n int) Option {
-	return func(c *AgentMemoryConfig) { c.KeepRecent = n }
 }
 
 // WithCompaction wires a Compactor that runs when stored history exceeds
@@ -122,8 +85,8 @@ func WithSemanticRecallMinScore(s float32) Option {
 
 // WithRecallKinds configures which MemoryItem kinds are included in BatchedRecall.
 // Defaults to [KindFact] when not set.
-func WithRecallKinds(kinds ...Kind) Option {
-	return func(c *AgentMemoryConfig) { c.RecallKinds = append([]Kind{}, kinds...) }
+func WithRecallKinds(kinds ...core.MemoryKind) Option {
+	return func(c *AgentMemoryConfig) { c.RecallKinds = append([]core.MemoryKind{}, kinds...) }
 }
 
 // WithRecallTopK sets the total top-K for BatchedRecall (default 8).
@@ -133,12 +96,14 @@ func WithRecallTopK(k int) Option { return func(c *AgentMemoryConfig) { c.Recall
 func WithWorkingMemory() Option {
 	return func(c *AgentMemoryConfig) {
 		c.WorkingMemory = true
-		if c.WorkingMemoryScope == "" { c.WorkingMemoryScope = ScopeResource }
+		if c.WorkingMemoryScope == "" {
+			c.WorkingMemoryScope = ScopeResource
+		}
 	}
 }
 
 // WithWorkingMemoryScope overrides the default Resource scope for working memory.
-func WithWorkingMemoryScope(s ScopeKind) Option {
+func WithWorkingMemoryScope(s core.MemoryScopeKind) Option {
 	return func(c *AgentMemoryConfig) { c.WorkingMemoryScope = s }
 }
 
@@ -177,6 +142,8 @@ func WithTracer(t core.Tracer) Option { return func(c *AgentMemoryConfig) { c.Tr
 // BuildConfig applies the options and returns the resulting config.
 func BuildConfig(opts ...Option) AgentMemoryConfig {
 	var cfg AgentMemoryConfig
-	for _, o := range opts { o(&cfg) }
+	for _, o := range opts {
+		o(&cfg)
+	}
 	return cfg
 }

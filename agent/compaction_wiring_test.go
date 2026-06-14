@@ -28,7 +28,7 @@ func TestWithCompaction_StoresOnConfig(t *testing.T) {
 
 func TestWithCompaction_OmittedLeavesNilCompactor(t *testing.T) {
 	cfg := BuildConfig([]AgentOption{
-		WithMemory(memory.WithMaxHistory(10)),
+		WithMemory(memory.WithHistory(memory.HistoryConfig{MaxMessages: 10})),
 	})
 	if cfg.Compactor != nil {
 		t.Error("compactor should be nil when WithCompaction not used")

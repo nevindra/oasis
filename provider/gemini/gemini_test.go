@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	oasis "github.com/nevindra/oasis/core"
 )
@@ -601,26 +603,109 @@ func TestMapRole(t *testing.T) {
 	}
 }
 
-func TestIsCompleteJSON(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{`{"key": "value"}`, true},
-		{`{"key": "val`, false},
-		{`{"nested": {"a": 1}}`, true},
-		{`[1, 2, 3]`, true},
-		{`[1, 2`, false},
-		{`{"key": "value with \" escape"}`, true},
-		{`{"key": "value with { brace"}`, true},
-		{``, true}, // empty is balanced (depth 0)
+// TestChatStream_SplitPayloadSSE verifies that a JSON payload split across
+// multiple SSE lines is reassembled correctly and the text delta is delivered.
+func TestChatStream_SplitPayloadSSE(t *testing.T) {
+	// Build the full JSON chunk that Gemini would normally send as one line.
+	fullChunk := `{"candidates":[{"content":{"parts":[{"text":"hello"}],"role":"model"}}]}`
+
+	// Split it across two raw lines so that neither half is valid JSON on its own.
+	// The scanner feeds "data: <first_half>" then a continuation line "<second_half>".
+	half := len(fullChunk) / 2
+	firstHalf := fullChunk[:half]
+	secondHalf := fullChunk[half:]
+
+	sseBody := "data: " + firstHalf + "\n" + secondHalf + "\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-flash")
+	ch := make(chan oasis.StreamEvent, 16)
+	result, err := g.ChatStream(context.Background(), oasis.ChatRequest{
+		Messages: []oasis.ChatMessage{{Role: "user", Content: "hi"}},
+	}, ch)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if result.Content != "hello" {
+		t.Errorf("expected content 'hello', got %q", result.Content)
 	}
 
-	for _, tt := range tests {
-		got := isCompleteJSON(tt.input)
-		if got != tt.expected {
-			t.Errorf("isCompleteJSON(%q) = %v, want %v", tt.input, got, tt.expected)
+	// The channel should have received exactly one text-delta event.
+	var events []oasis.StreamEvent
+	for e := range ch {
+		events = append(events, e)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 stream event, got %d", len(events))
+	}
+	if events[0].Content != "hello" {
+		t.Errorf("expected event content 'hello', got %q", events[0].Content)
+	}
+}
+
+// TestChatStream_CancelledConsumer verifies that cancelling the context while
+// the stream is in progress causes ChatStream to return promptly with
+// context.Canceled rather than blocking forever (goroutine leak guard).
+func TestChatStream_CancelledConsumer(t *testing.T) {
+	// Use an unbuffered channel so the first send would block if not for the ctx guard.
+	chunk := `{"candidates":[{"content":{"parts":[{"text":"word"}],"role":"model"}}]}`
+	// Repeat the chunk many times so the loop keeps running after the first send.
+	var body strings.Builder
+	for i := 0; i < 100; i++ {
+		body.WriteString("data: ")
+		body.WriteString(chunk)
+		body.WriteString("\n\n")
+	}
+	ssePayload := body.String()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(ssePayload))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-flash")
+
+	// Unbuffered channel — consumer reads exactly 0 events, then cancels.
+	ch := make(chan oasis.StreamEvent)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so the very first send triggers ctx.Done()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Drain (never reads, since context already cancelled).
+		for range ch {
 		}
+	}()
+
+	_, err := g.ChatStream(ctx, oasis.ChatRequest{
+		Messages: []oasis.ChatMessage{{Role: "user", Content: "hi"}},
+	}, ch)
+
+	// Must return promptly (not hang), and error must be context.Canceled.
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ChatStream did not return promptly after context cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error when context cancelled")
 	}
 }
 

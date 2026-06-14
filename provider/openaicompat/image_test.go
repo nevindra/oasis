@@ -41,17 +41,17 @@ func TestParseResponseExtractsImage(t *testing.T) {
 
 func TestWithModalitiesPromotesStringContent(t *testing.T) {
 	req := ChatRequest{
-		Messages: []Message{{Role: "user", Content: "draw a fox"}},
+		Messages: []Message{{Role: "user", Content: StringContent("draw a fox")}},
 	}
 	WithModalities([]string{"image", "text"})(&req)
 
 	if len(req.Modalities) != 2 {
 		t.Fatalf("modalities not set: %v", req.Modalities)
 	}
-	blocks, ok := req.Messages[0].Content.([]ContentBlock)
-	if !ok {
-		t.Fatalf("content not promoted to blocks: %T", req.Messages[0].Content)
+	if !req.Messages[0].Content.IsBlocks() {
+		t.Fatalf("content not promoted to blocks: %+v", req.Messages[0].Content)
 	}
+	blocks := req.Messages[0].Content.Blocks
 	if len(blocks) != 1 || blocks[0].Type != "text" || blocks[0].Text != "draw a fox" {
 		t.Errorf("unexpected blocks: %+v", blocks)
 	}
@@ -59,11 +59,11 @@ func TestWithModalitiesPromotesStringContent(t *testing.T) {
 
 func TestWithModalitiesTextOnlyLeavesStringContent(t *testing.T) {
 	req := ChatRequest{
-		Messages: []Message{{Role: "user", Content: "hello"}},
+		Messages: []Message{{Role: "user", Content: StringContent("hello")}},
 	}
 	WithModalities([]string{"text"})(&req)
 
-	if _, ok := req.Messages[0].Content.(string); !ok {
-		t.Errorf("text-only request should keep string content, got %T", req.Messages[0].Content)
+	if !req.Messages[0].Content.IsString() {
+		t.Errorf("text-only request should keep string content, got %+v", req.Messages[0].Content)
 	}
 }

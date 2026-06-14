@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/nevindra/oasis/core"
-	"github.com/nevindra/oasis/skills"
 	"github.com/nevindra/oasis/memory"
+	"github.com/nevindra/oasis/skills"
 )
 
 // ptr returns a pointer to v. Test helper for optional Generation fields.
@@ -165,8 +165,6 @@ func TestLLMAgentInterfaceCompliance(t *testing.T) {
 	agent := New("test", "test agent", &mockProvider{name: "test"})
 	var _ Agent = agent
 }
-
-
 
 // --- Error path and edge case tests ---
 

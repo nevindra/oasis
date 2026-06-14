@@ -55,8 +55,9 @@ func EstimateContextTokens(messages []core.ChatMessage, model core.ModelInfo) in
 // StripMediaBlocks returns a copy of messages with image and document
 // attachments removed and replaced by text markers ("[image]", "[document]")
 // appended to the message Content. Used before a compaction LLM call to:
-//   (a) prevent the compaction request itself from overflowing on media bytes
-//   (b) save tokens — visual content doesn't help summary generation
+//
+//	(a) prevent the compaction request itself from overflowing on media bytes
+//	(b) save tokens — visual content doesn't help summary generation
 //
 // Does NOT modify the original messages. Non-media attachments are preserved.
 func StripMediaBlocks(messages []core.ChatMessage) []core.ChatMessage {

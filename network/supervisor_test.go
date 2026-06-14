@@ -166,9 +166,9 @@ func TestQuorum_NoMajorityErrors(t *testing.T) {
 // fires), then records whether cancellation was the cause. Used to assert
 // that quorum cancels in-flight members once the threshold is reached.
 type slowCancellableAgent struct {
-	name        string
-	out         string
-	delay       time.Duration
+	name         string
+	out          string
+	delay        time.Duration
 	ctxCancelled atomic.Bool
 }
 
@@ -211,6 +211,46 @@ func TestQuorum_CancelsRemainingMembersOnThreshold(t *testing.T) {
 	if !slow.ctxCancelled.Load() {
 		t.Fatal("slow member's ctx was not cancelled after quorum threshold was reached")
 	}
+}
+
+func TestQuorum_PanicsOnInvalidThreshold(t *testing.T) {
+	a := &fixedAgent{name: "a", out: "yes"}
+	b := &fixedAgent{name: "b", out: "yes"}
+	c := &fixedAgent{name: "c", out: "yes"}
+
+	t.Run("threshold zero panics", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for threshold=0")
+			}
+		}()
+		Quorum(3, 0, a, b, c)
+	})
+
+	t.Run("threshold exceeds askN panics", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for threshold > askN")
+			}
+		}()
+		Quorum(3, 4, a, b, c)
+	})
+
+	t.Run("threshold equals askN is valid", func(t *testing.T) {
+		// Should not panic.
+		policy := Quorum(3, 3, a, b, c)
+		if policy == nil {
+			t.Fatal("expected non-nil policy")
+		}
+	})
+
+	t.Run("threshold of 1 is valid", func(t *testing.T) {
+		// Should not panic.
+		policy := Quorum(3, 1, a, b, c)
+		if policy == nil {
+			t.Fatal("expected non-nil policy")
+		}
+	})
 }
 
 func TestCircuitBreaker_OpensAfterThreshold(t *testing.T) {

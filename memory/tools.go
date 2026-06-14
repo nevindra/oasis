@@ -58,17 +58,17 @@ func (t rememberTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (cor
 	if a.Content == "" {
 		return errResult("invalid args: 'content' is required"), nil
 	}
-	kind := Kind(a.Kind)
+	kind := core.MemoryKind(a.Kind)
 	if kind == "" {
 		kind = KindFact
 	}
 	scope := scopeFromStr(a.Scope)
-	item := MemoryItem{
+	item := core.MemoryItem{
 		ID:      core.NewID(),
 		Kind:    kind,
 		Content: a.Content,
 		Scope:   scope,
-		Source:  Source{Kind: "tool"},
+		Source:  core.MemorySource{Kind: "tool"},
 		Tags:    a.Tags,
 		Pinned:  a.Pinned,
 	}
@@ -109,7 +109,7 @@ func (t recallTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.
 	}
 	opts := []RecallOption{RecallLimit(k)}
 	if a.Kind != "" {
-		opts = append(opts, RecallKind(Kind(a.Kind)))
+		opts = append(opts, RecallKind(core.MemoryKind(a.Kind)))
 	}
 	sc := scopeFromStr(a.Scope)
 	opts = append(opts, RecallScope(sc))
@@ -172,7 +172,7 @@ func (t forgetTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.
 	if a.Match != "" {
 		spec := ForgetByMatch(a.Match)
 		if a.Kind != "" {
-			spec.Kind = Kind(a.Kind)
+			spec.Kind = core.MemoryKind(a.Kind)
 		}
 		if a.OlderThanSeconds > 0 {
 			spec.Older = time.Duration(a.OlderThanSeconds) * time.Second
@@ -186,7 +186,7 @@ func (t forgetTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.
 	if a.Kind != "" || a.OlderThanSeconds > 0 {
 		spec := ForgetSpec{}
 		if a.Kind != "" {
-			spec.Kind = Kind(a.Kind)
+			spec.Kind = core.MemoryKind(a.Kind)
 		}
 		if a.OlderThanSeconds > 0 {
 			spec.Older = time.Duration(a.OlderThanSeconds) * time.Second
@@ -235,10 +235,10 @@ func (t pinTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.Too
 
 // --- helpers ---
 
-// scopeFromStr maps a scope string to a Scope with an empty Ref.
+// scopeFromStr maps a scope string to a core.MemoryScope with an empty Ref.
 // Callers that have thread/chat context should call Scoped directly.
-func scopeFromStr(s string) Scope {
-	switch ScopeKind(strings.ToLower(s)) {
+func scopeFromStr(s string) core.MemoryScope {
+	switch core.MemoryScopeKind(strings.ToLower(s)) {
 	case ScopeThread:
 		return Scoped(ScopeThread, "")
 	case ScopeAgent:

@@ -19,6 +19,7 @@ var validRelations = map[string]oasis.RelationType{
 	"depends_on":  oasis.RelDependsOn,
 	"contradicts": oasis.RelContradicts,
 	"part_of":     oasis.RelPartOf,
+	"similar_to":  oasis.RelSimilarTo,
 	"sequence":    oasis.RelSequence,
 	"caused_by":   oasis.RelCausedBy,
 }
@@ -28,7 +29,7 @@ const graphExtractionPrompt = `You are a knowledge graph extractor. Analyze the 
 For each relationship found, output a JSON edge with:
 - "source": the source chunk ID (see directionality below)
 - "target": the target chunk ID (see directionality below)
-- "relation": one of: references, elaborates, depends_on, contradicts, part_of, caused_by
+- "relation": one of: references, elaborates, depends_on, contradicts, part_of, similar_to, sequence, caused_by
 - "weight": confidence score from 0.0 to 1.0
 - "description": a brief explanation of why this relationship exists (1 sentence)
 
@@ -38,6 +39,8 @@ Relationship types and directionality (source → target):
 - depends_on: source assumes knowledge from target (source is the dependent chunk, target is the prerequisite)
 - contradicts: source conflicts with target (either direction is valid; pick the chunk making the stronger claim as source)
 - part_of: source is a component or subset of target (source is the part, target is the whole)
+- similar_to: source and target cover closely related or overlapping concepts (either direction is valid)
+- sequence: source immediately precedes target in narrative or procedural order (source is earlier, target is later)
 - caused_by: source is a consequence of target (source is the effect, target is the cause)
 
 Output ONLY valid JSON in this format:
@@ -187,10 +190,9 @@ func extractFromBatches(ctx context.Context, provider oasis.Provider, batches []
 
 					temp := 0.0
 					callCtx := ctx
+					cancel := context.CancelFunc(func() {})
 					if llmTimeout > 0 {
-						var cancel context.CancelFunc
 						callCtx, cancel = context.WithTimeout(ctx, llmTimeout)
-						defer cancel()
 					}
 					resp, err := oasis.Chat(callCtx, provider, oasis.ChatRequest{
 						Messages: []oasis.ChatMessage{
@@ -198,6 +200,7 @@ func extractFromBatches(ctx context.Context, provider oasis.Provider, batches []
 						},
 						GenerationParams: &oasis.GenerationParams{Temperature: &temp},
 					})
+					cancel() // release per-call context immediately, not at goroutine exit
 					if err != nil {
 						if logger != nil {
 							logger.Warn("graph extraction: LLM call failed",
@@ -519,5 +522,3 @@ func buildSemanticBatches(chunks []oasis.Chunk, batchSize int, logger *slog.Logg
 	}
 	return result
 }
-
-

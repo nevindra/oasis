@@ -36,8 +36,8 @@ func WithModalities(m []string) Option {
 			return
 		}
 		for i := range r.Messages {
-			if s, ok := r.Messages[i].Content.(string); ok && s != "" {
-				r.Messages[i].Content = []ContentBlock{{Type: "text", Text: s}}
+			if c := r.Messages[i].Content; c.IsString() && c.String != "" {
+				r.Messages[i].Content = BlockContent([]ContentBlock{{Type: "text", Text: c.String}})
 			}
 		}
 	}
@@ -63,11 +63,14 @@ func WithSeed(s int) Option {
 	return func(r *ChatRequest) { r.Seed = &s }
 }
 
-// WithToolChoice controls how the model selects tools.
-// Accepts "none", "auto", "required", or a specific tool object
-// like map[string]any{"type": "function", "function": map[string]any{"name": "my_func"}}.
-func WithToolChoice(choice any) Option {
-	return func(r *ChatRequest) { r.ToolChoice = choice }
+// WithToolChoice controls how the model selects tools. Build the choice with
+// ToolChoiceModeValue (for "none"/"auto"/"required") or ToolChoiceFunction (to
+// force a specific named function):
+//
+//	openaicompat.WithToolChoice(openaicompat.ToolChoiceModeValue(openaicompat.ToolChoiceRequired))
+//	openaicompat.WithToolChoice(openaicompat.ToolChoiceFunction("get_weather"))
+func WithToolChoice(choice ToolChoice) Option {
+	return func(r *ChatRequest) { r.ToolChoice = &choice }
 }
 
 // WithCacheControl marks the last content block of each specified message index

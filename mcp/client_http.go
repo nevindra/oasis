@@ -99,11 +99,11 @@ func (c *HTTPClient) OnDisconnect(fn func(error)) {
 // Initialize performs the MCP initialize handshake and returns the server's
 // declared info and capabilities.
 func (c *HTTPClient) Initialize(ctx context.Context) (*InitializeResult, error) {
-	params := json.RawMessage(`{
-		"protocolVersion":"2024-11-05",
+	params := json.RawMessage(fmt.Sprintf(`{
+		"protocolVersion":%q,
 		"capabilities":{"tools":{},"resources":{}},
 		"clientInfo":{"name":"oasis","version":"0.x.0"}
-	}`)
+	}`, protocolVersion))
 	raw, err := c.call(ctx, "initialize", params)
 	if err != nil {
 		return nil, err

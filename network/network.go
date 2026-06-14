@@ -88,6 +88,8 @@ type Network struct {
 // agents. All configuration (children, supervisor, dynamic spawning, router
 // options) flows through Options.
 //
+// New panics if two agents share a name.
+//
 //	net := network.New("coordinator", "...", routerP,
 //	    network.WithChildren(searchAgent, summarizeAgent),
 //	    network.WithAgentOptions(agent.WithTracer(t)),

@@ -290,9 +290,9 @@ func TestStateNonBlocking(t *testing.T) {
 	a := &funcAgent{
 		name: "blocker",
 		execute: func(ctx context.Context, _ AgentTask) (AgentResult, error) {
-			<-readyCh                                          // wait until hPtr is set
-			hPtr.Load().state.Store(int32(StateCompleted))    // simulate terminal but not done
-			<-blockCh                                         // hang
+			<-readyCh                                      // wait until hPtr is set
+			hPtr.Load().state.Store(int32(StateCompleted)) // simulate terminal but not done
+			<-blockCh                                      // hang
 			return AgentResult{}, nil
 		},
 	}
@@ -348,6 +348,8 @@ type panicingAgent struct {
 	name string
 }
 
-func (p *panicingAgent) Name() string                                                { return p.name }
-func (p *panicingAgent) Description() string                                         { return "panics" }
-func (p *panicingAgent) Execute(_ context.Context, _ AgentTask, _ ...RunOption) (AgentResult, error) { panic("agent on fire") }
+func (p *panicingAgent) Name() string        { return p.name }
+func (p *panicingAgent) Description() string { return "panics" }
+func (p *panicingAgent) Execute(_ context.Context, _ AgentTask, _ ...RunOption) (AgentResult, error) {
+	panic("agent on fire")
+}

@@ -49,9 +49,9 @@ type modelsDevModalities struct {
 }
 
 type modelsDevCost struct {
-	Input      float64 `json:"input"`       // per 1M input tokens
-	Output     float64 `json:"output"`      // per 1M output tokens
-	CacheRead  float64 `json:"cache_read"`  // per 1M cached read tokens
+	Input      float64 `json:"input"`      // per 1M input tokens
+	Output     float64 `json:"output"`     // per 1M output tokens
+	CacheRead  float64 `json:"cache_read"` // per 1M cached read tokens
 	CacheWrite float64 `json:"cache_write"`
 }
 

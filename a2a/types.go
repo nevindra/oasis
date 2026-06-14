@@ -215,11 +215,22 @@ type StreamResponse struct {
 // AcceptedOutputModes lists the MIME types the caller is willing to receive;
 // the server filters artifacts to these types (omit for no restriction).
 //
-// Blocking controls server-side scheduling: true (the default) runs the task
-// inline and returns the settled result in the same HTTP response. false starts
-// the task in the background and returns immediately with a working task — the
-// caller must supply a PushNotificationConfig to receive the eventual outcome,
-// or poll GetTask. The server rejects non-blocking sends without a push config.
+// Blocking controls server-side scheduling and is a tri-state pointer so the
+// Go zero value (nil) means "use the protocol default", which is blocking —
+// a zero-value SendConfiguration{} therefore blocks, matching the A2A spec.
+// Set it explicitly with BlockingPtr / NonBlockingPtr:
+//
+//   - nil (the default): blocking. The server runs the task inline and returns
+//     the settled result in the same HTTP response.
+//   - *true: blocking, stated explicitly. Same behavior as nil.
+//   - *false: non-blocking. The server starts the task in the background and
+//     returns immediately with a working task — the caller must supply a
+//     PushNotificationConfig to receive the eventual outcome, or poll GetTask.
+//     The server rejects non-blocking sends without a push config.
+//
+// The wire key is "blocking" (A2A v1.0 SendMessageConfiguration.blocking); the
+// pointer is omitted entirely when nil so the on-the-wire shape is unchanged
+// from a plain bool field that defaults to blocking.
 //
 // PushNotificationConfig registers the webhook that receives the terminal
 // StreamResponse when the task settles on the non-blocking path. The Token
@@ -230,9 +241,26 @@ type StreamResponse struct {
 // Task; zero means unbounded.
 type SendConfiguration struct {
 	AcceptedOutputModes    []string                `json:"acceptedOutputModes,omitempty"`
-	Blocking               bool                    `json:"blocking,omitempty"`
+	Blocking               *bool                   `json:"blocking,omitempty"`
 	PushNotificationConfig *PushNotificationConfig `json:"pushNotificationConfig,omitempty"`
 	HistoryLength          int                     `json:"historyLength,omitempty"`
+}
+
+// BlockingPtr returns a *bool set to true, for SendConfiguration.Blocking. It
+// is equivalent to leaving the field nil (blocking is the default) but states
+// the intent explicitly.
+func BlockingPtr() *bool { b := true; return &b }
+
+// NonBlockingPtr returns a *bool set to false, for SendConfiguration.Blocking.
+// A non-blocking send requires a PushNotificationConfig (or polling GetTask)
+// to retrieve the eventual result.
+func NonBlockingPtr() *bool { b := false; return &b }
+
+// isNonBlocking reports whether cfg explicitly opted out of blocking. nil cfg
+// or nil/true Blocking means blocking (the default); only an explicit *false
+// selects the background path.
+func (cfg *SendConfiguration) isNonBlocking() bool {
+	return cfg != nil && cfg.Blocking != nil && !*cfg.Blocking
 }
 
 // PushNotificationConfig registers a webhook for asynchronous task updates.

@@ -72,10 +72,12 @@ rest of your code works against the interface. `oasis-sandbox-ix` uses Docker;
 another implementation could use Firecracker, gVisor, or a remote API — none of that
 changes the agent code.
 
-**`Tools()` exposes capability as agent tools.** `sandbox.Tools(sb)` returns 19
-`oasis.AnyTool` values (20 when a writable mount or `FileDelivery` is configured).
-Pass them to `WithSandbox` and the LLM sees them in its tool schema on every call.
-You can restrict the set by passing a subset, but the default is all capabilities.
+**`Tools()` exposes capability as agent tools.** `sandbox.Tools(sb)` returns up to
+20 `oasis.AnyTool` values when `sb` also satisfies `BrowserSandbox` (21 when a
+writable mount or `FileDelivery` is configured). Browser tools are omitted for
+sandbox implementations that do not implement `BrowserSandbox`. Pass the result to
+`WithSandbox` and the LLM sees them in its tool schema on every call. You can
+restrict the set by passing a subset, but the default is all capabilities.
 
 **Lifecycle is manager-owned, not caller-owned.** `Manager` provisions containers,
 tracks them by `SessionID`, enforces a concurrency cap, and runs a TTL reaper that
@@ -251,7 +253,8 @@ func main() {
   `SessionID` lets you retrieve the same sandbox later with `mgr.Get`.
 - `sb.Close()` is deferred for Go-side cleanup. The container's actual lifetime is
   governed by the `TTL` and the manager's TTL reaper.
-- `sandbox.Tools(sb)` returns all 19 agent-callable tools. Spreading them with `...`
+- `sandbox.Tools(sb)` returns up to 20 agent-callable tools (including the 9
+  `browser_*` tools when `sb` satisfies `BrowserSandbox`). Spreading them with `...`
   into `WithSandbox` registers each one individually on the agent.
 - The LLM will call `execute_code` or `shell` to run the script, receive the output
   as a tool result, and return a summary — entirely within the isolated container.

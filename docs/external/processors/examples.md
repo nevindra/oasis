@@ -333,11 +333,13 @@ A production setup combining guardrails, custom logic, and a rate-limited
 provider.
 
 ```go
-provider := gemini.New(apiKey, "gemini-2.0-flash")
-provider = oasis.WithRetry(provider, oasis.RetryMaxAttempts(5))
-provider = oasis.WithRateLimit(provider, oasis.RPM(60), oasis.TPM(100_000))
+base := gemini.New(apiKey, "gemini-2.0-flash")
+llm := provider.Chain(
+    agent.RetryMiddleware(agent.RetryMaxAttempts(5)),
+    oasis.RateLimitMiddleware(oasis.RPM(60), oasis.TPM(100_000)),
+)(base)
 
-agent := oasis.NewLLMAgent("prod", "Production agent", provider,
+agent := oasis.NewAgent("prod", "Production agent", llm,
     oasis.WithPreProcessors(
         oasis.NewInjectionGuard(oasis.ScanAllMessages()),
         oasis.NewContentGuard(oasis.MaxInputLength(8000)),

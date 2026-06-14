@@ -30,7 +30,7 @@ type rawServer struct {
 }
 
 type rawAuth struct {
-	Type   string `json:"type"`            // "bearer" only in v1
+	Type   string `json:"type"` // "bearer" only in v1
 	Token  string `json:"token,omitempty"`
 	EnvVar string `json:"envVar,omitempty"`
 }

@@ -7,12 +7,12 @@
 // Available guards:
 //
 //   - InjectionGuard:    multi-layer prompt-injection detection (phrases,
-//                        role overrides, delimiter abuse, base64 decode,
-//                        custom regex).
+//     role overrides, delimiter abuse, base64 decode,
+//     custom regex).
 //   - ContentGuard:      input/output length limits (rune count).
 //   - KeywordGuard:      keyword and regex blocklist for user messages.
 //   - MaxToolCallsGuard: silently trims excess tool calls per LLM turn
-//                        (graceful degradation, no halt).
+//     (graceful degradation, no halt).
 //
 // Basic usage:
 //
@@ -22,7 +22,7 @@
 //	    guardrail.MaxOutputLength(10_000),
 //	)
 //
-//	agent := oasis.NewLLMAgent("agent", "...", provider,
+//	agent := oasis.NewAgent("agent", "...", provider,
 //	    oasis.WithProcessors(oasis.Processors{Pre: []core.PreProcessor{injection, length}}),
 //	)
 //

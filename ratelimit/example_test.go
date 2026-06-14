@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/provider"
 	"github.com/nevindra/oasis/ratelimit"
 )
 
@@ -19,13 +20,13 @@ func (passThroughProvider) ChatStream(ctx context.Context, req core.ChatRequest,
 	return core.ChatResponse{Content: "ok"}, nil
 }
 
-// ExampleWithRateLimit shows the typical 4-line wiring for a rate-limited Provider.
-func ExampleWithRateLimit() {
-	provider := passThroughProvider{}
-	limited := ratelimit.WithRateLimit(provider,
+// ExampleRateLimitMiddleware shows the typical wiring for a rate-limited Provider.
+func ExampleRateLimitMiddleware() {
+	base := passThroughProvider{}
+	limited := provider.Chain(ratelimit.RateLimitMiddleware(
 		ratelimit.RPM(60),      // 60 requests per minute
 		ratelimit.TPM(100_000), // 100k tokens per minute
-	)
+	))(base)
 
 	resp, _ := core.Chat(context.Background(), limited, core.ChatRequest{})
 	fmt.Println(resp.Content)

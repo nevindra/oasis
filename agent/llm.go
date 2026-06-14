@@ -175,7 +175,7 @@ var _ core.Agent = (*LLMAgent)(nil)
 // re-run reflection on every Execute call. The schemas of askUserArgs and
 // planArgs are structurally invariant — they never depend on runtime state.
 var (
-	askUserSchema    = core.DeriveSchema[askUserArgs]()
+	askUserSchema     = core.DeriveSchema[askUserArgs]()
 	executePlanSchema = core.DeriveSchema[planArgs]()
 )
 
@@ -434,4 +434,3 @@ func drainSubCh(subCh <-chan core.StreamEvent, safeClose func(), logger *slog.Lo
 		}
 	}
 }
-

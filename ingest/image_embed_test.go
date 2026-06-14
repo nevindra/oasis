@@ -54,35 +54,51 @@ func (f *fakeImageStore) StoreDocument(_ context.Context, doc oasis.Document, ch
 	return nil
 }
 
-func (f *fakeImageStore) CreateThread(context.Context, oasis.Thread) error                     { return nil }
-func (f *fakeImageStore) GetThread(context.Context, string) (oasis.Thread, error)              { return oasis.Thread{}, nil }
-func (f *fakeImageStore) ListThreads(context.Context, string, int) ([]oasis.Thread, error)     { return nil, nil }
-func (f *fakeImageStore) UpdateThread(context.Context, oasis.Thread) error                     { return nil }
-func (f *fakeImageStore) DeleteThread(context.Context, string) error                           { return nil }
-func (f *fakeImageStore) StoreMessage(context.Context, oasis.Message) error                    { return nil }
-func (f *fakeImageStore) GetMessages(context.Context, string, int) ([]oasis.Message, error)    { return nil, nil }
+func (f *fakeImageStore) CreateThread(context.Context, oasis.Thread) error { return nil }
+func (f *fakeImageStore) GetThread(context.Context, string) (oasis.Thread, error) {
+	return oasis.Thread{}, nil
+}
+func (f *fakeImageStore) ListThreads(context.Context, string, int) ([]oasis.Thread, error) {
+	return nil, nil
+}
+func (f *fakeImageStore) UpdateThread(context.Context, oasis.Thread) error  { return nil }
+func (f *fakeImageStore) DeleteThread(context.Context, string) error        { return nil }
+func (f *fakeImageStore) StoreMessage(context.Context, oasis.Message) error { return nil }
+func (f *fakeImageStore) GetMessages(context.Context, string, int) ([]oasis.Message, error) {
+	return nil, nil
+}
 func (f *fakeImageStore) SearchMessages(context.Context, []float32, int, string) ([]oasis.ScoredMessage, error) {
 	return nil, nil
 }
-func (f *fakeImageStore) ListDocuments(context.Context, int) ([]oasis.Document, error) { return nil, nil }
-func (f *fakeImageStore) DeleteDocument(context.Context, string) error                 { return nil }
+func (f *fakeImageStore) ListDocuments(context.Context, int) ([]oasis.Document, error) {
+	return nil, nil
+}
+func (f *fakeImageStore) DeleteDocument(context.Context, string) error { return nil }
 func (f *fakeImageStore) SearchChunks(context.Context, []float32, int, ...oasis.ChunkFilter) ([]oasis.ScoredChunk, error) {
 	return nil, nil
 }
-func (f *fakeImageStore) GetChunksByIDs(context.Context, []string) ([]oasis.Chunk, error)  { return nil, nil }
-func (f *fakeImageStore) GetConfig(context.Context, string) (string, error)                { return "", nil }
-func (f *fakeImageStore) SetConfig(context.Context, string, string) error                  { return nil }
-func (f *fakeImageStore) CreateScheduledAction(context.Context, oasis.ScheduledAction) error { return nil }
+func (f *fakeImageStore) GetChunksByIDs(context.Context, []string) ([]oasis.Chunk, error) {
+	return nil, nil
+}
+func (f *fakeImageStore) GetConfig(context.Context, string) (string, error) { return "", nil }
+func (f *fakeImageStore) SetConfig(context.Context, string, string) error   { return nil }
+func (f *fakeImageStore) CreateScheduledAction(context.Context, oasis.ScheduledAction) error {
+	return nil
+}
 func (f *fakeImageStore) ListScheduledActions(context.Context) ([]oasis.ScheduledAction, error) {
 	return nil, nil
 }
 func (f *fakeImageStore) GetDueScheduledActions(context.Context, int64) ([]oasis.ScheduledAction, error) {
 	return nil, nil
 }
-func (f *fakeImageStore) UpdateScheduledAction(context.Context, oasis.ScheduledAction) error { return nil }
-func (f *fakeImageStore) UpdateScheduledActionEnabled(context.Context, string, bool) error   { return nil }
-func (f *fakeImageStore) DeleteScheduledAction(context.Context, string) error                { return nil }
-func (f *fakeImageStore) DeleteAllScheduledActions(context.Context) (int, error)             { return 0, nil }
+func (f *fakeImageStore) UpdateScheduledAction(context.Context, oasis.ScheduledAction) error {
+	return nil
+}
+func (f *fakeImageStore) UpdateScheduledActionEnabled(context.Context, string, bool) error {
+	return nil
+}
+func (f *fakeImageStore) DeleteScheduledAction(context.Context, string) error    { return nil }
+func (f *fakeImageStore) DeleteAllScheduledActions(context.Context) (int, error) { return 0, nil }
 func (f *fakeImageStore) ListScheduledActionsByDescription(context.Context, string) ([]oasis.ScheduledAction, error) {
 	return nil, nil
 }

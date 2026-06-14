@@ -35,13 +35,15 @@ func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 // --- core.Store: Threads ---
 
 func (s *testStore) CreateThread(_ context.Context, t core.Thread) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.threads[t.ID] = t
 	return nil
 }
 
 func (s *testStore) GetThread(_ context.Context, id string) (core.Thread, error) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	t, ok := s.threads[id]
 	if !ok {
 		return core.Thread{}, errors.New("not found")
@@ -54,7 +56,8 @@ func (s *testStore) ListThreads(_ context.Context, _ string, _ int) ([]core.Thre
 }
 
 func (s *testStore) UpdateThread(_ context.Context, t core.Thread) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.threads[t.ID] = t
 	return nil
 }
@@ -64,7 +67,8 @@ func (s *testStore) DeleteThread(_ context.Context, _ string) error { return nil
 // --- core.Store: Messages ---
 
 func (s *testStore) StoreMessage(_ context.Context, m core.Message) error {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.messages[m.ThreadID] = append(s.messages[m.ThreadID], m)
 	return nil
 }

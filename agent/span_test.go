@@ -15,10 +15,10 @@ type recordingSpan struct {
 	ended bool
 }
 
-func (s *recordingSpan) SetAttr(attrs ...core.SpanAttr) { s.attrs = append(s.attrs, attrs...) }
-func (s *recordingSpan) End()                           { s.ended = true }
+func (s *recordingSpan) SetAttr(attrs ...core.SpanAttr)            { s.attrs = append(s.attrs, attrs...) }
+func (s *recordingSpan) End()                                      { s.ended = true }
 func (s *recordingSpan) Event(name string, attrs ...core.SpanAttr) {}
-func (s *recordingSpan) Error(err error)                {}
+func (s *recordingSpan) Error(err error)                           {}
 
 // recordingTracer is a test double for core.Tracer that records all spans started.
 type recordingTracer struct {
@@ -50,8 +50,8 @@ func TestIterationSpanCreated(t *testing.T) {
 	provider := newFnProvider(func(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{Content: "ok", FinishReason: core.FinishStop}, nil
 	})
@@ -80,8 +80,8 @@ func TestLLMGenerateSpanCreated(t *testing.T) {
 	provider := newFnProvider(func(ctx context.Context, req core.ChatRequest, ch chan<- core.StreamEvent) (core.ChatResponse, error) {
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{Content: "ok", FinishReason: core.FinishStop}, nil
 	})

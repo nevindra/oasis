@@ -27,16 +27,6 @@ type Sandbox interface {
     GrepFiles(ctx context.Context, req GrepRequest) (GrepResult, error)
     Tree(ctx context.Context, req TreeRequest) (TreeResult, error)
 
-    // Browser
-    BrowserNavigate(ctx context.Context, url string) error
-    BrowserScreenshot(ctx context.Context) ([]byte, error)
-    BrowserAction(ctx context.Context, action BrowserAction) (BrowserResult, error)
-    BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (BrowserSnapshot, error)
-    BrowserText(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
-    BrowserPDF(ctx context.Context) ([]byte, error)
-    BrowserEval(ctx context.Context, expression string) (string, error)
-    BrowserFind(ctx context.Context, query string) (BrowserFindResult, error)
-
     // Web and MCP
     HTTPFetch(ctx context.Context, req HTTPFetchRequest) (HTTPFetchResult, error)
     WebSearch(ctx context.Context, req WebSearchRequest) (WebSearchResult, error)
@@ -45,6 +35,28 @@ type Sandbox interface {
 
     // Lifecycle
     Close() error
+}
+```
+
+The nine browser methods (`BrowserNavigate`, `BrowserScreenshot`, `BrowserAction`,
+`BrowserSnapshot`, `BrowserText`, `BrowserPDF`, `BrowserEval`, `BrowserFind`,
+`BrowserWait`) are declared on the **optional** `BrowserSandbox` interface, not on
+`Sandbox`. `Tools()` checks for `BrowserSandbox` via a type assertion; if the
+implementation satisfies it, the `browser_*` tools are registered. Headless or
+lightweight implementations can satisfy `Sandbox` alone without stubbing browser
+methods.
+
+```go
+type BrowserSandbox interface {
+    BrowserNavigate(ctx context.Context, url string) error
+    BrowserScreenshot(ctx context.Context) ([]byte, error)
+    BrowserAction(ctx context.Context, action BrowserAction) (BrowserResult, error)
+    BrowserSnapshot(ctx context.Context, opts SnapshotOpts) (PageSnapshot, error)
+    BrowserText(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
+    BrowserPDF(ctx context.Context) ([]byte, error)
+    BrowserEval(ctx context.Context, expression string) (string, error)
+    BrowserFind(ctx context.Context, query string) (BrowserFindResult, error)
+    BrowserWait(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error)
 }
 ```
 
@@ -157,7 +169,7 @@ type SnapshotOpts struct {
     Selector string // CSS selector to scope subtree
     Depth    int    // 0 = unlimited
 }
-type BrowserSnapshot struct {
+type PageSnapshot struct {
     URL   string
     Title string
     Nodes []SnapshotNode
@@ -190,7 +202,7 @@ type BrowserFindResult struct {
 |---|---|---|
 | `HTTPFetchRequest` | `URL` (req), `Raw` (false=readability), `MaxChars` (0=8000) | `HTTPFetchResult{URL, Title, Content string}` |
 | `WebSearchRequest` | `Query` (req), `MaxResults` (0=10) | `WebSearchResult{Query, Results []WebSearchResultItem}` |
-| `MCPRequest` | `Server` (MCP server name in container), `Tool`, `Args map[string]any` | `MCPResult{Content string, IsError bool}` |
+| `MCPRequest` | `Server` (MCP server name in container), `Tool`, `Args json.RawMessage` | `MCPResult{Content string, IsError bool}` |
 
 `WebSearchResultItem`: `{Title, URL, Snippet string}`.
 
@@ -209,12 +221,14 @@ Use `BrowserNavigate` + `BrowserText` as fallback.
 func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool
 ```
 
-Returns the full set of agent tools backed by `sb`. The 19 tools generated:
+Returns the full set of agent tools backed by `sb`. The 20 tools generated
+(when `sb` also satisfies `BrowserSandbox`):
 `shell`, `execute_code`, `file_read`, `file_write`, `file_edit`, `file_glob`,
 `file_grep`, `file_tree`, `http_fetch`, `workspace_info`, `browser`, `screenshot`,
 `mcp_call`, `snapshot`, `page_text`, `export_pdf`, `browser_eval`, `browser_find`,
-`web_search`. `deliver_file` is added automatically when a writable mount or
-`FileDelivery` is configured.
+`browser_wait`, `web_search`. `deliver_file` is added automatically when a writable
+mount or `FileDelivery` is configured. Browser tools are omitted when `sb` does not
+implement `BrowserSandbox`.
 
 ```go
 oasis.WithSandbox(sb, sandbox.Tools(sb)...)

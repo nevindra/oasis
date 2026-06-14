@@ -109,14 +109,14 @@ type ScoredMemoryItem struct {
 
 // MemoryFilter selects MemoryItems for read or delete queries.
 type MemoryFilter struct {
-	Kinds      []MemoryKind   // OR; empty = any
-	Scope      *MemoryScope   // nil = any; non-nil = exact match on Kind+Ref
-	Tags       []string       // AND; all tags must be present
-	Pinned     *bool          // nil = any; true = only pinned; false = only unpinned
-	Since      int64          // CreatedAt >= Since (0 = no lower bound)
-	Until      int64          // CreatedAt <= Until (0 = no upper bound)
-	Limit      int            // 0 = implementation default (50)
-	IncludeExp bool           // include items where ExpiresAt > 0 AND ExpiresAt <= now
+	Kinds      []MemoryKind // OR; empty = any
+	Scope      *MemoryScope // nil = any; non-nil = exact match on Kind+Ref
+	Tags       []string     // AND; all tags must be present
+	Pinned     *bool        // nil = any; true = only pinned; false = only unpinned
+	Since      int64        // CreatedAt >= Since (0 = no lower bound)
+	Until      int64        // CreatedAt <= Until (0 = no upper bound)
+	Limit      int          // 0 = implementation default (50)
+	IncludeExp bool         // include items where ExpiresAt > 0 AND ExpiresAt <= now
 }
 
 // IsEmpty reports whether the filter would match every item.

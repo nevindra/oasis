@@ -18,8 +18,8 @@ var headingRe = regexp.MustCompile(`(?m)^#{1,6}\s`)
 //  3. If too large → fall back to RecursiveChunker for that section
 //  4. If too small → merge with next section up to maxBytes
 type MarkdownChunker struct {
-	maxBytes  int
-	fallback  *RecursiveChunker
+	maxBytes int
+	fallback *RecursiveChunker
 }
 
 // NewMarkdownChunker creates a MarkdownChunker with the given options.

@@ -144,4 +144,4 @@ Staying in lane is how a framework stays sharp.
 - **Not a vector database.** Storage and retrieval are integration points; the framework doesn't ship its own indexes or embeddings.
 - **Not an opinionated app architecture.** No prescribed agent topology, no required memory strategy, no mandatory supervisor pattern. You design the app; the framework supplies the bricks.
 
-If a feature request would push Oasis into any of these spaces, the answer is: build it in user code or in a satellite. The core stays focused.
+If a feature request would push Oasis into any of these spaces, the answer is: build it in user code or in a separate package above the framework. The core stays focused; optional features that belong in the module live in their own subpackage, not in the core packages.

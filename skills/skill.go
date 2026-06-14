@@ -30,15 +30,6 @@ type chainedSkillProvider struct {
 //	    skills.Builtin(),
 //	)
 func Chain(providers ...SkillProvider) SkillProvider {
-	return ChainSkillProviders(providers...)
-}
-
-// ChainSkillProviders creates a provider that searches multiple providers in
-// order. Typically: ChainSkillProviders(fileProvider, builtinProvider) so
-// user skills override built-in ones.
-//
-// Deprecated: use skills.Chain instead. Will be removed in next major.
-func ChainSkillProviders(providers ...SkillProvider) SkillProvider {
 	return &chainedSkillProvider{providers: providers}
 }
 
@@ -240,14 +231,6 @@ type fileSkillProvider struct {
 //
 //	provider := skills.FromDir("./skills", "./team-skills")
 func FromDir(dirs ...string) SkillProvider {
-	return NewFileSkillProvider(dirs...)
-}
-
-// NewFileSkillProvider creates a provider that searches the given directories
-// in order for skill subdirectories.
-//
-// Deprecated: use skills.FromDir instead. Will be removed in next major.
-func NewFileSkillProvider(dirs ...string) SkillProvider {
 	return &fileSkillProvider{dirs: dirs}
 }
 

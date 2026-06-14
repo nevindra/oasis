@@ -52,10 +52,10 @@ func buildStepTrace(tc core.ToolCall, res toolExecResult) StepTrace {
 	}
 
 	return StepTrace{
-		Name:      name,
-		Type:      traceType,
-		Input:     TruncateStr(input, 200),
-		Output:    TruncateStr(res.content, 500),
+		Name:    name,
+		Type:    traceType,
+		Input:   TruncateStr(input, 200),
+		Output:  TruncateStr(res.content, 500),
 		RawArgs: json.RawMessage(tc.Args),
 		// Why: res.content is an immutable string the tool already owns;
 		// assigning it directly is zero-copy. Typing RawOutput as []byte-backed

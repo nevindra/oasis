@@ -17,8 +17,8 @@ type retryProvider struct {
 	inner       core.Provider
 	maxAttempts int
 	baseDelay   time.Duration
-	timeout     time.Duration    // overall timeout across all attempts; 0 = no limit
-	logger      *slog.Logger     // nil = nopLogger
+	timeout     time.Duration // overall timeout across all attempts; 0 = no limit
+	logger      *slog.Logger  // nil = nopLogger
 }
 
 // RetryOption configures a retryProvider.
@@ -299,8 +299,8 @@ func WithEmbeddingRetry(p core.EmbeddingProvider, opts ...RetryOption) core.Embe
 	}
 }
 
-func (r *retryEmbeddingProvider) Name() string       { return r.inner.Name() }
-func (r *retryEmbeddingProvider) Dimensions() int     { return r.inner.Dimensions() }
+func (r *retryEmbeddingProvider) Name() string    { return r.inner.Name() }
+func (r *retryEmbeddingProvider) Dimensions() int { return r.inner.Dimensions() }
 
 func (r *retryEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if r.timeout > 0 {

@@ -45,14 +45,9 @@ func TPM(n int) RateLimitOption {
 	return func(r *rateLimitProvider) { r.tpm = n }
 }
 
-// WithRateLimit wraps p with proactive rate limiting. Compose with other wrappers:
-//
-//	chatLLM = ratelimit.WithRateLimit(provider, ratelimit.RPM(60))
-//	chatLLM = ratelimit.WithRateLimit(provider, ratelimit.RPM(60), ratelimit.TPM(100000))
-//	chatLLM = provider.Chain(ratelimit.RateLimitMiddleware(ratelimit.RPM(60)), agent.RetryMiddleware())(p)
-//
-// Deprecated: use RateLimitMiddleware with provider.Chain.
-func WithRateLimit(p core.Provider, opts ...RateLimitOption) core.Provider {
+// newRateLimited wraps p with proactive rate limiting. It is the implementation
+// behind RateLimitMiddleware; callers use RateLimitMiddleware with provider.Chain.
+func newRateLimited(p core.Provider, opts ...RateLimitOption) core.Provider {
 	r := &rateLimitProvider{inner: p}
 	for _, opt := range opts {
 		opt(r)
@@ -170,15 +165,18 @@ func pruneTpm(s []tpmEntry, cutoff time.Time) []tpmEntry {
 	return s[i:]
 }
 
-// RateLimitMiddleware returns a provider.Middleware that adds rate-limiting
-// with the supplied options. Use with provider.Chain:
+// RateLimitMiddleware returns a provider.Middleware that adds proactive
+// request-per-minute (RPM) and token-per-minute (TPM) rate limiting with the
+// supplied options. It is the canonical entry point; compose with provider.Chain:
 //
 //	p := provider.Chain(ratelimit.RateLimitMiddleware(ratelimit.RPM(60)))(base)
+//	p := provider.Chain(ratelimit.RateLimitMiddleware(ratelimit.RPM(60), ratelimit.TPM(100000)))(base)
 //
-// Equivalent to WithRateLimit but composable via provider.Chain.
+// The wrapped provider blocks the calling goroutine until the rolling-window
+// budget allows a request; context cancellation during a wait returns ctx.Err().
 func RateLimitMiddleware(opts ...RateLimitOption) provider.Middleware {
 	return func(p core.Provider) core.Provider {
-		return WithRateLimit(p, opts...)
+		return newRateLimited(p, opts...)
 	}
 }
 

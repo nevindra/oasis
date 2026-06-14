@@ -25,7 +25,7 @@ func TestBuildMessages_Minimal(t *testing.T) {
 
 func TestBuildMessages_BatchedRecallIncludesFacts(t *testing.T) {
 	store := newConformanceStore(t)
-	must(t, store.Upsert(context.Background(), MemoryItem{
+	must(t, store.Upsert(context.Background(), core.MemoryItem{
 		ID: "f1", Kind: KindFact, Content: "User likes dark mode",
 		Scope: Scoped(ScopeResource, "c1"), Embedding: []float32{1, 0, 0},
 	}))
@@ -33,7 +33,7 @@ func TestBuildMessages_BatchedRecallIncludesFacts(t *testing.T) {
 	var m AgentMemory
 	m.Init(AgentMemoryConfig{
 		Store: store, Embedding: emb,
-		RecallKinds: []Kind{KindFact}, RecallTopK: 5,
+		RecallKinds: []core.MemoryKind{KindFact}, RecallTopK: 5,
 		Logger: discardLogger(),
 	})
 	task := core.AgentTask{ThreadID: "t1", ChatID: "c1", Input: "what color"}
@@ -61,7 +61,7 @@ func TestBuildMessages_BatchedRecallIncludesFacts(t *testing.T) {
 // positioned after history and before the current user input.
 func TestBuildMessages_RAGInContextBlock(t *testing.T) {
 	store := newConformanceStore(t)
-	must(t, store.Upsert(context.Background(), MemoryItem{
+	must(t, store.Upsert(context.Background(), core.MemoryItem{
 		ID: "f1", Kind: KindFact, Content: "User likes dark mode",
 		Scope: Scoped(ScopeResource, "c1"), Embedding: []float32{1, 0, 0},
 	}))
@@ -69,7 +69,7 @@ func TestBuildMessages_RAGInContextBlock(t *testing.T) {
 	var m AgentMemory
 	m.Init(AgentMemoryConfig{
 		Store: store, Embedding: emb,
-		RecallKinds: []Kind{KindFact}, RecallTopK: 5,
+		RecallKinds: []core.MemoryKind{KindFact}, RecallTopK: 5,
 		Logger: discardLogger(),
 	})
 	task := core.AgentTask{ThreadID: "t1", ChatID: "c1", Input: "what color"}
@@ -157,11 +157,11 @@ func TestBuildMessages_SystemStableAcrossCalls(t *testing.T) {
 
 	// Plant two facts with different embeddings so different inputs recall
 	// different content — simulating variation per turn.
-	must(t, store.Upsert(context.Background(), MemoryItem{
+	must(t, store.Upsert(context.Background(), core.MemoryItem{
 		ID: "f1", Kind: KindFact, Content: "User likes dark mode",
 		Scope: Scoped(ScopeResource, "c1"), Embedding: []float32{1, 0, 0},
 	}))
-	must(t, store.Upsert(context.Background(), MemoryItem{
+	must(t, store.Upsert(context.Background(), core.MemoryItem{
 		ID: "f2", Kind: KindFact, Content: "User prefers Go over Python",
 		Scope: Scoped(ScopeResource, "c1"), Embedding: []float32{0, 1, 0},
 	}))
@@ -171,7 +171,7 @@ func TestBuildMessages_SystemStableAcrossCalls(t *testing.T) {
 	var m1 AgentMemory
 	m1.Init(AgentMemoryConfig{
 		Store: store, Embedding: emb1,
-		RecallKinds: []Kind{KindFact}, RecallTopK: 1,
+		RecallKinds: []core.MemoryKind{KindFact}, RecallTopK: 1,
 		Logger: discardLogger(),
 	})
 	task := core.AgentTask{ThreadID: "t1", ChatID: "c1", Input: "colors?"}
@@ -182,7 +182,7 @@ func TestBuildMessages_SystemStableAcrossCalls(t *testing.T) {
 	var m2 AgentMemory
 	m2.Init(AgentMemoryConfig{
 		Store: store, Embedding: emb2,
-		RecallKinds: []Kind{KindFact}, RecallTopK: 1,
+		RecallKinds: []core.MemoryKind{KindFact}, RecallTopK: 1,
 		Logger: discardLogger(),
 	})
 	msgs2 := m2.BuildMessages(context.Background(), "agent", "you are helpful", task)

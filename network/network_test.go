@@ -374,7 +374,7 @@ func TestNetwork_ExecuteWith_AppliesOverrides(t *testing.T) {
 		},
 	}
 	router := &mockProvider{
-		name: "router",
+		name:      "router",
 		responses: []core.ChatResponse{{Content: "ok"}},
 	}
 	net := New("net", "test", router, WithChildren(sub))
@@ -453,7 +453,7 @@ func TestNetwork_ExecuteStreamWith_AppliesOverrides(t *testing.T) {
 		},
 	}
 	router := &mockProvider{
-		name: "router",
+		name:      "router",
 		responses: []core.ChatResponse{{Content: "ok"}},
 	}
 	net := New("net", "test", router, WithChildren(sub))
@@ -484,4 +484,3 @@ func TestNetwork_ExecuteStreamWith_InvalidOverrideClosesChannel(t *testing.T) {
 		t.Fatalf("channel should be closed on validation error")
 	}
 }
-

@@ -115,8 +115,10 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 			// If we're accumulating a partial JSON, append the line.
 			if jsonBuf.Len() > 0 {
 				jsonBuf.WriteString(line)
-				if isCompleteJSON(jsonBuf.String()) {
-					g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch)
+				if json.Valid([]byte(jsonBuf.String())) {
+					if err := g.processStreamChunk(ctx, jsonBuf.String(), &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch); err != nil {
+						return oasis.ChatResponse{}, err
+					}
 					jsonBuf.Reset()
 				}
 			}
@@ -128,9 +130,11 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 			continue
 		}
 
-		// Check if JSON is complete in a single line.
-		if isCompleteJSON(data) {
-			g.processStreamChunk(data, &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch)
+		// Check if JSON is complete using json.Valid; accumulate across lines if not.
+		if json.Valid([]byte(data)) {
+			if err := g.processStreamChunk(ctx, data, &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch); err != nil {
+				return oasis.ChatResponse{}, err
+			}
 		} else {
 			jsonBuf.Reset()
 			jsonBuf.WriteString(data)
@@ -138,8 +142,12 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 	}
 
 	// Process any remaining buffered JSON.
-	if jsonBuf.Len() > 0 && isCompleteJSON(jsonBuf.String()) {
-		g.processStreamChunk(jsonBuf.String(), &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch)
+	if jsonBuf.Len() > 0 {
+		if b := []byte(jsonBuf.String()); json.Valid(b) {
+			if err := g.processStreamChunk(ctx, jsonBuf.String(), &fullContent, &usage, &attachments, &finishReason, &safetyRatings, ch); err != nil {
+				return oasis.ChatResponse{}, err
+			}
+		}
 	}
 
 	out := oasis.ChatResponse{
@@ -163,10 +171,11 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 // extracts text deltas, usage, finish reason, and safety ratings, and sends
 // text events to the channel. The last non-empty finishReason and any safety
 // ratings from candidates[0] overwrite the caller's accumulators.
-func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, attachments *[]oasis.Attachment, finishReason *string, safetyRatings *[]geminiSafetyRating, ch chan<- oasis.StreamEvent) {
+// Returns ctx.Err() if the consumer has cancelled before the send completes.
+func (g *Gemini) processStreamChunk(ctx context.Context, jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, attachments *[]oasis.Attachment, finishReason *string, safetyRatings *[]geminiSafetyRating, ch chan<- oasis.StreamEvent) error {
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
-		return
+		return nil
 	}
 
 	// Extract text from candidates[0].content.parts[].text
@@ -174,7 +183,11 @@ func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder
 	if text != "" {
 		fullContent.WriteString(text)
 		if ch != nil {
-			ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: text}
+			select {
+			case ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: text}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 
@@ -188,6 +201,7 @@ func (g *Gemini) processStreamChunk(jsonStr string, fullContent *strings.Builder
 
 	// Extract finish reason and safety ratings from candidates[0].
 	extractFinishMetaFromParsed(parsed, finishReason, safetyRatings)
+	return nil
 }
 
 // doGenerate performs a non-streaming generateContent call and parses the response.
@@ -752,9 +766,9 @@ type geminiFuncCall struct {
 }
 
 type geminiUsage struct {
-	PromptTokenCount          int `json:"promptTokenCount"`
-	CandidatesTokenCount      int `json:"candidatesTokenCount"`
-	CachedContentTokenCount   int `json:"cachedContentTokenCount"`
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount"`
 }
 
 type embedResponse struct {
@@ -891,39 +905,6 @@ func extractFinishMetaFromParsed(parsed map[string]json.RawMessage, finishReason
 	if len(candidate.SafetyRatings) > 0 {
 		*safetyRatings = candidate.SafetyRatings
 	}
-}
-
-// isCompleteJSON checks whether a string has balanced braces/brackets,
-// indicating it is a complete JSON value.
-func isCompleteJSON(s string) bool {
-	depth := 0
-	inString := false
-	escape := false
-
-	for _, ch := range s {
-		if escape {
-			escape = false
-			continue
-		}
-		if ch == '\\' && inString {
-			escape = true
-			continue
-		}
-		if ch == '"' {
-			inString = !inString
-			continue
-		}
-		if inString {
-			continue
-		}
-		switch ch {
-		case '{', '[':
-			depth++
-		case '}', ']':
-			depth--
-		}
-	}
-	return depth == 0 && !inString
 }
 
 // Compile-time interface assertions.

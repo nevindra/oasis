@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"unicode"
@@ -11,7 +12,7 @@ import (
 
 // Extractor converts raw content to plain text.
 type Extractor interface {
-	Extract(content []byte) (string, error)
+	Extract(ctx context.Context, content []byte) (string, error)
 }
 
 // ExtractResult holds extracted text and optional per-page/section metadata.
@@ -35,7 +36,7 @@ type PageMeta struct {
 // structured metadata alongside text. If an Extractor also implements
 // MetadataExtractor, the ingestor uses ExtractWithMeta instead of Extract.
 type MetadataExtractor interface {
-	ExtractWithMeta(content []byte) (ExtractResult, error)
+	ExtractWithMeta(ctx context.Context, content []byte) (ExtractResult, error)
 }
 
 // ContentType identifies the MIME type of content for extraction.
@@ -76,21 +77,21 @@ func ContentTypeFromExtension(ext string) ContentType {
 // PlainTextExtractor returns content as-is.
 type PlainTextExtractor struct{}
 
-func (PlainTextExtractor) Extract(content []byte) (string, error) {
+func (PlainTextExtractor) Extract(_ context.Context, content []byte) (string, error) {
 	return string(content), nil
 }
 
 // HTMLExtractor strips HTML tags, scripts, styles, and decodes entities.
 type HTMLExtractor struct{}
 
-func (HTMLExtractor) Extract(content []byte) (string, error) {
+func (HTMLExtractor) Extract(_ context.Context, content []byte) (string, error) {
 	return StripHTML(string(content)), nil
 }
 
 // MarkdownExtractor strips markdown formatting to produce plain text.
 type MarkdownExtractor struct{}
 
-func (MarkdownExtractor) Extract(content []byte) (string, error) {
+func (MarkdownExtractor) Extract(_ context.Context, content []byte) (string, error) {
 	return stripMarkdown(string(content)), nil
 }
 

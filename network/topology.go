@@ -50,7 +50,9 @@ type Edge struct {
 // SupervisorSummary is a human-readable label for an applied policy.
 // E.g. {Kind: "restart", Params: {"max": "3"}}.
 type SupervisorSummary struct {
-	Kind   string
+	Kind string
+	// Params holds policy-specific key/value labels. Callers must not mutate
+	// the returned map; doing so may corrupt concurrent Topology snapshots.
 	Params map[string]string
 }
 

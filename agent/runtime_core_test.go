@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/memory"
 )
 
@@ -74,7 +74,7 @@ func TestInitCoreMemoryFieldsWired(t *testing.T) {
 	// Deep field verification is done via integration tests in memory_test.go.
 	store := &stubStore{}
 	cfg := BuildConfig([]AgentOption{
-		WithMemory(memory.WithStore(store), memory.WithMaxHistory(25), memory.WithMaxTokens(5000)),
+		WithMemory(memory.WithStore(store), memory.WithHistory(memory.HistoryConfig{MaxMessages: 25, MaxTokens: 5000})),
 	})
 
 	var c runtime.Runtime

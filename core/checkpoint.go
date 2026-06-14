@@ -9,9 +9,9 @@ import "context"
 // completion. If the Store does not implement CheckpointStore, checkpointing is
 // silently disabled.
 type IngestCheckpoint struct {
-	ID     string           `json:"id"`      // UUIDv7
-	Type   string           `json:"type"`    // "document", "batch", "crossdoc"
-	Source string           `json:"source"`  // filename or source URL
+	ID     string           `json:"id"`     // UUIDv7
+	Type   string           `json:"type"`   // "document", "batch", "crossdoc"
+	Source string           `json:"source"` // filename or source URL
 	Status CheckpointStatus `json:"status"`
 
 	// DocumentID is the ID assigned to the document when StoreDocument succeeds.

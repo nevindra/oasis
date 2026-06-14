@@ -666,6 +666,213 @@ func TestTransformSortAndLimit(t *testing.T) {
 	}
 }
 
+// ---- ConditionValue JSON round-trip tests ----
+
+func TestConditionValueUnmarshal_String(t *testing.T) {
+	var cv ConditionValue
+	if err := json.Unmarshal([]byte(`"hello"`), &cv); err != nil {
+		t.Fatalf("unmarshal string: %v", err)
+	}
+	if cv.Kind != ConditionValueString {
+		t.Fatalf("expected ConditionValueString kind, got %d", cv.Kind)
+	}
+	if cv.String == nil || *cv.String != "hello" {
+		t.Errorf("expected String=hello, got %v", cv.String)
+	}
+	if cv.Number != nil {
+		t.Errorf("Number should be nil, got %v", cv.Number)
+	}
+	if cv.Strings != nil {
+		t.Errorf("Strings should be nil, got %v", cv.Strings)
+	}
+}
+
+func TestConditionValueUnmarshal_Number(t *testing.T) {
+	var cv ConditionValue
+	if err := json.Unmarshal([]byte(`42.5`), &cv); err != nil {
+		t.Fatalf("unmarshal number: %v", err)
+	}
+	if cv.Kind != ConditionValueNumber {
+		t.Fatalf("expected ConditionValueNumber kind, got %d", cv.Kind)
+	}
+	if cv.Number == nil || *cv.Number != 42.5 {
+		t.Errorf("expected Number=42.5, got %v", cv.Number)
+	}
+	if cv.String != nil {
+		t.Errorf("String should be nil, got %v", cv.String)
+	}
+	if cv.Strings != nil {
+		t.Errorf("Strings should be nil, got %v", cv.Strings)
+	}
+}
+
+func TestConditionValueUnmarshal_Integer(t *testing.T) {
+	var cv ConditionValue
+	if err := json.Unmarshal([]byte(`28`), &cv); err != nil {
+		t.Fatalf("unmarshal integer: %v", err)
+	}
+	if cv.Kind != ConditionValueNumber {
+		t.Fatalf("expected ConditionValueNumber, got %d", cv.Kind)
+	}
+	if cv.Number == nil || *cv.Number != 28 {
+		t.Errorf("expected Number=28, got %v", cv.Number)
+	}
+}
+
+func TestConditionValueUnmarshal_StringArray(t *testing.T) {
+	var cv ConditionValue
+	if err := json.Unmarshal([]byte(`["NYC","SF"]`), &cv); err != nil {
+		t.Fatalf("unmarshal string array: %v", err)
+	}
+	if cv.Kind != ConditionValueStrings {
+		t.Fatalf("expected ConditionValueStrings, got %d", cv.Kind)
+	}
+	if len(cv.Strings) != 2 || cv.Strings[0] != "NYC" || cv.Strings[1] != "SF" {
+		t.Errorf("expected [NYC SF], got %v", cv.Strings)
+	}
+}
+
+func TestConditionValueMarshal_String(t *testing.T) {
+	s := "world"
+	cv := ConditionValue{Kind: ConditionValueString, String: &s}
+	b, err := json.Marshal(cv)
+	if err != nil {
+		t.Fatalf("marshal string: %v", err)
+	}
+	if string(b) != `"world"` {
+		t.Errorf("expected %q, got %q", `"world"`, string(b))
+	}
+}
+
+func TestConditionValueMarshal_Number(t *testing.T) {
+	f := float64(99)
+	cv := ConditionValue{Kind: ConditionValueNumber, Number: &f}
+	b, err := json.Marshal(cv)
+	if err != nil {
+		t.Fatalf("marshal number: %v", err)
+	}
+	if string(b) != `99` {
+		t.Errorf("expected 99, got %s", string(b))
+	}
+}
+
+func TestConditionValueMarshal_Strings(t *testing.T) {
+	cv := ConditionValue{Kind: ConditionValueStrings, Strings: []string{"A", "B"}}
+	b, err := json.Marshal(cv)
+	if err != nil {
+		t.Fatalf("marshal strings: %v", err)
+	}
+	if string(b) != `["A","B"]` {
+		t.Errorf("expected [\"A\",\"B\"], got %s", string(b))
+	}
+}
+
+func TestConditionValueRoundTrip_String(t *testing.T) {
+	original := `"hello"`
+	var cv ConditionValue
+	if err := json.Unmarshal([]byte(original), &cv); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	b, err := json.Marshal(cv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != original {
+		t.Errorf("round-trip mismatch: got %s, want %s", string(b), original)
+	}
+}
+
+func TestConditionValueRoundTrip_Number(t *testing.T) {
+	original := `42`
+	var cv ConditionValue
+	if err := json.Unmarshal([]byte(original), &cv); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	b, err := json.Marshal(cv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != original {
+		t.Errorf("round-trip mismatch: got %s, want %s", string(b), original)
+	}
+}
+
+func TestConditionValueRoundTrip_StringArray(t *testing.T) {
+	original := `["X","Y","Z"]`
+	var cv ConditionValue
+	if err := json.Unmarshal([]byte(original), &cv); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	b, err := json.Marshal(cv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != original {
+		t.Errorf("round-trip mismatch: got %s, want %s", string(b), original)
+	}
+}
+
+// ---- filter behavior tests using typed ConditionValue ----
+
+func TestFilterStringCondition(t *testing.T) {
+	// Directly construct typed Condition to exercise the typed path.
+	strVal := "NYC"
+	conditions := []Condition{
+		{Column: "city", Op: "==", Value: ConditionValue{Kind: ConditionValueString, String: &strVal}},
+	}
+	records := []map[string]any{
+		{"city": "NYC", "name": "Alice"},
+		{"city": "LA", "name": "Bob"},
+	}
+	filtered := filterRecords(records, conditions)
+	if len(filtered) != 1 || filtered[0]["name"] != "Alice" {
+		t.Errorf("expected Alice only, got %v", filtered)
+	}
+}
+
+func TestFilterNumberCondition(t *testing.T) {
+	threshold := float64(28)
+	conditions := []Condition{
+		{Column: "age", Op: ">", Value: ConditionValue{Kind: ConditionValueNumber, Number: &threshold}},
+	}
+	records := []map[string]any{
+		{"name": "Alice", "age": "30"},
+		{"name": "Bob", "age": "25"},
+	}
+	filtered := filterRecords(records, conditions)
+	if len(filtered) != 1 || filtered[0]["name"] != "Alice" {
+		t.Errorf("expected only Alice (age>28), got %v", filtered)
+	}
+}
+
+func TestFilterStringsCondition(t *testing.T) {
+	conditions := []Condition{
+		{Column: "city", Op: "in", Value: ConditionValue{
+			Kind:    ConditionValueStrings,
+			Strings: []string{"NYC", "SF"},
+		}},
+	}
+	records := []map[string]any{
+		{"city": "NYC"}, {"city": "LA"}, {"city": "SF"}, {"city": "CHI"},
+	}
+	filtered := filterRecords(records, conditions)
+	if len(filtered) != 2 {
+		t.Errorf("expected 2 records (NYC, SF), got %d: %v", len(filtered), filtered)
+	}
+}
+
+// filterRecords is a test helper that applies conditions directly, exercising
+// the matchCondition path without going through the JSON dispatch layer.
+func filterRecords(recs []map[string]any, conditions []Condition) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if matchesAll(r, conditions) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // ---- definitions + dispatch ----
 
 func TestDefinitions(t *testing.T) {
@@ -721,7 +928,7 @@ func TestPipeline(t *testing.T) {
 
 	// Step 3: Aggregate by product.
 	aggregated := call(t, "data_aggregate", map[string]any{
-		"records": filtered["records"],
+		"records":  filtered["records"],
 		"group_by": []string{"product"},
 		"metrics": []map[string]any{
 			{"column": "revenue", "op": "sum"},

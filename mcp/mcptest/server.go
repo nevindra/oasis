@@ -52,8 +52,8 @@ type Server struct {
 	clientReads  *io.PipeReader // client reads server output from this end
 	clientWrites *io.PipeWriter // client writes to this end
 
-	enc     *json.Encoder // guarded by encMu; shared between serve and watchListChanged
-	encMu   sync.Mutex
+	enc   *json.Encoder // guarded by encMu; shared between serve and watchListChanged
+	encMu sync.Mutex
 
 	hangNext atomic.Bool
 	stopped  atomic.Bool
@@ -122,9 +122,14 @@ func (s *Server) serve() {
 		}
 
 		if s.hangNext.Swap(false) {
-			// Simulate a hung server: do not respond to this request. The
-			// goroutine blocks here until the test process exits. Callers
-			// recover via context timeout on the client side.
+			// Simulate a hung server: never respond to this request. Keep
+			// draining the input pipe in the background so the client's request
+			// write fully flushes — real OS pipes are buffered, so a hung
+			// server still accepts a small request, but the in-process io.Pipe
+			// is unbuffered and a blocked write would deadlock the client before
+			// it reaches its context-timeout select. The client recovers via
+			// its context deadline on the call side.
+			go func() { _, _ = io.Copy(io.Discard, s.serverReads) }()
 			select {} //nolint:staticcheck // intentional hang for test purposes
 		}
 

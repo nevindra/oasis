@@ -135,9 +135,11 @@ func (s *Server) handleMessageSend(ctx context.Context, raw json.RawMessage) (an
 		},
 	}
 
-	// Non-blocking path: only valid when the client opted out of blocking AND
-	// registered a push config to receive the eventual result.
-	if p.Configuration != nil && !p.Configuration.Blocking && p.Configuration.PushNotificationConfig != nil {
+	// Non-blocking path: only valid when the client explicitly opted out of
+	// blocking AND registered a push config to receive the eventual result.
+	// Blocking is the default (nil/true Blocking), so a zero-value or absent
+	// Configuration runs the inline blocking path below.
+	if p.Configuration.isNonBlocking() && p.Configuration.PushNotificationConfig != nil {
 		if !s.opts.pushEnabled {
 			return nil, &rpcError{Code: codePushNotSupported, Message: ErrPushNotSupported.Error()}
 		}

@@ -54,7 +54,7 @@ func TestPersistMessages_StoresBoth(t *testing.T) {
 func TestEmbedder_BackfillsEmbeddings(t *testing.T) {
 	emb := &fakeEmbedder{out: [][]float32{{1, 0, 0}, {0, 1, 0}}}
 	in := &IngestContext{
-		Candidates: []MemoryItem{
+		Candidates: []core.MemoryItem{
 			{ID: "a", Content: "first"},
 			{ID: "b", Content: "second"},
 		},
@@ -90,7 +90,7 @@ func (f *fakeEmbedder) Name() string    { return "fake" }
 func TestUpserter_WritesAllCandidates(t *testing.T) {
 	store := newConformanceStore(t)
 	in := &IngestContext{
-		Candidates: []MemoryItem{
+		Candidates: []core.MemoryItem{
 			{ID: "a", Kind: KindFact, Content: "x"},
 			{ID: "b", Kind: KindFact, Content: "y"},
 		},
@@ -185,7 +185,7 @@ func TestDeduper_SkipsWhenNoSupersedes(t *testing.T) {
 	store := newConformanceStore(t)
 	defer store.Close()
 	in := &IngestContext{
-		Candidates: []MemoryItem{
+		Candidates: []core.MemoryItem{
 			{ID: "a", Kind: KindFact, Content: "fact", Tags: []string{"category:personal"}},
 		},
 		ItemStore: store,

@@ -42,10 +42,10 @@ type scoredEntry struct {
 // against the root and replace only when the new score is higher.
 type minScoreHeap []scoredEntry
 
-func (h minScoreHeap) Len() int            { return len(h) }
-func (h minScoreHeap) Less(i, j int) bool  { return h[i].score < h[j].score }
-func (h minScoreHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *minScoreHeap) Push(x any)         { *h = append(*h, x.(scoredEntry)) }
+func (h minScoreHeap) Len() int           { return len(h) }
+func (h minScoreHeap) Less(i, j int) bool { return h[i].score < h[j].score }
+func (h minScoreHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *minScoreHeap) Push(x any)        { *h = append(*h, x.(scoredEntry)) }
 func (h *minScoreHeap) Pop() any {
 	old := *h
 	n := len(old)

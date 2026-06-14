@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 
@@ -19,8 +20,8 @@ type PDFExtractor struct{}
 func NewPDFExtractor() *PDFExtractor { return &PDFExtractor{} }
 
 // Extract extracts plain text from a PDF document.
-func (e *PDFExtractor) Extract(content []byte) (string, error) {
-	result, err := e.ExtractWithMeta(content)
+func (e *PDFExtractor) Extract(ctx context.Context, content []byte) (string, error) {
+	result, err := e.ExtractWithMeta(ctx, content)
 	if err != nil {
 		return "", err
 	}
@@ -28,7 +29,7 @@ func (e *PDFExtractor) Extract(content []byte) (string, error) {
 }
 
 // ExtractWithMeta extracts text page-by-page with page number metadata.
-func (e *PDFExtractor) ExtractWithMeta(content []byte) (ExtractResult, error) {
+func (e *PDFExtractor) ExtractWithMeta(_ context.Context, content []byte) (ExtractResult, error) {
 	if len(content) == 0 {
 		return ExtractResult{}, fmt.Errorf("empty PDF content")
 	}

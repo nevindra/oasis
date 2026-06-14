@@ -260,12 +260,12 @@ func (r *Registry) hasTool(name string) bool {
 //
 // Typical wiring:
 //
-//	agent := oasis.NewLLMAgent("a", "d", p, oasis.WithTools(reg.Tools()...))
+//	agent := oasis.NewAgent("a", "d", p, oasis.WithTools(reg.Tools()...))
 //
 // For runtime-changing tool sets (e.g., registering more MCP servers after
 // agent construction), prefer:
 //
-//	agent := oasis.NewLLMAgent("a", "d", p,
+//	agent := oasis.NewAgent("a", "d", p,
 //	    oasis.WithDynamicTools(func(_ context.Context, _ oasis.AgentTask) []oasis.AnyTool {
 //	        return reg.Tools()
 //	    }),

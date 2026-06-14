@@ -29,9 +29,9 @@ type RetrievalResult struct {
 // EdgeContext describes a graph edge that led to a chunk's discovery.
 // Populated by GraphRetriever for graph-discovered (non-seed) chunks.
 type EdgeContext struct {
-	FromChunkID string       `json:"from_chunk_id"`
+	FromChunkID string            `json:"from_chunk_id"`
 	Relation    core.RelationType `json:"relation"`
-	Description string       `json:"description"`
+	Description string            `json:"description"`
 }
 
 // Retriever searches a knowledge base and returns ranked results.

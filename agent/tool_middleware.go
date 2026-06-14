@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/internal/runtime"
 )
 
 // LoggingMiddleware logs tool.start and tool.finish events with name, duration,

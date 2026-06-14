@@ -138,6 +138,9 @@ func Quorum(askN, takeMajorityOfN int, members ...core.Agent) SupervisorPolicy {
 	if len(members) != askN {
 		panic("network.Quorum: len(members) must equal askN")
 	}
+	if takeMajorityOfN < 1 || takeMajorityOfN > askN {
+		panic("network: Quorum threshold must be in [1, askN]")
+	}
 	return &quorumPolicy{askN: askN, threshold: takeMajorityOfN, members: members}
 }
 

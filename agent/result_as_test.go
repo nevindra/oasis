@@ -39,8 +39,8 @@ func TestStreamObjectAsTyped(t *testing.T) {
 		ch <- core.StreamEvent{Type: core.EventTextDelta, Content: `,"summary"]}`}
 		if ch != nil {
 			if ch != nil {
-		close(ch)
-	}
+				close(ch)
+			}
 		}
 		return core.ChatResponse{
 			Content:      `{"title":"Q3","sections":["intro","summary"]}`,

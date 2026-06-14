@@ -64,7 +64,7 @@ func BenchmarkRemember(b *testing.B) {
 				b.StartTimer()
 
 				for i := range n {
-					_ = m.Remember(context.Background(), MemoryItem{
+					_ = m.Remember(context.Background(), core.MemoryItem{
 						ID:      fmt.Sprintf("fact-%d", i),
 						Kind:    KindFact,
 						Content: fmt.Sprintf("user prefers option %d over alternatives", i),
@@ -90,13 +90,13 @@ func BenchmarkRecall(b *testing.B) {
 				Store:       store,
 				Embedding:   emb,
 				RecallTopK:  5,
-				RecallKinds: []Kind{KindFact},
+				RecallKinds: []core.MemoryKind{KindFact},
 				Logger:      discardLogger(),
 			})
 
 			ctx := context.Background()
 			for i := range n {
-				_ = store.Upsert(ctx, MemoryItem{
+				_ = store.Upsert(ctx, core.MemoryItem{
 					ID:        fmt.Sprintf("fact-%d", i),
 					Kind:      KindFact,
 					Content:   fmt.Sprintf("fact number %d about the user", i),

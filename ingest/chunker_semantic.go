@@ -207,7 +207,6 @@ func splitSentences(text string) []string {
 	return sentences
 }
 
-
 // percentileThreshold computes the Nth percentile of a float32 slice.
 func percentileThreshold(values []float32, percentile int) float32 {
 	if len(values) == 0 {

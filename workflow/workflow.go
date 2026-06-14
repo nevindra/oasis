@@ -26,20 +26,92 @@ func truncateStr(s string, n int) string {
 	return string(rs[:n])
 }
 
-// ErrSuspended is returned when a workflow suspends execution.
+// ErrSuspended is returned by Workflow.Execute when a step calls Suspend.
+// Inspect Payload for context, then call Resume or ResumeStream with the
+// human's response to continue the workflow from the suspended step.
 type ErrSuspended struct {
-	Step         string
-	Payload      json.RawMessage
-	resume       func(ctx context.Context, data json.RawMessage) (core.AgentResult, error)
+	// Step is the name of the step that suspended.
+	Step string
+	// Payload carries context for the human (passed to Suspend).
+	Payload json.RawMessage
+	// resume continues execution with human input.
+	resume func(ctx context.Context, data json.RawMessage) (core.AgentResult, error)
+	// resumeStream is like resume but emits StreamEvent values into ch.
 	resumeStream func(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (core.AgentResult, error)
-	mu           sync.Mutex
-	ttlTimer     *time.Timer
-	snapshotSize int64
-	onRelease    func(size int64)
+	// once guards against a double Resume/ResumeStream: the second call is a
+	// no-op that returns an error rather than re-executing the workflow.
+	once sync.Once
 }
 
 func (e *ErrSuspended) Error() string {
 	return fmt.Sprintf("suspended at step %q", e.Step)
+}
+
+// errResumeConsumed is returned by Resume/ResumeStream when the suspension has
+// already been resumed (single-use) or was constructed outside the engine.
+var errResumeConsumed = errors.New("workflow: ErrSuspended already resumed or has no resume closure")
+
+// Resume continues the workflow from the suspended step with the human's
+// response data. The data is made available to the step via the resume-data
+// context key (read it inside the StepFunc).
+//
+// Resume is single-use: the first call runs the workflow to completion; any
+// subsequent call returns an error without re-executing.
+func (e *ErrSuspended) Resume(ctx context.Context, data json.RawMessage) (core.AgentResult, error) {
+	var (
+		result core.AgentResult
+		err    = errResumeConsumed
+		ran    bool
+	)
+	e.once.Do(func() {
+		ran = true
+		fn := e.resume
+		e.resume = nil
+		e.resumeStream = nil
+		if fn == nil {
+			return
+		}
+		result, err = fn(ctx, data)
+	})
+	if !ran {
+		return core.AgentResult{}, errResumeConsumed
+	}
+	return result, err
+}
+
+// ResumeStream continues the workflow from the suspended step with the human's
+// response data, emitting StreamEvent values into ch throughout. Like Resume
+// but with streaming support. The channel is closed before ResumeStream
+// returns.
+//
+// ResumeStream is single-use: any call after the first Resume or ResumeStream
+// returns an error (and closes ch) without re-executing.
+func (e *ErrSuspended) ResumeStream(ctx context.Context, data json.RawMessage, ch chan<- core.StreamEvent) (core.AgentResult, error) {
+	var (
+		result core.AgentResult
+		err    = errResumeConsumed
+		ran    bool
+	)
+	e.once.Do(func() {
+		ran = true
+		fn := e.resumeStream
+		e.resume = nil
+		e.resumeStream = nil
+		if fn == nil {
+			if ch != nil {
+				close(ch)
+			}
+			return
+		}
+		result, err = fn(ctx, data, ch)
+	})
+	if !ran {
+		if ch != nil {
+			close(ch)
+		}
+		return core.AgentResult{}, errResumeConsumed
+	}
+	return result, err
 }
 
 // errSuspend is the internal sentinel for suspension.
@@ -332,6 +404,14 @@ type WorkflowResult struct {
 // is reached without the exit condition being met.
 var ErrMaxIterExceeded = errors.New("step reached max iterations without meeting exit condition")
 
+// ErrOverridesUnsupported is returned by Workflow.Execute when per-call
+// overrides (RunConfig.Overrides, e.g. via agent.WithOverrides) are supplied.
+// Workflows run a fixed, declaration-time step graph and intentionally do not
+// propagate per-call overrides to their steps — this is a permanent contract,
+// not a temporary gap. Configure step behaviour at construction time instead.
+// Match it with errors.Is.
+var ErrOverridesUnsupported = errors.New("workflow: per-call overrides are not supported")
+
 // WorkflowError is returned by Workflow.Execute when one or more steps fail.
 // Callers can inspect per-step results via errors.As:
 //
@@ -379,7 +459,7 @@ const (
 type stepConfig struct {
 	name       string
 	fn         StepFunc
-	after      []string                   // dependency edges
+	after      []string                    // dependency edges
 	when       func(*WorkflowContext) bool // conditional execution gate
 	inputFrom  string                      // AgentStep: context key for input
 	argsFrom   string                      // tool call step: context key for args
@@ -629,11 +709,11 @@ const defaultLoopMaxIter = 10
 type Workflow struct {
 	name         string
 	description  string
-	steps        map[string]*stepConfig  // all steps by name
-	stepOrder    []string                // declaration order (for deterministic iteration)
-	edges        map[string][]string     // step -> its dependencies (After)
-	dependents   map[string][]string     // forward adjacency: dep -> steps that depend on it
-	roots        []string                // steps with no dependencies
+	steps        map[string]*stepConfig // all steps by name
+	stepOrder    []string               // declaration order (for deterministic iteration)
+	edges        map[string][]string    // step -> its dependencies (After)
+	dependents   map[string][]string    // forward adjacency: dep -> steps that depend on it
+	roots        []string               // steps with no dependencies
 	onFinish     func(WorkflowResult)
 	onError      func(string, error)
 	defaultRetry int

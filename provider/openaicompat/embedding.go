@@ -12,11 +12,41 @@ import (
 	oasis "github.com/nevindra/oasis/core"
 )
 
-// EmbedRequest is the OpenAI-compatible embedding request body.
-type EmbedRequest struct {
-	Model      string `json:"model"`
-	Input      any    `json:"input"`                 // []string for text, []Message for multimodal
-	Dimensions int    `json:"dimensions,omitempty"`
+// embedRequest is the OpenAI-compatible embedding request body. It is internal
+// to this package (only doEmbed consumes it), so its input field is a typed
+// discriminated union rather than an exported any.
+type embedRequest struct {
+	Model      string     `json:"model"`
+	Input      embedInput `json:"input"` // texts (JSON []string) or multimodal messages (JSON []Message)
+	Dimensions int        `json:"dimensions,omitempty"`
+}
+
+// embedInput is the discriminated input for an embedding request. Exactly one of
+// Texts or Messages is set; it marshals to the OpenAI wire shape (a JSON array of
+// strings for text, or a JSON array of chat messages for multimodal).
+type embedInput struct {
+	Texts    []string
+	Messages []Message
+}
+
+// textInput builds a text-only embedding input.
+func textInput(texts []string) embedInput { return embedInput{Texts: texts} }
+
+// messageInput builds a multimodal (chat-message) embedding input.
+func messageInput(msgs []Message) embedInput { return embedInput{Messages: msgs} }
+
+// MarshalJSON emits the wire shape: a JSON array of strings when Texts is set,
+// otherwise a JSON array of chat messages. A nil slice marshals to an empty array
+// so the array shape is preserved.
+func (e embedInput) MarshalJSON() ([]byte, error) {
+	if e.Messages != nil {
+		return json.Marshal(e.Messages)
+	}
+	texts := e.Texts
+	if texts == nil {
+		texts = []string{}
+	}
+	return json.Marshal(texts)
 }
 
 // EmbedResponse is the OpenAI-compatible embedding response.
@@ -81,9 +111,9 @@ func (e *Embedding) Dimensions() int { return e.dims }
 
 // Embed returns embedding vectors for the given texts.
 func (e *Embedding) Embed(ctx context.Context, texts []string) ([][]float32, error) {
-	req := EmbedRequest{
+	req := embedRequest{
 		Model: e.model,
-		Input: texts,
+		Input: textInput(texts),
 	}
 	if e.dims > 0 {
 		req.Dimensions = e.dims
@@ -116,12 +146,12 @@ func (e *Embedding) EmbedMultimodal(ctx context.Context, inputs []oasis.Multimod
 				ImageURL: &ImageURL{URL: url},
 			})
 		}
-		msgs[i] = Message{Role: "user", Content: blocks}
+		msgs[i] = Message{Role: "user", Content: BlockContent(blocks)}
 	}
 
-	req := EmbedRequest{
+	req := embedRequest{
 		Model: e.model,
-		Input: msgs,
+		Input: messageInput(msgs),
 	}
 	if e.dims > 0 {
 		req.Dimensions = e.dims
@@ -130,7 +160,7 @@ func (e *Embedding) EmbedMultimodal(ctx context.Context, inputs []oasis.Multimod
 }
 
 // doEmbed sends the embedding request and parses the response.
-func (e *Embedding) doEmbed(ctx context.Context, req EmbedRequest) ([][]float32, error) {
+func (e *Embedding) doEmbed(ctx context.Context, req embedRequest) ([][]float32, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return nil, &oasis.ErrLLM{Provider: e.name, Message: "marshal embed request: " + err.Error()}

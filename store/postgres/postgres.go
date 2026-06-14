@@ -303,6 +303,10 @@ func Open(ctx context.Context, dsn string, opts ...Option) (*Store, error) {
 	}
 	s := New(pool, opts...)
 	s.ownedPool = true
+	if err := s.Init(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("postgres: open: %w", err)
+	}
 	return s, nil
 }
 

@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/internal/runtime"
 	"github.com/nevindra/oasis/memory"
 	"github.com/nevindra/oasis/skills"
 )
@@ -203,14 +203,14 @@ func Approval(toolName string, opts ...ApprovalOption) ApprovalConfig {
 
 // Hook constructors re-exported from runtime.
 var (
-	Continue            = runtime.Continue
-	Stop                = runtime.Stop
-	InjectFeedback      = runtime.InjectFeedback
-	InjectMessages      = runtime.InjectMessages
-	Propagate           = runtime.Propagate
-	Retry               = runtime.Retry
-	RetryWithFeedback   = runtime.RetryWithFeedback
-	HaltDecision        = runtime.HaltDecision
+	Continue          = runtime.Continue
+	Stop              = runtime.Stop
+	InjectFeedback    = runtime.InjectFeedback
+	InjectMessages    = runtime.InjectMessages
+	Propagate         = runtime.Propagate
+	Retry             = runtime.Retry
+	RetryWithFeedback = runtime.RetryWithFeedback
+	HaltDecision      = runtime.HaltDecision
 )
 
 // ---- AgentOption constructors ----
@@ -476,4 +476,3 @@ func TaskFromContext(ctx context.Context) (AgentTask, bool) {
 	task, ok := ctx.Value(taskCtxKey{}).(AgentTask)
 	return task, ok
 }
-

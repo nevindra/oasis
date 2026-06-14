@@ -13,7 +13,7 @@ import (
 // StdioClient runs an MCP server as a child process and communicates via
 // newline-delimited JSON-RPC over stdin/stdout.
 type StdioClient struct {
-	cmd          *exec.Cmd      // nil when constructed via NewStdioClientFromPipes (testing)
+	cmd          *exec.Cmd // nil when constructed via NewStdioClientFromPipes (testing)
 	stdin        io.WriteCloser
 	stdout       io.ReadCloser
 	framer       *framer
@@ -83,11 +83,11 @@ func (c *StdioClient) OnDisconnect(fn func(error)) {
 
 // Initialize performs the MCP initialize handshake and returns the server's capabilities.
 func (c *StdioClient) Initialize(ctx context.Context) (*InitializeResult, error) {
-	params := json.RawMessage(`{
-        "protocolVersion":"2024-11-05",
+	params := json.RawMessage(fmt.Sprintf(`{
+        "protocolVersion":%q,
         "capabilities":{"tools":{},"resources":{}},
         "clientInfo":{"name":"oasis","version":"0.x.0"}
-    }`)
+    }`, protocolVersion))
 	raw, err := c.framer.Call(ctx, "initialize", params)
 	if err != nil {
 		return nil, fmt.Errorf("initialize: %w", err)

@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -204,24 +205,56 @@ func containsAny(haystack []any, needle string) bool {
 	return false
 }
 
-type embedConflictA struct {
-	Field string `json:"field"`
-}
-type embedConflictB struct {
-	Field string `json:"field"`
-}
-type embedConflictOuter struct {
-	embedConflictA
-	embedConflictB
-}
-
 func TestDeriveSchema_EmbeddedConflict_Panics(t *testing.T) {
+	// DeriveSchema should panic when an embedded struct type has multiple fields
+	// that serialize to the same JSON property name.
+	// We use reflect.StructOf to create this scenario at runtime, avoiding
+	// go vet's structtag check which forbids duplicate json tags in static code.
+
+	// Create: type A struct { F string `json:"field"` }
+	typeA := reflect.StructOf([]reflect.StructField{
+		{
+			Name:    "F",
+			Type:    reflect.TypeOf(""),
+			Tag:     `json:"field"`,
+			PkgPath: "",
+		},
+	})
+
+	// Create: type B struct { F string `json:"field"` }
+	typeB := reflect.StructOf([]reflect.StructField{
+		{
+			Name:    "F",
+			Type:    reflect.TypeOf(""),
+			Tag:     `json:"field"`,
+			PkgPath: "",
+		},
+	})
+
+	// Create: type Outer struct { A; B } (embedded)
+	typeOuter := reflect.StructOf([]reflect.StructField{
+		{
+			Name:      "A",
+			Type:      typeA,
+			Anonymous: true,
+		},
+		{
+			Name:      "B",
+			Type:      typeB,
+			Anonymous: true,
+		},
+	})
+
+	// Verify that DeriveSchema panics on this embedded conflict.
 	defer func() {
 		if r := recover(); r == nil {
 			t.Errorf("expected panic on duplicate JSON name from embedded structs")
 		}
 	}()
-	_ = DeriveSchema[embedConflictOuter]()
+
+	// Call the internal buildStructSchema directly on the runtime-created type.
+	visited := make(map[reflect.Type]bool)
+	buildStructSchema(typeOuter, "", visited)
 }
 
 type recursiveNode struct {

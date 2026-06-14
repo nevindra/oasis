@@ -94,13 +94,13 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 			TypeDOCX:      NewDOCXExtractor(),
 			TypePDF:       NewPDFExtractor(),
 		},
-		strategy:        StrategyFlat,
-		batchSize:       64,
-		maxContentSize:  defaultMaxContentSize,
-		mdChunker:       NewMarkdownChunker(),
-		mdParentChunker: NewMarkdownChunker(WithMaxTokens(1024)),
-		parentChunker:   NewRecursiveChunker(WithMaxTokens(1024)),
-		childChunker:    NewRecursiveChunker(WithMaxTokens(256)),
+		strategy:           StrategyFlat,
+		batchSize:          64,
+		maxContentSize:     defaultMaxContentSize,
+		mdChunker:          NewMarkdownChunker(),
+		mdParentChunker:    NewMarkdownChunker(WithMaxTokens(1024)),
+		parentChunker:      NewRecursiveChunker(WithMaxTokens(1024)),
+		childChunker:       NewRecursiveChunker(WithMaxTokens(256)),
 		graphBatchSize:     5,
 		graphWorkers:       3,
 		contextWorkers:     3,
@@ -597,23 +597,23 @@ func (ing *Ingestor) notifyError(source string, err error) {
 }
 
 // safeExtract calls e.Extract, recovering any panic into an error.
-func safeExtract(e Extractor, content []byte) (text string, err error) {
+func safeExtract(ctx context.Context, e Extractor, content []byte) (text string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("extractor panicked: %v", r)
 		}
 	}()
-	return e.Extract(content)
+	return e.Extract(ctx, content)
 }
 
 // safeExtractWithMeta calls me.ExtractWithMeta, recovering any panic into an error.
-func safeExtractWithMeta(me MetadataExtractor, content []byte) (result ExtractResult, err error) {
+func safeExtractWithMeta(ctx context.Context, me MetadataExtractor, content []byte) (result ExtractResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("extractor panicked: %v", r)
 		}
 	}()
-	return me.ExtractWithMeta(content)
+	return me.ExtractWithMeta(ctx, content)
 }
 
 // strategyName returns a human-readable name for a ChunkStrategy.

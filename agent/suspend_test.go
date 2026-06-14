@@ -569,7 +569,7 @@ func TestTypedSuspendRespectsTTL(t *testing.T) {
 	suspended.WithSuspendTTL(20 * time.Millisecond)
 	time.Sleep(60 * time.Millisecond)
 
-	_, err = p.Resume(suspended, context.Background(), apResp{Approved: true})
+	_, err = p.Resume(context.Background(), suspended, apResp{Approved: true})
 	if err == nil {
 		t.Fatal("expected resume to fail after TTL, got nil")
 	}
@@ -781,8 +781,8 @@ func TestResumeDataNilContext(t *testing.T) {
 
 func TestEstimateSnapshotSize(t *testing.T) {
 	messages := []core.ChatMessage{
-		{Content: "hello"},                                                          // 5 bytes
-		{Content: "world", Metadata: json.RawMessage(`{"k":"v"}`)},                 // 5 + 9 = 14
+		{Content: "hello"}, // 5 bytes
+		{Content: "world", Metadata: json.RawMessage(`{"k":"v"}`)}, // 5 + 9 = 14
 		{
 			Content: "",
 			ToolCalls: []core.ToolCall{
@@ -821,13 +821,13 @@ func TestEventToolCallSuspendedFires(t *testing.T) {
 	})
 
 	cfg := LoopConfig{
-		Name:     "test",
-		Provider: provider,
-		Tools:    []core.ToolDefinition{{Name: "transfer_money", Description: "move funds"}},
+		Name:       "test",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "transfer_money", Description: "move funds"}},
 		Processors: chain,
-		Config:   Config{MaxIter: 5},
-		Mem:      &memory.AgentMemory{},
-		Dispatch: func(_ context.Context, tc core.ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, tc core.ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
 	}
 
 	ch := make(chan core.StreamEvent, 64)
@@ -922,13 +922,13 @@ func TestEventProcessorSuspendedFiresPostLLM(t *testing.T) {
 	})
 
 	cfg := LoopConfig{
-		Name:     "test-post",
-		Provider: provider,
-		Tools:    []core.ToolDefinition{{Name: "risky", Description: "risky op"}},
+		Name:       "test-post",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "risky", Description: "risky op"}},
 		Processors: chain,
-		Config:   Config{MaxIter: 5},
-		Mem:      &memory.AgentMemory{},
-		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{} },
 	}
 
 	ch := make(chan core.StreamEvent, 64)
@@ -969,13 +969,13 @@ func TestEventOrderingOnToolSuspend(t *testing.T) {
 	})
 
 	cfg := LoopConfig{
-		Name:     "test-order",
-		Provider: provider,
-		Tools:    []core.ToolDefinition{{Name: "risky_op", Description: "test"}},
+		Name:       "test-order",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "risky_op", Description: "test"}},
 		Processors: chain,
-		Config:   Config{MaxIter: 5},
-		Mem:      &memory.AgentMemory{},
-		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{Content: "done"} },
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{Content: "done"} },
 	}
 
 	ch := make(chan core.StreamEvent, 64)
@@ -1135,13 +1135,13 @@ func TestIterationTraceFinishReasonOnSuspend(t *testing.T) {
 	})
 
 	cfg := LoopConfig{
-		Name:     "test-iter-trace",
-		Provider: provider,
-		Tools:    []core.ToolDefinition{{Name: "op", Description: "test op"}},
+		Name:       "test-iter-trace",
+		Provider:   provider,
+		Tools:      []core.ToolDefinition{{Name: "op", Description: "test op"}},
 		Processors: chain,
-		Config:   Config{MaxIter: 5},
-		Mem:      &memory.AgentMemory{},
-		Dispatch: func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
+		Config:     Config{MaxIter: 5},
+		Mem:        &memory.AgentMemory{},
+		Dispatch:   func(_ context.Context, _ core.ToolCall) DispatchResult { return DispatchResult{Content: "ok"} },
 	}
 
 	ch := make(chan core.StreamEvent, 64)
@@ -1581,7 +1581,7 @@ func TestResumeAppliesRenderResume(t *testing.T) {
 	// again after the second LLM call. That's expected — we only care that
 	// the resumed run reached the LLM (onChat was called) and that the
 	// formatted message was injected.
-	_, err = p.Resume(suspended, context.Background(), apResp{Approved: true})
+	_, err = p.Resume(context.Background(), suspended, apResp{Approved: true})
 	var resumedSuspension *ErrSuspended
 	if err != nil && !errors.As(err, &resumedSuspension) {
 		t.Fatalf("Resume error = %v", err)
@@ -1620,7 +1620,7 @@ func TestResumeTagMismatch(t *testing.T) {
 		t.Fatalf("expected ErrSuspended, got %v", err)
 	}
 
-	_, err = pB.Resume(suspended, context.Background(), apResp{Approved: true})
+	_, err = pB.Resume(context.Background(), suspended, apResp{Approved: true})
 	if err == nil {
 		t.Fatal("expected mismatch error, got nil")
 	}
@@ -1631,7 +1631,7 @@ func TestResumeTagMismatch(t *testing.T) {
 	// The original suspended should still be resumable via the correct protocol.
 	// (The resumed run may re-suspend via PostLLM — that's OK; we only verify
 	// that pA.Resume doesn't return a protocol-mismatch or unexpected error.)
-	_, err = pA.Resume(suspended, context.Background(), apResp{Approved: true})
+	_, err = pA.Resume(context.Background(), suspended, apResp{Approved: true})
 	var pAResumeSuspension *ErrSuspended
 	if err != nil && !errors.As(err, &pAResumeSuspension) {
 		t.Errorf("Resume via correct protocol failed: %v", err)
@@ -1666,7 +1666,7 @@ func TestResumeStreamDeliversEvents(t *testing.T) {
 	}
 
 	resumeCh := make(chan core.StreamEvent, 16)
-	_, err = p.ResumeStream(suspended, context.Background(), apResp{Approved: true}, resumeCh)
+	_, err = p.ResumeStream(context.Background(), suspended, apResp{Approved: true}, resumeCh)
 	// The PostProcessor fires again after the resumed LLM call, producing
 	// another *ErrSuspended. Accept that as OK — the key assertion is that
 	// the channel is (or will be) closed by the engine.
@@ -1788,12 +1788,12 @@ func TestResumeIsSingleUse(t *testing.T) {
 	// First Resume: PostProcessor fires after resumed LLM call — may return
 	// another *ErrSuspended. The important thing is the resume closure was
 	// consumed (nil'd out), so the second call must fail.
-	_, err = p.Resume(suspended, context.Background(), apResp{Approved: true})
+	_, err = p.Resume(context.Background(), suspended, apResp{Approved: true})
 	var firstResumeSuspension *ErrSuspended
 	if err != nil && !errors.As(err, &firstResumeSuspension) {
 		t.Fatalf("first Resume failed: %v", err)
 	}
-	_, err = p.Resume(suspended, context.Background(), apResp{Approved: true})
+	_, err = p.Resume(context.Background(), suspended, apResp{Approved: true})
 	if err == nil {
 		t.Fatal("second Resume should fail with closure-is-nil")
 	}

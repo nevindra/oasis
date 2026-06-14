@@ -136,3 +136,40 @@ func TestHTTPClient_ExtraHeaders(t *testing.T) {
 		t.Errorf("X-Api-Version: %q", apiVer)
 	}
 }
+
+// TestHTTPClient_Initialize_ProtocolVersion asserts that the outbound
+// initialize request carries the package-level protocolVersion constant,
+// not any hard-coded legacy string.
+func TestHTTPClient_Initialize_ProtocolVersion(t *testing.T) {
+	var gotVersion string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req rpcRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Errorf("bad rpc request: %v", err)
+			return
+		}
+		if req.Method == "initialize" {
+			var p initializeParams
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				t.Errorf("bad initialize params: %v", err)
+				return
+			}
+			gotVersion = p.ProtocolVersion
+		}
+		json.NewEncoder(w).Encode(rpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  json.RawMessage(`{"protocolVersion":"` + protocolVersion + `","capabilities":{},"serverInfo":{"name":"s","version":"1"}}`),
+		})
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient(srv.URL, nil, nil, 5*time.Second)
+	if _, err := c.Initialize(context.Background()); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	if gotVersion != protocolVersion {
+		t.Errorf("outbound protocolVersion = %q, want %q", gotVersion, protocolVersion)
+	}
+}

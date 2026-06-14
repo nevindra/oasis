@@ -199,7 +199,7 @@ func scoreToolMatch(queryWords []string, toolName, description string) float64 {
 // using WithDeferredSchemas:
 //
 //	prompt := mcp.DeferredToolsPromptSection() + "\n\n" + userPrompt
-//	agent := oasis.NewLLMAgent("a", "d", p,
+//	agent := oasis.NewAgent("a", "d", p,
 //	    oasis.WithPrompt(prompt),
 //	    oasis.WithTools(reg.Tools()...),
 //	)

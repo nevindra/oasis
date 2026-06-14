@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -32,7 +33,7 @@ import (
 type ModelCatalog struct {
 	mu sync.RWMutex
 
-	platforms    []oasis.Platform // built-in + custom
+	platforms   []oasis.Platform // built-in + custom
 	platformIdx map[string]int   // lowercase name → index in platforms
 
 	providers map[string]*providerEntry // lowercase identifier → entry
@@ -44,9 +45,9 @@ type ModelCatalog struct {
 
 // providerEntry tracks a registered provider and its cached models.
 type providerEntry struct {
-	platform oasis.Platform
-	apiKey   string
-	cached   []oasis.ModelInfo
+	platform  oasis.Platform
+	apiKey    string
+	cached    []oasis.ModelInfo
 	fetchedAt time.Time
 }
 
@@ -221,6 +222,13 @@ func (c *ModelCatalog) Remove(identifier string) {
 
 // List returns models from all registered providers, merging static metadata
 // with live API results.
+//
+// Partial-success contract: if one or more providers fail, List still returns
+// the models collected from the successful providers alongside a non-nil error
+// (built with errors.Join) that wraps each per-provider failure. Callers that
+// only need the model list may ignore the error; callers that need to detect
+// misconfiguration should inspect it. When all providers succeed the error is
+// nil.
 func (c *ModelCatalog) List(ctx context.Context) ([]oasis.ModelInfo, error) {
 	c.mu.RLock()
 	ids := make([]string, 0, len(c.providers))
@@ -230,15 +238,16 @@ func (c *ModelCatalog) List(ctx context.Context) ([]oasis.ModelInfo, error) {
 	c.mu.RUnlock()
 
 	var all []oasis.ModelInfo
+	var errs []error
 	for _, id := range ids {
 		models, err := c.ListProvider(ctx, id)
 		if err != nil {
-			// Degrade gracefully: skip providers that fail, continue with others.
+			errs = append(errs, fmt.Errorf("catalog: provider %q: %w", id, err))
 			continue
 		}
 		all = append(all, models...)
 	}
-	return all, nil
+	return all, errors.Join(errs...)
 }
 
 // ListProvider returns models from a single registered provider.

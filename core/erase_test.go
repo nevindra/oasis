@@ -16,7 +16,7 @@ type stubAnyTool struct {
 	name string
 }
 
-func (s *stubAnyTool) Name() string              { return s.name }
+func (s *stubAnyTool) Name() string               { return s.name }
 func (s *stubAnyTool) Definition() ToolDefinition { return ToolDefinition{Name: s.name} }
 func (s *stubAnyTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (ToolResult, error) {
 	return TextResult("ok"), nil

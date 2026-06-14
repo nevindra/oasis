@@ -15,7 +15,7 @@ import (
 // Handles request/response correlation by ID; serializes writes via mutex.
 type framer struct {
 	enc      *json.Encoder
-	encMu    sync.Mutex   // serialize writes (FIFO)
+	encMu    sync.Mutex // serialize writes (FIFO)
 	nextID   atomic.Int64
 	pending  map[int64]chan rpcResponse
 	pendMu   sync.Mutex

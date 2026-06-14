@@ -1,13 +1,14 @@
 package ingest
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
 
 func TestPlainTextExtractorIdentity(t *testing.T) {
 	e := PlainTextExtractor{}
-	out, err := e.Extract([]byte("hello world"))
+	out, err := e.Extract(context.Background(), []byte("hello world"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +46,7 @@ func TestStripHTMLScript(t *testing.T) {
 
 func TestMarkdownExtractorHeadings(t *testing.T) {
 	e := MarkdownExtractor{}
-	out, err := e.Extract([]byte("# Title\n## Subtitle"))
+	out, err := e.Extract(context.Background(), []byte("# Title\n## Subtitle"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestMarkdownExtractorHeadings(t *testing.T) {
 
 func TestMarkdownExtractorLinks(t *testing.T) {
 	e := MarkdownExtractor{}
-	out, err := e.Extract([]byte("Click [here](https://example.com) for more"))
+	out, err := e.Extract(context.Background(), []byte("Click [here](https://example.com) for more"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestMarkdownExtractorLinks(t *testing.T) {
 
 func TestMarkdownExtractorEmphasis(t *testing.T) {
 	e := MarkdownExtractor{}
-	out, err := e.Extract([]byte("This is **bold** and *italic*"))
+	out, err := e.Extract(context.Background(), []byte("This is **bold** and *italic*"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +120,7 @@ func TestContentTypeFromExtensionNew(t *testing.T) {
 
 func TestHTMLExtractor(t *testing.T) {
 	e := HTMLExtractor{}
-	out, err := e.Extract([]byte("<p>Hello <b>world</b></p>"))
+	out, err := e.Extract(context.Background(), []byte("<p>Hello <b>world</b></p>"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +131,7 @@ func TestHTMLExtractor(t *testing.T) {
 
 func TestMarkdownExtractor(t *testing.T) {
 	e := MarkdownExtractor{}
-	out, err := e.Extract([]byte("# Title\n\nSome **bold** text"))
+	out, err := e.Extract(context.Background(), []byte("# Title\n\nSome **bold** text"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,12 +167,12 @@ func TestStripHTMLNumericEntities(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"&#169;", "\u00A9"},       // decimal: ©
-		{"&#x00A9;", "\u00A9"},     // hex: ©
-		{"&#8212;", "\u2014"},      // decimal: —
-		{"&#x2014;", "\u2014"},     // hex: —
-		{"&#65;", "A"},             // decimal: A
-		{"&#x41;", "A"},            // hex: A
+		{"&#169;", "\u00A9"},   // decimal: ©
+		{"&#x00A9;", "\u00A9"}, // hex: ©
+		{"&#8212;", "\u2014"},  // decimal: —
+		{"&#x2014;", "\u2014"}, // hex: —
+		{"&#65;", "A"},         // decimal: A
+		{"&#x41;", "A"},        // hex: A
 	}
 	for _, tt := range tests {
 		out := StripHTML(tt.input)

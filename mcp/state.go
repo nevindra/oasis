@@ -50,7 +50,7 @@ type ServerMetadata struct {
 	Name            string
 	Version         string
 	ProtocolVersion string
-	Capabilities    map[string]interface{}
+	Capabilities    ServerCapabilities
 }
 
 // LifecycleHandler receives lifecycle notifications from MCP servers.
@@ -69,9 +69,9 @@ type LifecycleHandler interface {
 //	func (h MyHandler) OnConnect(name string, info mcp.ServerMetadata) { /* ... */ }
 type NoopLifecycle struct{}
 
-func (NoopLifecycle) OnConnect(string, ServerMetadata)                   {}
-func (NoopLifecycle) OnDisconnect(string, error)                         {}
-func (NoopLifecycle) OnToolCall(string, string, json.RawMessage)         {}
+func (NoopLifecycle) OnConnect(string, ServerMetadata)                    {}
+func (NoopLifecycle) OnDisconnect(string, error)                          {}
+func (NoopLifecycle) OnToolCall(string, string, json.RawMessage)          {}
 func (NoopLifecycle) OnToolResult(string, string, *CallToolResult, error) {}
 
 // EventType classifies an Event.

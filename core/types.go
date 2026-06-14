@@ -446,7 +446,7 @@ type Usage struct {
 type ToolDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`            // JSON Schema for the input.
+	Parameters  json.RawMessage `json:"parameters"` // JSON Schema for the input.
 	// OutputSchema is the JSON Schema for the tool's successful result. It is
 	// derived at registration time by Erase/EraseStreaming via DeriveSchema[Out].
 	// Tools that need richer constraints than reflection produces may implement

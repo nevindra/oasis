@@ -15,12 +15,17 @@ import (
 // http.Handler; the application owns the listener, TLS, and middleware
 // (auth verification is middleware — Oasis does not build an auth framework).
 type Server struct {
-	agent   core.Agent
-	card    AgentCard
-	store   TaskStore
-	opts    serverOptions
-	baseCtx context.Context
-	stop    context.CancelFunc
+	agent core.Agent
+	card  AgentCard
+	store TaskStore
+	opts  serverOptions
+	// pushClient delivers webhook notifications. It is the injected
+	// WithPushHTTPClient client, or a bounded default built in NewServer —
+	// never a shared package global, so concurrent servers (and tests) get
+	// independent transports.
+	pushClient *http.Client
+	baseCtx    context.Context
+	stop       context.CancelFunc
 }
 
 type serverOptions struct {
@@ -31,6 +36,7 @@ type serverOptions struct {
 	cardOverride    *AgentCard
 	store           TaskStore
 	pushEnabled     bool
+	pushClient      *http.Client
 	memoryCap       int
 }
 
@@ -70,6 +76,18 @@ func WithTaskStore(s TaskStore) ServerOption { return func(o *serverOptions) { o
 // WithPushNotifications enables webhook delivery of task updates.
 func WithPushNotifications() ServerOption { return func(o *serverOptions) { o.pushEnabled = true } }
 
+// WithPushHTTPClient overrides the *http.Client used to POST webhook
+// notifications. Inject one to control the transport, proxy, or timeout (the
+// default client has a 10s timeout). A nil client is ignored — NewServer falls
+// back to the bounded default. Tests pass a client wired to an httptest server.
+func WithPushHTTPClient(c *http.Client) ServerOption {
+	return func(o *serverOptions) {
+		if c != nil {
+			o.pushClient = c
+		}
+	}
+}
+
 // WithTaskCapacity bounds the in-memory task store (default 1024 tasks).
 func WithTaskCapacity(n int) ServerOption { return func(o *serverOptions) { o.memoryCap = n } }
 
@@ -86,14 +104,18 @@ func NewServer(agent core.Agent, opts ...ServerOption) *Server {
 	if o.store == nil {
 		o.store = newMemoryStore(o.memoryCap)
 	}
+	if o.pushClient == nil {
+		o.pushClient = newDefaultPushClient()
+	}
 	baseCtx, stop := context.WithCancel(context.Background())
 	return &Server{
-		agent:   agent,
-		card:    buildCard(agent.Name(), agent.Description(), &o),
-		store:   o.store,
-		opts:    o,
-		baseCtx: baseCtx,
-		stop:    stop,
+		agent:      agent,
+		card:       buildCard(agent.Name(), agent.Description(), &o),
+		store:      o.store,
+		opts:       o,
+		pushClient: o.pushClient,
+		baseCtx:    baseCtx,
+		stop:       stop,
 	}
 }
 
