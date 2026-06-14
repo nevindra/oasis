@@ -242,7 +242,7 @@ Same signature as `HybridRetriever.Retrieve`. Also implements `core.Sourced`.
 | `WithChildTokens(n)` | 256 | Max tokens per child chunk. |
 | `WithBatchSize(n)` | 64 | Chunks per `Embed()` call. |
 | `WithMaxContentSize(n)` | 50 MB | Reject files larger than this. `0` disables. |
-| `WithExtractor(ct, e)` | — | Register or override an extractor for a `ContentType`. |
+| `WithExtractor(ct, e)` | — | Register or override an extractor for a `ContentType`. Use this to delegate PDF/DOCX parsing to an external parser (liteparse, LlamaParse) — see Recipe 8 in [examples.md](examples.md). |
 | `WithGraphExtraction(p)` | disabled | LLM-based relationship extraction using `core.Provider` `p`. |
 | `WithSequenceEdges(true)` | `false` | Add `RelSequence` edges between consecutive chunks (no LLM). |
 | `WithContextualEnrichment(p)` | disabled | Prepend LLM-generated context to each chunk before embedding. |

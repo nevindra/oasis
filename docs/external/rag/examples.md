@@ -268,3 +268,73 @@ ing.IngestText(ctx, novelText, "novel-draft", "My Novel")
 
 - For technical documents with clear heading structure, `NewMarkdownChunker()` is usually better than `SemanticChunker` and requires no embedding calls at ingest time.
 - Pair `SemanticChunker` with `WithContextualEnrichment` for maximum retrieval precision on noisy long-form content.
+
+---
+
+## Recipe 8: Delegate PDF parsing to an external parser (liteparse / LlamaParse)
+
+**Goal:** Use a best-in-class document parser for scanned pages, tables, and multi-column layouts instead of the built-in `PDFExtractor`.
+
+The built-in `PDFExtractor` does pure-Go text extraction — fast and dependency-light, and the right default for clean, digital-native PDFs. But Go has no strong story for OCR or layout reconstruction, so for scanned documents, complex tables, or multi-column pages, delegate to a parser built for the job. Tools like [liteparse](https://github.com/run-llama/liteparse) (Rust + PDFium + Tesseract, exposed via its Node/Python bindings) or LlamaParse (cloud API) run as a sidecar; you reach them through the `Extractor` seam.
+
+```go
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "time"
+
+    "github.com/nevindra/oasis/core"
+    "github.com/nevindra/oasis/ingest"
+)
+
+// LiteparseExtractor sends raw bytes to a liteparse sidecar over HTTP and
+// returns the parsed text. It satisfies ingest.Extractor.
+type LiteparseExtractor struct {
+    Endpoint string       // e.g. "http://liteparse:8080/parse"
+    Client   *http.Client
+}
+
+func (e LiteparseExtractor) Extract(content []byte) (string, error) {
+    resp, err := e.Client.Post(e.Endpoint, "application/octet-stream", bytes.NewReader(content))
+    if err != nil {
+        return "", fmt.Errorf("liteparse: %w", err)
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode != http.StatusOK {
+        return "", fmt.Errorf("liteparse: status %d", resp.StatusCode)
+    }
+    var out struct {
+        Text string `json:"text"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+        return "", fmt.Errorf("liteparse decode: %w", err)
+    }
+    return out.Text, nil
+}
+
+func newIngestor(store core.Store, emb core.EmbeddingProvider) *ingest.Ingestor {
+    parser := LiteparseExtractor{
+        Endpoint: "http://liteparse:8080/parse",
+        Client:   &http.Client{Timeout: 60 * time.Second},
+    }
+    return ingest.NewIngestor(store, emb,
+        ingest.WithExtractor(ingest.TypePDF, parser),   // overrides the built-in PDFExtractor
+        ingest.WithExtractor(ingest.TypeDOCX, parser),  // route DOCX through the same parser
+        ingest.WithExtractRetries(2),                   // sidecar may transiently fail
+    )
+}
+```
+
+**Plain-English walkthrough:**
+
+- `WithExtractor(ct, e)` overwrites the extractor for that one content type. Everything else (`.md`, `.csv`, `.json`, `.html`, `.txt`) keeps using the built-in extractors, which Go handles well. You opt out of in-process parsing only where it's weak.
+- `Extract` has no `context.Context`, so propagate timeouts via the `http.Client` (`Timeout: 60s` above), not `ctx`. `WithExtractRetries(2)` retries transient sidecar failures with exponential backoff.
+- The rest of the pipeline (chunk → embed → store → retrieve) is unchanged — the parser swap is invisible downstream because every stage talks through `core.Chunk`.
+
+**Variations:**
+
+- **Preserve page metadata.** If the sidecar returns per-page text, implement `MetadataExtractor` (`ExtractWithMeta(content []byte) (ingest.ExtractResult, error)`) instead of `Extract`. The ingestor prefers it automatically and attaches page numbers/headings to chunks.
+- **LlamaParse / any cloud API.** Same shape — point `Endpoint` at the API and add an auth header in `Extract`. The `Extractor` seam doesn't care whether the parser is a local sidecar or a remote service.
+- **Keep both.** Leaving the default in place means an ingestor constructed *without* the override still parses PDFs (with the weaker built-in). Register `WithExtractor` at every ingestor construction site if PDF quality matters across your app.
