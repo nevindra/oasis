@@ -12,6 +12,7 @@ A Store is the persistence backbone for an Oasis agent: one interface that holds
 | **Memory items** | Typed key/value facts about an agent's world | Long-term agent memory |
 | **Scheduled actions** | Cron-style tasks the agent owns | "Remind me every Monday" |
 | **Config** | Arbitrary key-value pairs | Per-agent settings, feature flags |
+| **Scores** | Scorer results (eval) | Quality-eval history |
 
 ---
 
@@ -125,8 +126,9 @@ Both `store/sqlite` and `store/postgres` implement all of these. Discover them a
 | `oasis.DocumentGetter` | `GetDocumentsByIDs` — batch document lookup, avoids N+1 | `s.(oasis.DocumentGetter)` |
 | `oasis.DocumentMetaLister` | `ListDocumentMeta` — titles and timestamps without loading `Content` | `s.(oasis.DocumentMetaLister)` |
 | `oasis.CheckpointStore` | `SaveCheckpoint` / `LoadCheckpoint` / `DeleteCheckpoint` / `ListCheckpoints` — resumable ingest | `s.(oasis.CheckpointStore)` |
+| `core.ScoreStore` | `SaveScores` / `ListScores` / `GetScore` / `DeleteScores` — quality-eval score persistence (see [eval](../eval/index.md)) | `s.(core.ScoreStore)` |
 
-All interfaces are re-exported from the root `oasis` package. You do not need to import `core` directly.
+The `oasis.*` interfaces above are re-exported from the root `oasis` package — you do not need to import `core` directly for those. `core.ScoreStore` is the exception: it lives in `github.com/nevindra/oasis/core` and is not re-exported at root; import `core` directly when type-asserting it.
 
 ### Choosing between `SearchMessages` and `SearchChunks`
 

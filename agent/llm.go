@@ -98,12 +98,18 @@ func (a *LLMAgent) executeRaw(ctx context.Context, task AgentTask, opts ...core.
 		defer cancel()
 	}
 	ctx = WithTaskContext(ctx, task)
-	return a.ExecuteWithSpan(ctx, task, rcfg.Stream, "LLMAgent", "agent",
+	res, err := a.ExecuteWithSpan(ctx, task, rcfg.Stream, "LLMAgent", "agent",
 		func(ctx context.Context, task AgentTask, ch chan<- core.StreamEvent) *LoopConfig {
 			return a.buildLoopConfig(ctx, task, ch, ro)
 		},
 		runLoop,
 	)
+	// Score the assembled result on success. Inline scorers mutate res.Scores;
+	// async scorers are submitted to the bounded pool. No-op when none attached.
+	if err == nil && a.HasScorers() {
+		res = a.RunScorers(ctx, task.Input, res)
+	}
+	return res, err
 }
 
 // executeRawProxy wraps *LLMAgent so middleware sees a core.Agent interface

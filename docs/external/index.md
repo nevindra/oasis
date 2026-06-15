@@ -95,4 +95,5 @@ func main() {
 | **Operations** | [observability](./observability/index.md) | Structured logging, tracing, and OTEL integration |
 | | [processors](./processors/index.md) | Pre/post hooks for guardrails, PII redaction, and HITL |
 | | [store](./store/index.md) | Persistent storage backends (SQLite, PostgreSQL + pgvector) |
+| | [eval](./eval/index.md) | Score agent output quality — custom scorers, sampling, persistence |
 | **Integrations** | [mcp](./mcp/index.md) | MCP client/server — expose tools to AI assistants; consume external MCP servers |

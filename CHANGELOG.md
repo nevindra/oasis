@@ -6,42 +6,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
-### Added
-
-- **Tool payload transforms** — `core.ToolTransform` / `core.SinkTransform` let a
-  tool's payload be rewritten independently per sink: `Model` (what the LLM sees),
-  `Display` (what the UI streams), and `Transcript` (what is persisted). Attach via
-  `agent.ToolConfig.Transforms` (by tool name) or `agent.ToolConfig.TransformMatchers`
-  (by predicate). Human-facing sinks fail closed on transform panic (a placeholder
-  is shown, never the raw payload); the model sink fails open.
-
-### Removed
-
-- **Breaking:** `agent.TransformMiddleware` is removed; its job is now the `Model`
-  sink of `core.ToolTransform`.
-
-  Migration — model-only (the usual intent):
-
-  ```go
-  // before
-  agent.ToolConfig{Middleware: []core.ToolMiddleware{agent.TransformMiddleware(fn)}}
-  // after
-  agent.ToolConfig{Transforms: map[string]core.ToolTransform{
-      "<tool>": {Model: &core.SinkTransform{Result: fn}}}}
-  ```
-
-  The old middleware ran before the sink split, so it affected *all* sinks for
-  *all* tools. To reproduce that exactly:
-
-  ```go
-  agent.ToolConfig{TransformMatchers: []agent.TransformMatcher{{
-      Match: func(string) bool { return true },
-      Transform: core.ToolTransform{
-          Model:      &core.SinkTransform{Result: fn},
-          Display:    &core.SinkTransform{Result: fn},
-          Transcript: &core.SinkTransform{Result: fn},
-      }}}}
-  ```
 
 ## [1.0.0] - 2026-06-14
 
@@ -83,6 +47,31 @@ below are one-time corrections made deliberately before the freeze.
 - **MCP client: filesystem roots.** `StdioConfig.Roots []Root` declares filesystem boundaries per server. The client advertises the roots capability during `initialize` and answers server-initiated `roots/list` requests automatically. New type: `Root{URI, Name}`. Stdio only; HTTP ignores the field.
 - **MCP: new client-primitive observability.** New `Event` fields `URI` (for `EventResourceUpdated`), `Progress`/`Total`/`Message` (for `EventProgress`), `Level`/`Message` (for `EventLog`); new `EventType` constants `EventProgress`, `EventLog`, `EventResourceUpdated`, `EventResourceListChanged`, `EventPromptListChanged`; and the `ErrUnsupported` sentinel returned by capability methods when the server didn't advertise the capability or the transport can't support it.
 - **MCP framer: server-initiated message routing.** The stdio framer now classifies inbound messages as responses (existing hot path, unchanged), notifications (no id → `onNotify` hook), or server→client requests (id + method → `onRequest` hook, answered inline). Answers `ping` automatically; answers `roots/list` with the configured roots.
+- **Evals & scorers** — quality evaluation for agent output. A single-method
+  `core.Scorer` interface (`ID` + `Score`), a `core.Score` result with a typed
+  `Details` (`json.RawMessage`, no `any`), and a `core.ScorerRun` input that reuses
+  the existing `IterationTrace`/`StepTrace` trajectory data. Attach scorers with
+  `agent.WithScorers`: hybrid execution runs deterministic scorers inline (results
+  land on the new `AgentResult.Scores` field) and scorers implementing
+  `core.AsyncScorer` in a bounded, drop-on-full background pool that drains on
+  `Close`. Per-scorer `core.Sampling` gates LIVE runs. An optional `core.ScoreStore`
+  capability — implemented by the SQLite and Postgres backends (new `scores` table)
+  — persists async results, and an optional `core.ScoreSink` (`agent.WithScoreSink`)
+  forwards them to external eval platforms. The `eval` package ships 8 deterministic
+  scorers (`ExactMatch`, `Contains`, `RegexMatch`, `KeywordCoverage`, `Completeness`,
+  `ContentSimilarity`, `ToolCallAccuracy`, `Trajectory`) and 12 LLM-judge scorers
+  (`AnswerRelevancy`, `Faithfulness`, `Hallucination`, `AnswerSimilarity`,
+  `ContextPrecision`, `ContextRelevance`, `Bias`, `Toxicity`, `PromptAlignment`,
+  `ToolCallAccuracyLLM`, `TrajectoryLLM`, `Rubric`) on a shared LLM-judge base that
+  requests structured `{score, reason}` JSON via `core.ResponseSchema`;
+  `eval.RunEvals` drives any `core.Agent` over a dataset with bounded concurrency
+  and returns an `EvalReport` (per-scorer mean/min/max/p50/p95) for CI gating.
+- **Tool payload transforms** — `core.ToolTransform` / `core.SinkTransform` let a
+  tool's payload be rewritten independently per sink: `Model` (what the LLM sees),
+  `Display` (what the UI streams), and `Transcript` (what is persisted). Attach via
+  `agent.ToolConfig.Transforms` (by tool name) or `agent.ToolConfig.TransformMatchers`
+  (by predicate). Human-facing sinks fail closed on transform panic (a placeholder
+  is shown, never the raw payload); the model sink fails open.
 
 ### Changed
 
@@ -140,6 +129,31 @@ below are one-time corrections made deliberately before the freeze.
   along with the deprecated `NewBuiltinSkillProvider` constructor. The framework
   ships no skill content; applications supply skills via `skills.FromDir` or a
   custom `SkillProvider`.
+- **Breaking:** `agent.TransformMiddleware` is removed; its job is now the `Model`
+  sink of `core.ToolTransform`.
+
+  Migration — model-only (the usual intent):
+
+  ```go
+  // before
+  agent.ToolConfig{Middleware: []core.ToolMiddleware{agent.TransformMiddleware(fn)}}
+  // after
+  agent.ToolConfig{Transforms: map[string]core.ToolTransform{
+      "<tool>": {Model: &core.SinkTransform{Result: fn}}}}
+  ```
+
+  The old middleware ran before the sink split, so it affected *all* sinks for
+  *all* tools. To reproduce that exactly:
+
+  ```go
+  agent.ToolConfig{TransformMatchers: []agent.TransformMatcher{{
+      Match: func(string) bool { return true },
+      Transform: core.ToolTransform{
+          Model:      &core.SinkTransform{Result: fn},
+          Display:    &core.SinkTransform{Result: fn},
+          Transcript: &core.SinkTransform{Result: fn},
+      }}}}
+  ```
 
 ### Fixed
 

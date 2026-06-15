@@ -278,6 +278,23 @@ func (s *Store) Init(ctx context.Context) error {
 			created_at BIGINT NOT NULL,
 			updated_at BIGINT NOT NULL
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS scores (
+			id TEXT PRIMARY KEY,
+			scorer_id TEXT NOT NULL DEFAULT '',
+			run_id TEXT NOT NULL DEFAULT '',
+			entity_id TEXT NOT NULL DEFAULT '',
+			entity_type TEXT NOT NULL DEFAULT '',
+			input TEXT NOT NULL DEFAULT '',
+			output TEXT NOT NULL DEFAULT '',
+			value DOUBLE PRECISION NOT NULL DEFAULT 0,
+			reason TEXT NOT NULL DEFAULT '',
+			details BYTEA,
+			source TEXT NOT NULL DEFAULT '',
+			created_at BIGINT NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_scores_entity ON scores(entity_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_scores_scorer ON scores(scorer_id)`,
 	)
 
 	for _, stmt := range stmts {

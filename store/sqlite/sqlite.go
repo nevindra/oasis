@@ -172,6 +172,27 @@ func (s *Store) Init(ctx context.Context) error {
 		return fmt.Errorf("create table: %w", err)
 	}
 
+	// Scores (eval/scorer results)
+	_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS scores (
+		id TEXT PRIMARY KEY,
+		scorer_id TEXT,
+		run_id TEXT,
+		entity_id TEXT,
+		entity_type TEXT,
+		input TEXT,
+		output TEXT,
+		value REAL,
+		reason TEXT,
+		details BLOB,
+		source TEXT,
+		created_at INTEGER
+	)`)
+	if err != nil {
+		return fmt.Errorf("create table: %w", err)
+	}
+	_, _ = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_scores_entity ON scores(entity_id)`)
+	_, _ = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_scores_scorer ON scores(scorer_id)`)
+
 	// Migrations (best-effort, silent fail if already applied)
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE scheduled_actions ADD COLUMN skill_id TEXT")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE chunks ADD COLUMN parent_id TEXT")

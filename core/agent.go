@@ -122,6 +122,11 @@ type AgentResult struct {
 	// Iterations records per-iteration timing and usage. One entry per
 	// LLM call. Nil for runs that hit cancellation before the first call.
 	Iterations []IterationTrace `json:"iterations,omitempty"`
+	// Scores carries inline (deterministic) scorer results attached after the
+	// run when WithScorers configured inline scorers. Async (LLM-judge) scores
+	// are NOT here — they post-date the return and live in the ScoreStore /
+	// ScoreSink only. Nil when no inline scorer ran.
+	Scores []Score `json:"scores,omitempty"`
 }
 
 // ModelFunc resolves the LLM provider per-request.

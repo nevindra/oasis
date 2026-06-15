@@ -62,6 +62,10 @@ type Runtime struct {
 	processors *processor.Chain
 	mem        memory.AgentMemory
 
+	// scorePool runs async scorers off the hot path. Nil when no scorers are
+	// attached. Drained in Close.
+	scorePool *scorerPool
+
 	// Cached / computed at build time.
 	cachedToolDefs          []core.ToolDefinition
 	activeSkillInstructions string
@@ -112,6 +116,12 @@ func Init(c *Runtime, name, description string, provider core.Provider, cfg *Con
 		}
 	}
 	c.mem.Init(memCfg)
+
+	// Wire the async scorer pool when scorers are attached. The pool persists to
+	// ScoreStore / ScoreSink; inline scorers run synchronously in runScorers.
+	if len(cfg.Scorers) > 0 {
+		c.scorePool = newScorerPool(defaultScorerWorkers, defaultScorerBuffer, cfg.ScoreStore, cfg.ScoreSink, cfg.Logger)
+	}
 
 	// Wrap every registered tool with the effective middleware chain.
 	// The same chain is reused for dynamically-resolved tools (see
@@ -192,7 +202,11 @@ func (c *Runtime) Processors() *processor.Chain { return c.processors }
 
 // Close waits for all in-flight background persist goroutines and releases
 // memory orchestrator resources.
-func (c *Runtime) Close() error { return c.mem.Close() }
+func (c *Runtime) Close() error {
+	// Drain in-flight async scores before tearing down (nil-safe).
+	c.scorePool.close()
+	return c.mem.Close()
+}
 
 // Generation returns a deep copy of this agent's current Generation parameters.
 // Mutating fields on the returned value (including pointed-to data) does not

@@ -158,6 +158,15 @@ type Config struct {
 	// Metadata is shallow-merged with RunOptions.Metadata at run time.
 	// Values are strings — callers needing structured data should JSON-encode it.
 	Metadata map[string]string
+
+	// --- Eval / scorers (set via agent.WithScorers / WithScoreStore / WithScoreSink) ---
+
+	// Scorers attached to this agent. Empty when none.
+	Scorers []core.ScorerConfig
+	// ScoreStore persists async scorer results when set. Optional.
+	ScoreStore core.ScoreStore
+	// ScoreSink forwards persisted scorer results to an external platform. Optional.
+	ScoreSink core.ScoreSink
 }
 
 // ResolveToolPolicy implements ServeMux-style policy lookup: exact-name first,

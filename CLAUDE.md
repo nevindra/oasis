@@ -27,6 +27,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Getting started flow     | [docs/external/getting-started/](docs/external/getting-started/index.md)      |
 | A2A protocol (server/client) | [docs/external/a2a/](docs/external/a2a/index.md)                          |
 | MCP client integration   | [docs/external/mcp/](docs/external/mcp/index.md)                              |
+| Evals / scorers          | [docs/external/eval/](docs/external/eval/index.md)                            |
 
 When your change affects multiple areas, search for all docs referencing the component name and update each one. Keep docs in sync with code.
 
