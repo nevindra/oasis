@@ -308,6 +308,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 	}
 	state.totalUsage.InputTokens += resp.Usage.InputTokens
 	state.totalUsage.OutputTokens += resp.Usage.OutputTokens
+	core.AddRunUsage(iterCtx, ep.llmModel, resp.Usage)
 
 	captureProviderMeta(state, &resp)
 
@@ -742,7 +743,7 @@ func callLLM(fwdCtx, spanCtx context.Context, cfg *LoopConfig, req core.ChatRequ
 	}
 
 	if useStream {
-		iterCh, wait := newObjectStreamForwarder(fwdCtx, ch, defaultIterChBufSize, state, cfg.ResponseSchema)
+		iterCh, wait := newObjectStreamForwarder(fwdCtx, ch, defaultIterChBufSize, state, cfg.ResponseSchema, cfg.Processors)
 		resp, err = provider.ChatStream(llmCtx, req, iterCh)
 		endLLMSpan()
 		wait()

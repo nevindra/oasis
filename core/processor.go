@@ -30,6 +30,19 @@ type PostToolProcessor interface {
 	PostTool(ctx context.Context, call ToolCall, result *ToolResult) error
 }
 
+// StreamProcessor runs on each streamed text/thinking delta before it reaches
+// the caller's channel. It is an optional capability: processors opt in by
+// implementing it, and the chain invokes it only for registered implementers.
+//
+// Return the event (possibly mutated) to forward it, nil to drop it, or an
+// error to fail the stream. Return *ErrHalt to stop the stream and surface a
+// canned response. The hook is per-event and stateless from the framework's
+// view; a processor needing cross-chunk context manages its own buffering.
+// Must be safe for concurrent use.
+type StreamProcessor interface {
+	PostChunk(ctx context.Context, ev *StreamEvent) (*StreamEvent, error)
+}
+
 // ErrHalt signals that a processor wants to stop agent execution and return
 // a specific response to the caller.
 //

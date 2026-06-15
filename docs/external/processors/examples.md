@@ -8,24 +8,24 @@ complete enough to drop into a real file with the right imports.
 ## 1. Stack built-in guardrails
 
 The most common setup: injection detection, length limits, keyword blocking, and
-a tool call cap. All four guards compose via `WithPreProcessors` and
-`WithPostProcessors`.
+a tool call cap. Guards live in `github.com/nevindra/oasis/guardrail`; compose
+them via `WithPreProcessors` and `WithPostProcessors` like any processor.
 
 ```go
 import (
-    "regexp"
     "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/guardrail"
 )
 
-agent := oasis.NewLLMAgent("safe", "Safe agent", provider,
+agent := oasis.NewAgent("safe", "Safe agent", provider,
     oasis.WithPreProcessors(
-        oasis.NewInjectionGuard(),                      // block injection attempts
-        oasis.NewContentGuard(oasis.MaxInputLength(5000)), // reject long input
-        oasis.NewKeywordGuard("DROP TABLE", "rm -rf"),  // block dangerous keywords
+        guardrail.NewInjectionGuard(),                          // block injection attempts
+        guardrail.NewContentGuard(guardrail.MaxInputLength(5000)), // reject long input
+        guardrail.NewKeywordGuard("DROP TABLE", "rm -rf"),      // block dangerous keywords
     ),
     oasis.WithPostProcessors(
-        oasis.NewContentGuard(oasis.MaxOutputLength(10_000)), // cap output
-        oasis.NewMaxToolCallsGuard(3),                         // keep first 3 tool calls
+        guardrail.NewContentGuard(guardrail.MaxOutputLength(10_000)), // cap output
+        guardrail.NewMaxToolCallsGuard(3),                             // keep first 3 tool calls
     ),
 )
 ```
@@ -42,6 +42,11 @@ Implement `PreProcessor` to write a domain-specific check. Return `*ErrHalt`
 to stop; return `nil` to pass.
 
 ```go
+import (
+    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/guardrail"
+)
+
 type CompanyPolicyGuard struct{}
 
 func (g *CompanyPolicyGuard) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
@@ -61,9 +66,9 @@ func (g *CompanyPolicyGuard) PreLLM(_ context.Context, req *oasis.ChatRequest) e
 Register it alongside the built-in guards:
 
 ```go
-agent := oasis.NewLLMAgent("corp", "Corporate agent", provider,
+agent := oasis.NewAgent("corp", "Corporate agent", provider,
     oasis.WithPreProcessors(
-        oasis.NewInjectionGuard(),
+        guardrail.NewInjectionGuard(),
         &CompanyPolicyGuard{},
     ),
 )
@@ -333,21 +338,29 @@ A production setup combining guardrails, custom logic, and a rate-limited
 provider.
 
 ```go
+import (
+    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/agent"
+    "github.com/nevindra/oasis/guardrail"
+    "github.com/nevindra/oasis/provider"
+    "github.com/nevindra/oasis/provider/gemini"
+)
+
 base := gemini.New(apiKey, "gemini-2.0-flash")
 llm := provider.Chain(
     agent.RetryMiddleware(agent.RetryMaxAttempts(5)),
     oasis.RateLimitMiddleware(oasis.RPM(60), oasis.TPM(100_000)),
 )(base)
 
-agent := oasis.NewAgent("prod", "Production agent", llm,
+ag := oasis.NewAgent("prod", "Production agent", llm,
     oasis.WithPreProcessors(
-        oasis.NewInjectionGuard(oasis.ScanAllMessages()),
-        oasis.NewContentGuard(oasis.MaxInputLength(8000)),
+        guardrail.NewInjectionGuard(guardrail.ScanAllMessages()),
+        guardrail.NewContentGuard(guardrail.MaxInputLength(8000)),
         &CompanyPolicyGuard{},
         &PIIRedactor{},
     ),
     oasis.WithPostProcessors(
-        oasis.NewMaxToolCallsGuard(5),
+        guardrail.NewMaxToolCallsGuard(5),
         &ToolFilter{Blocked: map[string]bool{"legacy_api": true}},
     ),
     oasis.WithPostToolProcessors(
@@ -360,6 +373,271 @@ agent := oasis.NewAgent("prod", "Production agent", llm,
 Processors run in the listed order at each hook point. The rate limiter acts
 at the provider level — it is not a processor, but it controls whether the LLM
 call is made at all.
+
+---
+
+---
+
+## 11. Cost guard — spending ceiling per run
+
+Halt (or warn) when cumulative spend across all models in a run exceeds a
+budget. Pricing is injected from the static catalog; no API calls needed.
+
+```go
+import (
+    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/guardrail"
+    "github.com/nevindra/oasis/provider/catalog"
+)
+
+guard := guardrail.NewCostGuard(5.0,                          // $5 ceiling
+    guardrail.WithPricing(catalog.PricingMap()),               // static registry prices
+    guardrail.CostResponse("Budget limit reached. Goodbye."), // custom halt message
+)
+
+// Register as both pre and post to catch over-budget conditions before
+// and after each LLM call.
+ag := oasis.NewAgent("budget-agent", "...", provider,
+    oasis.WithPreProcessors(guard),
+    oasis.WithPostProcessors(guard),
+)
+```
+
+To log instead of halt (useful in dev):
+
+```go
+guard := guardrail.NewCostGuard(5.0,
+    guardrail.WithPricing(catalog.PricingMap()),
+    guardrail.WarnOnly(),
+)
+```
+
+To supply a hand-crafted pricing table (e.g. for a private deployment):
+
+```go
+import "github.com/nevindra/oasis/core"
+
+prices := map[string]core.ModelPricing{
+    "my-model": {InputPerMillion: 1.50, OutputPerMillion: 6.00},
+}
+guard := guardrail.NewCostGuard(10.0, guardrail.WithPricing(prices))
+```
+
+---
+
+## 12. Token-budget guard — trim context before it overflows
+
+`TokenBudgetGuard` is a `PreProcessor` that drops oldest non-system messages
+until the heuristic token estimate fits the budget. Use it alongside
+`compaction` (which summarizes) or instead of it when lossless trimming is
+preferred.
+
+```go
+import (
+    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/guardrail"
+)
+
+guard := guardrail.NewTokenBudgetGuard(8000,
+    guardrail.PreserveLast(2),  // always keep the 2 most recent messages
+)
+
+ag := oasis.NewAgent("long-context-agent", "...", provider,
+    oasis.WithPreProcessors(guard),
+)
+```
+
+To plug in a real tokenizer (e.g. tiktoken):
+
+```go
+guard := guardrail.NewTokenBudgetGuard(16_000,
+    guardrail.WithEstimator(func(msgs []core.ChatMessage) int {
+        // call your tokenizer and return the real token count
+        return myTokenizer.CountMessages(msgs)
+    }),
+)
+```
+
+---
+
+## 13. Redaction guard — PII and secrets
+
+`RedactionGuard` scrubs sensitive data from requests, responses, and streamed
+deltas. With `StrategyRedact` (default), matches are replaced with labeled
+placeholders. With `StrategyBlock`, the first match halts the run.
+
+**Preset redaction on all phases:**
+
+```go
+import (
+    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/guardrail"
+)
+
+guard := guardrail.NewRedactionGuard(
+    guardrail.RedactPresets("pii", "secrets"),
+)
+
+// Register on both input and output phases.
+ag := oasis.NewAgent("safe-agent", "...", provider,
+    oasis.WithPreProcessors(guard),
+    oasis.WithPostProcessors(guard),
+)
+```
+
+**Custom rule:**
+
+```go
+import "regexp"
+
+guard := guardrail.NewRedactionGuard(
+    guardrail.RedactPresets("pii"),
+    guardrail.RedactRule("internal_id", regexp.MustCompile(`\bINT-\d{6}\b`)),
+    guardrail.RedactPlaceholder(func(kind string) string {
+        return "{{" + kind + "}}"
+    }),
+)
+```
+
+**Block strategy — halt on any match:**
+
+```go
+guard := guardrail.NewRedactionGuard(
+    guardrail.RedactPresets("secrets"),
+    guardrail.RedactStrategy(guardrail.StrategyBlock),
+    guardrail.RedactPhases(guardrail.PhaseInput), // input only
+)
+```
+
+**Streaming redaction** — register the same guard as a `StreamProcessor` so
+it runs on each text delta before it reaches the caller's channel:
+
+```go
+import "github.com/nevindra/oasis/processor"
+
+guard := guardrail.NewRedactionGuard(guardrail.RedactPresets("pii"))
+
+chain := processor.NewChain()
+chain.AddPre(guard)     // scrub requests
+chain.AddPost(guard)    // scrub assembled response
+chain.AddStream(guard)  // scrub each streamed chunk
+
+// Use the chain with agent.WithProcessors (if your agent option wiring supports it)
+// or register the guard individually via WithPreProcessors / WithPostProcessors.
+```
+
+> **Streaming limitation:** `PostChunk` is stateless and per-chunk. A secret
+> or PII value split across two consecutive deltas is not caught. Add a
+> `PostLLM` guard for guaranteed coverage of assembled output.
+>
+> `PostChunk` does not redact `EventObjectDelta`/`EventObjectFinish` snapshots
+> from structured-output (ResponseSchema) responses. Use a `PostProcessor` for
+> those.
+
+---
+
+## 14. StreamProcessor — custom per-chunk hook
+
+Implement `core.StreamProcessor` to mutate, filter, or halt individual streamed
+deltas before they reach the caller.
+
+```go
+import "github.com/nevindra/oasis/core"
+
+// UpperCaseStream uppercases every text delta (contrived but illustrative).
+type UpperCaseStream struct{}
+
+func (u *UpperCaseStream) PostChunk(_ context.Context, ev *core.StreamEvent) (*core.StreamEvent, error) {
+    if ev.Type == core.EventTextDelta {
+        ev.Content = strings.ToUpper(ev.Content)
+    }
+    return ev, nil
+}
+
+// Drop a chunk by returning nil.
+type DropEmptyChunks struct{}
+
+func (d *DropEmptyChunks) PostChunk(_ context.Context, ev *core.StreamEvent) (*core.StreamEvent, error) {
+    if ev.Content == "" {
+        return nil, nil // dropped — not forwarded to the caller
+    }
+    return ev, nil
+}
+```
+
+Register via `processor.Chain`:
+
+```go
+import "github.com/nevindra/oasis/processor"
+
+chain := processor.NewChain()
+chain.AddStream(&UpperCaseStream{})
+chain.AddStream(&DropEmptyChunks{})
+// chain.RunPostChunk(ctx, ev) is called by the agent forwarder for each delta.
+```
+
+> **Streaming halt limitation:** returning `*core.ErrHalt` from `PostChunk`
+> emits an `EventHalt` to the caller's channel and stops further chunk
+> forwarding, but it does **not** abort the in-flight LLM call or stop
+> billing. The model continues generating on the server side. For a hard halt
+> that terminates the run, use a non-streaming `PostLLM` guard instead.
+
+---
+
+## 15. `ask_user` multi-select
+
+When `WithInputHandler` is configured, the LLM can call `ask_user` with
+`multi_select: true` to let the user pick multiple options. The handler receives
+`InputRequest.MultiSelect == true` and returns selected items in
+`InputResponse.Values`. The agent marshals them to a JSON array and returns it
+to the LLM.
+
+Handler implementation:
+
+```go
+import "github.com/nevindra/oasis/agent"
+
+type CLIInputHandler struct{}
+
+func (h *CLIInputHandler) RequestInput(ctx context.Context, req agent.InputRequest) (agent.InputResponse, error) {
+    fmt.Println(req.Question)
+    for i, opt := range req.Options {
+        fmt.Printf("  [%d] %s\n", i+1, opt)
+    }
+    if req.MultiSelect {
+        // collect multiple selections
+        fmt.Print("Enter numbers separated by commas: ")
+        line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+        var selected []string
+        for _, part := range strings.Split(strings.TrimSpace(line), ",") {
+            n, err := strconv.Atoi(strings.TrimSpace(part))
+            if err == nil && n >= 1 && n <= len(req.Options) {
+                selected = append(selected, req.Options[n-1])
+            }
+        }
+        return agent.InputResponse{Values: selected}, nil
+    }
+    // single select
+    fmt.Print("Enter number: ")
+    line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+    n, _ := strconv.Atoi(strings.TrimSpace(line))
+    if n >= 1 && n <= len(req.Options) {
+        return agent.InputResponse{Value: req.Options[n-1]}, nil
+    }
+    return agent.InputResponse{Value: strings.TrimSpace(line)}, nil
+}
+```
+
+Wire it up:
+
+```go
+ag := oasis.NewAgent("survey-agent", "...", provider,
+    oasis.WithInputHandler(&CLIInputHandler{}),
+)
+```
+
+When the LLM calls `ask_user` with multi-select, the result returned to the LLM
+is a JSON array, for example `["security", "cost", "performance"]`.
 
 ---
 

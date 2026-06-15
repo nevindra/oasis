@@ -83,11 +83,11 @@ string as the output and a nil Go error (no exception, no panic). Return
 `oasis.Suspend(payload)` to pause the loop and surface a `*ErrSuspended` to the
 caller, who can later call `Resume` to continue or `Release` to abandon.
 
-**Guardrails are processors.** The four built-in guards in the `guardrail`
-package (`InjectionGuard`, `ContentGuard`, `KeywordGuard`,
-`MaxToolCallsGuard`) are ordinary structs that implement the processor
-interfaces. There is no separate guardrail runtime. You compose them with your
-own processors using the same registration options.
+**Guardrails are processors.** The built-in guards in the `guardrail`
+package (`InjectionGuard`, `ContentGuard`, `KeywordGuard`, `MaxToolCallsGuard`,
+`CostGuard`, `TokenBudgetGuard`, `RedactionGuard`) are ordinary structs that
+implement the processor interfaces. There is no separate guardrail runtime. You
+compose them with your own processors using the same registration options.
 
 **HITL is Suspend.** Human-in-the-loop approval works through the same
 `Suspend`/`Resume` mechanism. A `PostProcessor` calls
@@ -131,9 +131,11 @@ decision to a human, waits for their response, then calls
 
 ## Guardrails
 
-Oasis ships four guards in `github.com/nevindra/oasis/guardrail`, re-exported
-from the root `oasis` package. Each is an ordinary processor; compose them with
-`WithPreProcessors` and `WithPostProcessors` like any other.
+Oasis ships seven guards in `github.com/nevindra/oasis/guardrail`. Each is
+an ordinary processor; compose them with `WithPreProcessors`,
+`WithPostProcessors`, and `WithPostToolProcessors` like any other. Import the
+package directly — guardrail constructors are not re-exported from the root
+`oasis` package.
 
 | Guard | Hook | What it does |
 |---|---|---|
@@ -141,11 +143,136 @@ from the root `oasis` package. Each is an ordinary processor; compose them with
 | `ContentGuard` | Pre + Post | Rune-based input and output length limits (Unicode-safe). Zero for a limit disables that side. Returns `*ErrHalt` when exceeded. |
 | `KeywordGuard` | PreProcessor | Case-insensitive substring and regex blocklist on user messages. Returns `*ErrHalt` on match. |
 | `MaxToolCallsGuard` | PostProcessor | Trims the tool call list to the first N calls. Degrades silently — no halt. |
+| `CostGuard` | Pre + Post | Per-run, per-model spend ceiling. Prices cumulative token usage against a pricing table and halts when the budget is exceeded. |
+| `TokenBudgetGuard` | PreProcessor | Heuristic token-aware context trimming. Drops oldest non-system messages until the estimated token count fits the budget. Complements compaction (which summarizes; this trims losslessly). |
+| `RedactionGuard` | Pre + Post + Stream | Deterministic regex redaction on input, output, and streamed deltas. Ships built-in presets for PII, secrets, and URLs. |
 
 `InjectionGuard` runs a pre-pass (zero-width char stripping, NFKC
 normalization) before its five layers. Layer 2 (role-override detection) can
 produce false positives on content that contains `user:` at line start; use
 `SkipLayers(2)` if needed.
+
+### Cost guard
+
+`CostGuard` prices the run's cumulative per-model token usage (accumulated by
+the agent loop in the run context) against an injected pricing table and halts
+when the total exceeds the ceiling. It never blocks blind: with no pricing table
+it logs once and stays inactive. Unknown models cost 0 (fail open). The guard
+acts at both `PreLLM` (to catch a resumed run already over budget) and `PostLLM`
+(after each call).
+
+```go
+import (
+    "github.com/nevindra/oasis/guardrail"
+    "github.com/nevindra/oasis/provider/catalog"
+)
+
+guard := guardrail.NewCostGuard(5.0,
+    guardrail.WithPricing(catalog.PricingMap()),
+)
+```
+
+Pricing is injected explicitly via `WithPricing` to keep the `guardrail` package
+free of any catalog dependency. `catalog.PricingMap()` returns a
+`map[string]core.ModelPricing` from the static registry — no API calls needed.
+
+### Token-budget guard
+
+`TokenBudgetGuard` is the cheap, lossless complement to compaction. Compaction
+summarizes; token-budget trimming drops entire messages (oldest first) until the
+heuristic estimate fits the budget.
+
+The default estimator is intentionally hot (~1 token per 3 runes, padded) so
+the guard trims early rather than overflowing a provider context window. Plug in
+a real tokenizer via `WithEstimator`. System messages and the N most recent
+messages (`PreserveLast`) are always protected. Orphaned tool-result messages
+(whose originating tool call was trimmed) are dropped automatically.
+
+```go
+guard := guardrail.NewTokenBudgetGuard(8000,
+    guardrail.PreserveLast(2), // keep the 2 most recent messages
+)
+```
+
+### Redaction guard
+
+`RedactionGuard` applies deterministic, zero-cost regex redaction to request
+messages, response content, and streamed text/thinking deltas. Three strategies:
+
+- `StrategyRedact` (default) — replace each match with `[REDACTED:<kind>]`.
+- `StrategyBlock` — halt the run (`*ErrHalt`) on first match.
+- `StrategyWarn` — log the match, pass through unchanged.
+
+Built-in presets (`"pii"`, `"secrets"`, `"urls"`) cover common patterns; add
+custom rules with `RedactRule`. Control which side is inspected with
+`RedactPhases` (`PhaseBoth`, `PhaseInput`, `PhaseOutput`).
+
+```go
+guard := guardrail.NewRedactionGuard(
+    guardrail.RedactPresets("pii", "secrets"),
+    guardrail.RedactStrategy(guardrail.StrategyRedact),
+)
+```
+
+**Streaming redaction limitation:** `PostChunk` operates per-chunk and has no
+cross-chunk state. A secret split across two consecutive deltas is not caught.
+For guaranteed coverage of streamed output, complement streaming redaction with
+a non-streaming `PostLLM` guard (or accumulate the full response before
+inspecting it).
+
+**Structured output limitation:** `PostChunk` covers `EventTextDelta` and
+`EventThinking` deltas only. It does NOT redact `EventObjectDelta` or
+`EventObjectFinish` snapshots from structured-output (ResponseSchema) responses.
+Use a `PostProcessor` to redact structured output after the full response is
+assembled.
+
+## Streaming processor hook
+
+`core.StreamProcessor` is an optional capability interface that runs on each
+streamed text or thinking delta before it reaches the caller's channel. Guards
+and custom processors opt in by implementing it.
+
+```go
+type StreamProcessor interface {
+    PostChunk(ctx context.Context, ev *core.StreamEvent) (*core.StreamEvent, error)
+}
+```
+
+Register streaming processors via `processor.Chain.AddStream`:
+
+```go
+chain := processor.NewChain()
+chain.AddStream(myRedactionGuard) // runs on EventTextDelta and EventThinking
+```
+
+Or pass the guard directly to both the standard processor hooks and rely on the
+agent's built-in chain wiring (see examples).
+
+**Contract:** return the event (possibly mutated) to forward it, `nil` to drop
+the chunk, or `*core.ErrHalt` to halt the stream. A halt at stream level emits
+an `EventHalt` to the caller's channel but does **not** abort the in-flight LLM
+call or stop billing — the model continues generating. For a hard halt that ends
+the run, use a non-streaming `PostLLM` guard instead.
+
+## `ask_user` multi-select
+
+When `WithInputHandler` is configured, the LLM gains a built-in `ask_user`
+tool. Set `multi_select: true` in the tool call to allow the user to choose
+more than one option from the provided list. The result is returned to the LLM
+as a JSON array.
+
+```json
+{
+  "question": "Which topics should we cover?",
+  "options": ["security", "cost", "performance", "scalability"],
+  "multi_select": true
+}
+```
+
+The `InputRequest` receives `MultiSelect: true`; the handler populates
+`InputResponse.Values` (a `[]string`) with the selected items. The agent
+marshals the values to a JSON array and returns it to the LLM as the tool
+result.
 
 See the [API reference](api.md) for all constructor options.
 
@@ -229,6 +356,11 @@ Use `Suspend` when the human is offline or the approval is asynchronous. Use
 ## Quick example
 
 ```go
+import (
+    "github.com/nevindra/oasis"
+    "github.com/nevindra/oasis/guardrail"
+)
+
 // A custom guardrail that blocks competitor mentions.
 type CompanyGuard struct{}
 
@@ -245,13 +377,13 @@ func (g *CompanyGuard) PreLLM(_ context.Context, req *oasis.ChatRequest) error {
 }
 
 // Wire it up alongside a built-in guardrail.
-agent := oasis.NewLLMAgent("corp", "Corporate assistant", provider,
+agent := oasis.NewAgent("corp", "Corporate assistant", provider,
     oasis.WithPreProcessors(
-        oasis.NewInjectionGuard(),  // built-in: runs first, blocks injection
-        &CompanyGuard{},            // custom: runs second, blocks competitor mentions
+        guardrail.NewInjectionGuard(), // built-in: runs first, blocks injection
+        &CompanyGuard{},               // custom: runs second, blocks competitor mentions
     ),
     oasis.WithPostProcessors(
-        oasis.NewContentGuard(oasis.MaxOutputLength(10_000)), // cap response length
+        guardrail.NewContentGuard(guardrail.MaxOutputLength(10_000)), // cap response length
     ),
 )
 ```

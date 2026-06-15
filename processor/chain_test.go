@@ -261,3 +261,44 @@ func TestErrHaltMessage(t *testing.T) {
 		t.Errorf("Error() = %q, want %q", err.Error(), "processor halted: test halt")
 	}
 }
+
+type dropEmpty struct{}
+
+func (dropEmpty) PostChunk(_ context.Context, ev *core.StreamEvent) (*core.StreamEvent, error) {
+	if ev.Content == "" {
+		return nil, nil // drop
+	}
+	return ev, nil
+}
+
+type upper struct{}
+
+func (upper) PostChunk(_ context.Context, ev *core.StreamEvent) (*core.StreamEvent, error) {
+	ev.Content = ev.Content + "!"
+	return ev, nil
+}
+
+func TestRunPostChunkMutateAndDrop(t *testing.T) {
+	c := NewChain()
+	c.AddStream(dropEmpty{})
+	c.AddStream(upper{})
+
+	out, err := c.RunPostChunk(context.Background(), &core.StreamEvent{Type: core.EventTextDelta, Content: "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out == nil || out.Content != "hi!" {
+		t.Errorf("expected mutated 'hi!', got %+v", out)
+	}
+
+	dropped, err := c.RunPostChunk(context.Background(), &core.StreamEvent{Type: core.EventTextDelta, Content: ""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dropped != nil {
+		t.Errorf("expected nil (dropped), got %+v", dropped)
+	}
+	if !c.HasStream() {
+		t.Error("HasStream should be true")
+	}
+}

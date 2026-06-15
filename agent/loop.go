@@ -59,6 +59,10 @@ func runLoop(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<- cor
 		ctx = WithInputHandlerContext(ctx, cfg.InputHandler)
 	}
 
+	// Run-scoped per-model usage powers the cost guard without leaking state
+	// across runs that reuse the same processor instances.
+	ctx = core.WithRunUsage(ctx)
+
 	// Build initial messages (system prompt + user memory + history + user input).
 	// If ResumeMessages is set (suspend/resume), use those instead.
 	var messages []core.ChatMessage
@@ -165,7 +169,7 @@ func forceSynthesis(ctx context.Context, cfg *LoopConfig, task AgentTask, ch cha
 	var err error
 	synthReq := core.ChatRequest{Messages: state.messages, GenerationParams: cfg.GenParams}
 	if ch != nil {
-		synthCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.ResponseSchema)
+		synthCh, wait := newObjectStreamForwarder(ctx, ch, defaultIterChBufSize, state, cfg.ResponseSchema, cfg.Processors)
 		resp, err = cfg.Provider.ChatStream(synthCtx, synthReq, synthCh)
 		wait()
 	} else {
@@ -181,6 +185,7 @@ func forceSynthesis(ctx context.Context, cfg *LoopConfig, task AgentTask, ch cha
 		"output_tokens", resp.Usage.OutputTokens)
 	state.totalUsage.InputTokens += resp.Usage.InputTokens
 	state.totalUsage.OutputTokens += resp.Usage.OutputTokens
+	core.AddRunUsage(synthCtx, cfg.Provider.Name(), resp.Usage)
 
 	captureProviderMeta(state, &resp)
 

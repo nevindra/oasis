@@ -316,8 +316,9 @@ func askUserToolDef() core.ToolDefinition {
 
 // askUserArgs is the parsed arguments for the ask_user tool call.
 type askUserArgs struct {
-	Question string   `json:"question" describe:"The question to ask the user"`
-	Options  []string `json:"options,omitempty" describe:"Optional suggested answers for the user to choose from"`
+	Question    string   `json:"question" describe:"The question to ask the user"`
+	Options     []string `json:"options,omitempty" describe:"Optional suggested answers for the user to choose from"`
+	MultiSelect bool     `json:"multi_select,omitempty" describe:"Set true to let the user choose multiple options; the result is a JSON array"`
 }
 
 // ExecuteAskUser handles the ask_user special-case tool call.
@@ -337,8 +338,9 @@ func executeAskUser(ctx context.Context, handler InputHandler, agentName string,
 	}
 
 	resp, err := handler.RequestInput(ctx, InputRequest{
-		Question: args.Question,
-		Options:  args.Options,
+		Question:    args.Question,
+		Options:     args.Options,
+		MultiSelect: args.MultiSelect,
 		Metadata: map[string]string{
 			"agent":  agentName,
 			"source": "llm",
@@ -346,6 +348,15 @@ func executeAskUser(ctx context.Context, handler InputHandler, agentName string,
 	})
 	if err != nil {
 		return "", err
+	}
+
+	if args.MultiSelect {
+		// Return a JSON array so the LLM receives a structured multi-answer.
+		b, err := json.Marshal(resp.Values)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
 	}
 	return resp.Value, nil
 }

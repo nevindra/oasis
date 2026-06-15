@@ -1,14 +1,17 @@
 # Processors API Reference
 
-All processor types and helpers are available from the root `oasis` package.
-Guardrail constructors and options also live there. The `ProcessorChain` helper
-is in `github.com/nevindra/oasis/processor` (re-exported as
-`oasis.ProcessorChain`). `InputHandler` and related types live in
+All processor interfaces and helpers are in the root `oasis` package or the
+`core` package. Guardrail constructors and options live in
+`github.com/nevindra/oasis/guardrail` — import it directly; they are not
+re-exported from the root `oasis` package. The `ProcessorChain` helper is in
+`github.com/nevindra/oasis/processor`. `InputHandler` and related types live in
 `github.com/nevindra/oasis/agent`.
 
 ---
 
 ## Core interfaces
+
+All four processor interfaces live in `github.com/nevindra/oasis/core`.
 
 ### `PreProcessor`
 
@@ -48,6 +51,29 @@ Runs after each individual tool execution, before the result is appended to the
 message history. `call` is read-only (the tool call that was made). `result` is
 a pointer — modify it to redact, transform, or annotate the output. Return
 `*ErrHalt` to halt after this result. Must be safe for concurrent use.
+
+### `StreamProcessor`
+
+```go
+// import "github.com/nevindra/oasis/core"
+
+type StreamProcessor interface {
+    PostChunk(ctx context.Context, ev *core.StreamEvent) (*core.StreamEvent, error)
+}
+```
+
+Optional capability interface that runs on each streamed `EventTextDelta` or
+`EventThinking` delta before it reaches the caller's channel. Processors opt in
+by implementing it; the chain invokes it only for registered implementers.
+
+Return the event (possibly mutated) to forward it, `nil` to drop it, or
+`*core.ErrHalt` to halt the stream. A halt emits `EventHalt` to the caller's
+channel but does **not** abort the in-flight LLM call or stop billing — for a
+hard run-ending halt use a `PostProcessor` instead. The hook has no cross-chunk
+state from the framework's perspective; processors needing multi-chunk context
+must manage their own buffering.
+
+Must be safe for concurrent use.
 
 ---
 
@@ -179,24 +205,34 @@ is also accessible from processor hooks via
 ## ProcessorChain
 
 ```go
-type ProcessorChain  // oasis.ProcessorChain = processor.Chain
+// import "github.com/nevindra/oasis/processor"
 
-func NewProcessorChain() *ProcessorChain
+func NewChain() *Chain
 
-func (c *ProcessorChain) AddPre(p PreProcessor)
-func (c *ProcessorChain) AddPost(p PostProcessor)
-func (c *ProcessorChain) AddPostTool(p PostToolProcessor)
+func (c *Chain) AddPre(p core.PreProcessor)
+func (c *Chain) AddPost(p core.PostProcessor)
+func (c *Chain) AddPostTool(p core.PostToolProcessor)
+func (c *Chain) AddStream(p core.StreamProcessor)
 
-func (c *ProcessorChain) RunPreLLM(ctx context.Context, req *ChatRequest) error
-func (c *ProcessorChain) RunPostLLM(ctx context.Context, resp *ChatResponse) error
-func (c *ProcessorChain) RunPostTool(ctx context.Context, call ToolCall, result *ToolResult) error
+func (c *Chain) RunPreLLM(ctx context.Context, req *core.ChatRequest) error
+func (c *Chain) RunPostLLM(ctx context.Context, resp *core.ChatResponse) error
+func (c *Chain) RunPostTool(ctx context.Context, call core.ToolCall, result *core.ToolResult) error
+func (c *Chain) RunPostChunk(ctx context.Context, ev *core.StreamEvent) (*core.StreamEvent, error)
 
-func (c *ProcessorChain) Len() int
+func (c *Chain) Len() int
+func (c *Chain) HasAny() bool
+func (c *Chain) HasStream() bool
 ```
 
-`AddPre/Post/PostTool` bucket processors by interface at registration time so
-`RunPreLLM/RunPostLLM/RunPostTool` have no per-call type assertions. `Len`
-counts total registrations across all stages.
+`Add*` methods bucket processors by interface at registration time so the
+`Run*` methods have no per-call type assertions. `Len` counts total
+registrations across all stages. `HasStream` lets the agent forwarder skip
+chunk processing when no stream processors are registered (zero hot-path cost).
+
+`RunPostChunk` threads event through registered stream processors in order. A
+processor returning `nil` short-circuits the chain and drops the event.
+
+`oasis.NewProcessorChain()` is a convenience wrapper that returns `*processor.Chain`.
 
 ---
 
@@ -210,13 +246,15 @@ type InputHandler interface {
 }
 
 type InputRequest struct {
-    Question string
-    Options  []string            // empty = free-form
-    Metadata map[string]string   // agent name, tool being approved, etc.
+    Question    string
+    Options     []string            // empty = free-form
+    MultiSelect bool                // true when the LLM requested multi-select
+    Metadata    map[string]string   // agent name, tool being approved, etc.
 }
 
 type InputResponse struct {
-    Value string
+    Value  string   // single-select answer
+    Values []string // multi-select answers (nil when single-select)
 }
 
 func InputHandlerFromContext(ctx context.Context) (InputHandler, bool)
@@ -229,12 +267,18 @@ cancelled. `InputHandlerFromContext` retrieves the handler from the context that
 processors receive — useful for approval-gate processors that want to route
 through the same handler.
 
+When `InputRequest.MultiSelect` is true the LLM requested multiple selections;
+populate `InputResponse.Values` (a `[]string`) with the chosen items. The agent
+marshals `Values` to a JSON array and returns it as the `ask_user` tool result.
+When `MultiSelect` is false (the default), the agent returns `InputResponse.Value`
+as a plain string.
+
 ---
 
 ## Guardrails
 
-All four are in `github.com/nevindra/oasis/guardrail` and re-exported from
-`oasis`.
+All guards are in `github.com/nevindra/oasis/guardrail`. Import the package
+directly — guard constructors are not re-exported from the root `oasis` package.
 
 ### `InjectionGuard` (PreProcessor)
 
@@ -299,6 +343,139 @@ This guard degrades gracefully — it does not halt.
 
 ```go
 func NewMaxToolCallsGuard(max int) *MaxToolCallsGuard
+```
+
+### `CostGuard` (PreProcessor + PostProcessor)
+
+Per-run, per-model spend ceiling. Reads cumulative token usage from the
+run-scoped context (populated automatically by the agent loop) and prices it
+against the injected pricing table. Halts when the total exceeds `maxUSD`.
+Unknown models cost 0 (fail open). With no pricing table configured the guard
+is inactive and logs a warning once at construction.
+
+```go
+func NewCostGuard(maxUSD float64, opts ...CostOption) *CostGuard
+
+type CostOption func(*CostGuard)
+
+func WithPricing(m map[string]core.ModelPricing) CostOption  // required — inject catalog.PricingMap() or a custom map
+func WarnOnly() CostOption                                    // log instead of halting on budget exceeded
+func CostResponse(msg string) CostOption                     // override the halt message (default: "Spending limit reached.")
+func CostLogger(l *slog.Logger) CostOption
+```
+
+### `TokenBudgetGuard` (PreProcessor)
+
+Trims the oldest non-system messages from a request until the heuristic token
+estimate fits `maxTokens`. System messages and the N most recent messages are
+never trimmed. Orphaned tool-result messages (whose originating tool call was
+trimmed) are cleaned up automatically. A non-positive `maxTokens` disables
+trimming.
+
+```go
+func NewTokenBudgetGuard(maxTokens int, opts ...TokenBudgetOption) *TokenBudgetGuard
+
+type TokenBudgetOption func(*TokenBudgetGuard)
+
+func WithEstimator(fn func([]core.ChatMessage) int) TokenBudgetOption  // plug in a real tokenizer
+func PreserveLast(n int) TokenBudgetOption                              // protect n most recent messages (default: 1)
+func TokenBudgetLogger(l *slog.Logger) TokenBudgetOption
+```
+
+Default estimator: ~1 token per 3 runes, padded hot (runs early). Each image or
+PDF attachment counts as 2000 tokens.
+
+### `RedactionGuard` (PreProcessor + PostProcessor + StreamProcessor)
+
+Deterministic, zero-cost regex redaction on request messages, LLM response
+content, and streamed text/thinking deltas. With no presets or rules configured
+it is a no-op.
+
+```go
+func NewRedactionGuard(opts ...RedactionOption) *RedactionGuard
+
+type RedactionOption func(*RedactionGuard)
+
+func RedactPresets(names ...string) RedactionOption              // "pii", "secrets", "urls"
+func RedactRule(kind string, re *regexp.Regexp) RedactionOption  // add a custom rule
+func RedactStrategy(s Strategy) RedactionOption                  // default: StrategyRedact
+func RedactPhases(p Phase) RedactionOption                       // default: PhaseBoth
+func RedactPlaceholder(fn func(kind string) string) RedactionOption  // default: "[REDACTED:<kind>]"
+func RedactLogger(l *slog.Logger) RedactionOption
+```
+
+**Strategy constants:**
+
+```go
+type Strategy int
+
+const (
+    StrategyRedact Strategy = iota // replace matches with placeholder (default)
+    StrategyBlock                  // return *core.ErrHalt on first match
+    StrategyWarn                   // log the match, pass through unchanged
+)
+```
+
+**Phase constants:**
+
+```go
+type Phase int
+
+const (
+    PhaseBoth   Phase = iota // inspect input and output (default)
+    PhaseInput               // request messages only
+    PhaseOutput              // response content only
+)
+```
+
+**Preset rule sets:**
+
+| Preset | Patterns |
+|---|---|
+| `"pii"` | email, SSN (`NNN-NN-NNNN`), US phone, credit card (13–16 digits) |
+| `"secrets"` | AWS access key (`AKIA…`), Bearer token, generic `api_key`/`secret`/`token` assignments |
+| `"urls"` | `http://…` and `https://…` URLs |
+
+**Streaming limitation:** `PostChunk` is stateless and per-chunk. A secret or
+PII value split across two consecutive deltas is not redacted. For guaranteed
+coverage, add a non-streaming `PostLLM` guard. `PostChunk` also does not cover
+`EventObjectDelta`/`EventObjectFinish` snapshots from structured-output
+responses — use a `PostProcessor` for those.
+
+---
+
+## Run-usage accessors (core package)
+
+The agent loop seeds a per-run, per-model usage accumulator into the context at
+run start. Processors (such as `CostGuard`) read from it to price accumulated
+usage without any external storage.
+
+```go
+// import "github.com/nevindra/oasis/core"
+
+// WithRunUsage returns a context carrying a fresh per-model usage accumulator.
+// Called once by the agent loop at the start of each run.
+func WithRunUsage(ctx context.Context) context.Context
+
+// AddRunUsage adds one LLM call's usage under the given model. No-op if ctx
+// has no accumulator (safe to call from outside the run loop).
+func AddRunUsage(ctx context.Context, model string, u Usage) 
+
+// RunUsageByModel returns a copy of the run's cumulative per-model usage, and
+// false if no accumulator is present on ctx.
+func RunUsageByModel(ctx context.Context) (map[string]Usage, bool)
+```
+
+Processors read accumulated usage via `RunUsageByModel`. The map key is the
+model ID string (e.g., `"claude-opus-4-5"`, `"gpt-4o"`). The `Usage` struct:
+
+```go
+type Usage struct {
+    InputTokens         int
+    OutputTokens        int
+    CachedTokens        int
+    CacheCreationTokens int
+}
 ```
 
 ---

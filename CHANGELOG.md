@@ -6,17 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
-
-## [1.0.0] - 2026-06-14
-
-First stable release — the exported API is now frozen under semantic
-versioning. This release includes a coordinated API-freeze pass: deprecated
-symbols removed, `any` eliminated from exported boundaries, interfaces
-right-sized, and documentation fully synced to the code. The breaking changes
-below are one-time corrections made deliberately before the freeze.
-
 ### Added
 
+- **`guardrail.CostGuard`** — per-run, per-model spend ceiling (deterministic; no observability storage). Prices cumulative token usage against an injected pricing table (`WithPricing`). Halts (`*core.ErrHalt`) or warns (`WarnOnly`) when the budget is exceeded. Unknown models cost 0 (fail open); no pricing configured = inactive + warns once.
+- **`guardrail.TokenBudgetGuard`** — heuristic token-aware context trimming (`PreLLM`). Drops oldest non-system messages until the estimated token count fits the budget. Complements compaction (which summarizes; this trims losslessly). Plug in a real tokenizer via `WithEstimator`; protect recent messages with `PreserveLast`.
+- **`guardrail.RedactionGuard`** — deterministic PII/secrets/URLs redaction on input (`PreLLM`), output (`PostLLM`), and streamed text/thinking deltas (`PostChunk`). Ships built-in presets (`"pii"`, `"secrets"`, `"urls"`); supports custom `regexp` rules. Three strategies: `StrategyRedact` (replace), `StrategyBlock` (halt), `StrategyWarn` (log-only).
+- **`core.StreamProcessor`** + **`processor.Chain.AddStream`/`RunPostChunk`/`HasStream`** — optional per-chunk streaming hook. `PostChunk(ctx, *core.StreamEvent) (*core.StreamEvent, error)` runs on `EventTextDelta` and `EventThinking` deltas before they reach the caller. Return the event to forward (possibly mutated), `nil` to drop, or `*core.ErrHalt` to emit `EventHalt` (note: streaming halt does not abort the LLM call; use a `PostProcessor` for a hard run halt).
+- **`core.WithRunUsage`/`AddRunUsage`/`RunUsageByModel`** — run-scoped per-model usage accumulator. The agent loop seeds it at run start; each LLM call appends to it. Processors (e.g. `CostGuard`) read it via `RunUsageByModel` without any external storage.
+- **`ask_user` multi-select** — `askUserArgs.MultiSelect` (JSON: `multi_select`) lets the LLM request multiple selections. `InputRequest.MultiSelect` forwards the intent to the handler; the handler populates `InputResponse.Values []string`; the agent marshals the values to a JSON array returned as the tool result.
 - **`sandbox.BrowserSandbox`** — the 9 browser methods are now an optional
   interface; light/headless sandboxes implement only the 14-method core
   `Sandbox`. `Tools()` registers browser tools via a capability assertion.

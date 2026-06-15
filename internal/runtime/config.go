@@ -53,14 +53,16 @@ type toolTransformMatcher struct {
 
 // InputRequest describes what the agent needs from the human.
 type InputRequest struct {
-	Question string
-	Options  []string
-	Metadata map[string]string
+	Question    string
+	Options     []string
+	MultiSelect bool // allow selecting more than one option
+	Metadata    map[string]string
 }
 
 // InputResponse is the human's reply.
 type InputResponse struct {
-	Value string
+	Value  string   // single-select answer
+	Values []string // multi-select answers (nil when single-select)
 }
 
 // InputHandler delivers questions to a human and returns their response.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/internal/runtime"
+	"github.com/nevindra/oasis/processor"
 )
 
 // The StreamEvent struct, StreamEventType, and Event* constants live in
@@ -175,6 +177,10 @@ type forwarderConfig struct {
 	// emit additional events into dest. Returning a non-nil error causes the
 	// goroutine to drain iterCh and exit (used when ctx is cancelled mid-delta).
 	onTextDelta func(ctx context.Context, dest chan<- core.StreamEvent, ev core.StreamEvent) error
+	// onChunk runs registered StreamProcessors on text/thinking deltas before
+	// they reach dest. nil when no stream processors are registered. Returns a
+	// possibly-mutated event, nil to drop, or *core.ErrHalt to halt the stream.
+	onChunk func(context.Context, core.StreamEvent) (*core.StreamEvent, error)
 }
 
 // newForwarder is the single goroutine/drain primitive shared by all forwarder
@@ -209,6 +215,25 @@ func newForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int
 					return
 				}
 			}
+			if cfg.onChunk != nil && (ev.Type == core.EventTextDelta || ev.Type == core.EventThinking) {
+				out, err := cfg.onChunk(ctx, ev)
+				if err != nil {
+					var halt *core.ErrHalt
+					if errors.As(err, &halt) {
+						select {
+						case dest <- core.StreamEvent{Type: core.EventHalt, Content: halt.Response}:
+						case <-ctx.Done():
+						}
+					}
+					for range iterCh { // drain so the producer can close
+					}
+					return
+				}
+				if out == nil {
+					continue // processor dropped this chunk
+				}
+				ev = *out
+			}
 			select {
 			case dest <- ev:
 			case <-ctx.Done():
@@ -222,13 +247,25 @@ func newForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int
 	return iterCh, wg.Wait
 }
 
+// chunkHook adapts a processor chain's RunPostChunk into a forwarder onChunk,
+// or returns nil when no StreamProcessors are registered (zero hot-path cost).
+func chunkHook(chain *processor.Chain) func(context.Context, core.StreamEvent) (*core.StreamEvent, error) {
+	if chain == nil || !chain.HasStream() {
+		return nil
+	}
+	return func(ctx context.Context, ev core.StreamEvent) (*core.StreamEvent, error) {
+		return chain.RunPostChunk(ctx, &ev)
+	}
+}
+
 // newCapturingStreamForwarder is like newForwarder but also captures
 // EventFileAttachment events into state.files. Used for provider streaming paths
 // where the provider may emit EventFileAttachment alongside text deltas.
-func newCapturingStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, _ int, state *loopState) (chan<- core.StreamEvent, func()) {
+func newCapturingStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, _ int, state *loopState, chain *processor.Chain) (chan<- core.StreamEvent, func()) {
 	ch, wait := newForwarder(ctx, dest, 1, forwarderConfig{
 		capture:      captureFileEvent,
 		captureState: state,
+		onChunk:      chunkHook(chain),
 	})
 	return ch, wait
 }
@@ -309,9 +346,9 @@ func resolveIsArraySchema(schema *core.ResponseSchema) bool {
 //
 // When dest is nil (non-streaming Execute path), falls back to
 // newCapturingStreamForwarder (which no-ops on nil dest).
-func newObjectStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int, state *loopState, schema *core.ResponseSchema) (chan<- core.StreamEvent, func()) {
+func newObjectStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent, bufSize int, state *loopState, schema *core.ResponseSchema, chain *processor.Chain) (chan<- core.StreamEvent, func()) {
 	if dest == nil || schema == nil {
-		return newCapturingStreamForwarder(ctx, dest, bufSize, state)
+		return newCapturingStreamForwarder(ctx, dest, bufSize, state, chain)
 	}
 
 	// Detect whether the schema's top-level type is "array" (cached per schema pointer).
@@ -359,6 +396,7 @@ func newObjectStreamForwarder(ctx context.Context, dest chan<- core.StreamEvent,
 		capture:      captureFileEvent,
 		captureState: state,
 		onTextDelta:  onDelta,
+		onChunk:      chunkHook(chain),
 	})
 	return ch, wait
 }
