@@ -320,9 +320,9 @@ the conversation.
 
 ---
 
-## Recipe 7: Tool logging and transformation middleware
+## Recipe 7: Tool logging and payload transforms
 
-**Goal:** Log every tool call and redact sensitive fields from results.
+**Goal:** Log every tool call and redact sensitive fields from results shown in the UI and transcript — without changing what the LLM sees.
 
 ```go
 import (
@@ -337,32 +337,38 @@ logger := slog.Default()
 
 ag := oasis.NewAgent("secure-agent", "Logs and redacts tool output", llm,
     oasis.WithToolConfig(agent.ToolConfig{
-        Tools: myTools,
+        Tools: []core.AnyTool{lookupTool},
         Middleware: []core.ToolMiddleware{
             agent.LoggingMiddleware(logger),
-            agent.TransformMiddleware(func(name string, r core.ToolResult) core.ToolResult {
-                if name == "get_user_profile" {
-                    r.Content = redactEmail(r.Content)
-                }
-                return r
-            }),
+        },
+        Transforms: map[string]core.ToolTransform{
+            "lookup": {
+                Display:    &core.SinkTransform{Result: redactSecrets},
+                Transcript: &core.SinkTransform{Result: redactSecrets},
+            },
         },
     }),
 )
 ```
 
 **Plain-English walkthrough:** `WithToolConfig` lets you combine tool registration
-with middleware in one call. `LoggingMiddleware` logs `tool.start` and `tool.finish`
-at `slog.Info`. `TransformMiddleware` can inspect or rewrite the `ToolResult` before
-it reaches the LLM. Middleware ordering: first in the slice = innermost wrap (closest
-to the tool); last = outermost.
+with middleware and per-sink transforms in one call. `LoggingMiddleware` logs
+`tool.start` and `tool.finish` at `slog.Info`. `ToolConfig.Transforms` rewrites
+the `ToolResult` independently per sink: the `Display` sink controls what the UI
+streams, and the `Transcript` sink controls what is persisted — the `Model` sink
+(what the LLM sees) is left untouched here, so the LLM receives the full result
+while humans see only the redacted version. Transforms run on the returned
+`ToolResult`; a tool's Go error short-circuits the result entirely, so transforms
+are never called when the tool errored at the infrastructure level.
 
 **Variations:**
 - Add `agent.TimingMiddleware()` for lightweight `slog.Debug` duration logs.
 - Use `agent.OTelSpanMiddleware(tracer)` for OpenTelemetry spans per tool call (or
   let it auto-wire by passing `oasis.WithTracer(t)` to the agent).
-- `TransformMiddleware` is not called when the inner tool returned a Go error, so
-  you don't need to guard for nil content.
+- Use `agent.ToolConfig.TransformMatchers` with a predicate to apply the same
+  transform to all tools matching a pattern without listing each name explicitly.
+- Set `Model: &core.SinkTransform{Result: fn}` to also rewrite what the LLM sees
+  (e.g. to strip large fields before they consume context).
 
 ---
 

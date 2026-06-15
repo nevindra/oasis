@@ -62,33 +62,6 @@ func (t *timingWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) (c
 	return r, err
 }
 
-// TransformMiddleware applies fn to the ToolResult before it is returned.
-// fn receives the tool name and the result; the returned value replaces the
-// original. Use this to mask sensitive fields, truncate large outputs, or
-// inject computed metadata.
-//
-// fn is not called when the inner tool returned a Go error.
-func TransformMiddleware(fn func(name string, r core.ToolResult) core.ToolResult) core.ToolMiddleware {
-	return func(inner core.AnyTool) core.AnyTool {
-		return &transformWrapper{inner: inner, fn: fn}
-	}
-}
-
-type transformWrapper struct {
-	inner core.AnyTool
-	fn    func(string, core.ToolResult) core.ToolResult
-}
-
-func (w *transformWrapper) Name() string                    { return w.inner.Name() }
-func (w *transformWrapper) Definition() core.ToolDefinition { return w.inner.Definition() }
-func (w *transformWrapper) ExecuteRaw(ctx context.Context, a json.RawMessage) (core.ToolResult, error) {
-	r, err := w.inner.ExecuteRaw(ctx, a)
-	if err != nil {
-		return r, err
-	}
-	return w.fn(w.inner.Name(), r), nil
-}
-
 // OTelSpanMiddleware emits a tracing span named "tool.execute" for each tool
 // call, with attributes for tool name and arg byte length. Errors are recorded
 // on the span. Pass the tracer the agent was built with.

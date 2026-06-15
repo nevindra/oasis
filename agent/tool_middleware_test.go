@@ -101,24 +101,6 @@ func TestLoggingMiddleware_LogsStartAndFinish(t *testing.T) {
 	}
 }
 
-func TestTransformMiddleware_MutatesResult(t *testing.T) {
-	tool := core.ApplyToolMiddleware(
-		&recordingTool{called: new(bool)},
-		[]core.ToolMiddleware{
-			TransformMiddleware(func(name string, r core.ToolResult) core.ToolResult {
-				return core.ToolResult{Content: "transformed"}
-			}),
-		},
-	)
-
-	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatalf("ExecuteRaw err = %v", err)
-	}
-	if got := result.Content; got != "transformed" {
-		t.Errorf("Content = %s, want \"transformed\"", got)
-	}
-}
 
 func TestTimingMiddleware_PassesThrough(t *testing.T) {
 	called := false

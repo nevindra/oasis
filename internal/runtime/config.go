@@ -45,6 +45,12 @@ type toolPolicyMatcher struct {
 	policy core.ToolPolicy
 }
 
+// toolTransformMatcher pairs a name predicate with a transform.
+type toolTransformMatcher struct {
+	match     func(name string) bool
+	transform core.ToolTransform
+}
+
 // InputRequest describes what the agent needs from the human.
 type InputRequest struct {
 	Question string
@@ -132,6 +138,11 @@ type Config struct {
 	// Ordered matchers; first match wins (after exact).
 	ToolPolicyMatchers []toolPolicyMatcher
 
+	// Per-tool payload transforms (exact name entries).
+	ToolTransforms map[string]core.ToolTransform
+	// Ordered transform matchers; first match wins (after exact).
+	ToolTransformMatchers []toolTransformMatcher
+
 	// Configurable runtime limits.
 	MaxParallelDispatch int
 	MaxPlanSteps        int
@@ -169,6 +180,28 @@ func (c *Config) ResolveToolPolicy(name string) (core.ToolPolicy, bool) {
 // AddToolPolicyMatcher appends a matcher. Used by agent.WithToolPolicyMatch.
 func (c *Config) AddToolPolicyMatcher(match func(string) bool, policy core.ToolPolicy) {
 	c.ToolPolicyMatchers = append(c.ToolPolicyMatchers, toolPolicyMatcher{match: match, policy: policy})
+}
+
+// ResolveToolTransform implements ServeMux-style lookup: exact-name first,
+// then matchers in registration order. Mirrors ResolveToolPolicy.
+func (c *Config) ResolveToolTransform(name string) (core.ToolTransform, bool) {
+	if c == nil {
+		return core.ToolTransform{}, false
+	}
+	if tt, ok := c.ToolTransforms[name]; ok {
+		return tt, true
+	}
+	for _, m := range c.ToolTransformMatchers {
+		if m.match(name) {
+			return m.transform, true
+		}
+	}
+	return core.ToolTransform{}, false
+}
+
+// AddToolTransformMatcher appends a transform matcher. Used by ToolConfig.ApplyTo.
+func (c *Config) AddToolTransformMatcher(match func(string) bool, tt core.ToolTransform) {
+	c.ToolTransformMatchers = append(c.ToolTransformMatchers, toolTransformMatcher{match: match, transform: tt})
 }
 
 // ---- Limits ----

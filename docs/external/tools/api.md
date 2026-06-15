@@ -289,5 +289,24 @@ func core.IsInfraError(err error) bool  // reports whether err was wrapped with 
 func agent.LoggingMiddleware(logger *slog.Logger) core.ToolMiddleware
 func agent.TimingMiddleware() core.ToolMiddleware
 func agent.OTelSpanMiddleware(tracer core.Tracer) core.ToolMiddleware
-func agent.TransformMiddleware(fn func(name string, r core.ToolResult) core.ToolResult) core.ToolMiddleware
 ```
+
+**Payload transform types** live in `github.com/nevindra/oasis/core`:
+
+```go
+type ToolTransform struct {
+    Model      *SinkTransform // what the LLM sees
+    Display    *SinkTransform // what the UI streams
+    Transcript *SinkTransform // what is persisted
+}
+
+type SinkTransform struct {
+    Result func(name string, r ToolResult) ToolResult
+    Args   func(name string, args json.RawMessage) json.RawMessage
+}
+```
+
+Configure via `agent.ToolConfig.Transforms` (by exact tool name) or
+`agent.ToolConfig.TransformMatchers` (by predicate). Human-facing sinks
+(`Display`, `Transcript`) fail closed on transform panic — a safe placeholder
+is shown rather than the raw payload. The `Model` sink fails open.

@@ -408,11 +408,19 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 		state.messageRuneCount += utf8.RuneCountInString(resp.Content)
 	}
 
+	transformsActive := len(cfg.ToolTransforms) > 0 || len(cfg.ToolTransformMatchers) > 0
+
 	// Emit tool-call-start events before dispatch.
 	if ch != nil {
 		for _, tc := range resp.ToolCalls {
+			args := tc.Args
+			if transformsActive {
+				if tt, ok := cfg.ResolveToolTransform(tc.Name); ok {
+					args = applyArgsTransform(tt.Display, tc.Name, args, cfg.Logger)
+				}
+			}
 			select {
-			case ch <- core.StreamEvent{Type: core.EventToolCallStart, ID: tc.ID, Name: tc.Name, Args: tc.Args}:
+			case ch <- core.StreamEvent{Type: core.EventToolCallStart, ID: tc.ID, Name: tc.Name, Args: args}:
 			case <-ctx.Done():
 			}
 		}
@@ -476,6 +484,12 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 		state.totalUsage.InputTokens += results[j].usage.InputTokens
 		state.totalUsage.OutputTokens += results[j].usage.OutputTokens
 
+		var tt core.ToolTransform
+		var hasTransform bool
+		if transformsActive {
+			tt, hasTransform = cfg.ResolveToolTransform(tc.Name)
+		}
+
 		if results[j].isError {
 			if cfg.Logger.Enabled(ctx, slog.LevelWarn) {
 				cfg.Logger.Warn("tool call returned error", "agent", cfg.Name, "tool", tc.Name, "error", results[j].content, "duration", results[j].duration)
@@ -486,6 +500,17 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 			}
 		}
 
+		// Compute the Display-transformed result once; reuse for both the
+		// tool-call-result and ui-component events.
+		displayContent := results[j].content
+		displayUI := results[j].ui
+		if ch != nil && hasTransform && tt.Display != nil && tt.Display.Result != nil {
+			dr := applyResultTransform(tt.Display, tc.Name,
+				core.ToolResult{Content: results[j].content, UI: results[j].ui}, true, cfg.Logger)
+			displayContent = dr.Content
+			displayUI = dr.UI
+		}
+
 		// Emit tool-call-result event.
 		if ch != nil {
 			select {
@@ -493,7 +518,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 				Type:     core.EventToolCallResult,
 				ID:       tc.ID,
 				Name:     tc.Name,
-				Content:  results[j].content,
+				Content:  displayContent,
 				Usage:    results[j].usage,
 				Duration: results[j].duration,
 			}:
@@ -502,20 +527,40 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 		}
 
 		// Emit ui-component event when the tool produced a renderable component.
-		if ch != nil && results[j].ui != nil {
+		if ch != nil && displayUI != nil {
 			select {
 			case ch <- core.StreamEvent{
 				Type:   core.EventUIComponent,
 				ID:     tc.ID,
-				Name:   results[j].ui.Name,
-				Object: results[j].ui.Props,
+				Name:   displayUI.Name,
+				Object: displayUI.Props,
 			}:
 			case <-ctx.Done():
 			}
 		}
 
-		// Build step trace.
-		trace := buildStepTrace(tc, results[j])
+		// Build step trace. Apply the Transcript transform to the content/args
+		// the trace records. At this layer a tool error has already been folded
+		// into results[j].content (with results[j].isError set) by the dispatch
+		// layer — there is no separate Error payload here, so the transform
+		// operates on content. buildStepTrace truncates content into Output and
+		// keeps it raw in RawOutput, so the transcript-transformed content
+		// redacts both. transcriptContent is reused for the result store below.
+		transcriptContent := results[j].content
+		transcriptCall := tc
+		if hasTransform && tt.Transcript != nil {
+			if tt.Transcript.Result != nil {
+				tr := applyResultTransform(tt.Transcript, tc.Name,
+					core.ToolResult{Content: results[j].content}, true, cfg.Logger)
+				transcriptContent = tr.Content
+			}
+			if tt.Transcript.Args != nil {
+				transcriptCall.Args = applyArgsTransform(tt.Transcript, tc.Name, tc.Args, cfg.Logger)
+			}
+		}
+		traceRes := results[j]
+		traceRes.content = transcriptContent
+		trace := buildStepTrace(transcriptCall, traceRes)
 		state.steps = appendStepBounded(state.steps, trace, cfg.MaxStepsResolved)
 		if !haveFirstTrace {
 			firstTrace = trace
@@ -564,6 +609,15 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 			postProcessed[j] = result
 		}
 
+		// Apply the Model transform to what the LLM sees. Runs AFTER PostTool
+		// (so the Model transform observes the post-processor result) and BEFORE
+		// chunking (so chunk boundaries apply to the final model payload).
+		// Fail-open: a panicking Model transform leaves result unchanged so the
+		// agent loop stays functional.
+		if hasTransform && tt.Model != nil && tt.Model.Result != nil {
+			result = applyResultTransform(tt.Model, tc.Name, result, false /*fail open*/, cfg.Logger)
+		}
+
 		// Chunk large tool results transparently.
 		// Why: instead of hinting the LLM to call read_full_result, split the
 		// content into multiple sequential tool-result messages (all sharing the
@@ -576,7 +630,11 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 			maxLen = maxToolResultMessageLen
 		}
 		if cfg.ToolResultStore != nil {
-			if _, putErr := cfg.ToolResultStore.Put(iterCtx, result.Content); putErr != nil {
+			storeContent := result.Content
+			if hasTransform && tt.Transcript != nil && tt.Transcript.Result != nil {
+				storeContent = transcriptContent
+			}
+			if _, putErr := cfg.ToolResultStore.Put(iterCtx, storeContent); putErr != nil {
 				if cfg.Logger.Enabled(iterCtx, slog.LevelWarn) {
 					cfg.Logger.Warn("tool result store put failed", "agent", cfg.Name, "error", putErr)
 				}

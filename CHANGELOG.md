@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Tool payload transforms** — `core.ToolTransform` / `core.SinkTransform` let a
+  tool's payload be rewritten independently per sink: `Model` (what the LLM sees),
+  `Display` (what the UI streams), and `Transcript` (what is persisted). Attach via
+  `agent.ToolConfig.Transforms` (by tool name) or `agent.ToolConfig.TransformMatchers`
+  (by predicate). Human-facing sinks fail closed on transform panic (a placeholder
+  is shown, never the raw payload); the model sink fails open.
+
+### Removed
+
+- **Breaking:** `agent.TransformMiddleware` is removed; its job is now the `Model`
+  sink of `core.ToolTransform`.
+
+  Migration — model-only (the usual intent):
+
+  ```go
+  // before
+  agent.ToolConfig{Middleware: []core.ToolMiddleware{agent.TransformMiddleware(fn)}}
+  // after
+  agent.ToolConfig{Transforms: map[string]core.ToolTransform{
+      "<tool>": {Model: &core.SinkTransform{Result: fn}}}}
+  ```
+
+  The old middleware ran before the sink split, so it affected *all* sinks for
+  *all* tools. To reproduce that exactly:
+
+  ```go
+  agent.ToolConfig{TransformMatchers: []agent.TransformMatcher{{
+      Match: func(string) bool { return true },
+      Transform: core.ToolTransform{
+          Model:      &core.SinkTransform{Result: fn},
+          Display:    &core.SinkTransform{Result: fn},
+          Transcript: &core.SinkTransform{Result: fn},
+      }}}}
+  ```
+
 ## [1.0.0] - 2026-06-14
 
 First stable release — the exported API is now frozen under semantic

@@ -94,7 +94,8 @@ func main() {
 
 - **Provider middleware** — `provider.Middleware` + `provider.Chain` compose retry, rate limiting, caching, and custom wrappers into a single provider stack. Built-in: `agent.RetryMiddleware`, `ratelimit.RateLimitMiddleware`.
 - **Per-tool policies** — `core.ToolPolicy` with `Timeout`, `Retries`, `RetryDelay`, `MaxRetryDelay`, `RetryOn`. Attach via `agent.ToolConfig.Policies` (exact name) or `PolicyMatchers` (prefix/glob).
-- **Tool middleware** — `LoggingMiddleware`, `TimingMiddleware`, `TransformMiddleware`, `OTelSpanMiddleware`. Innermost-first ordering matches `net/http`.
+- **Tool middleware** — `LoggingMiddleware`, `TimingMiddleware`, `OTelSpanMiddleware`. Innermost-first ordering matches `net/http`.
+- **Tool payload transforms** — `core.ToolTransform` rewrites a tool's output per sink (model / UI / transcript) for redaction. Configure via `ToolConfig.Transforms`.
 - **Framework-enforced tool approval** — `agent.Approval(toolName, opts...)` pauses tool execution for human approval via the configured `InputHandler`. Composes with logging, tracing, policy, and any custom middleware. Emits `EventToolApprovalPending` before prompting.
 - **Processor pipeline** — `PreProcessor`, `PostProcessor`, `PostToolProcessor` hooks for guardrails, PII redaction, logging. `*ErrHalt` short-circuits execution.
 - **Human-in-the-loop** — `InputHandler` lets agents pause and ask humans for input, both LLM-driven (`ask_user` tool) and programmatic.

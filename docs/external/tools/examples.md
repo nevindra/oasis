@@ -103,7 +103,7 @@ a := agent.New(provider,
 - Both are no-ops when `logger` is nil / when timing output isn't needed.
 
 **Variations:**
-- Write an `agent.TransformMiddleware` to redact sensitive fields in `ToolResult.Content` before they reach the LLM conversation history.
+- Configure `ToolConfig.Transforms` with a `Display`/`Transcript` `SinkTransform` to redact sensitive fields from the UI and persisted transcript without changing what the LLM sees.
 - Compose `agent.OTelSpanMiddleware(tracer)` to emit OpenTelemetry spans per tool call.
 - Custom middleware: implement a function of type `func(core.AnyTool) core.AnyTool` and include it in `ToolConfig.Middleware`.
 

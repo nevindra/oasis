@@ -123,6 +123,14 @@ type ToolPolicyMatcher struct {
 	Policy core.ToolPolicy
 }
 
+// TransformMatcher attaches a payload transform to every tool whose name
+// satisfies the predicate. Use in ToolConfig.TransformMatchers to attach a transform to a family of tools.
+// Mirrors ToolPolicyMatcher. Exact-name ToolConfig.Transforms entries take precedence.
+type TransformMatcher struct {
+	Match     func(name string) bool
+	Transform core.ToolTransform
+}
+
 // ToolConfig groups the tool subsystem's knobs into one typed sub-config.
 // Use WithTools for simple tool registration; use WithToolConfig when you
 // need middleware, policies, approval gates, or a custom result store.
@@ -149,6 +157,15 @@ type ToolConfig struct {
 	// Use the Approval helper for sane defaults.
 	Approvals []ApprovalConfig
 
+	// Transforms rewrite a tool's payload per sink (Model/Display/Transcript),
+	// keyed by exact tool name. See core.ToolTransform. Use to redact secrets/PII
+	// from the UI and persisted transcript without changing what the LLM sees.
+	Transforms map[string]core.ToolTransform
+
+	// TransformMatchers attach a transform to every tool whose name satisfies the
+	// matcher predicate. Evaluated after exact-name Transforms (first match wins).
+	TransformMatchers []TransformMatcher
+
 	// ResultStore overrides the default in-memory tool-result store.
 	// A nil ResultStore disables the store explicitly (opt-out).
 	ResultStore core.ToolResultStore
@@ -171,6 +188,15 @@ func (tc ToolConfig) ApplyTo(c *Config) {
 	}
 	for _, m := range tc.PolicyMatchers {
 		c.AddToolPolicyMatcher(m.Match, m.Policy)
+	}
+	for name, tt := range tc.Transforms {
+		if c.ToolTransforms == nil {
+			c.ToolTransforms = map[string]core.ToolTransform{}
+		}
+		c.ToolTransforms[name] = tt
+	}
+	for _, m := range tc.TransformMatchers {
+		c.AddToolTransformMatcher(m.Match, m.Transform)
 	}
 	c.ToolApprovals = append(c.ToolApprovals, tc.Approvals...)
 	if tc.ResultStore != nil || tc.ResultStoreExplicit {

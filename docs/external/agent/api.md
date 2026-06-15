@@ -398,7 +398,7 @@ Construction-time options (all are `AgentOption`, pass to `New`):
 | `LoggingMiddleware(logger)` | Logs `tool.start` / `tool.finish` at `slog.Info` |
 | `TimingMiddleware()` | Logs duration at `slog.Debug` |
 | `OTelSpanMiddleware(tracer)` | Emits a `tool.execute` span; auto-wired when `WithTracer` is set |
-| `TransformMiddleware(fn)` | Applies `fn` to the `ToolResult` before it returns to the LLM |
+| `ToolConfig.Transforms` / `core.ToolTransform` | Rewrites a tool's payload independently per sink: `Model` (LLM), `Display` (UI), `Transcript` (persisted). See `docs/external/tools/api.md`. |
 
 ### Provider retry decorator
 
