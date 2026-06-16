@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,11 @@ type ModelCatalog struct {
 
 	ttl     time.Duration
 	refresh RefreshStrategy
+
+	// httpClient is used for all live lister calls. Defaults to
+	// http.DefaultClient when nil; override with WithHTTPClient (e.g. in tests
+	// or to set timeouts/proxies).
+	httpClient *http.Client
 }
 
 // providerEntry tracks a registered provider and its cached models.
@@ -82,16 +88,27 @@ func WithRefresh(s RefreshStrategy) CatalogOption {
 	return func(c *ModelCatalog) { c.refresh = s }
 }
 
+// WithHTTPClient sets the HTTP client used for live model-listing calls
+// (e.g. for timeouts, proxies, or test servers). Default: http.DefaultClient.
+func WithHTTPClient(client *http.Client) CatalogOption {
+	return func(c *ModelCatalog) { c.httpClient = client }
+}
+
 // NewModelCatalog creates a catalog with optional configuration.
 func NewModelCatalog(opts ...CatalogOption) *ModelCatalog {
 	c := &ModelCatalog{
-		providers: make(map[string]*providerEntry),
-		maxProv:   50,
-		ttl:       1 * time.Hour,
-		refresh:   RefreshOnDemand,
+		providers:  make(map[string]*providerEntry),
+		maxProv:    50,
+		ttl:        1 * time.Hour,
+		refresh:    RefreshOnDemand,
+		httpClient: http.DefaultClient,
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+	// Guard against WithHTTPClient(nil) — fall back to the shared default.
+	if c.httpClient == nil {
+		c.httpClient = http.DefaultClient
 	}
 
 	// Index built-in platforms.
@@ -279,7 +296,7 @@ func (c *ModelCatalog) ListProvider(ctx context.Context, identifier string) ([]o
 		return staticModels, nil
 	}
 
-	lister := listerFor(entry.platform.Protocol, key)
+	lister := listerFor(entry.platform.Protocol, key, c.httpClient)
 	liveModels, err := lister.listModels(ctx, entry.platform.BaseURL, entry.apiKey)
 	if err != nil {
 		// Degrade to static-only if live fetch fails.
@@ -368,15 +385,16 @@ func (c *ModelCatalog) CreateProviderByID(ctx context.Context, provider, model s
 	return c.CreateProvider(ctx, provider+"/"+model)
 }
 
-// listerFor returns the appropriate model lister for the given protocol.
-func listerFor(protocol oasis.Protocol, provider string) modelLister {
+// listerFor returns the appropriate model lister for the given protocol,
+// threading the catalog's HTTP client into listers that make live calls.
+func listerFor(protocol oasis.Protocol, provider string, client *http.Client) modelLister {
 	switch protocol {
 	case oasis.ProtocolGemini:
-		return &geminiLister{}
+		return &geminiLister{client: client}
 	case oasis.ProtocolDashScope:
 		return &dashscopeLister{}
 	default:
-		return &openaiLister{provider: provider}
+		return &openaiLister{provider: provider, client: client}
 	}
 }
 

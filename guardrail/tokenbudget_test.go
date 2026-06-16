@@ -13,7 +13,7 @@ func TestTokenBudgetTrimsOldest(t *testing.T) {
 	long := strings.Repeat("x", 300)
 	req := core.ChatRequest{Messages: []core.ChatMessage{
 		{Role: "system", Content: "sys"},
-		{Role: "user", Content: long},     // oldest user turn — should be trimmed
+		{Role: "user", Content: long}, // oldest user turn — should be trimmed
 		{Role: "assistant", Content: "ok"},
 		{Role: "user", Content: "newest"}, // preserved (most recent)
 	}}
@@ -104,5 +104,31 @@ func TestTokenBudgetUnderBudgetNoOp(t *testing.T) {
 	}
 	if len(req.Messages) != 1 {
 		t.Errorf("under-budget input must be untouched, got %d messages", len(req.Messages))
+	}
+}
+
+// TestDefaultTokenEstimateFormula pins the defaultTokenEstimate heuristic to
+// exactly runes/3 (integer division, no padding). This locks the behaviour
+// after simplifying (runes*4)/3/4 → runes/3 (finding #4).
+func TestDefaultTokenEstimateFormula(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    int // runes/3
+	}{
+		{"ascii", "aaa", 1},         // 3 runes → 1
+		{"ascii 9", "aaaaaaaaa", 3}, // 9 runes → 3
+		{"emoji", "🌍🌍🌍", 1},         // 3 runes (each emoji = 1 rune) → 1
+		{"cjk 6", "你好世界abc", 2},     // 6 runes → 2
+		{"empty", "", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msgs := []core.ChatMessage{{Role: "user", Content: tt.content}}
+			got := defaultTokenEstimate(msgs)
+			if got != tt.want {
+				t.Errorf("defaultTokenEstimate(%q) = %d, want %d", tt.content, got, tt.want)
+			}
+		})
 	}
 }

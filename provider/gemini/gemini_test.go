@@ -653,6 +653,106 @@ func TestChatStream_SplitPayloadSSE(t *testing.T) {
 	}
 }
 
+// TestChatStream_TextAndInlineDataInOneChunk verifies that a single SSE chunk
+// carrying BOTH a text part and an inlineData (image) part yields the text as a
+// delta event AND the image as an attachment — the collapsed single-unmarshal
+// path must not drop either when they coexist.
+func TestChatStream_TextAndInlineDataInOneChunk(t *testing.T) {
+	chunk := `{"candidates":[{"content":{"parts":[{"text":"caption"},{"inlineData":{"mimeType":"image/png","data":"YWJj"}}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":7}}`
+	sseBody := "data: " + chunk + "\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-flash")
+	ch := make(chan oasis.StreamEvent, 16)
+	result, err := g.ChatStream(context.Background(), oasis.ChatRequest{
+		Messages: []oasis.ChatMessage{{Role: "user", Content: "hi"}},
+	}, ch)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+
+	if result.Content != "caption" {
+		t.Errorf("expected content 'caption', got %q", result.Content)
+	}
+	if len(result.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment, got %d", len(result.Attachments))
+	}
+	if result.Attachments[0].MimeType != "image/png" {
+		t.Errorf("expected mimeType image/png, got %q", result.Attachments[0].MimeType)
+	}
+	if string(result.Attachments[0].Data) != "abc" {
+		t.Errorf("expected decoded data 'abc', got %q", result.Attachments[0].Data)
+	}
+	if result.Usage.InputTokens != 5 || result.Usage.OutputTokens != 7 {
+		t.Errorf("expected usage 5/7, got %d/%d", result.Usage.InputTokens, result.Usage.OutputTokens)
+	}
+	if result.FinishReason != oasis.FinishStop {
+		t.Errorf("expected FinishStop, got %q", result.FinishReason)
+	}
+
+	var events []oasis.StreamEvent
+	for e := range ch {
+		events = append(events, e)
+	}
+	if len(events) != 1 || events[0].Content != "caption" {
+		t.Fatalf("expected 1 text-delta 'caption', got %v", events)
+	}
+}
+
+// TestChatStream_UsageOnlyChunk verifies a chunk that carries only
+// usageMetadata (no candidates) updates the usage accumulator and emits no
+// stream events.
+func TestChatStream_UsageOnlyChunk(t *testing.T) {
+	textChunk := `{"candidates":[{"content":{"parts":[{"text":"hello"}],"role":"model"}}]}`
+	usageChunk := `{"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":22,"cachedContentTokenCount":3}}`
+	sseBody := "data: " + textChunk + "\n\n" + "data: " + usageChunk + "\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-flash")
+	ch := make(chan oasis.StreamEvent, 16)
+	result, err := g.ChatStream(context.Background(), oasis.ChatRequest{
+		Messages: []oasis.ChatMessage{{Role: "user", Content: "hi"}},
+	}, ch)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if result.Content != "hello" {
+		t.Errorf("expected content 'hello', got %q", result.Content)
+	}
+	if result.Usage.InputTokens != 11 || result.Usage.OutputTokens != 22 || result.Usage.CachedTokens != 3 {
+		t.Errorf("expected usage 11/22/3, got %d/%d/%d",
+			result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.CachedTokens)
+	}
+
+	var events []oasis.StreamEvent
+	for e := range ch {
+		events = append(events, e)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 event (the text delta), got %d", len(events))
+	}
+}
+
 // TestChatStream_CancelledConsumer verifies that cancelling the context while
 // the stream is in progress causes ChatStream to return promptly with
 // context.Canceled rather than blocking forever (goroutine leak guard).
@@ -818,6 +918,38 @@ func TestNewConstructors(t *testing.T) {
 	if e.Name() != "gemini" {
 		t.Errorf("expected name 'gemini', got %q", e.Name())
 	}
+	// Default HTTP client is non-nil when no opts are provided.
+	if e.httpClient == nil {
+		t.Error("expected non-nil default httpClient")
+	}
+}
+
+// TestNewEmbedding_WithHTTPClient verifies NewEmbedding accepts functional
+// options and that WithEmbeddingHTTPClient injects a custom client used by Embed.
+func TestNewEmbedding_WithHTTPClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"embedding":{"values":[0.1,0.2,0.3]}}`))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	custom := srv.Client()
+	e := NewEmbedding("k", "text-embedding-004", 3, WithEmbeddingHTTPClient(custom))
+	if e.httpClient != custom {
+		t.Fatal("expected WithEmbeddingHTTPClient to inject the custom client")
+	}
+
+	vecs, err := e.Embed(context.Background(), []string{"hi"})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(vecs) != 1 || len(vecs[0]) != 3 {
+		t.Fatalf("unexpected vecs: %v", vecs)
+	}
 }
 
 func TestNewWithOptions(t *testing.T) {
@@ -866,24 +998,28 @@ func TestNewWithOptions(t *testing.T) {
 	}
 }
 
-func TestExtractAttachmentsFromParsed(t *testing.T) {
-	raw := `{
-		"candidates": [{
-			"content": {
-				"parts": [
-					{"text": "here"},
-					{"inlineData": {"mimeType": "image/png", "data": "abc123"}}
-				]
-			}
-		}]
-	}`
-
-	var parsed map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+// processChunkForTest runs a single chunk through processStreamChunk and returns
+// the accumulated attachments — exercising the collapsed single-unmarshal path.
+func processChunkForTest(t *testing.T, jsonStr string) []oasis.Attachment {
+	t.Helper()
+	g := testGemini()
+	var fullContent strings.Builder
+	var usage oasis.Usage
+	var attachments []oasis.Attachment
+	var finishReason string
+	var safety []geminiSafetyRating
+	ch := make(chan oasis.StreamEvent, 4)
+	if err := g.processStreamChunk(context.Background(), jsonStr,
+		&fullContent, &usage, &attachments, &finishReason, &safety, ch); err != nil {
+		t.Fatalf("processStreamChunk: %v", err)
 	}
+	close(ch)
+	return attachments
+}
 
-	atts := extractAttachmentsFromParsed(parsed)
+func TestProcessStreamChunk_InlineDataAttachment(t *testing.T) {
+	raw := `{"candidates":[{"content":{"parts":[{"text":"here"},{"inlineData":{"mimeType":"image/png","data":"abc123"}}]}}]}`
+	atts := processChunkForTest(t, raw)
 	if len(atts) != 1 {
 		t.Fatalf("expected 1 attachment, got %d", len(atts))
 	}
@@ -895,21 +1031,9 @@ func TestExtractAttachmentsFromParsed(t *testing.T) {
 	}
 }
 
-func TestExtractAttachmentsFromParsed_NoAttachments(t *testing.T) {
-	raw := `{
-		"candidates": [{
-			"content": {
-				"parts": [{"text": "just text"}]
-			}
-		}]
-	}`
-
-	var parsed map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	atts := extractAttachmentsFromParsed(parsed)
+func TestProcessStreamChunk_NoAttachments(t *testing.T) {
+	raw := `{"candidates":[{"content":{"parts":[{"text":"just text"}]}}]}`
+	atts := processChunkForTest(t, raw)
 	if len(atts) != 0 {
 		t.Fatalf("expected 0 attachments, got %d", len(atts))
 	}
@@ -1221,5 +1345,27 @@ func TestDoGenerate_FinishReasonSafety(t *testing.T) {
 	}
 	if result.ProviderMeta == nil {
 		t.Fatal("expected ProviderMeta for blocked safety rating")
+	}
+}
+
+// BenchmarkProcessStreamChunk measures the per-chunk cost of the collapsed
+// single-unmarshal SSE path on a realistic text+inlineData chunk.
+func BenchmarkProcessStreamChunk(b *testing.B) {
+	g := testGemini()
+	// ~4KB base64 image payload to approximate a real image-bearing chunk.
+	img := strings.Repeat("QUJD", 1024)
+	chunk := `{"candidates":[{"content":{"parts":[{"text":"a caption for the generated image"},{"inlineData":{"mimeType":"image/png","data":"` + img + `"}}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":7}}`
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var fullContent strings.Builder
+		var usage oasis.Usage
+		var attachments []oasis.Attachment
+		var finishReason string
+		var safety []geminiSafetyRating
+		// Nil channel: skip the send so we measure only parse/extract cost.
+		_ = g.processStreamChunk(context.Background(), chunk,
+			&fullContent, &usage, &attachments, &finishReason, &safety, nil)
 	}
 }

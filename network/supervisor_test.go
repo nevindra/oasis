@@ -111,6 +111,35 @@ func TestRestartOnFail_BackoffBetweenAttempts(t *testing.T) {
 	})
 }
 
+func TestRestartOnFail_CancelDuringDelay(t *testing.T) {
+	// Why: verify that cancelling the context during the retry delay
+	// stops the timer and returns promptly, without leaking the timer goroutine.
+	// A leaked time.After timer would block until the full delay elapses.
+	// We use a very long delay and a short timeout to make the leak obvious.
+	delay := 30 * time.Second // long delay — if leaked, the timer would block
+	f := &flakeyAgent{failFor: 99}
+	wrapped := RestartOnFail(1, delay).Wrap(f)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := wrapped.Execute(ctx, core.AgentTask{})
+	elapsed := time.Since(start)
+
+	// Must return ctx.Err() (context.DeadlineExceeded in this case)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+
+	// Must return much faster than the delay.
+	// If the timer leaks (old code), this would wait ~30s and fail.
+	// With timer.Stop() (fixed code), it returns in ~50ms.
+	if elapsed >= 5*time.Second {
+		t.Fatalf("returned too slowly: %v (timer likely leaked)", elapsed)
+	}
+}
+
 func TestFallback_UsesBackupOnError(t *testing.T) {
 	primary := &fixedAgent{name: "primary", err: errors.New("boom")}
 	backup := &fixedAgent{name: "backup", out: "rescued"}

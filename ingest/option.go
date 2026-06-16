@@ -64,46 +64,119 @@ func WithExtractor(ct ContentType, e Extractor) Option {
 	return func(ing *Ingestor) { ing.extractors[ct] = e }
 }
 
-// WithGraphExtraction enables LLM-based graph extraction during ingestion.
-func WithGraphExtraction(p oasis.Provider) Option {
-	return func(ing *Ingestor) { ing.graphProvider = p }
+// Default graph-extraction tuning. The zero value of GraphExtractionConfig is
+// expanded to these at construction time so callers can pass an empty config
+// and get the historical defaults.
+const (
+	defaultGraphBatchSize = 5
+	defaultGraphWorkers   = 3
+)
+
+// GraphExtractionConfig tunes LLM-based (and sequence) graph extraction during
+// ingestion. It is the single configuration surface for the feature — pass it
+// to WithGraphExtraction.
+//
+// The zero value reproduces the framework defaults: BatchSize 5, Workers 3, no
+// overlap, no edge filtering, no document context, sliding-window batching, and
+// no sequence edges. Any field left zero falls back to its default; set a field
+// to override it.
+//
+// Field interactions (applied at construction time):
+//   - SemanticBatching forces BatchOverlap to 0 — overlap is meaningful only for
+//     the sliding-window batcher, not embedding-based batching.
+//   - BatchOverlap is clamped to be strictly less than BatchSize; an overlap
+//     greater than or equal to the batch size would stall the sliding window.
+type GraphExtractionConfig struct {
+	// BatchSize is the number of chunks per LLM graph extraction call (default 5).
+	BatchSize int
+	// BatchOverlap is the number of chunks shared between consecutive sliding-window
+	// batches (default 0). Must be < BatchSize. Higher overlap discovers more
+	// cross-boundary relationships at the cost of more LLM calls. Ignored when
+	// SemanticBatching is true.
+	BatchOverlap int
+	// Workers is the max concurrent LLM calls for graph extraction (default 3).
+	// Set to 1 for sequential extraction.
+	Workers int
+	// MinEdgeWeight is the minimum edge weight to keep (default 0, no filtering).
+	MinEdgeWeight float32
+	// MaxEdgesPerChunk caps the number of edges kept per source chunk (default 0, unlimited).
+	MaxEdgesPerChunk int
+	// DocContextBytes is the max document text (in bytes) included in the extraction
+	// prompt (default 0, disabled). When > 0, each LLM call includes a truncated copy
+	// of the source document, giving the LLM structural context (headings, hierarchy)
+	// for better relationship decisions. Recommended: 50_000 (~12K tokens) for
+	// structured technical documents.
+	DocContextBytes int
+	// SemanticBatching enables embedding-based batching instead of the sliding window.
+	// Each chunk's nearest intra-document neighbors (by embedding similarity) are grouped
+	// into batches, producing higher-quality extraction with fewer wasted calls. When
+	// true, BatchOverlap is ignored (forced to 0).
+	SemanticBatching bool
+	// SequenceEdges enables automatic creation of RelSequence edges between consecutive
+	// chunks in the same document (default false). This is a lightweight, non-LLM
+	// alternative that links chunk[i] → chunk[i+1], allowing GraphRetriever to walk to
+	// neighboring chunks for additional context. Works without a provider.
+	SequenceEdges bool
 }
 
-// WithMinEdgeWeight sets the minimum edge weight to keep (default 0, no filtering).
-func WithMinEdgeWeight(w float32) Option {
-	return func(ing *Ingestor) { ing.minEdgeWeight = w }
-}
+// WithGraphExtraction configures graph extraction during ingestion using cfg.
+//
+// Pass a non-nil provider p to enable LLM-based relationship extraction. Pass a
+// nil provider together with GraphExtractionConfig{SequenceEdges: true} to emit
+// only deterministic sequence edges (no LLM calls). An empty config uses the
+// framework defaults (see GraphExtractionConfig).
+//
+// Why: a single config struct replaces nine separate With* options whose
+// interactions (overlap vs. semantic batching, overlap vs. batch size) were
+// invisible at the call site and only validated implicitly deep in extraction.
+// Validation now happens once, here, at construction time.
+func WithGraphExtraction(p oasis.Provider, cfg GraphExtractionConfig) Option {
+	return func(ing *Ingestor) {
+		ing.graphProvider = p
 
-// WithMaxEdgesPerChunk caps the number of edges kept per source chunk (default 0, unlimited).
-func WithMaxEdgesPerChunk(n int) Option {
-	return func(ing *Ingestor) { ing.maxEdgesPerChunk = n }
-}
+		// Expand zero-value fields to defaults so an empty config reproduces the
+		// historical NewIngestor behaviour.
+		if cfg.BatchSize <= 0 {
+			cfg.BatchSize = defaultGraphBatchSize
+		}
+		if cfg.Workers <= 0 {
+			cfg.Workers = defaultGraphWorkers
+		}
 
-// WithGraphBatchSize sets the number of chunks per LLM graph extraction call (default 5).
-func WithGraphBatchSize(n int) Option {
-	return func(ing *Ingestor) { ing.graphBatchSize = n }
-}
+		// Why: overlap is meaningless under semantic batching (no sliding window),
+		// so a non-zero overlap there is a configuration mistake — zero it and note it.
+		if cfg.SemanticBatching && cfg.BatchOverlap != 0 {
+			if ing.logger != nil {
+				ing.logger.Info("graph extraction: BatchOverlap ignored because SemanticBatching is enabled",
+					"requested_overlap", cfg.BatchOverlap)
+			}
+			cfg.BatchOverlap = 0
+		}
 
-// WithGraphBatchOverlap sets the number of chunks that overlap between consecutive
-// extraction batches (default 0). Overlap must be less than graphBatchSize.
-// Higher overlap discovers more cross-boundary relationships at the cost of more LLM calls.
-func WithGraphBatchOverlap(n int) Option {
-	return func(ing *Ingestor) { ing.graphBatchOverlap = n }
-}
+		// Why: an overlap >= batch size would never advance the sliding window
+		// (stride <= 0), so clamp it to batchSize-1.
+		if cfg.BatchOverlap >= cfg.BatchSize {
+			clamped := cfg.BatchSize - 1
+			if clamped < 0 {
+				clamped = 0
+			}
+			if ing.logger != nil {
+				ing.logger.Info("graph extraction: BatchOverlap clamped below BatchSize",
+					"requested_overlap", cfg.BatchOverlap, "batch_size", cfg.BatchSize,
+					"clamped_overlap", clamped)
+			}
+			cfg.BatchOverlap = clamped
+		}
 
-// WithGraphExtractionWorkers sets the max concurrent LLM calls for graph extraction
-// (default 3). Set to 1 for sequential extraction.
-func WithGraphExtractionWorkers(n int) Option {
-	return func(ing *Ingestor) { ing.graphWorkers = n }
-}
-
-// WithSequenceEdges enables automatic creation of sequence edges between
-// consecutive chunks in the same document (default false). This is a
-// lightweight, non-LLM alternative that links chunk[i] → chunk[i+1] with
-// RelSequence edges, allowing GraphRetriever to walk to neighboring chunks
-// for additional context. Works independently of WithGraphExtraction.
-func WithSequenceEdges(b bool) Option {
-	return func(ing *Ingestor) { ing.sequenceEdges = b }
+		ing.graphBatchSize = cfg.BatchSize
+		ing.graphBatchOverlap = cfg.BatchOverlap
+		ing.graphWorkers = cfg.Workers
+		ing.minEdgeWeight = cfg.MinEdgeWeight
+		ing.maxEdgesPerChunk = cfg.MaxEdgesPerChunk
+		ing.graphDocContextBytes = cfg.DocContextBytes
+		ing.semanticBatching = cfg.SemanticBatching
+		ing.sequenceEdges = cfg.SequenceEdges
+	}
 }
 
 // WithContextualEnrichment enables LLM-based contextual enrichment during
@@ -192,26 +265,6 @@ func WithBatchConcurrency(n int) Option {
 // at the end of an IngestBatch call (default false).
 func WithBatchCrossDocEdges(b bool) Option {
 	return func(ing *Ingestor) { ing.batchCrossDocEdges = b }
-}
-
-// WithGraphDocContext sets the maximum document text (in bytes) included in the
-// graph extraction prompt. When > 0, each LLM extraction call includes a
-// truncated copy of the source document, giving the LLM structural context
-// (headings, section hierarchy) to make better relationship decisions.
-// Default is 0 (disabled — no document context in prompt).
-// Recommended: 50_000 (~12K tokens) for structured technical documents.
-func WithGraphDocContext(maxBytes int) Option {
-	return func(ing *Ingestor) { ing.graphDocContextBytes = maxBytes }
-}
-
-// WithSemanticBatching enables embedding-based batching for graph extraction
-// instead of the default sliding window. When enabled, each chunk's nearest
-// intra-document neighbors (by embedding similarity) are grouped into batches,
-// producing higher-quality LLM extraction with fewer wasted calls.
-// When enabled, WithGraphBatchOverlap is ignored (overlap is meaningful only
-// for sequential windowing).
-func WithSemanticBatching(b bool) Option {
-	return func(ing *Ingestor) { ing.semanticBatching = b }
 }
 
 // WithLLMTimeout sets the maximum duration for individual LLM calls during

@@ -142,6 +142,46 @@ func (b BatchedRecall) Process(ctx context.Context, in *RetrieveContext) error {
 	return nil
 }
 
+// LoadWorkingMemory loads the single canonical working-memory KindNote item
+// for the agent and renders it as a prompt part.
+//
+// Why: working memory is a persistent scratchpad, not a similarity-ranked
+// recall result — it must be loaded on every turn regardless of the input
+// embedding. So it does an exact-ID Get on WorkingMemoryID(agentName, scope)
+// rather than going through BatchedRecall. The Scope is the configured working
+// memory scope anchored to the task's ChatID (falling back to ThreadID).
+type LoadWorkingMemory struct {
+	Scope core.MemoryScopeKind // working-memory scope kind (default ScopeResource)
+}
+
+func (w LoadWorkingMemory) Process(ctx context.Context, in *RetrieveContext) error {
+	if in.Store == nil {
+		return nil
+	}
+	sc := w.Scope
+	if sc == "" {
+		sc = ScopeResource
+	}
+	ref := in.Task.ChatID
+	if ref == "" {
+		ref = in.Task.ThreadID
+	}
+	id := WorkingMemoryID(in.AgentName, Scoped(sc, ref))
+	it, err := in.Store.Get(ctx, id)
+	if err != nil {
+		// Why: a missing working-memory note is the common case (none written
+		// yet), not an error worth surfacing — Get returns ErrNotFound. Skip
+		// silently; the pipeline logs only genuine store failures via the
+		// returned error, and ErrNotFound here is expected, so swallow it.
+		return nil
+	}
+	if it.Content == "" {
+		return nil
+	}
+	in.PromptParts = append(in.PromptParts, "Working memory:\n"+truncateStr(it.Content, maxRecallContentLen))
+	return nil
+}
+
 // RecallCrossThread runs cross-thread semantic recall on the messages table.
 // Stays separate from BatchedRecall because it queries a different table.
 type RecallCrossThread struct{ MinScore float32 }

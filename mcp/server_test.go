@@ -5,11 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+// blockingReader blocks on Read until its done channel is closed, then returns
+// EOF. It models an idle stdin that never delivers a line — the condition under
+// which Serve must still observe context cancellation.
+type blockingReader struct{ done chan struct{} }
+
+func (b *blockingReader) Read(p []byte) (int, error) {
+	<-b.done
+	return 0, io.EOF
+}
 
 // testServer creates a Server wired to in-memory reader/writer for testing.
 func testServer() (*Server, *bytes.Buffer) {
@@ -108,11 +120,7 @@ func TestToolsList(t *testing.T) {
 		Definition: ToolDefinition{
 			Name:        "search_docs",
 			Description: "Search documentation",
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"query": map[string]any{"type": "string"}},
-				"required":   []string{"query"},
-			},
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
 		},
 		Execute: func(_ context.Context, _ json.RawMessage) ToolCallResult { return TextResult("ok") },
 	})
@@ -317,6 +325,38 @@ func TestWithServerLogger(t *testing.T) {
 	mu.Unlock()
 	if n == 0 {
 		t.Fatal("expected logger to receive at least one error record")
+	}
+}
+
+// TestServe_CancelOnIdleStdin asserts Serve returns promptly when its context
+// is cancelled even though stdin is idle (blocks forever). Without selecting on
+// ctx.Done() alongside the scan, Scanner.Scan() blocks indefinitely and the
+// deadline is never observed.
+func TestServe_CancelOnIdleStdin(t *testing.T) {
+	srv := New("test-server", "1.0.0")
+	br := &blockingReader{done: make(chan struct{})}
+	defer close(br.done)
+	srv.reader = br
+	var out bytes.Buffer
+	srv.writer = &out
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- srv.Serve(ctx) }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Serve returned %v, want context.DeadlineExceeded", err)
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("Serve took %v to observe cancellation; want ~deadline", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after context deadline — blocked on idle stdin")
 	}
 }
 

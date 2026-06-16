@@ -268,7 +268,11 @@ func buildMemWhere(base string, f core.MemoryFilter, withOrderLimit bool) (strin
 		if limit <= 0 {
 			limit = 50
 		}
-		sb.WriteString(fmt.Sprintf(" LIMIT %d", limit))
+		// Why: parameterize LIMIT like every other clause so the whole query is
+		// uniformly bound (no fmt.Sprintf'd literal mixed into a parameterized
+		// statement).
+		sb.WriteString(" LIMIT ?")
+		args = append(args, limit)
 	}
 	return sb.String(), args
 }

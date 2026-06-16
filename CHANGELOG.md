@@ -6,8 +6,41 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Breaking
+
+- **`mcp.ToolDefinition.InputSchema`** changed from `any` to `json.RawMessage`. Replace `map[string]any{...}` schemas with `` json.RawMessage(`{...}`) `` or marshal a typed struct.
+- **`guardrail.KeywordGuard`** switched to functional options. Replace receiver-method chains (`NewKeywordGuard(kws...).WithRegex(...).WithResponse(...)`) with `NewKeywordGuard(kws, guardrail.KeywordRegex(...), guardrail.KeywordResponse(...))`. `WithRegex`, `WithKeywordLogger`, and `WithResponse` receiver methods are gone.
+- **`ingest.WithGraphExtraction`** now takes `(provider, ingest.GraphExtractionConfig)`. The nine separate `With*` options (`WithSequenceEdges`, `WithMinEdgeWeight`, `WithGraphExtractionWorkers`, `WithSemanticBatching`, `WithGraphBatchSize`, `WithGraphBatchOverlap`, `WithGraphDocContext`, `WithMaxEdgesPerChunk`) are removed; set the equivalent fields on `GraphExtractionConfig` instead.
+- **`rag.NewGraphRetriever`** now takes `(store, embedder, rag.GraphRetrieverConfig)` instead of variadic `GraphRetrieverOption` funcs. The 15 `With*` option funcs are gone; use the corresponding fields on `GraphRetrieverConfig`.
+- **`openaicompat`** embedding option renames: `WithEmbeddingName` → `WithName`; `WithEmbeddingHTTPClient` → `WithHTTPClient`. Both now satisfy both `ProviderOption` and `EmbeddingOption`, so a single value can be passed to either constructor.
+
+### Fixed
+
+- **MCP `Reconnect` data race** — concurrent `Reconnect` calls on the same server no longer race on the internal state map.
+- **MCP `Serve` cancellation hang** — `(*Server).Serve` now returns promptly on context cancellation instead of blocking on the next stdin read.
+- **Swallowed errors** — errors in `memory` ingest processors, `mcp` dispatch, and `eval` scorer invocations are now propagated or logged rather than silently discarded.
+- **`core.ScoreFilter.RunID` was ignored** — `store/sqlite` and `store/postgres` now apply the `RunID` constraint in `ListScores` and `DeleteScores`.
+- **`store/postgres` placeholder bug** — parameters at index ≥ 10 used the wrong `$N` placeholder; now fixed.
+- **`store/sqlite.SaveScores` rollback** — a failed batch write now rolls back the transaction correctly instead of committing a partial batch.
+- **`ingest.IngestText` size bound** — the max-content-size guard is now applied before UTF-8 conversion, preventing an allocation spike on large binary inputs.
+- **Workflow step panic recovery** — panics inside a workflow step are now recovered and returned as errors rather than crashing the process.
+- **Supervisor and dashscope timer leaks** — `time.After` usage replaced with `time.NewTimer` + explicit stop, closing long-lived goroutine leaks.
+
+### Changed
+
+- **Gemini SSE single-parse** — streamed SSE responses are parsed in one pass rather than two, halving allocations on the streaming hot path.
+- **MCP `CallTool` typed struct** — the internal call payload uses a typed struct instead of `map[string]any`, reducing allocations per tool call.
+- **`guardrail.ContentGuard` uses UTF-8 rune count** — input and output length checks now count Unicode code points (via `utf8.RuneCountInString`) rather than bytes, matching the documented semantics.
+
 ### Added
 
+- **`eval.EvalResult.ScorerErrors map[string]error`** — per-scorer failures keyed by scorer ID. A scorer present in this map errored and has no entry in `Scores`. Nil when all scorers succeeded.
+- **`core.ScoreFilter.RunID string`** — scopes `ListScores` / `DeleteScores` to a single run ID.
+- **`core.ScoreStore.GetScore`** now returns `core.ErrNotFound` when no row with the given ID exists.
+- **`memory.WithWorkingMemory()`** is now fully implemented: when set, the canonical `KindNote` scratchpad is loaded into context on every turn via the new `memory.LoadWorkingMemory` retrieve processor (exact-ID lookup, not embedding-ranked recall).
+- **`memory.LoadWorkingMemory`** — exported retrieve processor for the working-memory slot; wired automatically by `WithWorkingMemory()` but also usable in custom retrieve pipelines.
+- **`catalog.WithHTTPClient(*http.Client) CatalogOption`** — custom HTTP client for live model-listing calls in `ModelCatalog` (useful in tests).
+- **`gemini.NewEmbedding`** now accepts `opts ...GeminiEmbeddingOption`; `gemini.WithEmbeddingHTTPClient` is the first option.
 - **`guardrail.CostGuard`** — per-run, per-model spend ceiling (deterministic; no observability storage). Prices cumulative token usage against an injected pricing table (`WithPricing`). Halts (`*core.ErrHalt`) or warns (`WarnOnly`) when the budget is exceeded. Unknown models cost 0 (fail open); no pricing configured = inactive + warns once.
 - **`guardrail.TokenBudgetGuard`** — heuristic token-aware context trimming (`PreLLM`). Drops oldest non-system messages until the estimated token count fits the budget. Complements compaction (which summarizes; this trims losslessly). Plug in a real tokenizer via `WithEstimator`; protect recent messages with `PreserveLast`.
 - **`guardrail.RedactionGuard`** — deterministic PII/secrets/URLs redaction on input (`PreLLM`), output (`PostLLM`), and streamed text/thinking deltas (`PostChunk`). Ships built-in presets (`"pii"`, `"secrets"`, `"urls"`); supports custom `regexp` rules. Three strategies: `StrategyRedact` (replace), `StrategyBlock` (halt), `StrategyWarn` (log-only).

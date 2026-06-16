@@ -25,14 +25,14 @@ func main() {
         Definition: mcp.ToolDefinition{
             Name:        "add",
             Description: "Add two integers",
-            InputSchema: map[string]any{
+            InputSchema: json.RawMessage(`{
                 "type": "object",
-                "properties": map[string]any{
-                    "a": map[string]any{"type": "integer"},
-                    "b": map[string]any{"type": "integer"},
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"}
                 },
-                "required": []string{"a", "b"},
-            },
+                "required": ["a", "b"]
+            }`),
         },
         Execute: func(ctx context.Context, args json.RawMessage) mcp.ToolCallResult {
             var in struct {

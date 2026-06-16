@@ -90,14 +90,8 @@ var _ oasis.DocumentMetaLister = (*Store)(nil)
 var _ oasis.ScheduledActionStore = (*Store)(nil)
 
 // nopLogger is a logger that discards all output.
-var nopLogger = slog.New(pgDiscardHandler{})
-
-type pgDiscardHandler struct{}
-
-func (pgDiscardHandler) Enabled(context.Context, slog.Level) bool  { return false }
-func (pgDiscardHandler) Handle(context.Context, slog.Record) error { return nil }
-func (d pgDiscardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
-func (d pgDiscardHandler) WithGroup(string) slog.Handler           { return d }
+// Why: slog.DiscardHandler (Go 1.24+) replaces the hand-rolled no-op handler.
+var nopLogger = slog.New(slog.DiscardHandler)
 
 // ConfigurePoolConfig applies store settings that require per-connection
 // setup to a pgxpool.Config. Call this before pgxpool.NewWithConfig so

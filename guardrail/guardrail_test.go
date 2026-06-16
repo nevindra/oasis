@@ -432,10 +432,52 @@ func TestContentGuardEmptyMessages(t *testing.T) {
 	}
 }
 
+// TestContentGuardMultibyteRuneCount ensures PreLLM and PostLLM count runes
+// (not bytes) so that multibyte UTF-8 sequences (emoji, CJK) are counted as
+// one rune each. This pins the semantics after the utf8.RuneCountInString
+// optimisation (finding #1).
+func TestContentGuardMultibyteRuneCount(t *testing.T) {
+	// "Hello🌍" = 6 runes (5 ASCII + 1 emoji — 4 bytes); byte-length = 9.
+	// With MaxInputLength(6) it must pass; with MaxInputLength(5) it must block.
+	const s = "Hello\U0001F30D" // Hello + EARTH GLOBE EUROPE-AFRICA (U+1F30D)
+
+	t.Run("input at limit passes", func(t *testing.T) {
+		g := NewContentGuard(MaxInputLength(6))
+		req := core.ChatRequest{Messages: []core.ChatMessage{core.UserMessage(s)}}
+		if err := g.PreLLM(context.Background(), &req); err != nil {
+			t.Errorf("expected pass for 6-rune input with limit 6, got %v", err)
+		}
+	})
+	t.Run("input over limit blocks", func(t *testing.T) {
+		g := NewContentGuard(MaxInputLength(5))
+		req := core.ChatRequest{Messages: []core.ChatMessage{core.UserMessage(s)}}
+		if err := g.PreLLM(context.Background(), &req); err == nil {
+			t.Error("expected block for 6-rune input with limit 5, got nil")
+		}
+	})
+
+	// CJK: "你好世界" = 4 runes, byte-length = 12.
+	const cjk = "你好世界"
+	t.Run("output CJK at limit passes", func(t *testing.T) {
+		g := NewContentGuard(MaxOutputLength(4))
+		resp := core.ChatResponse{Content: cjk}
+		if err := g.PostLLM(context.Background(), &resp); err != nil {
+			t.Errorf("expected pass for 4-rune CJK output with limit 4, got %v", err)
+		}
+	})
+	t.Run("output CJK over limit blocks", func(t *testing.T) {
+		g := NewContentGuard(MaxOutputLength(3))
+		resp := core.ChatResponse{Content: cjk}
+		if err := g.PostLLM(context.Background(), &resp); err == nil {
+			t.Error("expected block for 4-rune CJK output with limit 3, got nil")
+		}
+	})
+}
+
 // --- KeywordGuard tests ---
 
 func TestKeywordGuard(t *testing.T) {
-	guard := NewKeywordGuard("DROP TABLE", "rm -rf")
+	guard := NewKeywordGuard([]string{"DROP TABLE", "rm -rf"})
 
 	tests := []struct {
 		name    string
@@ -464,8 +506,8 @@ func TestKeywordGuard(t *testing.T) {
 }
 
 func TestKeywordGuardWithRegex(t *testing.T) {
-	guard := NewKeywordGuard("bad").
-		WithRegex(regexp.MustCompile(`\b(SSN|social\s+security)\b`))
+	guard := NewKeywordGuard([]string{"bad"},
+		KeywordRegex(regexp.MustCompile(`\b(SSN|social\s+security)\b`)))
 
 	tests := []struct {
 		name    string
@@ -493,7 +535,7 @@ func TestKeywordGuardWithRegex(t *testing.T) {
 }
 
 func TestKeywordGuardCustomResponse(t *testing.T) {
-	guard := NewKeywordGuard("blocked").WithResponse("nope!")
+	guard := NewKeywordGuard([]string{"blocked"}, KeywordResponse("nope!"))
 
 	req := core.ChatRequest{Messages: []core.ChatMessage{core.UserMessage("This is blocked content")}}
 	err := guard.PreLLM(context.Background(), &req)
@@ -508,7 +550,7 @@ func TestKeywordGuardCustomResponse(t *testing.T) {
 }
 
 func TestKeywordGuardEmptyMessages(t *testing.T) {
-	guard := NewKeywordGuard("blocked")
+	guard := NewKeywordGuard([]string{"blocked"})
 
 	req := core.ChatRequest{Messages: []core.ChatMessage{}}
 	if err := guard.PreLLM(context.Background(), &req); err != nil {

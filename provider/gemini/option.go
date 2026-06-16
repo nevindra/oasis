@@ -1,9 +1,25 @@
 package gemini
 
-import "log/slog"
+import (
+	"log/slog"
+	"net/http"
+)
 
 // Option configures a Gemini provider.
 type Option func(*Gemini)
+
+// GeminiEmbeddingOption configures a Gemini embedding provider.
+//
+// Why: mirrors the functional-options shape used by every other constructor in
+// this package (New, batch constructors) so codegen and callers get a
+// consistent API. The zero-option case preserves the prior default client.
+type GeminiEmbeddingOption func(*GeminiEmbedding)
+
+// WithEmbeddingHTTPClient sets a custom HTTP client for the embedding provider
+// (e.g. for timeouts, proxies, or test servers). Defaults to &http.Client{}.
+func WithEmbeddingHTTPClient(c *http.Client) GeminiEmbeddingOption {
+	return func(e *GeminiEmbedding) { e.httpClient = c }
+}
 
 // WithTemperature sets the sampling temperature (default 0.1).
 func WithTemperature(t float64) Option {

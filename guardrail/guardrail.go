@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nevindra/oasis/core"
 	"golang.org/x/text/unicode/norm"
@@ -380,7 +381,8 @@ func (g *ContentGuard) PreLLM(_ context.Context, req *core.ChatRequest) error {
 		return nil
 	}
 	content := lastUserContent(req.Messages)
-	runeLen := len([]rune(content))
+	// Why: utf8.RuneCountInString avoids allocating a []rune slice on the hot path.
+	runeLen := utf8.RuneCountInString(content)
 	if runeLen > g.maxInputLen {
 		g.logger.Warn("input content exceeds limit", "length", runeLen, "max", g.maxInputLen)
 		return &core.ErrHalt{Response: g.response}
@@ -393,7 +395,8 @@ func (g *ContentGuard) PostLLM(_ context.Context, resp *core.ChatResponse) error
 	if g.maxOutputLen <= 0 {
 		return nil
 	}
-	runeLen := len([]rune(resp.Content))
+	// Why: utf8.RuneCountInString avoids allocating a []rune slice on the hot path.
+	runeLen := utf8.RuneCountInString(resp.Content)
 	if runeLen > g.maxOutputLen {
 		g.logger.Warn("output content exceeds limit", "length", runeLen, "max", g.maxOutputLen)
 		return &core.ErrHalt{Response: g.response}
@@ -419,39 +422,41 @@ type KeywordGuard struct {
 	logger   *slog.Logger
 }
 
+// KeywordOption configures a KeywordGuard.
+type KeywordOption func(*KeywordGuard)
+
+// KeywordRegex adds regex patterns matched against the raw (non-lowercased) content.
+func KeywordRegex(patterns ...*regexp.Regexp) KeywordOption {
+	return func(g *KeywordGuard) { g.regexes = append(g.regexes, patterns...) }
+}
+
+// KeywordLogger sets the structured logger for the guard. When set,
+// blocked messages are logged at WARN level with the matched keyword or pattern.
+func KeywordLogger(l *slog.Logger) KeywordOption {
+	return func(g *KeywordGuard) { g.logger = l }
+}
+
+// KeywordResponse sets the halt response message.
+// Default: "Message contains blocked content."
+func KeywordResponse(msg string) KeywordOption {
+	return func(g *KeywordGuard) { g.response = msg }
+}
+
 // NewKeywordGuard creates a guard that blocks messages containing any of
 // the specified keywords. Keywords are matched case-insensitively as substrings.
-func NewKeywordGuard(keywords ...string) *KeywordGuard {
+func NewKeywordGuard(keywords []string, opts ...KeywordOption) *KeywordGuard {
 	lower := make([]string, len(keywords))
 	for i, k := range keywords {
 		lower[i] = strings.ToLower(k)
 	}
-	return &KeywordGuard{
+	g := &KeywordGuard{
 		keywords: lower,
 		response: "Message contains blocked content.",
 		logger:   nopLogger,
 	}
-}
-
-// WithRegex adds regex patterns to the keyword guard.
-// Returns the guard for builder-style chaining.
-func (g *KeywordGuard) WithRegex(patterns ...*regexp.Regexp) *KeywordGuard {
-	g.regexes = append(g.regexes, patterns...)
-	return g
-}
-
-// WithKeywordLogger sets the structured logger for the guard. When set,
-// blocked messages are logged at WARN level with the matched keyword.
-// Returns the guard for builder-style chaining.
-func (g *KeywordGuard) WithKeywordLogger(l *slog.Logger) *KeywordGuard {
-	g.logger = l
-	return g
-}
-
-// WithResponse sets the halt response message.
-// Returns the guard for builder-style chaining.
-func (g *KeywordGuard) WithResponse(msg string) *KeywordGuard {
-	g.response = msg
+	for _, opt := range opts {
+		opt(g)
+	}
 	return g
 }
 

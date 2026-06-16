@@ -451,14 +451,7 @@ func (r *Registry) registerTools(entry *serverEntry, tools []ToolDefinition) err
 			continue
 		}
 
-		var params json.RawMessage
-		if t.InputSchema != nil {
-			if raw, ok := t.InputSchema.(json.RawMessage); ok {
-				params = raw
-			} else if b, merr := json.Marshal(t.InputSchema); merr == nil {
-				params = b
-			}
-		}
+		params := t.InputSchema
 
 		te := &toolEntry{
 			serverName: serverName,
@@ -717,7 +710,13 @@ func (r *Registry) Reconnect(ctx context.Context, name string) error {
 		return ErrServerNotFound
 	}
 	entry.state.Store(int32(StateReconnecting))
+	// Why: reconnectLoop guards backoff.attempts with reconnectMu for its whole
+	// run. A bare reset here races a loop already sleeping between attempts, so
+	// take the same lock. The spawned loop also re-zeroes attempts under the
+	// lock; this reset just guarantees a clean start if no loop is running.
+	entry.reconnectMu.Lock()
 	entry.backoff.attempts = 0
+	entry.reconnectMu.Unlock()
 	go entry.reconnectLoop()
 	return nil
 }
@@ -927,7 +926,12 @@ func (r *Registry) routeNotification(server, method string, params json.RawMessa
 			Level LogLevel        `json:"level"`
 			Data  json.RawMessage `json:"data"`
 		}
-		_ = json.Unmarshal(params, &p)
+		// Why: a discarded unmarshal error would emit a phantom zero-value event
+		// on malformed JSON. Log with context and drop the notification instead.
+		if err := json.Unmarshal(params, &p); err != nil {
+			r.logBadNotification(server, method, err)
+			return
+		}
 		r.emit(Event{Type: EventLog, Server: server, Level: p.Level,
 			Message: messageFromLogData(p.Data), Timestamp: time.Now()})
 	case "notifications/progress":
@@ -937,14 +941,20 @@ func (r *Registry) routeNotification(server, method string, params json.RawMessa
 			Total    float64 `json:"total"`
 			Message  string  `json:"message"`
 		}
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			r.logBadNotification(server, method, err)
+			return
+		}
 		r.emit(Event{Type: EventProgress, Server: server, Tool: toolFromProgressToken(p.Token),
 			Progress: p.Progress, Total: p.Total, Message: p.Message, Timestamp: time.Now()})
 	case "notifications/resources/updated":
 		var p struct {
 			URI string `json:"uri"`
 		}
-		_ = json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			r.logBadNotification(server, method, err)
+			return
+		}
 		r.emit(Event{Type: EventResourceUpdated, Server: server, URI: p.URI, Timestamp: time.Now()})
 	case "notifications/resources/list_changed":
 		r.emit(Event{Type: EventResourceListChanged, Server: server, Timestamp: time.Now()})
@@ -952,6 +962,15 @@ func (r *Registry) routeNotification(server, method string, params json.RawMessa
 		r.emit(Event{Type: EventPromptListChanged, Server: server, Timestamp: time.Now()})
 	default:
 		// Unknown / unhandled (e.g. tools/list_changed) — ignored.
+	}
+}
+
+// logBadNotification records a malformed server notification at warn level. No
+// event is emitted for a notification that fails to parse.
+func (r *Registry) logBadNotification(server, method string, err error) {
+	if r.logger != nil {
+		r.logger.Warn("MCP notification dropped: malformed params",
+			"server", server, "method", method, "err", err)
 	}
 }
 

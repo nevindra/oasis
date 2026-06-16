@@ -252,10 +252,15 @@ func (p *Provider) generateInterleaved(ctx context.Context, prompt string) ([]oa
 func (p *Provider) pollTask(ctx context.Context, taskID string) ([]oasis.Attachment, error) {
 	taskURL := p.baseURL + "/tasks/" + taskID
 	for {
+		// Why: a fresh time.After timer per iteration is not garbage-collected
+		// until it fires, so cancelling mid-delay would leak one timer per loop.
+		// NewTimer + explicit Stop on the cancel arm releases it immediately.
+		t := time.NewTimer(3 * time.Second)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return nil, ctx.Err()
-		case <-time.After(3 * time.Second):
+		case <-t.C:
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, taskURL, nil)

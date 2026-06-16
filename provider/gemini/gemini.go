@@ -3,6 +3,7 @@ package gemini
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -77,7 +78,7 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 		return oasis.ChatResponse{}, g.wrapErr("marshal body: " + err.Error())
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("create request: " + err.Error())
 	}
@@ -167,40 +168,77 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 	return out, nil
 }
 
-// processStreamChunk parses a single JSON chunk from the SSE stream,
-// extracts text deltas, usage, finish reason, and safety ratings, and sends
-// text events to the channel. The last non-empty finishReason and any safety
-// ratings from candidates[0] overwrite the caller's accumulators.
-// Returns ctx.Err() if the consumer has cancelled before the send completes.
+// geminiStreamChunk is the typed shape of one SSE chunk from
+// streamGenerateContent. It captures everything a chunk can carry —
+// candidates[0].content.parts (text AND inlineData), finishReason, safety
+// ratings, and usageMetadata — so a single json.Unmarshal per chunk replaces the
+// prior 7-8 redundant parses of the same (possibly multi-MB) payload.
+type geminiStreamChunk struct {
+	Candidates    []geminiCandidate `json:"candidates"`
+	UsageMetadata *geminiUsage      `json:"usageMetadata"`
+}
+
+// processStreamChunk parses a single JSON chunk from the SSE stream with ONE
+// typed unmarshal, extracts text deltas, attachments, usage, finish reason, and
+// safety ratings, and sends text events to the channel. The last non-empty
+// finishReason and any safety ratings from candidates[0] overwrite the caller's
+// accumulators. Returns ctx.Err() if the consumer has cancelled before the send
+// completes; a malformed chunk is skipped (returns nil).
 func (g *Gemini) processStreamChunk(ctx context.Context, jsonStr string, fullContent *strings.Builder, usage *oasis.Usage, attachments *[]oasis.Attachment, finishReason *string, safetyRatings *[]geminiSafetyRating, ch chan<- oasis.StreamEvent) error {
-	var parsed map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+	// Why: one typed unmarshal per chunk. json.Unmarshal already reports
+	// malformed JSON, so a separate json.Valid pre-check is redundant here.
+	var chunk geminiStreamChunk
+	if err := json.Unmarshal([]byte(jsonStr), &chunk); err != nil {
 		return nil
 	}
 
-	// Extract text from candidates[0].content.parts[].text
-	text := extractTextFromParsed(parsed)
-	if text != "" {
-		fullContent.WriteString(text)
-		if ch != nil {
-			select {
-			case ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: text}:
-			case <-ctx.Done():
-				return ctx.Err()
+	if len(chunk.Candidates) > 0 {
+		cand := chunk.Candidates[0]
+
+		// Text and inlineData parts can coexist in one payload; walk parts once.
+		var text strings.Builder
+		for _, p := range cand.Content.Parts {
+			if p.Thought {
+				continue
 			}
+			if p.Text != nil {
+				text.WriteString(*p.Text)
+			}
+			if p.InlineData != nil {
+				raw, _ := base64.StdEncoding.DecodeString(p.InlineData.Data)
+				*attachments = append(*attachments, oasis.Attachment{
+					MimeType: p.InlineData.MimeType,
+					Data:     raw,
+				})
+			}
+		}
+
+		if t := text.String(); t != "" {
+			fullContent.WriteString(t)
+			if ch != nil {
+				select {
+				case ch <- oasis.StreamEvent{Type: oasis.EventTextDelta, Content: t}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		}
+
+		// Last non-empty finishReason / safety ratings win (terminal chunk).
+		if cand.FinishReason != "" {
+			*finishReason = cand.FinishReason
+		}
+		if len(cand.SafetyRatings) > 0 {
+			*safetyRatings = cand.SafetyRatings
 		}
 	}
 
-	// Extract attachments from inlineData parts.
-	if atts := extractAttachmentsFromParsed(parsed); len(atts) > 0 {
-		*attachments = append(*attachments, atts...)
+	// Usage-only chunks carry no candidates; update usage when present.
+	if u := chunk.UsageMetadata; u != nil && (u.PromptTokenCount > 0 || u.CandidatesTokenCount > 0) {
+		usage.InputTokens = u.PromptTokenCount
+		usage.OutputTokens = u.CandidatesTokenCount
+		usage.CachedTokens = u.CachedContentTokenCount
 	}
-
-	// Extract usage metadata (overwrite each time; last chunk wins).
-	extractUsageFromParsed(parsed, usage)
-
-	// Extract finish reason and safety ratings from candidates[0].
-	extractFinishMetaFromParsed(parsed, finishReason, safetyRatings)
 	return nil
 }
 
@@ -213,7 +251,7 @@ func (g *Gemini) doGenerate(ctx context.Context, body map[string]any) (oasis.Cha
 		return oasis.ChatResponse{}, g.wrapErr("marshal body: " + err.Error())
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return oasis.ChatResponse{}, g.wrapErr("create request: " + err.Error())
 	}
@@ -369,14 +407,20 @@ type GeminiEmbedding struct {
 	httpClient *http.Client
 }
 
-// NewEmbedding creates a new Gemini embedding provider.
-func NewEmbedding(apiKey, model string, dims int) *GeminiEmbedding {
-	return &GeminiEmbedding{
+// NewEmbedding creates a new Gemini embedding provider. Optional functional
+// options (e.g. WithEmbeddingHTTPClient) customise the provider; with no options
+// the HTTP client defaults to &http.Client{}.
+func NewEmbedding(apiKey, model string, dims int, opts ...GeminiEmbeddingOption) *GeminiEmbedding {
+	e := &GeminiEmbedding{
 		apiKey:     apiKey,
 		model:      model,
 		dims:       dims,
 		httpClient: &http.Client{},
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // Name returns "gemini".
@@ -406,7 +450,7 @@ func (e *GeminiEmbedding) Embed(ctx context.Context, texts []string) ([][]float3
 			return nil, &oasis.ErrLLM{Provider: "gemini", Message: "marshal embed body: " + err.Error()}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 		if err != nil {
 			return nil, &oasis.ErrLLM{Provider: "gemini", Message: "create embed request: " + err.Error()}
 		}
@@ -777,134 +821,6 @@ type embedResponse struct {
 
 type embedValues struct {
 	Values []float64 `json:"values"`
-}
-
-// ---- Stream helpers ----
-
-// extractTextFromParsed extracts concatenated text from candidates[0].content.parts[].text
-// in a raw parsed JSON map.
-func extractTextFromParsed(parsed map[string]json.RawMessage) string {
-	candidatesRaw, ok := parsed["candidates"]
-	if !ok {
-		return ""
-	}
-
-	var candidates []json.RawMessage
-	if err := json.Unmarshal(candidatesRaw, &candidates); err != nil || len(candidates) == 0 {
-		return ""
-	}
-
-	var candidate struct {
-		Content struct {
-			Parts []struct {
-				Text    *string `json:"text,omitempty"`
-				Thought bool    `json:"thought,omitempty"`
-			} `json:"parts"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(candidates[0], &candidate); err != nil {
-		return ""
-	}
-
-	var sb strings.Builder
-	for _, p := range candidate.Content.Parts {
-		if p.Thought {
-			continue
-		}
-		if p.Text != nil {
-			sb.WriteString(*p.Text)
-		}
-	}
-	return sb.String()
-}
-
-// extractAttachmentsFromParsed extracts inlineData parts from candidates[0].content.parts[]
-// in a raw parsed JSON map.
-func extractAttachmentsFromParsed(parsed map[string]json.RawMessage) []oasis.Attachment {
-	candidatesRaw, ok := parsed["candidates"]
-	if !ok {
-		return nil
-	}
-
-	var candidates []json.RawMessage
-	if err := json.Unmarshal(candidatesRaw, &candidates); err != nil || len(candidates) == 0 {
-		return nil
-	}
-
-	var candidate struct {
-		Content struct {
-			Parts []struct {
-				InlineData *struct {
-					MimeType string `json:"mimeType"`
-					Data     string `json:"data"`
-				} `json:"inlineData,omitempty"`
-			} `json:"parts"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(candidates[0], &candidate); err != nil {
-		return nil
-	}
-
-	var attachments []oasis.Attachment
-	for _, p := range candidate.Content.Parts {
-		if p.InlineData != nil {
-			raw, _ := base64.StdEncoding.DecodeString(p.InlineData.Data)
-			attachments = append(attachments, oasis.Attachment{
-				MimeType: p.InlineData.MimeType,
-				Data:     raw,
-			})
-		}
-	}
-	return attachments
-}
-
-// extractUsageFromParsed extracts usage metadata from the parsed response.
-func extractUsageFromParsed(parsed map[string]json.RawMessage, usage *oasis.Usage) {
-	usageRaw, ok := parsed["usageMetadata"]
-	if !ok {
-		return
-	}
-
-	var u geminiUsage
-	if err := json.Unmarshal(usageRaw, &u); err != nil {
-		return
-	}
-
-	if u.PromptTokenCount > 0 || u.CandidatesTokenCount > 0 {
-		usage.InputTokens = u.PromptTokenCount
-		usage.OutputTokens = u.CandidatesTokenCount
-		usage.CachedTokens = u.CachedContentTokenCount
-	}
-}
-
-// extractFinishMetaFromParsed extracts finishReason and safetyRatings from
-// candidates[0] in a raw parsed JSON map. Called on each streaming chunk;
-// the last non-empty values win (last chunk carries the terminal state).
-func extractFinishMetaFromParsed(parsed map[string]json.RawMessage, finishReason *string, safetyRatings *[]geminiSafetyRating) {
-	candidatesRaw, ok := parsed["candidates"]
-	if !ok {
-		return
-	}
-
-	var candidates []json.RawMessage
-	if err := json.Unmarshal(candidatesRaw, &candidates); err != nil || len(candidates) == 0 {
-		return
-	}
-
-	var candidate struct {
-		FinishReason  string               `json:"finishReason"`
-		SafetyRatings []geminiSafetyRating `json:"safetyRatings"`
-	}
-	if err := json.Unmarshal(candidates[0], &candidate); err != nil {
-		return
-	}
-
-	if candidate.FinishReason != "" {
-		*finishReason = candidate.FinishReason
-	}
-	if len(candidate.SafetyRatings) > 0 {
-		*safetyRatings = candidate.SafetyRatings
-	}
 }
 
 // Compile-time interface assertions.

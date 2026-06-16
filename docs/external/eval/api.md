@@ -295,7 +295,7 @@ type ScoreStore interface {
 
 **`ListScores`** — returns rows matching `filter`. Zero-value fields in the filter are ignored (match-all). Results are ordered by `CreatedAt` descending.
 
-**`GetScore`** — fetches a single row by its `ID`.
+**`GetScore`** — fetches a single row by its `ID`. Returns `core.ErrNotFound` when no row with that ID exists.
 
 **`DeleteScores`** — deletes rows matching `filter` and returns the count of deleted rows.
 
@@ -331,6 +331,7 @@ Restricts which rows `ListScores` and `DeleteScores` operate on. Zero-value fiel
 ```go
 type ScoreFilter struct {
     ScorerID string
+    RunID    string
     EntityID string
     Source   ScorerSource
     Since    time.Time
@@ -341,6 +342,7 @@ type ScoreFilter struct {
 | Field | Effect when non-zero |
 |---|---|
 | `ScorerID` | Only rows from this scorer |
+| `RunID` | Only rows for this specific run ID |
 | `EntityID` | Only rows for this entity (agent run group) |
 | `Source` | Only rows with this source (`"LIVE"` or `"TEST"`) |
 | `Since` | Only rows created at or after this time |
@@ -498,10 +500,11 @@ The result of running one `EvalItem`.
 
 ```go
 type EvalResult struct {
-    Item   EvalItem
-    Result core.AgentResult
-    Scores []core.Score
-    Err    error
+    Item         EvalItem
+    Result       core.AgentResult
+    Scores       []core.Score
+    ScorerErrors map[string]error // keyed by scorer ID; nil when no scorer errors
+    Err          error
 }
 ```
 
@@ -509,7 +512,8 @@ type EvalResult struct {
 |---|---|
 | `Item` | The original item that was evaluated. |
 | `Result` | The agent's `AgentResult` for this run; zero value if the agent returned an error. |
-| `Scores` | Scores produced by all scorers for this run. |
+| `Scores` | Scores produced by all scorers that succeeded for this run. |
+| `ScorerErrors` | Per-scorer failures keyed by scorer ID. A scorer present in this map errored and has no entry in `Scores`. Nil when all scorers succeeded. |
 | `Err` | Non-nil when the agent run itself failed. Scorer results may still be partial. |
 
 ---

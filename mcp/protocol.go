@@ -90,10 +90,16 @@ type serverInfo struct {
 // --- Tool types ---
 
 // ToolDefinition describes a tool exposed via MCP.
+//
+// InputSchema is the tool's JSON Schema as raw bytes. On the server side, set it
+// to the marshaled schema (e.g. json.RawMessage(`{"type":"object",...}`)); a nil
+// value marshals to JSON null. On the client side it captures the server's
+// advertised schema verbatim. Why json.RawMessage rather than any: an exported
+// any defeats codegen tooling (see docs/ENGINEERING.md "No any at the Boundary").
 type ToolDefinition struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	InputSchema any    `json:"inputSchema"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
 // toolsListResult is the response to tools/list.

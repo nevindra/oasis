@@ -8,6 +8,16 @@ import (
 	"github.com/nevindra/oasis/core"
 )
 
+// TestRedactionGuardImplementsInterfaces verifies at test-compile time that
+// RedactionGuard satisfies all three processor interfaces. The var-nil-pointer
+// pattern is the idiomatic Go compile-time assertion; this test function makes
+// the intent visible in the test suite alongside the assertions in redaction.go.
+func TestRedactionGuardImplementsInterfaces(t *testing.T) {
+	var _ core.PreProcessor = (*RedactionGuard)(nil)
+	var _ core.PostProcessor = (*RedactionGuard)(nil)
+	var _ core.StreamProcessor = (*RedactionGuard)(nil)
+}
+
 func TestRedactionInputRedactsPII(t *testing.T) {
 	g := NewRedactionGuard(RedactPresets("pii"))
 	req := core.ChatRequest{Messages: []core.ChatMessage{

@@ -61,14 +61,18 @@ type modelsDevLimit struct {
 	Input   int `json:"input"` // explicit input limit (rare, usually == context)
 }
 
-// fetchModelsDev fetches and parses the models.dev API.
-func fetchModelsDev(ctx context.Context, url string) (map[string]modelsDevProvider, error) {
+// fetchModelsDev fetches and parses the models.dev API using the given HTTP
+// client. A nil client falls back to http.DefaultClient.
+func fetchModelsDev(ctx context.Context, url string, client *http.Client) (map[string]modelsDevProvider, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("modelsdev: create request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("modelsdev: fetch: %w", err)
 	}

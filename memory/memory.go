@@ -322,7 +322,16 @@ func (m *AgentMemory) Remember(ctx context.Context, item core.MemoryItem) error 
 		item.CreatedAt = core.NowUnix()
 	}
 	if len(item.Embedding) == 0 && m.embedding != nil && item.Content != "" {
-		if embs, err := m.embedding.Embed(ctx, []string{item.Content}); err == nil && len(embs) > 0 {
+		embs, err := m.embedding.Embed(ctx, []string{item.Content})
+		switch {
+		case err != nil:
+			// Why: store-without-vector is the correct fallback (the item stays
+			// retrievable by ID/List), but the embedding failure leaves it
+			// invisible to semantic recall. Log at Warn so the degraded state is
+			// observable instead of silently swallowing the error.
+			m.logger.Warn("memory: embedding failed; storing item without vector (not recallable by similarity)",
+				"id", item.ID, "kind", item.Kind, "error", err)
+		case len(embs) > 0:
 			item.Embedding = embs[0]
 		}
 	}
@@ -413,11 +422,17 @@ func (m *AgentMemory) Forget(ctx context.Context, spec ForgetSpec) (int, error) 
 		}
 		n := 0
 		for _, it := range items {
-			if strings.Contains(strings.ToLower(it.Content), strings.ToLower(spec.Match)) {
-				if err := m.itemStore.Delete(ctx, it.ID); err == nil {
-					n++
-				}
+			if !strings.Contains(strings.ToLower(it.Content), strings.ToLower(spec.Match)) {
+				continue
 			}
+			if err := m.itemStore.Delete(ctx, it.ID); err != nil {
+				// Why: best-effort multi-delete — a single failure must not abort
+				// the whole match loop, but it must be observable. Log at Warn and
+				// continue; n counts only successful deletes.
+				m.logger.Warn("memory: forget-by-match delete failed", "id", it.ID, "error", err)
+				continue
+			}
+			n++
 		}
 		return n, nil
 	}

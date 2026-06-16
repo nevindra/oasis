@@ -53,7 +53,7 @@ The vector path finds semantically similar content even when the exact words dif
 
 **Reranking refines.** After RRF you have a rough top-N. A reranker assigns a new relevance score to each candidate by reading the query and chunk text together. `ScoreReranker` is a zero-cost filter (drops below a threshold). `LLMReranker` asks the provider to score each candidate 0–10 — slower but highest precision. Both degrade gracefully: on failure the original order is returned, no error surfaced.
 
-**Graph RAG follows relations.** When you enable `WithGraphExtraction`, the ingestor runs an LLM after chunking to label relationships between chunks — `references`, `elaborates`, `depends_on`, `contradicts`, `part_of`, `similar_to`, `caused_by`, `sequence`. These become edges in the store. `GraphRetriever` seeds from a normal vector search, then BFS-traverses those edges up to `maxHops` hops. Each hop multiplies the score by a decay factor (`{1.0, 0.7, 0.5}` by default). This surfaces chunks a pure vector search would miss — for example "this section depends on a concept three chunks earlier."
+**Graph RAG follows relations.** When you enable `WithGraphExtraction`, the ingestor runs an LLM after chunking to label relationships between chunks — `references`, `elaborates`, `depends_on`, `contradicts`, `part_of`, `similar_to`, `caused_by`, `sequence`. These become edges in the store. `GraphRetriever` seeds from a normal vector search, then BFS-traverses those edges up to `MaxHops` hops. Each hop multiplies the score by a decay factor (`{1.0, 0.7, 0.5}` by default). This surfaces chunks a pure vector search would miss — for example "this section depends on a concept three chunks earlier."
 
 ## How it works step by step
 
@@ -64,7 +64,7 @@ The vector path finds semantically similar content even when the exact words dif
 3. **Chunk.** The selected chunker splits the extracted text. `StrategyFlat` uses one chunker (auto-selected by content type; Markdown files get `MarkdownChunker`, everything else gets `RecursiveChunker`). `StrategyParentChild` splits into parents first, then each parent into children; only children get embeddings.
 4. **Optional contextual enrichment.** If `WithContextualEnrichment` is set, the LLM prepends a 1-2 sentence context prefix to each chunk before embedding. The prefix anchors the chunk in the broader document, improving vector matching for noisy or ambiguous passages. On LLM failure the original text is used.
 5. **Embed.** All chunks are sent to the `EmbeddingProvider` in batches of `batchSize` (default 64). The resulting vectors are stored alongside the chunk text.
-6. **Optional graph extraction.** If `WithGraphExtraction` is set, chunks are sent in batches to an LLM which outputs a JSON edge list. Each edge has a `RelationType` and a confidence weight. Edges below `minEdgeWeight` are discarded. `WithSequenceEdges(true)` adds free `RelSequence` links between consecutive chunks without any LLM call.
+6. **Optional graph extraction.** If `WithGraphExtraction` is set, chunks are sent in batches to an LLM which outputs a JSON edge list. Each edge has a `RelationType` and a confidence weight. Edges below `GraphExtractionConfig.MinEdgeWeight` are discarded. Setting `SequenceEdges: true` in the config adds free `RelSequence` links between consecutive chunks without any LLM call.
 7. **Write to store.** The document record, chunk records (with embeddings and metadata), and edges are written to the store. If the store write fails the call returns an error; no partial state is committed.
 
 ### Retrieval
@@ -79,12 +79,12 @@ The vector path finds semantically similar content even when the exact words dif
 
 ### Graph RAG
 
-1. **Seed.** `GraphRetriever.Retrieve` runs an initial vector search for `seedTopK` (default 10) chunks. Optionally, keyword results are also merged into the seed set via `WithSeedKeywordWeight`.
-2. **BFS traversal.** Starting from every seed chunk, the retriever loads outgoing edges from the store. If `WithBidirectional(true)` is set, incoming edges are also traversed. Edges are filtered by `RelationFilter` and `minTraversalScore`.
-3. **Hop decay.** Scores of graph-discovered chunks are multiplied by `hopDecay[hop]` (e.g., 0.7 at hop 1, 0.5 at hop 2) and by the edge weight. This ensures seed chunks still outrank distant graph chunks unless those chunks are highly connected.
-4. **Score blending.** Final score = `vectorWeight × vectorScore + graphWeight × graphScore`. Defaults: 0.7 vector, 0.3 graph.
-5. **Graph topK reservation.** If `WithGraphTopK(n)` is set, `n` result slots are reserved for graph-discovered chunks so seed chunks can't crowd them out.
-6. **Rerank and return.** If `WithGraphReranker` is set, the blended list is reranked before returning. Each `RetrievalResult.GraphContext` records the edge path that discovered the chunk (`FromChunkID`, `Relation`, `Description`).
+1. **Seed.** `GraphRetriever.Retrieve` runs an initial vector search for `SeedTopK` (default 10) chunks. Optionally, keyword results are also merged into the seed set when `SeedKeywordWeight > 0` in `GraphRetrieverConfig`.
+2. **BFS traversal.** Starting from every seed chunk, the retriever loads outgoing edges from the store. If `Bidirectional: true` is set in the config, incoming edges are also traversed. Edges are filtered by `RelationFilter` and `MinTraversalScore`.
+3. **Hop decay.** Scores of graph-discovered chunks are multiplied by `HopDecay[hop]` (e.g., 0.7 at hop 1, 0.5 at hop 2) and by the edge weight. This ensures seed chunks still outrank distant graph chunks unless those chunks are highly connected.
+4. **Score blending.** Final score = `VectorWeight × vectorScore + GraphWeight × graphScore`. Defaults: 0.7 vector, 0.3 graph.
+5. **Graph topK reservation.** If `GraphTopK > 0` in the config, that many result slots are reserved for graph-discovered chunks so seed chunks can't crowd them out.
+6. **Rerank and return.** If `Reranker` is set in the config, the blended list is reranked before returning. Each `RetrievalResult.GraphContext` records the edge path that discovered the chunk (`FromChunkID`, `Relation`, `Description`).
 
 ## Common patterns and gotchas
 
@@ -92,7 +92,7 @@ The vector path finds semantically similar content even when the exact words dif
 
 **Embedding dimension must match.** The dimension of the embedding vector produced by your provider must match what the store's vector index was created with. Changing embedding providers after ingestion requires re-ingesting all documents.
 
-**Graph extraction is LLM-heavy.** Each batch of 5 chunks (default `graphBatchSize`) makes one LLM call. For a 200-chunk document that is 40 LLM calls. Use `WithGraphExtractionWorkers` to parallelize, `WithMinEdgeWeight(0.5)` to drop noise, and `WithSemanticBatching(true)` to group topically similar chunks for better edge quality. Free `RelSequence` edges via `WithSequenceEdges(true)` cost nothing.
+**Graph extraction is LLM-heavy.** Each batch of 5 chunks (default `BatchSize`) makes one LLM call. For a 200-chunk document that is 40 LLM calls. Set `GraphExtractionConfig.Workers` to parallelize, `MinEdgeWeight: 0.5` to drop noise, and `SemanticBatching: true` to group topically similar chunks for better edge quality. Free `RelSequence` edges via `SequenceEdges: true` in the config cost nothing.
 
 **Reranker timeout.** `LLMReranker` has a default timeout of 2 minutes. For latency-sensitive paths set `WithRerankerTimeout(15 * time.Second)` and let it degrade gracefully (original order returned on timeout).
 
@@ -115,9 +115,10 @@ ctx := context.Background()
 // Ingest once (e.g., at startup or in a batch job).
 ing := ingest.NewIngestor(store, embeddingProvider,
     ingest.WithStrategy(ingest.StrategyParentChild), // child embeds, parent returned
-    ingest.WithGraphExtraction(llmProvider),         // optional: build a knowledge graph
-    ingest.WithSequenceEdges(true),                  // free sequential links
-    ingest.WithMinEdgeWeight(0.5),                   // discard low-confidence edges
+    ingest.WithGraphExtraction(llmProvider, ingest.GraphExtractionConfig{
+        SequenceEdges: true,   // free sequential links, no extra LLM calls
+        MinEdgeWeight: 0.5,    // discard low-confidence edges
+    }),
 )
 
 data, _ := os.ReadFile("handbook.pdf")

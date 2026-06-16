@@ -128,9 +128,13 @@ Creates a Gemini chat provider. Defaults: temperature 0.1, top-p 0.9, structured
 g := gemini.New(apiKey, "gemini-2.0-flash", gemini.WithThinking(true))
 ```
 
-### `gemini.NewEmbedding(apiKey, model string, dims int) *GeminiEmbedding`
+### `gemini.NewEmbedding(apiKey, model string, dims int, opts ...GeminiEmbeddingOption) *GeminiEmbedding`
 
-Creates a Gemini embedding provider. `dims` sets the output dimensionality (e.g. 768 for `text-embedding-004`).
+Creates a Gemini embedding provider. `dims` sets the output dimensionality (e.g. 768 for `text-embedding-004`). Optional `GeminiEmbeddingOption` values configure the provider:
+
+| Option | Default | Notes |
+|--------|---------|-------|
+| `gemini.WithEmbeddingHTTPClient(c *http.Client)` | `&http.Client{}` | Custom HTTP client for timeouts or proxies. |
 
 ### `openaicompat.NewProvider(apiKey, model, baseURL string, opts ...ProviderOption) *Provider`
 
@@ -225,10 +229,12 @@ Applied once at construction; affect every request.
 
 | Option | Default | Notes |
 |--------|---------|-------|
-| `openaicompat.WithName(name string)` | `"openai"` | Sets `Provider.Name()`. Use to distinguish providers in logs. |
-| `openaicompat.WithHTTPClient(c *http.Client)` | `&http.Client{}` | Custom client for timeouts, proxies. |
+| `openaicompat.WithName(name string)` | `"openai"` | Sets `Provider.Name()`. Use to distinguish providers in logs. Also satisfies `EmbeddingOption` — pass to either `NewProvider` or `NewEmbedding`. |
+| `openaicompat.WithHTTPClient(c *http.Client)` | `&http.Client{}` | Custom client for timeouts, proxies. Also satisfies `EmbeddingOption` — pass to either `NewProvider` or `NewEmbedding`. |
 | `openaicompat.WithOptions(opts ...Option)` | none | Appends per-request defaults (temperature, top-p, etc.). |
 | `openaicompat.WithLogger(l *slog.Logger)` | nil | Warns when `GenerationParams.TopK` is ignored. |
+
+**Shared options.** `WithName` and `WithHTTPClient` satisfy both `ProviderOption` and `EmbeddingOption`, so the same value can be passed to either `NewProvider` or `NewEmbedding`. The previous embedding-specific variants `WithEmbeddingName` and `WithEmbeddingHTTPClient` have been removed.
 
 ### OpenAI-compat per-request options (`openaicompat.Option`)
 
@@ -291,6 +297,7 @@ Creates a catalog that discovers models across multiple providers. Safe for conc
 | `catalog.WithCatalogTTL(d time.Duration)` | 1 hour | How long to cache live API results. |
 | `catalog.WithMaxProviders(n int)` | 50 | Cap on registered providers. |
 | `catalog.WithRefresh(s RefreshStrategy)` | `RefreshOnDemand` | `RefreshNone` = static data only; `RefreshOnDemand` = live API on first list, then cached per TTL. |
+| `catalog.WithHTTPClient(c *http.Client)` | `http.DefaultClient` | Custom HTTP client used for live model-listing calls. Useful in tests to inject a `*httptest.Server` or control timeouts. |
 
 ### Methods
 

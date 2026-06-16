@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,7 +37,6 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 
 	numWorkers := min(workers, len(chunks))
 	work := make(chan int, len(chunks))
-	done := make(chan struct{})
 
 	if logger != nil {
 		logger.Info("contextual enrichment: worker pool started",
@@ -49,8 +49,15 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 	prefixes := make([]string, len(chunks))
 	var enriched, failed, skipped atomic.Int32
 
+	// Why: a WaitGroup with deferred Done() guarantees the merge runs only after
+	// every worker returns, and the wait completes even if a worker unwinds via
+	// panic — unlike draining N tokens from a channel, where a worker that exits
+	// without sending would block the main goroutine forever.
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
 	for w := 0; w < numWorkers; w++ {
 		go func() {
+			defer wg.Done()
 			for i := range work {
 				if ctx.Err() != nil {
 					skipped.Add(1)
@@ -102,7 +109,6 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 						"chunk_id", chunks[i].ID)
 				}
 			}
-			done <- struct{}{}
 		}()
 	}
 
@@ -111,9 +117,7 @@ func enrichChunksWithContext(ctx context.Context, provider oasis.Provider, chunk
 	}
 	close(work)
 
-	for w := 0; w < numWorkers; w++ {
-		<-done
-	}
+	wg.Wait()
 
 	// Merge prefixes into chunk content — single goroutine, no races.
 	for i, p := range prefixes {

@@ -61,3 +61,36 @@ func TestUpsertBatch_Atomicity(t *testing.T) {
 		t.Fatalf("UpsertBatch atomicity broken: goodItem was persisted despite batch error (Get returned: %v)", getErr)
 	}
 }
+
+// TestList_LimitParameterized verifies List honors MemoryFilter.Limit after the
+// LIMIT clause was switched from an interpolated literal to a bound parameter.
+func TestList_LimitParameterized(t *testing.T) {
+	ctx := context.Background()
+	s := sqlite.New(":memory:")
+	if err := s.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	store := s.Memory()
+
+	scope := memory.Scoped(memory.ScopeResource, "limittest")
+	for i := 0; i < 5; i++ {
+		it := core.MemoryItem{
+			ID:      "lim-" + string(rune('a'+i)),
+			Kind:    memory.KindFact,
+			Content: "item",
+			Scope:   scope,
+		}
+		if err := store.Upsert(ctx, it); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+	}
+
+	got, err := store.List(ctx, core.MemoryFilter{Scope: &scope, Limit: 2})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("List Limit=2: want 2 rows, got %d", len(got))
+	}
+}

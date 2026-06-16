@@ -66,39 +66,50 @@ func (s *ItemStore) Init(ctx context.Context) error {
 	return nil
 }
 
-func (s *ItemStore) Upsert(ctx context.Context, it core.MemoryItem) error {
-	if it.ID == "" {
-		return errors.New("postgres: item ID required")
-	}
+// upsertMemItemSQL is the INSERT ... ON CONFLICT used by both Upsert (pool) and
+// upsertTx (transaction). created_at is deliberately NOT in the update set so an
+// upsert preserves the row's original creation timestamp.
+//
+// Why: Upsert and upsertTx previously duplicated this statement and its arg list
+// verbatim; a single const keeps them from drifting.
+const upsertMemItemSQL = `
+	INSERT INTO memory_items
+		(id, kind, content, scope_kind, scope_ref, source_kind, source_ref, source_agent,
+		 pinned, tags, embedding, created_at, updated_at, expires_at)
+	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14)
+	ON CONFLICT (id) DO UPDATE SET
+		kind         = EXCLUDED.kind,
+		content      = EXCLUDED.content,
+		scope_kind   = EXCLUDED.scope_kind,
+		scope_ref    = EXCLUDED.scope_ref,
+		source_kind  = EXCLUDED.source_kind,
+		source_ref   = EXCLUDED.source_ref,
+		source_agent = EXCLUDED.source_agent,
+		pinned       = EXCLUDED.pinned,
+		tags         = EXCLUDED.tags,
+		embedding    = EXCLUDED.embedding,
+		updated_at   = EXCLUDED.updated_at,
+		expires_at   = EXCLUDED.expires_at
+	`
+
+// upsertMemItemArgs returns the positional args for upsertMemItemSQL.
+func upsertMemItemArgs(it core.MemoryItem) []any {
 	now := time.Now().Unix()
 	tags, _ := json.Marshal(it.Tags)
 	emb, _ := json.Marshal(it.Embedding)
-
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO memory_items
-			(id, kind, content, scope_kind, scope_ref, source_kind, source_ref, source_agent,
-			 pinned, tags, embedding, created_at, updated_at, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14)
-		ON CONFLICT (id) DO UPDATE SET
-			kind         = EXCLUDED.kind,
-			content      = EXCLUDED.content,
-			scope_kind   = EXCLUDED.scope_kind,
-			scope_ref    = EXCLUDED.scope_ref,
-			source_kind  = EXCLUDED.source_kind,
-			source_ref   = EXCLUDED.source_ref,
-			source_agent = EXCLUDED.source_agent,
-			pinned       = EXCLUDED.pinned,
-			tags         = EXCLUDED.tags,
-			embedding    = EXCLUDED.embedding,
-			updated_at   = EXCLUDED.updated_at,
-			expires_at   = EXCLUDED.expires_at
-		`,
+	return []any{
 		it.ID, string(it.Kind), it.Content, string(it.Scope.Kind), it.Scope.Ref,
 		nullableStr(it.Source.Kind), nullableStr(it.Source.Ref), nullableStr(it.Source.AgentID),
 		it.Pinned, string(tags), string(emb),
 		coalesceUnixPg(it.CreatedAt, now), now, it.ExpiresAt,
-	)
-	if err != nil {
+	}
+}
+
+func (s *ItemStore) Upsert(ctx context.Context, it core.MemoryItem) error {
+	if it.ID == "" {
+		return errors.New("postgres: item ID required")
+	}
+	if _, err := s.pool.Exec(ctx, upsertMemItemSQL, upsertMemItemArgs(it)...); err != nil {
 		return fmt.Errorf("postgres: upsert item: %w", err)
 	}
 	return nil
@@ -122,35 +133,7 @@ func (s *ItemStore) upsertTx(ctx context.Context, tx pgx.Tx, it core.MemoryItem)
 	if it.ID == "" {
 		return errors.New("postgres: item ID required")
 	}
-	now := time.Now().Unix()
-	tags, _ := json.Marshal(it.Tags)
-	emb, _ := json.Marshal(it.Embedding)
-
-	_, err := tx.Exec(ctx, `
-		INSERT INTO memory_items
-			(id, kind, content, scope_kind, scope_ref, source_kind, source_ref, source_agent,
-			 pinned, tags, embedding, created_at, updated_at, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14)
-		ON CONFLICT (id) DO UPDATE SET
-			kind         = EXCLUDED.kind,
-			content      = EXCLUDED.content,
-			scope_kind   = EXCLUDED.scope_kind,
-			scope_ref    = EXCLUDED.scope_ref,
-			source_kind  = EXCLUDED.source_kind,
-			source_ref   = EXCLUDED.source_ref,
-			source_agent = EXCLUDED.source_agent,
-			pinned       = EXCLUDED.pinned,
-			tags         = EXCLUDED.tags,
-			embedding    = EXCLUDED.embedding,
-			updated_at   = EXCLUDED.updated_at,
-			expires_at   = EXCLUDED.expires_at
-		`,
-		it.ID, string(it.Kind), it.Content, string(it.Scope.Kind), it.Scope.Ref,
-		nullableStr(it.Source.Kind), nullableStr(it.Source.Ref), nullableStr(it.Source.AgentID),
-		it.Pinned, string(tags), string(emb),
-		coalesceUnixPg(it.CreatedAt, now), now, it.ExpiresAt,
-	)
-	if err != nil {
+	if _, err := tx.Exec(ctx, upsertMemItemSQL, upsertMemItemArgs(it)...); err != nil {
 		return fmt.Errorf("postgres: upsert item (tx): %w", err)
 	}
 	return nil
@@ -302,7 +285,6 @@ func buildWherePg(base string, f core.MemoryFilter, withOrderLimit bool) (string
 		args = append(args, time.Now().Unix())
 		p++
 	}
-	_ = p // suppress "p declared and not used" if no conditions added beyond this point
 	if len(where) > 0 {
 		sb.WriteString(" WHERE ")
 		sb.WriteString(strings.Join(where, " AND "))
@@ -313,8 +295,14 @@ func buildWherePg(base string, f core.MemoryFilter, withOrderLimit bool) (string
 		if limit <= 0 {
 			limit = 50
 		}
-		sb.WriteString(fmt.Sprintf(" LIMIT %d", limit))
+		// Why: parameterize LIMIT like every other clause so the whole query is
+		// uniformly bound (no fmt.Sprintf'd literal mixed into a parameterized
+		// statement). p is the next free positional placeholder index.
+		sb.WriteString(fmt.Sprintf(" LIMIT $%d", p))
+		args = append(args, limit)
+		p++
 	}
+	_ = p // p is no longer read after this point; keep increments self-consistent.
 	return sb.String(), args
 }
 

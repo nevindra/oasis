@@ -143,6 +143,52 @@ func TestParseModelID(t *testing.T) {
 	}
 }
 
+// countingTransport records how many requests pass through it, then delegates
+// to the wrapped RoundTripper. Used to prove the catalog's injected HTTP client
+// (not http.DefaultClient) is the one making lister calls.
+type countingTransport struct {
+	base  http.RoundTripper
+	calls int
+}
+
+func (t *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.calls++
+	return t.base.RoundTrip(r)
+}
+
+// TestListProviderUsesInjectedHTTPClient verifies WithHTTPClient threads a
+// custom *http.Client through listerFor into the openaiLister.
+func TestListProviderUsesInjectedHTTPClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(openaiModelResponse{
+			Object: "list",
+			Data:   []openaiModel{{ID: "m1", Object: "model"}},
+		})
+	}))
+	defer srv.Close()
+
+	ct := &countingTransport{base: http.DefaultTransport}
+	cat := NewModelCatalog(WithHTTPClient(&http.Client{Transport: ct}))
+	if err := cat.AddCustom("testprov", srv.URL+"/v1", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	models, err := cat.ListProvider(context.Background(), "testprov")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].ID != "m1" {
+		t.Fatalf("unexpected models: %v", models)
+	}
+	if ct.calls == 0 {
+		t.Fatal("expected the injected HTTP client to be used, but it made 0 calls")
+	}
+}
+
 func TestListProviderWithMockServer(t *testing.T) {
 	// Mock an OpenAI-compatible /models endpoint.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

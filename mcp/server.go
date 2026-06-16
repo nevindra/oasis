@@ -82,29 +82,61 @@ func (s *Server) AddResource(r Resource) {
 
 // Serve runs the MCP server, reading JSON-RPC messages from stdin and writing
 // responses to stdout. Blocks until stdin is closed or ctx is cancelled.
+//
+// Why: bufio.Scanner.Scan() blocks indefinitely on idle stdin, so cancellation
+// can only be observed by moving the scan to a goroutine that feeds lines over
+// a channel and selecting against ctx.Done() in the main loop. The scan
+// goroutine cannot be force-unblocked (Read on os.Stdin is not interruptible),
+// but it exits naturally when stdin closes, and the buffered send + ctx select
+// on the receive side prevent it from leaking the main loop.
 func (s *Server) Serve(ctx context.Context) error {
 	scanner := bufio.NewScanner(s.reader)
 	scanner.Buffer(make([]byte, 0, 10<<20), 10<<20) // 10MB max message
 
-	for scanner.Scan() {
+	// Buffered by 1: lets the scan goroutine stage one line ahead while the main
+	// loop is busy handling the previous one, without forcing it to block when
+	// the loop returns early on cancellation.
+	lines := make(chan []byte, 1)
+	scanErr := make(chan error, 1)
+	go func() {
+		defer close(lines)
+		for scanner.Scan() {
+			b := scanner.Bytes()
+			if len(b) == 0 {
+				continue
+			}
+			// Why: scanner.Bytes() aliases an internal buffer reused on the next
+			// Scan(); copy before handing the line to another goroutine.
+			line := make([]byte, len(b))
+			copy(line, b)
+			select {
+			case lines <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			scanErr <- err
+		}
+	}()
+
+	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
+		case line, ok := <-lines:
+			if !ok {
+				// Scan goroutine finished: stdin closed (EOF) or read error.
+				select {
+				case err := <-scanErr:
+					return fmt.Errorf("mcp: read stdin: %w", err)
+				default:
+					return nil
+				}
+			}
+			s.handleMessage(ctx, line)
 		}
-
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		s.handleMessage(ctx, line)
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("mcp: read stdin: %w", err)
-	}
-	return nil
 }
 
 // handleMessage parses a single JSON-RPC message (or batch) and dispatches it.

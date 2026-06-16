@@ -89,13 +89,13 @@ A readable data source. `Read` is called on each `resources/read` request and mu
 
 ```go
 type ToolDefinition struct {
-    Name        string `json:"name"`
-    Description string `json:"description"`
-    InputSchema any    `json:"inputSchema"`
+    Name        string          `json:"name"`
+    Description string          `json:"description"`
+    InputSchema json.RawMessage `json:"inputSchema"`
 }
 ```
 
-Describes a tool in `tools/list` responses. `InputSchema` is any JSON-serializable value representing the JSON Schema for the tool's input object. Prefer `map[string]any` for inline schemas or `json.RawMessage` for pre-serialized schemas.
+Describes a tool in `tools/list` responses. `InputSchema` is the tool's JSON Schema as pre-serialized JSON bytes (`json.RawMessage`). Use a raw JSON string literal (e.g. `` json.RawMessage(`{...}`) ``) or `json.Marshal` a typed struct to produce the value. `json.RawMessage` avoids double-encoding that occurred when `any` was used with `map[string]any`.
 
 ### `ToolCallResult`
 

@@ -76,9 +76,43 @@ func TestEmbedding_Name(t *testing.T) {
 	if e.Name() != "openai" {
 		t.Errorf("expected 'openai', got %q", e.Name())
 	}
-	e = NewEmbedding("key", "model", "http://localhost", 768, WithEmbeddingName("vllm"))
+	// WithName (shared with Provider) must configure the embedding name too.
+	e = NewEmbedding("key", "model", "http://localhost", 768, WithName("vllm"))
 	if e.Name() != "vllm" {
 		t.Errorf("expected 'vllm', got %q", e.Name())
+	}
+}
+
+// TestEmbedding_WithHTTPClient verifies the shared WithHTTPClient option injects
+// a custom client into the embedding provider (used to drive an httptest server).
+func TestEmbedding_WithHTTPClient(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(EmbedResponse{Data: []EmbedData{{Index: 0, Embedding: []float32{0.5}}}})
+	}))
+	defer srv.Close()
+
+	e := NewEmbedding("key", "model", srv.URL, 1, WithHTTPClient(srv.Client()))
+	vecs, err := e.Embed(context.Background(), []string{"x"})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if gotPath != "/embeddings" {
+		t.Errorf("expected /embeddings, got %q", gotPath)
+	}
+	if len(vecs) != 1 || vecs[0][0] != 0.5 {
+		t.Errorf("unexpected vecs: %v", vecs)
+	}
+}
+
+// TestSharedOption_ConfiguresProvider verifies the same WithName value also
+// configures a chat Provider — the single option works in both contexts.
+func TestSharedOption_ConfiguresProvider(t *testing.T) {
+	p := NewProvider("key", "model", "http://localhost", WithName("groq"))
+	if p.Name() != "groq" {
+		t.Errorf("expected 'groq', got %q", p.Name())
 	}
 }
 

@@ -102,6 +102,36 @@ func TestIngestorIngestText(t *testing.T) {
 	}
 }
 
+func TestIngestorIngestText_RejectsOversizedContent(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	ing := NewIngestor(store, emb, WithMaxContentSize(100))
+
+	oversized := strings.Repeat("a", 200)
+	_, err := ing.IngestText(context.Background(), oversized, "src", "title")
+	if err == nil {
+		t.Fatal("expected error for oversized text content")
+	}
+	if !strings.Contains(err.Error(), "200") || !strings.Contains(err.Error(), "100") {
+		t.Errorf("error should mention actual (200) and limit (100) sizes, got: %v", err)
+	}
+	if len(store.documents) != 0 {
+		t.Error("oversized content must not be stored")
+	}
+}
+
+func TestIngestorIngestText_MaxContentSizeDisabled(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	// WithMaxContentSize(0) disables the limit — large text must still ingest.
+	ing := NewIngestor(store, emb, WithMaxContentSize(0))
+
+	_, err := ing.IngestText(context.Background(), strings.Repeat("a", 200), "src", "title")
+	if err != nil {
+		t.Fatalf("unexpected error with limit disabled: %v", err)
+	}
+}
+
 func TestIngestorIngestFile(t *testing.T) {
 	store := &mockStore{}
 	emb := &mockEmbedding{}

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -44,6 +45,9 @@ func (s *Store) ListScores(ctx context.Context, filter oasis.ScoreFilter) ([]oas
 	if filter.ScorerID != "" {
 		add(" AND scorer_id = $"+itoa(i), filter.ScorerID)
 	}
+	if filter.RunID != "" {
+		add(" AND run_id = $"+itoa(i), filter.RunID)
+	}
 	if filter.EntityID != "" {
 		add(" AND entity_id = $"+itoa(i), filter.EntityID)
 	}
@@ -77,7 +81,9 @@ func (s *Store) GetScore(ctx context.Context, id string) (oasis.ScoreRow, error)
 		return oasis.ScoreRow{}, err
 	}
 	if len(out) == 0 {
-		return oasis.ScoreRow{}, pgx.ErrNoRows
+		// Why: the ScoreStore contract promises core.ErrNotFound on a missing
+		// id (mirrors MemoryItemStore.Get); never leak the driver's pgx.ErrNoRows.
+		return oasis.ScoreRow{}, oasis.ErrNotFound
 	}
 	return out[0], nil
 }
@@ -93,6 +99,9 @@ func (s *Store) DeleteScores(ctx context.Context, filter oasis.ScoreFilter) (int
 	}
 	if filter.ScorerID != "" {
 		add(" AND scorer_id = $"+itoa(i), filter.ScorerID)
+	}
+	if filter.RunID != "" {
+		add(" AND run_id = $"+itoa(i), filter.RunID)
 	}
 	if filter.EntityID != "" {
 		add(" AND entity_id = $"+itoa(i), filter.EntityID)
@@ -131,7 +140,12 @@ func scanScores(rows pgx.Rows) ([]oasis.ScoreRow, error) {
 	return out, rows.Err()
 }
 
-// itoa avoids importing strconv at every call site for placeholder numbering.
+// itoa renders a positional placeholder index. It wraps strconv.Itoa so the
+// call sites stay terse.
+//
+// Why: the old string(rune('0'+i)) hack only produced correct digits for
+// i<10 — at i>=10 it emitted ':' (the byte after '9'), silently corrupting
+// placeholders once the filter list grew. strconv.Itoa is correct for any i.
 func itoa(i int) string {
-	return string(rune('0'+i)) // placeholders 1..9; widen if a filter ever exceeds 9 args
+	return strconv.Itoa(i)
 }

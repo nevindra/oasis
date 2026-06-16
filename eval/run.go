@@ -22,6 +22,10 @@ type EvalResult struct {
 	Result core.AgentResult
 	Scores []core.Score
 	Err    error // non-nil if the agent run failed (scorers were skipped)
+	// Why: a failing scorer must not be silently treated as a 0.0 score in CI;
+	// callers need to distinguish "scored 0" from "scorer errored". Nil on the
+	// happy path — no allocation overhead when all scorers succeed.
+	ScorerErrors map[string]error // keyed by scorer ID; nil when no scorer errors
 }
 
 // RunEvalsConfig configures a batch evaluation.
@@ -62,7 +66,17 @@ func RunEvals(ctx context.Context, cfg RunEvalsConfig) (EvalReport, error) {
 
 	for i := range cfg.Data {
 		wg.Add(1)
-		sem <- struct{}{}
+		// Why: a bare blocking send on sem would stall here indefinitely when all
+		// concurrency slots are busy, ignoring a cancelled context. The select
+		// unblocks immediately on cancellation; wg.Done() balances the wg.Add(1)
+		// above before we drain already-running goroutines with wg.Wait().
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Done() // balance the wg.Add(1) for the goroutine we are not launching
+			wg.Wait() // drain goroutines that are already running
+			return EvalReport{}, ctx.Err()
+		}
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -104,7 +118,15 @@ func evalOne(ctx context.Context, cfg RunEvalsConfig, item EvalItem) EvalResult 
 	for _, sc := range cfg.Scorers {
 		s, serr := sc.Score(ctx, run)
 		if serr != nil {
-			continue // a failing scorer is recorded as absent, not fatal
+			// Why: silently continuing makes a misconfigured judge indistinguishable
+			// from a 0.0 score in CI. Record the error keyed by scorer ID so callers
+			// can detect and surface it. The map is lazily initialised for zero
+			// allocation on the happy path.
+			if res.ScorerErrors == nil {
+				res.ScorerErrors = make(map[string]error)
+			}
+			res.ScorerErrors[sc.ID()] = serr
+			continue
 		}
 		res.Scores = append(res.Scores, s)
 	}

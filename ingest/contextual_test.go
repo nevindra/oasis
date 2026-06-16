@@ -96,6 +96,31 @@ func TestEnrichChunksWithContext_CancelledContext(t *testing.T) {
 	}
 }
 
+// TestEnrichChunksWithContext_AllWorkersComplete verifies that every chunk is
+// processed and merged before the function returns, with more chunks than
+// workers (so each worker drains multiple items). This guards the WaitGroup
+// coordination: the merge must run only after all workers finish, and no
+// completion signal may be lost. Runs with -race to catch concurrent access.
+func TestEnrichChunksWithContext_AllWorkersComplete(t *testing.T) {
+	const n = 50
+	chunks := make([]oasis.Chunk, n)
+	for i := range chunks {
+		chunks[i] = oasis.Chunk{ID: fmt.Sprintf("c%d", i), Content: fmt.Sprintf("chunk %d", i)}
+	}
+	provider := &mockContextProvider{prefix: "ctx"}
+
+	enrichChunksWithContext(context.Background(), provider, chunks, "doc", 4, 0, nil)
+
+	if got := provider.calls.Load(); got != n {
+		t.Fatalf("got %d LLM calls, want %d (a worker signal was lost)", got, n)
+	}
+	for i, c := range chunks {
+		if !strings.HasPrefix(c.Content, "ctx\n\n") {
+			t.Errorf("chunks[%d] not enriched: %q (merge ran before all workers finished?)", i, c.Content)
+		}
+	}
+}
+
 func TestEnrichChunksWithContext_EmptyChunks(t *testing.T) {
 	provider := &mockContextProvider{prefix: "ctx"}
 	enrichChunksWithContext(context.Background(), provider, nil, "doc", 3, 0, nil)

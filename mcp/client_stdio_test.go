@@ -120,6 +120,77 @@ func TestStdioClient_CallTool(t *testing.T) {
 	}
 }
 
+// TestStdioClient_CallTool_WireBytes pins the exact tools/call params wire bytes
+// for the no-progress and progress-enabled cases. The byte order and the
+// presence/absence of _meta must be byte-identical to the original map-based
+// marshal so servers (and the progress-token recovery path) see no change.
+func TestStdioClient_CallTool_WireBytes(t *testing.T) {
+	cases := []struct {
+		name     string
+		progress bool
+		toolName string
+		args     json.RawMessage
+		want     string
+	}{
+		{
+			name:     "no progress, empty args",
+			progress: false,
+			toolName: "ping",
+			args:     json.RawMessage(`{}`),
+			want:     `{"arguments":{},"name":"ping"}`,
+		},
+		{
+			name:     "no progress, with args",
+			progress: false,
+			toolName: "fetch",
+			args:     json.RawMessage(`{"url":"http://x"}`),
+			want:     `{"arguments":{"url":"http://x"},"name":"fetch"}`,
+		},
+		{
+			name:     "progress enabled",
+			progress: true,
+			toolName: "fetch",
+			args:     json.RawMessage(`{}`),
+			want:     `{"_meta":{"progressToken":"fetch#1"},"arguments":{},"name":"fetch"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newFakePipes()
+			got := make(chan json.RawMessage, 1)
+			go func() {
+				dec := json.NewDecoder(p.serverReads)
+				var req struct {
+					Method string          `json:"method"`
+					Params json.RawMessage `json:"params"`
+				}
+				dec.Decode(&req) // initialize
+				p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"x","capabilities":{},"serverInfo":{"name":"f","version":"1"}}}` + "\n"))
+				dec.Decode(&req) // notifications/initialized
+				dec.Decode(&req) // tools/call
+				got <- req.Params
+				p.serverWrites.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"content":[]}}` + "\n"))
+			}()
+
+			c := NewStdioClientFromPipes(p.clientReads, p.clientWrites)
+			if tc.progress {
+				c.setProgressEnabled(true)
+			}
+			defer c.Close(context.Background())
+			c.Initialize(context.Background())
+			if _, err := c.CallTool(context.Background(), tc.toolName, tc.args); err != nil {
+				t.Fatalf("call: %v", err)
+			}
+
+			params := string(<-got)
+			if params != tc.want {
+				t.Errorf("params wire bytes:\n got  %s\n want %s", params, tc.want)
+			}
+		})
+	}
+}
+
 func TestStdioClient_OnDisconnect_OnEOF(t *testing.T) {
 	p := newFakePipes()
 	c := NewStdioClientFromPipes(p.clientReads, p.clientWrites)

@@ -67,16 +67,7 @@ func main() {
 		Definition: mcp.ToolDefinition{
 			Name:        "search_docs",
 			Description: "Search Oasis framework documentation. Supports multi-word queries — results are ranked by relevance using BM25 scoring.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{
-						"type":        "string",
-						"description": "Search query (e.g. \"network multi-agent\", \"streaming memory\", \"tool\")",
-					},
-				},
-				"required": []string{"query"},
-			},
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Search query (e.g. \"network multi-agent\", \"streaming memory\", \"tool\")"}},"required":["query"]}`),
 		},
 		Execute: func(_ context.Context, args json.RawMessage) mcp.ToolCallResult {
 			var params struct {

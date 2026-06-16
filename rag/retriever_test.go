@@ -464,7 +464,7 @@ func TestGraphRetriever_VectorOnlyFallback(t *testing.T) {
 	}
 	emb := &graphTestEmbedding{}
 
-	gr := NewGraphRetriever(store, emb)
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{})
 	results, err := gr.Retrieve(context.Background(), "test query", 5)
 	if err != nil {
 		t.Fatalf("Retrieve() error = %v", err)
@@ -496,7 +496,7 @@ func TestGraphRetriever_WithGraphTraversal(t *testing.T) {
 	}
 	emb := &graphTestEmbedding{}
 
-	gr := NewGraphRetriever(store, emb, WithMaxHops(2), WithGraphWeight(0.3))
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{MaxHops: 2, GraphWeight: 0.3, VectorWeight: 0.7})
 	results, err := gr.Retrieve(context.Background(), "test", 10)
 	if err != nil {
 		t.Fatalf("Retrieve() error = %v", err)
@@ -546,14 +546,14 @@ func TestGraphRetriever_Bidirectional(t *testing.T) {
 	emb := &graphTestEmbedding{}
 
 	// Without bidirectional: only seed (no outgoing edges from c2)
-	gr := NewGraphRetriever(store, emb, WithMaxHops(1))
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{MaxHops: 1})
 	results, _ := gr.Retrieve(context.Background(), "test", 10)
 	if len(results) != 1 {
 		t.Fatalf("non-bidirectional: len = %d, want 1", len(results))
 	}
 
 	// With bidirectional: seed + c1 (via incoming edge)
-	gr = NewGraphRetriever(store, emb, WithMaxHops(1), WithBidirectional(true))
+	gr = NewGraphRetriever(store, emb, GraphRetrieverConfig{MaxHops: 1, Bidirectional: true})
 	results, _ = gr.Retrieve(context.Background(), "test", 10)
 	if len(results) != 2 {
 		t.Fatalf("bidirectional: len = %d, want 2", len(results))
@@ -582,7 +582,7 @@ func TestGraphRetriever_RelationFilter(t *testing.T) {
 	emb := &graphTestEmbedding{}
 
 	// Filter to only follow "references" edges
-	gr := NewGraphRetriever(store, emb, WithMaxHops(1), WithRelationFilter(core.RelReferences))
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{MaxHops: 1, RelationFilter: []core.RelationType{core.RelReferences}})
 	results, _ := gr.Retrieve(context.Background(), "test", 10)
 
 	// Should have 2: seed + c2 (references), but NOT c3 (contradicts)
@@ -733,7 +733,7 @@ func TestGraphRetriever_HybridSeeding(t *testing.T) {
 	emb := &graphTestEmbedding{}
 
 	// Without hybrid seeding: only c1 is seed, c2+c3 not discovered.
-	gr := NewGraphRetriever(store, emb, WithMaxHops(1))
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{MaxHops: 1})
 	results, _ := gr.Retrieve(context.Background(), "test", 10)
 	hasC3 := false
 	for _, r := range results {
@@ -746,7 +746,7 @@ func TestGraphRetriever_HybridSeeding(t *testing.T) {
 	}
 
 	// With hybrid seeding: c2 becomes a seed via keyword, c3 discovered via graph.
-	gr = NewGraphRetriever(store, emb, WithMaxHops(1), WithSeedKeywordWeight(0.3))
+	gr = NewGraphRetriever(store, emb, GraphRetrieverConfig{MaxHops: 1, SeedKeywordWeight: 0.3})
 	results, _ = gr.Retrieve(context.Background(), "test", 10)
 	hasC3 = false
 	for _, r := range results {
@@ -776,7 +776,7 @@ func TestGraphRetriever_GraphContext(t *testing.T) {
 	}
 	emb := &graphTestEmbedding{}
 
-	gr := NewGraphRetriever(store, emb, WithMaxHops(1))
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{MaxHops: 1})
 	results, err := gr.Retrieve(context.Background(), "test", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -938,5 +938,174 @@ func TestResultsToSources_QuoteTruncation(t *testing.T) {
 	}
 	if len(srcs[0].Quote) != 500 {
 		t.Errorf("Quote len = %d, want 500 (truncated)", len(srcs[0].Quote))
+	}
+}
+
+// --- GraphRetrieverConfig consolidation tests ---
+
+// TestGraphRetrieverConfig_ZeroValueDefaults verifies that NewGraphRetriever
+// with a zero-value GraphRetrieverConfig applies all documented defaults.
+func TestGraphRetrieverConfig_ZeroValueDefaults(t *testing.T) {
+	store := &graphTestStore{
+		chunks: []core.ScoredChunk{
+			{Chunk: core.Chunk{ID: "c1", DocumentID: "d1", Content: "chunk"}, Score: 0.9},
+		},
+	}
+	emb := &graphTestEmbedding{}
+
+	// Zero-value config must produce defaults: MaxHops=2, GraphWeight=0.3,
+	// VectorWeight=0.7, HopDecay={1.0, 0.7, 0.5}, SeedTopK=10.
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{})
+
+	cfg := gr.cfg // Why: read back internal cfg to verify defaults were applied.
+	if cfg.MaxHops != 2 {
+		t.Errorf("MaxHops = %d, want 2", cfg.MaxHops)
+	}
+	if cfg.GraphWeight != 0.3 {
+		t.Errorf("GraphWeight = %f, want 0.3", cfg.GraphWeight)
+	}
+	if cfg.VectorWeight != 0.7 {
+		t.Errorf("VectorWeight = %f, want 0.7", cfg.VectorWeight)
+	}
+	if len(cfg.HopDecay) != 3 || cfg.HopDecay[0] != 1.0 || cfg.HopDecay[1] != 0.7 || cfg.HopDecay[2] != 0.5 {
+		t.Errorf("HopDecay = %v, want [1.0, 0.7, 0.5]", cfg.HopDecay)
+	}
+	if cfg.SeedTopK != 10 {
+		t.Errorf("SeedTopK = %d, want 10", cfg.SeedTopK)
+	}
+}
+
+// TestGraphRetrieverConfig_FieldsApplied verifies that explicit non-zero fields
+// in GraphRetrieverConfig are respected.
+func TestGraphRetrieverConfig_FieldsApplied(t *testing.T) {
+	store := &graphTestStore{
+		chunks: []core.ScoredChunk{
+			{Chunk: core.Chunk{ID: "c1", DocumentID: "d1", Content: "chunk"}, Score: 0.9},
+		},
+	}
+	emb := &graphTestEmbedding{}
+
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{
+		MaxHops:       3,
+		GraphWeight:   0.4,
+		VectorWeight:  0.6,
+		SeedTopK:      20,
+		Bidirectional: true,
+	})
+
+	cfg := gr.cfg
+	if cfg.MaxHops != 3 {
+		t.Errorf("MaxHops = %d, want 3", cfg.MaxHops)
+	}
+	if cfg.GraphWeight != 0.4 {
+		t.Errorf("GraphWeight = %f, want 0.4", cfg.GraphWeight)
+	}
+	if cfg.VectorWeight != 0.6 {
+		t.Errorf("VectorWeight = %f, want 0.6", cfg.VectorWeight)
+	}
+	if cfg.SeedTopK != 20 {
+		t.Errorf("SeedTopK = %d, want 20", cfg.SeedTopK)
+	}
+	if !cfg.Bidirectional {
+		t.Error("Bidirectional = false, want true")
+	}
+}
+
+// TestGraphRetrieverConfig_WeightSumNormalization verifies that when
+// GraphWeight+VectorWeight != ~1.0, the constructor normalizes them.
+func TestGraphRetrieverConfig_WeightSumNormalization(t *testing.T) {
+	store := &graphTestStore{
+		chunks: []core.ScoredChunk{
+			{Chunk: core.Chunk{ID: "c1", DocumentID: "d1", Content: "chunk"}, Score: 0.9},
+		},
+	}
+	emb := &graphTestEmbedding{}
+
+	// Weights that don't sum to 1.0 — constructor must normalize.
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{
+		GraphWeight:  0.6,
+		VectorWeight: 0.6,
+	})
+
+	cfg := gr.cfg
+	sum := cfg.GraphWeight + cfg.VectorWeight
+	// After normalization, sum must be within 0.01 of 1.0.
+	if sum < 0.99 || sum > 1.01 {
+		t.Errorf("normalized weight sum = %f, want ~1.0", sum)
+	}
+}
+
+// TestGraphRetrieverConfig_HopDecayLengthEnforced verifies that when the
+// HopDecay slice is shorter than MaxHops, the constructor pads it or caps
+// MaxHops to len(HopDecay) so no out-of-bounds access occurs.
+func TestGraphRetrieverConfig_HopDecayLengthEnforced(t *testing.T) {
+	store := &graphTestStoreWithEdges{
+		graphTestStore: graphTestStore{
+			chunks: []core.ScoredChunk{
+				{Chunk: core.Chunk{ID: "c1", DocumentID: "d1", Content: "seed"}, Score: 0.9},
+			},
+			allChunks: map[string]core.Chunk{
+				"c1": {ID: "c1", DocumentID: "d1", Content: "seed"},
+				"c2": {ID: "c2", DocumentID: "d1", Content: "hop1"},
+				"c3": {ID: "c3", DocumentID: "d1", Content: "hop2"},
+			},
+		},
+		edges: map[string][]core.ChunkEdge{
+			"c1": {{ID: "e1", SourceID: "c1", TargetID: "c2", Relation: core.RelReferences, Weight: 0.8}},
+			"c2": {{ID: "e2", SourceID: "c2", TargetID: "c3", Relation: core.RelElaborates, Weight: 0.7}},
+		},
+	}
+	emb := &graphTestEmbedding{}
+
+	// MaxHops=3 but HopDecay only has 1 element — must not panic.
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{
+		MaxHops:  3,
+		HopDecay: []float32{1.0},
+	})
+
+	// Must not panic; results are secondary.
+	results, err := gr.Retrieve(context.Background(), "test", 10)
+	if err != nil {
+		t.Fatalf("Retrieve() panicked or errored: %v", err)
+	}
+	_ = results
+}
+
+// TestGraphRetrieverConfig_RelationFilterField verifies that RelationFilter
+// set on the struct is applied correctly during traversal.
+func TestGraphRetrieverConfig_RelationFilterField(t *testing.T) {
+	store := &graphTestStoreWithEdges{
+		graphTestStore: graphTestStore{
+			chunks: []core.ScoredChunk{
+				{Chunk: core.Chunk{ID: "c1", DocumentID: "d1", Content: "seed"}, Score: 0.9},
+			},
+			allChunks: map[string]core.Chunk{
+				"c1": {ID: "c1", DocumentID: "d1", Content: "seed"},
+				"c2": {ID: "c2", DocumentID: "d1", Content: "referenced"},
+				"c3": {ID: "c3", DocumentID: "d1", Content: "contradicts"},
+			},
+		},
+		edges: map[string][]core.ChunkEdge{
+			"c1": {
+				{ID: "e1", SourceID: "c1", TargetID: "c2", Relation: core.RelReferences, Weight: 0.8},
+				{ID: "e2", SourceID: "c1", TargetID: "c3", Relation: core.RelContradicts, Weight: 0.9},
+			},
+		},
+	}
+	emb := &graphTestEmbedding{}
+
+	gr := NewGraphRetriever(store, emb, GraphRetrieverConfig{
+		MaxHops:        1,
+		RelationFilter: []core.RelationType{core.RelReferences},
+	})
+	results, _ := gr.Retrieve(context.Background(), "test", 10)
+
+	if len(results) != 2 {
+		t.Fatalf("len = %d, want 2 (seed + c2 only)", len(results))
+	}
+	for _, r := range results {
+		if r.ChunkID == "c3" {
+			t.Error("c3 should be filtered out (contradicts relation not in filter)")
+		}
 	}
 }

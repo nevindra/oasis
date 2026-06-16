@@ -118,7 +118,8 @@ func firstTrimmable(msgs []core.ChatMessage, preserveLast int) int {
 }
 
 // defaultTokenEstimate mirrors the compaction heuristic: ~1 token per 3 runes,
-// padded hot, plus a fixed cost per image/PDF attachment.
+// plus a fixed cost per image/PDF attachment. No padding is applied; supply
+// WithEstimator for a real tokenizer if tighter control is needed.
 func defaultTokenEstimate(msgs []core.ChatMessage) int {
 	const attachmentTokens = 2000
 	var runes, media int
@@ -126,7 +127,7 @@ func defaultTokenEstimate(msgs []core.ChatMessage) int {
 		runes += utf8.RuneCountInString(m.Content)
 		media += len(m.Attachments)
 	}
-	return (runes*4)/3/4 + media*attachmentTokens
+	return runes/3 + media*attachmentTokens
 }
 
 // compile-time check

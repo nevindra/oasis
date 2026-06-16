@@ -101,8 +101,8 @@ func NewIngestor(store oasis.Store, emb oasis.EmbeddingProvider, opts ...Option)
 		mdParentChunker:    NewMarkdownChunker(WithMaxTokens(1024)),
 		parentChunker:      NewRecursiveChunker(WithMaxTokens(1024)),
 		childChunker:       NewRecursiveChunker(WithMaxTokens(256)),
-		graphBatchSize:     5,
-		graphWorkers:       3,
+		graphBatchSize:     defaultGraphBatchSize,
+		graphWorkers:       defaultGraphWorkers,
 		contextWorkers:     3,
 		contextMaxDocBytes: 100_000, // 100KB ≈ ~25K tokens
 		llmTimeout:         2 * time.Minute,
@@ -138,6 +138,21 @@ func (ing *Ingestor) IngestText(ctx context.Context, text, source, title string)
 }
 
 func (ing *Ingestor) ingestText(ctx context.Context, text, source, title string) (IngestResult, error) {
+	// Why: bound content at the ingestion boundary so an oversized string is
+	// never forwarded into the checkpoint store or chunk pipeline (unbounded
+	// memory). Mirrors the ingestFile guard; maxContentSize == 0 disables it so
+	// WithMaxContentSize(0) opts out.
+	if ing.maxContentSize > 0 && len(text) > ing.maxContentSize {
+		err := fmt.Errorf("content size %d exceeds limit %d", len(text), ing.maxContentSize)
+		if ing.logger != nil {
+			ing.logger.Error("content size exceeds limit",
+				"source", source, "content_bytes", len(text),
+				"max_bytes", ing.maxContentSize)
+		}
+		ing.notifyError(source, err)
+		return IngestResult{}, err
+	}
+
 	now := oasis.NowUnix()
 	docID := oasis.NewID()
 

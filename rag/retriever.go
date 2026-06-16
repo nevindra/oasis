@@ -617,114 +617,78 @@ func (r *LLMReranker) Rerank(ctx context.Context, query string, results []Retrie
 
 // --- GraphRetriever ---
 
-// GraphRetrieverOption configures a GraphRetriever.
-type GraphRetrieverOption func(*graphRetrieverConfig)
+// GraphRetrieverConfig configures a GraphRetriever.
+// The zero value reproduces all defaults (MaxHops=2, GraphWeight=0.3,
+// VectorWeight=0.7, HopDecay={1.0,0.7,0.5}, SeedTopK=10).
+// All other fields default to their zero/nil value (disabled).
+//
+// Weight normalization: if GraphWeight+VectorWeight is not within 0.01 of 1.0,
+// NewGraphRetriever normalizes both proportionally.
+//
+// Hop-decay length: if len(HopDecay) < MaxHops, the last element of HopDecay
+// is repeated to pad it to MaxHops length. If HopDecay is empty after defaults
+// are applied, a fallback decay of 0.5 is used for all hops beyond the table.
+type GraphRetrieverConfig struct {
+	// MaxHops is the maximum number of BFS traversal hops from seed chunks (default 2).
+	MaxHops int
+	// GraphWeight is the weight for graph-derived scores in the final blend (default 0.3).
+	// Why: together with VectorWeight forms the blending equation; both are normalized to sum to 1.0.
+	GraphWeight float32
+	// VectorWeight is the weight for vector scores in the final blend (default 0.7).
+	VectorWeight float32
+	// HopDecay is the per-hop score decay multiplier (default {1.0, 0.7, 0.5}).
+	// Why: must have len >= MaxHops after constructor padding; last value is repeated if shorter.
+	HopDecay []float32
+	// Bidirectional enables traversal of both outgoing and incoming edges (default false).
+	Bidirectional bool
+	// RelationFilter restricts graph traversal to specified relationship types (nil = all types).
+	// Why: stored as a slice for ergonomic struct-literal use; converted to map internally.
+	RelationFilter []core.RelationType
+	// MinTraversalScore skips edges with weight below this value (default 0).
+	MinTraversalScore float32
+	// SeedTopK is the number of seed chunks from the initial vector search (default 10).
+	SeedTopK int
+	// SeedKeywordWeight is the keyword search weight in the seed RRF merge (default 0, disabled).
+	// When > 0 and the core.Store implements core.KeywordSearcher, keyword results are merged
+	// with vector results to produce a more diverse seed set for graph traversal.
+	SeedKeywordWeight float32
+	// GraphTopK is the number of guaranteed graph-discovered slots in the final results.
+	// When > 0, results are partitioned into a seed pool and a graph pool, each sorted
+	// independently, then merged. Default is 0 (single-pool, backward compatible).
+	GraphTopK int
+	// MaxFrontierSize caps the BFS frontier per hop. When > 0, only the top n candidates
+	// by tentative graph score are kept per hop. Default is 0 (unlimited).
+	MaxFrontierSize int
+	// Reranker sets an optional re-ranking stage that runs after graph score blending
+	// and parent resolution, before the final topK trim.
+	Reranker Reranker
+	// Filters sets metadata filters passed to the initial vector search.
+	Filters []core.ChunkFilter
+	// Tracer sets the core.Tracer for distributed tracing.
+	Tracer core.Tracer
+	// Logger sets the structured logger.
+	Logger *slog.Logger
+}
 
+// graphRetrieverConfig is the internal representation after defaults and validation.
+// Why: keeps exported GraphRetrieverConfig ergonomic (slice for RelationFilter) while
+// allowing efficient map-based lookups internally.
 type graphRetrieverConfig struct {
-	maxHops           int
-	graphWeight       float32
-	vectorWeight      float32
-	hopDecay          []float32
-	bidirectional     bool
-	relationFilter    map[core.RelationType]bool
-	minTraversalScore float32
-	seedTopK          int
-	seedKeywordWeight float32
-	graphTopK         int
-	maxFrontierSize   int
+	MaxHops           int
+	GraphWeight       float32
+	VectorWeight      float32
+	HopDecay          []float32
+	Bidirectional     bool
+	relationFilter    map[core.RelationType]bool // Why: O(1) lookup during edge traversal.
+	MinTraversalScore float32
+	SeedTopK          int
+	SeedKeywordWeight float32
+	GraphTopK         int
+	MaxFrontierSize   int
 	reranker          Reranker
 	filters           []core.ChunkFilter
 	tracer            core.Tracer
 	logger            *slog.Logger
-}
-
-// WithMaxHops sets the maximum number of graph traversal hops (default 2).
-func WithMaxHops(n int) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.maxHops = n }
-}
-
-// WithGraphWeight sets the weight for graph-derived scores in the final blend (default 0.3).
-func WithGraphWeight(w float32) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.graphWeight = w }
-}
-
-// WithVectorWeight sets the weight for vector scores in the final blend (default 0.7).
-func WithVectorWeight(w float32) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.vectorWeight = w }
-}
-
-// WithHopDecay sets the score decay factor per hop level (default {1.0, 0.7, 0.5}).
-// Length implicitly caps max hops.
-func WithHopDecay(factors []float32) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.hopDecay = factors }
-}
-
-// WithBidirectional enables traversal of both outgoing and incoming edges (default false).
-func WithBidirectional(b bool) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.bidirectional = b }
-}
-
-// WithRelationFilter restricts graph traversal to the specified relationship types.
-func WithRelationFilter(types ...core.RelationType) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) {
-		c.relationFilter = make(map[core.RelationType]bool, len(types))
-		for _, t := range types {
-			c.relationFilter[t] = true
-		}
-	}
-}
-
-// WithMinTraversalScore sets the minimum edge weight to follow during traversal (default 0).
-func WithMinTraversalScore(s float32) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.minTraversalScore = s }
-}
-
-// WithSeedTopK sets the number of seed chunks from initial vector search (default 10).
-func WithSeedTopK(k int) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.seedTopK = k }
-}
-
-// WithSeedKeywordWeight sets the keyword search weight in the seed RRF merge (default 0, disabled).
-// When > 0 and the core.Store implements core.KeywordSearcher, keyword results are merged with vector
-// results to produce a more diverse seed set for graph traversal.
-func WithSeedKeywordWeight(w float32) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.seedKeywordWeight = w }
-}
-
-// WithGraphTopK sets the number of guaranteed graph-discovered slots in
-// the final results. When > 0, results are partitioned into a seed pool and
-// a graph pool, each sorted independently, then merged. Default is 0
-// (single-pool behavior, backward compatible).
-func WithGraphTopK(n int) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.graphTopK = n }
-}
-
-// WithMaxFrontierSize caps the BFS frontier per hop. When > 0, after building
-// the next-hop candidate list, only the top n candidates by tentative graph
-// score are kept. Default is 0 (unlimited, backward compatible).
-func WithMaxFrontierSize(n int) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.maxFrontierSize = n }
-}
-
-// WithGraphReranker sets an optional re-ranking stage that runs after graph
-// score blending and parent resolution, before the final topK trim.
-func WithGraphReranker(r Reranker) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.reranker = r }
-}
-
-// WithGraphFilters sets metadata filters passed to the initial vector search.
-func WithGraphFilters(filters ...core.ChunkFilter) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.filters = filters }
-}
-
-// WithGraphRetrieverTracer sets the core.Tracer for a GraphRetriever.
-func WithGraphRetrieverTracer(t core.Tracer) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.tracer = t }
-}
-
-// WithGraphRetrieverLogger sets the structured logger for a GraphRetriever.
-func WithGraphRetrieverLogger(l *slog.Logger) GraphRetrieverOption {
-	return func(c *graphRetrieverConfig) { c.logger = l }
 }
 
 // GraphRetriever combines vector search with knowledge graph traversal.
@@ -748,16 +712,71 @@ var _ core.Sourced = (*GraphRetriever)(nil)
 
 // NewGraphRetriever creates a Retriever that combines vector search with
 // graph traversal for multi-hop contextual retrieval.
-func NewGraphRetriever(store core.Store, embedding core.EmbeddingProvider, opts ...GraphRetrieverOption) *GraphRetriever {
-	cfg := graphRetrieverConfig{
-		maxHops:      2,
-		graphWeight:  0.3,
-		vectorWeight: 0.7,
-		hopDecay:     []float32{1.0, 0.7, 0.5},
-		seedTopK:     10,
+//
+// Zero-value GraphRetrieverConfig reproduces all defaults:
+// MaxHops=2, GraphWeight=0.3, VectorWeight=0.7, HopDecay={1.0,0.7,0.5}, SeedTopK=10.
+//
+// Construction-time normalization:
+//   - If GraphWeight+VectorWeight is not within 0.01 of 1.0, both are normalized proportionally.
+//   - If len(HopDecay) < MaxHops, the last element is repeated to pad to MaxHops length.
+func NewGraphRetriever(store core.Store, embedding core.EmbeddingProvider, in GraphRetrieverConfig) *GraphRetriever {
+	// Apply defaults for zero values.
+	if in.MaxHops == 0 {
+		in.MaxHops = 2
 	}
-	for _, o := range opts {
-		o(&cfg)
+	if in.GraphWeight == 0 && in.VectorWeight == 0 {
+		in.GraphWeight = 0.3
+		in.VectorWeight = 0.7
+	}
+	if len(in.HopDecay) == 0 {
+		in.HopDecay = []float32{1.0, 0.7, 0.5}
+	}
+	if in.SeedTopK == 0 {
+		in.SeedTopK = 10
+	}
+
+	// Normalize weights if they don't sum to ~1.0.
+	// Why: blending equation assumes sum=1; mismatched weights silently deflate scores.
+	total := in.GraphWeight + in.VectorWeight
+	if total > 0 && (total < 0.99 || total > 1.01) {
+		in.GraphWeight = in.GraphWeight / total
+		in.VectorWeight = in.VectorWeight / total
+	}
+
+	// Pad HopDecay to at least MaxHops length using the last element.
+	// Why: avoids silent out-of-bounds use of fallback 0.5 for user-provided decay tables.
+	if len(in.HopDecay) < in.MaxHops {
+		last := in.HopDecay[len(in.HopDecay)-1]
+		for len(in.HopDecay) < in.MaxHops {
+			in.HopDecay = append(in.HopDecay, last)
+		}
+	}
+
+	// Convert RelationFilter slice to map for O(1) edge-traversal lookups.
+	var rf map[core.RelationType]bool
+	if len(in.RelationFilter) > 0 {
+		rf = make(map[core.RelationType]bool, len(in.RelationFilter))
+		for _, t := range in.RelationFilter {
+			rf[t] = true
+		}
+	}
+
+	cfg := graphRetrieverConfig{
+		MaxHops:           in.MaxHops,
+		GraphWeight:       in.GraphWeight,
+		VectorWeight:      in.VectorWeight,
+		HopDecay:          in.HopDecay,
+		Bidirectional:     in.Bidirectional,
+		relationFilter:    rf,
+		MinTraversalScore: in.MinTraversalScore,
+		SeedTopK:          in.SeedTopK,
+		SeedKeywordWeight: in.SeedKeywordWeight,
+		GraphTopK:         in.GraphTopK,
+		MaxFrontierSize:   in.MaxFrontierSize,
+		reranker:          in.Reranker,
+		filters:           in.Filters,
+		tracer:            in.Tracer,
+		logger:            in.Logger,
 	}
 	return &GraphRetriever{store: store, embedding: embedding, cfg: cfg}
 }
@@ -812,20 +831,20 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 	}
 
 	// 1. Vector search for seed chunks.
-	seeds, err := g.store.SearchChunks(ctx, embs[0], g.cfg.seedTopK, g.cfg.filters...)
+	seeds, err := g.store.SearchChunks(ctx, embs[0], g.cfg.SeedTopK, g.cfg.filters...)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
 	// Keyword search for seed diversity (if store supports it and weight > 0).
-	if g.cfg.seedKeywordWeight > 0 {
+	if g.cfg.SeedKeywordWeight > 0 {
 		if ks, ok := g.store.(core.KeywordSearcher); ok {
-			kwResults, kwErr := ks.SearchChunksKeyword(ctx, query, g.cfg.seedTopK, g.cfg.filters...)
+			kwResults, kwErr := ks.SearchChunksKeyword(ctx, query, g.cfg.SeedTopK, g.cfg.filters...)
 			if kwErr != nil && g.cfg.logger != nil {
 				g.cfg.logger.Warn("seed keyword search failed, using vector-only seeds", "err", kwErr)
 			}
 			if len(kwResults) > 0 {
-				rrfResults := reciprocalRankFusion(seeds, kwResults, g.cfg.seedKeywordWeight)
+				rrfResults := reciprocalRankFusion(seeds, kwResults, g.cfg.SeedKeywordWeight)
 				mergedSeeds := make([]core.ScoredChunk, 0, len(rrfResults))
 				chunkLookup := make(map[string]core.Chunk)
 				for _, sc := range seeds {
@@ -856,7 +875,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 	seedSet := make(map[string]bool, len(seeds))
 	for _, sc := range seeds {
 		seedSet[sc.ID] = true
-		best[sc.ID] = &scored{chunkID: sc.ID, score: g.cfg.vectorWeight * sc.Score, isSeed: true}
+		best[sc.ID] = &scored{chunkID: sc.ID, score: g.cfg.VectorWeight * sc.Score, isSeed: true}
 	}
 
 	// 2. Graph traversal (if store supports it).
@@ -872,14 +891,14 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 			visited[id] = true
 		}
 
-		for hop := 1; hop <= g.cfg.maxHops; hop++ {
+		for hop := 1; hop <= g.cfg.MaxHops; hop++ {
 			decay := float32(0.5)
-			if hop < len(g.cfg.hopDecay) {
-				decay = g.cfg.hopDecay[hop]
+			if hop < len(g.cfg.HopDecay) {
+				decay = g.cfg.HopDecay[hop]
 			}
 
 			var edges []core.ChunkEdge
-			if g.cfg.bidirectional {
+			if g.cfg.Bidirectional {
 				// Use single-query core.BidirectionalGraphStore when available.
 				if bgs, ok := gs.(core.BidirectionalGraphStore); ok {
 					edges, err = bgs.GetBothEdges(ctx, currentIDs)
@@ -904,7 +923,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 				if g.cfg.relationFilter != nil && !g.cfg.relationFilter[edge.Relation] {
 					continue
 				}
-				if edge.Weight < g.cfg.minTraversalScore {
+				if edge.Weight < g.cfg.MinTraversalScore {
 					continue
 				}
 
@@ -926,7 +945,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 					Description: edge.Description,
 				}
 
-				graphScore := g.cfg.graphWeight * edge.Weight * decay
+				graphScore := g.cfg.GraphWeight * edge.Weight * decay
 				if existing, ok := best[neighborID]; ok {
 					if graphScore > existing.score {
 						existing.score = graphScore
@@ -941,7 +960,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 			}
 
 			// Cap frontier size if configured.
-			if g.cfg.maxFrontierSize > 0 && len(nextIDs) > g.cfg.maxFrontierSize {
+			if g.cfg.MaxFrontierSize > 0 && len(nextIDs) > g.cfg.MaxFrontierSize {
 				sort.Slice(nextIDs, func(i, j int) bool {
 					si, sj := best[nextIDs[i]], best[nextIDs[j]]
 					if si == nil {
@@ -952,7 +971,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 					}
 					return si.score > sj.score
 				})
-				nextIDs = nextIDs[:g.cfg.maxFrontierSize]
+				nextIDs = nextIDs[:g.cfg.MaxFrontierSize]
 			}
 
 			currentIDs = nextIDs
@@ -1016,7 +1035,7 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 	}
 
 	// 8. Two-pool merge or single-pool sort.
-	if g.cfg.graphTopK > 0 {
+	if g.cfg.GraphTopK > 0 {
 		var seedPool, graphPool []RetrievalResult
 		for _, r := range results {
 			if seedSet[r.ChunkID] {
@@ -1028,15 +1047,15 @@ func (g *GraphRetriever) retrieveInner(ctx context.Context, query string, topK i
 		sort.Slice(seedPool, func(i, j int) bool { return seedPool[i].Score > seedPool[j].Score })
 		sort.Slice(graphPool, func(i, j int) bool { return graphPool[i].Score > graphPool[j].Score })
 
-		seedSlots := topK - g.cfg.graphTopK
+		seedSlots := topK - g.cfg.GraphTopK
 		if seedSlots < 0 {
 			seedSlots = 0
 		}
 		if len(seedPool) > seedSlots {
 			seedPool = seedPool[:seedSlots]
 		}
-		if len(graphPool) > g.cfg.graphTopK {
-			graphPool = graphPool[:g.cfg.graphTopK]
+		if len(graphPool) > g.cfg.GraphTopK {
+			graphPool = graphPool[:g.cfg.GraphTopK]
 		}
 		results = append(seedPool, graphPool...)
 	} else {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	oasis "github.com/nevindra/oasis/core"
 )
@@ -393,6 +394,46 @@ func TestPollTask_ContextCanceled(t *testing.T) {
 	_, err := p.pollTask(ctx, taskID)
 	if err == nil {
 		t.Fatal("expected error when context is canceled")
+	}
+}
+
+// TestPollTask_CancelDuringPollDelayReturnsPromptly verifies that cancelling the
+// context while pollTask is waiting on its inter-poll delay returns well before
+// the 3s interval elapses — and (with the NewTimer/Stop fix) stops the timer on
+// the cancellation arm rather than leaking it.
+func TestPollTask_CancelDuringPollDelayReturnsPromptly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always PENDING so the loop would spin forever without cancellation.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"task_status": "PENDING"},
+		})
+	}))
+	defer srv.Close()
+
+	p := New("test-key", "qwen-image-2.0", srv.URL, WithHTTPClient(srv.Client()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { _, err := p.pollTask(ctx, "task-prompt"); done <- err }()
+
+	// Cancel while the loop is in its first 3s delay select.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected error after context cancellation")
+		}
+		if elapsed := time.Since(start); elapsed >= 3*time.Second {
+			t.Fatalf("pollTask returned after %v, expected prompt return on cancel", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pollTask did not return promptly after cancellation")
 	}
 }
 

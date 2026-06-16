@@ -100,23 +100,24 @@ results, _ := retriever.Retrieve(ctx, "how does the auth handshake work?", 5)
 ```go
 // --- Ingestion ---
 ing := ingest.NewIngestor(store, embeddingProvider,
-    ingest.WithGraphExtraction(llmProvider),
-    ingest.WithSequenceEdges(true),      // free sequential links, no LLM needed
-    ingest.WithGraphBatchSize(5),
-    ingest.WithMinEdgeWeight(0.5),       // drop low-confidence edges
+    ingest.WithGraphExtraction(llmProvider, ingest.GraphExtractionConfig{
+        SequenceEdges: true,  // free sequential links, no LLM needed
+        BatchSize:     5,
+        MinEdgeWeight: 0.5,   // drop low-confidence edges
+    }),
 )
 ing.IngestFile(ctx, data, "architecture-guide.md")
 
 // --- Retrieval ---
-retriever := rag.NewGraphRetriever(store, embeddingProvider,
-    rag.WithMaxHops(2),
-    rag.WithGraphWeight(0.3),
-    rag.WithGraphTopK(3),               // guarantee 3 graph-discovered slots in top-10
-    rag.WithRelationFilter(
+retriever := rag.NewGraphRetriever(store, embeddingProvider, rag.GraphRetrieverConfig{
+    MaxHops:        2,
+    GraphWeight:    0.3,
+    GraphTopK:      3, // guarantee 3 graph-discovered slots in top-10
+    RelationFilter: []core.RelationType{
         core.RelDependsOn,
         core.RelElaborates,
-    ),
-)
+    },
+})
 results, _ := retriever.Retrieve(ctx, "what must I configure before enabling TLS?", 10)
 
 for _, r := range results {
@@ -128,18 +129,18 @@ for _, r := range results {
 
 **Plain-English walkthrough:**
 
-- `WithGraphExtraction(llmProvider)` runs an LLM after chunking that reads batches of chunks and outputs a JSON edge list. Each edge has a type (e.g. `depends_on`) and a confidence weight.
-- `WithSequenceEdges(true)` adds cheap `RelSequence` edges linking chunk[i] → chunk[i+1], so `GraphRetriever` can walk to neighboring chunks for continuity without any LLM calls.
-- `WithMinEdgeWeight(0.5)` discards edges where the LLM was less than 50% confident.
-- `GraphRetriever.Retrieve` first does a vector search for seed chunks, then BFS-traverses the stored edges up to 2 hops. Chunks discovered via graph traversal get a score of `graphWeight * edge.weight * hopDecay`.
-- `WithGraphTopK(3)` reserves 3 of the 10 result slots for graph-discovered chunks, preventing seed chunks from crowding them out.
+- `WithGraphExtraction(llmProvider, cfg)` runs an LLM after chunking that reads batches of chunks and outputs a JSON edge list. Each edge has a type (e.g. `depends_on`) and a confidence weight.
+- `SequenceEdges: true` in the config adds cheap `RelSequence` edges linking chunk[i] → chunk[i+1], so `GraphRetriever` can walk to neighboring chunks for continuity without any LLM calls.
+- `MinEdgeWeight: 0.5` discards edges where the LLM was less than 50% confident.
+- `GraphRetriever.Retrieve` first does a vector search for seed chunks, then BFS-traverses the stored edges up to 2 hops. Chunks discovered via graph traversal get a score of `GraphWeight * edge.weight * hopDecay`.
+- `GraphTopK: 3` reserves 3 of the 10 result slots for graph-discovered chunks, preventing seed chunks from crowding them out.
 - `r.GraphContext` tells you which chunk pointed here and what the relationship was.
 
 **Variations:**
 
-- Use `WithBidirectional(true)` when you want to walk both `A→B` and `B→A` edges (useful for `contradicts` relationships).
-- Use `WithSeedKeywordWeight(0.3)` to diversify the seed set with keyword results before graph traversal begins.
-- For large documents, add `WithGraphDocContext(50_000)` to include document structure in the LLM prompt for better relationship detection.
+- Set `Bidirectional: true` in `GraphRetrieverConfig` when you want to walk both `A→B` and `B→A` edges (useful for `contradicts` relationships).
+- Set `SeedKeywordWeight: 0.3` in `GraphRetrieverConfig` to diversify the seed set with keyword results before graph traversal begins.
+- For large documents, set `DocContextBytes: 50_000` in `GraphExtractionConfig` to include document structure in the LLM prompt for better relationship detection.
 
 ---
 

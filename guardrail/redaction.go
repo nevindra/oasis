@@ -192,3 +192,10 @@ func (g *RedactionGuard) PostChunk(_ context.Context, ev *core.StreamEvent) (*co
 	ev.Content = out
 	return ev, nil
 }
+
+// compile-time interface checks
+var (
+	_ core.PreProcessor    = (*RedactionGuard)(nil)
+	_ core.PostProcessor   = (*RedactionGuard)(nil)
+	_ core.StreamProcessor = (*RedactionGuard)(nil)
+)

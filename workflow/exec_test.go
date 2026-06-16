@@ -401,6 +401,60 @@ func TestWorkflowCallbackPanicRecovery(t *testing.T) {
 	}
 }
 
+// TestWorkflowStepFuncPanicRecovery verifies that a panic inside a StepFunc is
+// recovered, the step is marked StepFailed (not process-crash), and dependent
+// downstream steps are skipped — matching the a2a recover() pattern.
+func TestWorkflowStepFuncPanicRecovery(t *testing.T) {
+	wf, err := New("panic-step", "step func panic recovery test",
+		Step("a", func(_ context.Context, _ *WorkflowContext) error {
+			panic("step exploded")
+		}),
+		// "b" depends on "a" — it must be skipped when "a" panics.
+		Step("b", func(_ context.Context, wCtx *WorkflowContext) error {
+			wCtx.Set("b.output", "should-not-run")
+			return nil
+		}, After("a")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Must not crash the process.
+	_, execErr := wf.Execute(context.Background(), core.AgentTask{Input: "go"})
+	if execErr == nil {
+		t.Fatal("expected a WorkflowError but got nil")
+	}
+
+	var wfErr *WorkflowError
+	if !errors.As(execErr, &wfErr) {
+		t.Fatalf("expected *WorkflowError, got %T: %v", execErr, execErr)
+	}
+	if wfErr.StepName != "a" {
+		t.Errorf("WorkflowError.StepName = %q, want %q", wfErr.StepName, "a")
+	}
+
+	// The panicking step must be recorded as StepFailed.
+	aResult, ok := wfErr.Result.Steps["a"]
+	if !ok {
+		t.Fatal("step 'a' missing from WorkflowResult.Steps")
+	}
+	if aResult.Status != StepFailed {
+		t.Errorf("step 'a' status = %v, want StepFailed", aResult.Status)
+	}
+	if aResult.Error == nil {
+		t.Error("step 'a' Error is nil, expected panic message wrapped in error")
+	}
+
+	// Dependent step "b" must be skipped (not executed).
+	bResult, ok := wfErr.Result.Steps["b"]
+	if !ok {
+		t.Fatal("step 'b' missing from WorkflowResult.Steps")
+	}
+	if bResult.Status != StepSkipped {
+		t.Errorf("step 'b' status = %v, want StepSkipped", bResult.Status)
+	}
+}
+
 // --- OutputTo tests ---
 
 func TestWorkflowOutputTo(t *testing.T) {

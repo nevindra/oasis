@@ -76,14 +76,8 @@ var _ oasis.DocumentMetaLister = (*Store)(nil)
 var _ oasis.ScheduledActionStore = (*Store)(nil)
 
 // nopLogger is a logger that discards all output.
-var nopLogger = slog.New(discardHandler{})
-
-type discardHandler struct{}
-
-func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
-func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
-func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
-func (d discardHandler) WithGroup(string) slog.Handler           { return d }
+// Why: slog.DiscardHandler (Go 1.24+) replaces the hand-rolled no-op handler.
+var nopLogger = slog.New(slog.DiscardHandler)
 
 // New creates a Store using a local SQLite file at dbPath.
 // WAL journal mode is enabled for concurrent reader/writer access, and the
@@ -172,20 +166,24 @@ func (s *Store) Init(ctx context.Context) error {
 		return fmt.Errorf("create table: %w", err)
 	}
 
-	// Scores (eval/scorer results)
+	// Scores (eval/scorer results).
+	// Why: NOT NULL DEFAULT mirrors the postgres scores DDL so a row written
+	// by one backend reads back identically on the other (no NULL drift in
+	// scanScores). Applies to fresh tables only (IF NOT EXISTS); details stays
+	// nullable on both backends.
 	_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS scores (
 		id TEXT PRIMARY KEY,
-		scorer_id TEXT,
-		run_id TEXT,
-		entity_id TEXT,
-		entity_type TEXT,
-		input TEXT,
-		output TEXT,
-		value REAL,
-		reason TEXT,
+		scorer_id TEXT NOT NULL DEFAULT '',
+		run_id TEXT NOT NULL DEFAULT '',
+		entity_id TEXT NOT NULL DEFAULT '',
+		entity_type TEXT NOT NULL DEFAULT '',
+		input TEXT NOT NULL DEFAULT '',
+		output TEXT NOT NULL DEFAULT '',
+		value REAL NOT NULL DEFAULT 0,
+		reason TEXT NOT NULL DEFAULT '',
 		details BLOB,
-		source TEXT,
-		created_at INTEGER
+		source TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL DEFAULT 0
 	)`)
 	if err != nil {
 		return fmt.Errorf("create table: %w", err)

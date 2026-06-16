@@ -64,11 +64,7 @@ func (w *toolWrapper) EnsureSchema(ctx context.Context) error {
 			if t.Name != w.entry.rawName {
 				continue
 			}
-			if raw, ok := t.InputSchema.(json.RawMessage); ok {
-				newSchema = raw
-			} else if b, merr := json.Marshal(t.InputSchema); merr == nil {
-				newSchema = b
-			}
+			newSchema = t.InputSchema
 			break
 		}
 		if len(newSchema) == 0 {

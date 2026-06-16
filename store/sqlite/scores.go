@@ -18,11 +18,14 @@ func (s *Store) SaveScores(ctx context.Context, rows []oasis.ScoreRow) error {
 	if err != nil {
 		return err
 	}
+	// Why: deferred rollback guarantees no leaked transaction on any early
+	// return; rollback after a successful Commit is a documented no-op.
+	// LIFO ordering runs stmt.Close() before this rollback. Matches memory.go.
+	defer tx.Rollback() //nolint:errcheck
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO scores (id, scorer_id, run_id, entity_id, entity_type, input, output, value, reason, details, source, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	defer stmt.Close()
@@ -30,7 +33,6 @@ func (s *Store) SaveScores(ctx context.Context, rows []oasis.ScoreRow) error {
 		if _, err := stmt.ExecContext(ctx,
 			r.ID, r.ScorerID, r.RunID, r.EntityID, r.EntityType,
 			r.Input, r.Output, r.Value, r.Reason, []byte(r.Details), string(r.Source), r.CreatedAt.UnixMilli()); err != nil {
-			_ = tx.Rollback()
 			return err
 		}
 	}
@@ -43,6 +45,10 @@ func (s *Store) ListScores(ctx context.Context, filter oasis.ScoreFilter) ([]oas
 	if filter.ScorerID != "" {
 		q += " AND scorer_id = ?"
 		args = append(args, filter.ScorerID)
+	}
+	if filter.RunID != "" {
+		q += " AND run_id = ?"
+		args = append(args, filter.RunID)
 	}
 	if filter.EntityID != "" {
 		q += " AND entity_id = ?"
@@ -81,7 +87,9 @@ func (s *Store) GetScore(ctx context.Context, id string) (oasis.ScoreRow, error)
 		return oasis.ScoreRow{}, err
 	}
 	if len(out) == 0 {
-		return oasis.ScoreRow{}, sql.ErrNoRows
+		// Why: the ScoreStore contract promises core.ErrNotFound on a missing
+		// id (mirrors MemoryItemStore.Get); never leak the driver's sql.ErrNoRows.
+		return oasis.ScoreRow{}, oasis.ErrNotFound
 	}
 	return out[0], nil
 }
@@ -92,6 +100,10 @@ func (s *Store) DeleteScores(ctx context.Context, filter oasis.ScoreFilter) (int
 	if filter.ScorerID != "" {
 		q += " AND scorer_id = ?"
 		args = append(args, filter.ScorerID)
+	}
+	if filter.RunID != "" {
+		q += " AND run_id = ?"
+		args = append(args, filter.RunID)
 	}
 	if filter.EntityID != "" {
 		q += " AND entity_id = ?"

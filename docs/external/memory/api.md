@@ -220,7 +220,7 @@ Pass these to `oasis.WithMemory(...)` or `memory.BuildConfig(...)`.
 | `WithSemanticRecallMinScore(s)` | `0.60` | Cosine similarity threshold for cross-thread recall. |
 | `WithRecallKinds(kinds...)` | `[KindFact]` | Which `Kind` values are searched during batched recall. |
 | `WithRecallTopK(k)` | `8` | Max items returned by batched recall per turn. |
-| `WithWorkingMemory()` | `false` | Enable a single writable markdown slot at `ScopeResource`. |
+| `WithWorkingMemory()` | `false` | Enable a single writable markdown slot (a `KindNote` item) at `ScopeResource`. When set, the canonical working-memory note is loaded via a `LoadWorkingMemory` retrieve processor on every turn, so it always appears in context regardless of embedding similarity. |
 | `WithWorkingMemoryScope(s)` | `ScopeResource` | Override the scope for the working memory slot. |
 | `WithAutoTitle()` | `false` | On the first turn of a thread, ask the LLM to generate a thread title. Requires `WithProvider`. |
 | `WithCompaction(c, threshold)` | `nil, 0` | Wire a `Compactor`. Fires when stored history exceeds `threshold × contextWindow`. `threshold` is `0.0–1.0`; recommended `0.80`. Requires `WithStore`. |
@@ -230,6 +230,30 @@ Pass these to `oasis.WithMemory(...)` or `memory.BuildConfig(...)`.
 | `WithRetrieveProcessors(ps...)` | `nil` | Append custom processors to the retrieve pipeline (runs after defaults). |
 | `WithLogger(l)` | `slog.DiscardHandler` | Structured logger for memory-internal events. |
 | `WithTracer(t)` | `nil` | OpenTelemetry tracer. Instruments ingest and retrieve spans. |
+
+---
+
+## Retrieve Processors
+
+Retrieve processors implement `RetrieveProcessor` and run in the retrieve pipeline (before each LLM call) to load memory items into context. The framework registers built-in processors automatically; use `WithRetrieveProcessors` to append custom ones.
+
+### `LoadWorkingMemory`
+
+```go
+type LoadWorkingMemory struct {
+    Scope core.MemoryScopeKind // default: ScopeResource
+}
+```
+
+A retrieve processor that loads the single canonical working-memory `KindNote` item and adds it to the context block on every turn. It is registered automatically by `WithWorkingMemory()` — you do not construct it directly in typical usage.
+
+Unlike `BatchedRecall` (which ranks items by embedding similarity), `LoadWorkingMemory` does an exact-ID lookup so the scratchpad always appears in context regardless of the current input. The item ID is derived deterministically from `(agentName, scope+chatID)`.
+
+If you need to wire this processor manually (e.g. in a custom agent that builds its own retrieve pipeline via `WithRetrieveProcessors`):
+
+```go
+memory.WithRetrieveProcessors(memory.LoadWorkingMemory{Scope: memory.ScopeResource})
+```
 
 ---
 

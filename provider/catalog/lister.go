@@ -51,6 +51,15 @@ type modelLister interface {
 
 type openaiLister struct {
 	provider string
+	client   *http.Client
+}
+
+// httpClient returns the configured client or http.DefaultClient when nil.
+func (l *openaiLister) httpClient() *http.Client {
+	if l.client != nil {
+		return l.client
+	}
+	return http.DefaultClient
 }
 
 // openaiModelResponse matches the OpenAI /v1/models response.
@@ -109,7 +118,7 @@ func (l *openaiLister) listModels(ctx context.Context, baseURL, apiKey string) (
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := l.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: fetch models from %s: %w", l.provider, err)
 	}
@@ -219,7 +228,17 @@ func parseTogetherPricing(p *togetherPricing) *oasis.ModelPricing {
 
 // --- Gemini lister ---
 
-type geminiLister struct{}
+type geminiLister struct {
+	client *http.Client
+}
+
+// httpClient returns the configured client or http.DefaultClient when nil.
+func (l *geminiLister) httpClient() *http.Client {
+	if l.client != nil {
+		return l.client
+	}
+	return http.DefaultClient
+}
 
 type geminiModelsResponse struct {
 	Models        []geminiModel `json:"models"`
@@ -250,7 +269,7 @@ func (l *geminiLister) listModels(ctx context.Context, baseURL, apiKey string) (
 			return nil, fmt.Errorf("catalog: create gemini request: %w", err)
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := l.httpClient().Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("catalog: fetch gemini models: %w", err)
 		}

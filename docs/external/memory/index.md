@@ -78,7 +78,7 @@ Think of the memory system as three concentric layers, each building on the one 
 
 **Layer 3 — Cross-thread recall (episodic).** The outer layer. When `WithSemanticRecall()` is enabled, the retrieve pipeline also searches across *other threads* for the same `ChatID` and injects matching messages. This is how an agent remembers a user across separate sessions — not by loading every old conversation, but by surfacing the ones most similar to what the user just said.
 
-**Working memory** is a special case inside Layer 2. It is a single `KindNote` item whose ID is deterministically derived from `(agentName, scope)`. Upserting it always overwrites the same row. Think of it as a sticky note the agent can rewrite each turn rather than accumulating a growing pile.
+**Working memory** is a special case inside Layer 2. It is a single `KindNote` item whose ID is deterministically derived from `(agentName, scope)`. Upserting it always overwrites the same row. Think of it as a sticky note the agent can rewrite each turn rather than accumulating a growing pile. When `WithWorkingMemory()` is set, a `LoadWorkingMemory` retrieve processor is added to the pipeline automatically — the scratchpad is loaded on every turn via an exact-ID lookup, so it always appears in context regardless of embedding similarity.
 
 **Compaction** is orthogonal to the layers. It is a pressure valve: when stored history gets so long that loading it would overflow the model's context window, compaction replaces the oldest portion with a structured summary. The summary lands in the store as a `KindSummary` item and appears at the start of the history slice on the next load.
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -320,7 +321,42 @@ func (w *Workflow) runDAG(ctx context.Context, state *executionState, ch chan<- 
 		completed[name] = true
 		inflight++
 		go func() {
+			// Why: recover() here mirrors the a2a pattern (a2a/server_send.go ~188).
+			// A panic inside a user-provided StepFunc would otherwise escape the
+			// goroutine boundary and crash the whole process. Instead we settle the
+			// step as StepFailed so the coordinator loop can drain normally and the
+			// caller receives a WorkflowError — never a process crash.
+			var sent bool
+			defer func() {
+				if r := recover(); r != nil {
+					panicErr := fmt.Errorf("step panic: %v", r)
+					dur := time.Duration(0)
+					state.mu.Lock()
+					// Guard: only record failure if the step hasn't already settled
+					// (e.g. context cancel racing with panic is theoretically impossible
+					// here, but defence-in-depth costs nothing).
+					if sr, ok := state.results[s.name]; !ok || sr.Status == StepRunning {
+						state.results[s.name] = StepResult{
+							Name:     s.name,
+							Status:   StepFailed,
+							Error:    panicErr,
+							Duration: dur,
+						}
+						if state.failedStep == "" {
+							state.failedStep = s.name
+						}
+					}
+					state.mu.Unlock()
+					w.logger.Error("step panic recovered", "workflow", w.name, "step", s.name, "panic", r)
+					state.cancel()
+					if !sent {
+						sent = true
+						done <- s.name
+					}
+				}
+			}()
 			w.executeStep(ctx, s, state, ch)
+			sent = true
 			done <- name
 		}()
 	}

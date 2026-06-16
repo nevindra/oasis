@@ -61,16 +61,12 @@ type EmbedData struct {
 }
 
 // EmbeddingOption configures an Embedding provider.
-type EmbeddingOption func(*Embedding)
-
-// WithEmbeddingName sets the provider name (default "openai").
-func WithEmbeddingName(name string) EmbeddingOption {
-	return func(e *Embedding) { e.name = name }
-}
-
-// WithEmbeddingHTTPClient sets a custom HTTP client.
-func WithEmbeddingHTTPClient(c *http.Client) EmbeddingOption {
-	return func(e *Embedding) { e.client = c }
+//
+// Why: an interface (not a bare func type) so the shared WithName /
+// WithHTTPClient values — which also satisfy ProviderOption — can be passed to
+// NewEmbedding without a package-level name collision. See provider_option.go.
+type EmbeddingOption interface {
+	applyEmbedding(*Embedding)
 }
 
 // Embedding implements oasis.EmbeddingProvider for any OpenAI-compatible
@@ -98,7 +94,7 @@ func NewEmbedding(apiKey, model, baseURL string, dims int, opts ...EmbeddingOpti
 		name:    "openai",
 	}
 	for _, opt := range opts {
-		opt(e)
+		opt.applyEmbedding(e)
 	}
 	return e
 }

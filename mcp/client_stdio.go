@@ -132,20 +132,36 @@ func (c *StdioClient) ListTools(ctx context.Context) (*ListToolsResult, error) {
 
 func (c *StdioClient) setProgressEnabled(on bool) { c.progressEnabled = on }
 
+// toolCallMeta is the optional _meta object carrying a progress token. Encoded
+// only when progress is enabled (pointer + omitempty on the parent).
+type toolCallMeta struct {
+	ProgressToken string `json:"progressToken"`
+}
+
+// toolCallRequest is the typed tools/call params payload. Field order and tags
+// reproduce the original map-based marshal byte-for-byte: Go sorts map keys, so
+// the wire order is _meta, arguments, name. Meta is a pointer so omitempty drops
+// it entirely when progress is off.
+//
+// Why typed: CallTool is an agent hot path; marshaling a concrete struct avoids
+// the per-call map allocations (and the nested _meta map) the map form required.
+type toolCallRequest struct {
+	Meta      *toolCallMeta   `json:"_meta,omitempty"`
+	Arguments json.RawMessage `json:"arguments"`
+	Name      string          `json:"name"`
+}
+
 // CallTool invokes a named tool on the MCP server with the given arguments.
 func (c *StdioClient) CallTool(ctx context.Context, name string, args json.RawMessage) (*CallToolResult, error) {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	payload := map[string]interface{}{
-		"name":      name,
-		"arguments": json.RawMessage(args),
-	}
+	payload := toolCallRequest{Arguments: args, Name: name}
 	if c.progressEnabled {
 		// Encode the tool name in the token so the registry recovers it without
 		// a correlation map: "<tool>#<seq>".
 		seq := c.progressSeq.Add(1)
-		payload["_meta"] = map[string]string{"progressToken": fmt.Sprintf("%s#%d", name, seq)}
+		payload.Meta = &toolCallMeta{ProgressToken: fmt.Sprintf("%s#%d", name, seq)}
 	}
 	params, _ := json.Marshal(payload)
 	raw, err := c.framer.Call(ctx, "tools/call", params)

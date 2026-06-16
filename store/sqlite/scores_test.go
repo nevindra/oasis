@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -46,5 +47,88 @@ func TestSQLiteScoreStoreRoundTrip(t *testing.T) {
 	n, err := store.DeleteScores(ctx, oasis.ScoreFilter{EntityID: "agent1"})
 	if err != nil || n != 2 {
 		t.Fatalf("DeleteScores n=%d err=%v", n, err)
+	}
+}
+
+// TestSQLiteGetScoreNotFound proves GetScore reports core.ErrNotFound (not the
+// leaked sql.ErrNoRows) when no row has the requested id.
+func TestSQLiteGetScoreNotFound(t *testing.T) {
+	s := New(":memory:")
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer s.Close()
+
+	_, err := s.GetScore(context.Background(), "missing")
+	if !errors.Is(err, oasis.ErrNotFound) {
+		t.Fatalf("GetScore missing: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestSQLiteListScoresRunIDFilter proves ScoreFilter.RunID scopes ListScores to
+// rows with the matching run_id (the field was previously ignored).
+func TestSQLiteListScoresRunIDFilter(t *testing.T) {
+	s := New(":memory:")
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	rows := []oasis.ScoreRow{
+		{ID: "1", ScorerID: "f", RunID: "r1", EntityID: "a", EntityType: "agent", CreatedAt: time.Now()},
+		{ID: "2", ScorerID: "f", RunID: "r2", EntityID: "a", EntityType: "agent", CreatedAt: time.Now()},
+		{ID: "3", ScorerID: "f", RunID: "r1", EntityID: "a", EntityType: "agent", CreatedAt: time.Now()},
+	}
+	if err := s.SaveScores(ctx, rows); err != nil {
+		t.Fatalf("SaveScores: %v", err)
+	}
+
+	got, err := s.ListScores(ctx, oasis.ScoreFilter{RunID: "r1"})
+	if err != nil {
+		t.Fatalf("ListScores: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListScores RunID=r1: want 2 rows, got %d (%+v)", len(got), got)
+	}
+	for _, r := range got {
+		if r.RunID != "r1" {
+			t.Fatalf("ListScores returned row with run_id=%q, want r1", r.RunID)
+		}
+	}
+}
+
+// TestSQLiteDeleteScoresRunIDFilter proves ScoreFilter.RunID scopes DeleteScores
+// to rows with the matching run_id (the field was previously ignored).
+func TestSQLiteDeleteScoresRunIDFilter(t *testing.T) {
+	s := New(":memory:")
+	if err := s.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	rows := []oasis.ScoreRow{
+		{ID: "1", RunID: "r1", EntityID: "a", CreatedAt: time.Now()},
+		{ID: "2", RunID: "r2", EntityID: "a", CreatedAt: time.Now()},
+		{ID: "3", RunID: "r1", EntityID: "a", CreatedAt: time.Now()},
+	}
+	if err := s.SaveScores(ctx, rows); err != nil {
+		t.Fatalf("SaveScores: %v", err)
+	}
+
+	n, err := s.DeleteScores(ctx, oasis.ScoreFilter{RunID: "r1"})
+	if err != nil {
+		t.Fatalf("DeleteScores: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("DeleteScores RunID=r1: want 2 deleted, got %d", n)
+	}
+	remaining, err := s.ListScores(ctx, oasis.ScoreFilter{})
+	if err != nil {
+		t.Fatalf("ListScores: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].RunID != "r2" {
+		t.Fatalf("after delete: want 1 row run_id=r2, got %+v", remaining)
 	}
 }

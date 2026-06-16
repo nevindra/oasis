@@ -331,22 +331,16 @@ func shouldExtractFacts(text string) bool {
 }
 
 // scopeForKind returns the default scope for a given MemoryKind based on the task.
-func scopeForKind(task core.AgentTask, kind core.MemoryKind) core.MemoryScope {
-	switch kind {
-	case KindNote, KindPlaybook:
-		ref := task.ChatID
-		if ref == "" {
-			ref = task.ThreadID
-		}
-		return Scoped(ScopeResource, ref)
-	default:
-		// fact, event, reflection, summary, custom kinds
-		ref := task.ChatID
-		if ref == "" {
-			ref = task.ThreadID
-		}
-		return Scoped(ScopeResource, ref)
+//
+// Why: every kind currently resolves to the same Resource scope (the kind
+// argument is retained so callers stay future-proof if per-kind scoping is
+// reintroduced). Collapsed from a switch whose arms were byte-identical.
+func scopeForKind(task core.AgentTask, _ core.MemoryKind) core.MemoryScope {
+	ref := task.ChatID
+	if ref == "" {
+		ref = task.ThreadID
 	}
+	return Scoped(ScopeResource, ref)
 }
 
 // Deduper handles supersedes intent and de-duplicates candidates against
@@ -381,7 +375,12 @@ func (Deduper) Process(ctx context.Context, in *IngestContext) error {
 		}
 		for _, r := range results {
 			if r.Score >= supersedesMinScore {
-				_ = in.ItemStore.Delete(ctx, r.Item.ID)
+				if err := in.ItemStore.Delete(ctx, r.Item.ID); err != nil {
+					// Why: superseding the stale item is best-effort — a delete
+					// failure leaves a duplicate but must not abort dedup. Log at
+					// Warn (non-fatal) and continue.
+					in.Logger.Warn("dedup: supersede delete failed", "id", r.Item.ID, "error", err)
+				}
 			}
 		}
 	}

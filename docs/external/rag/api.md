@@ -143,10 +143,10 @@ Defaults: keyword weight 0.3, overfetch multiplier 3. Keyword search runs automa
 ### `rag.NewGraphRetriever`
 
 ```go
-func NewGraphRetriever(store core.Store, embedding core.EmbeddingProvider, opts ...GraphRetrieverOption) *GraphRetriever
+func NewGraphRetriever(store core.Store, embedding core.EmbeddingProvider, cfg GraphRetrieverConfig) *GraphRetriever
 ```
 
-Defaults: 2 hops, vector weight 0.7, graph weight 0.3, hop decay `{1.0, 0.7, 0.5}`, seed top-K 10. Falls back to vector-only when the store doesn't implement `core.GraphStore`.
+Accepts a `GraphRetrieverConfig` struct (not variadic options). The zero value reproduces all defaults: `MaxHops=2`, `VectorWeight=0.7`, `GraphWeight=0.3`, `HopDecay={1.0, 0.7, 0.5}`, `SeedTopK=10`. Falls back to vector-only when the store doesn't implement `core.GraphStore`.
 
 ### `rag.NewScoreReranker`
 
@@ -243,15 +243,8 @@ Same signature as `HybridRetriever.Retrieve`. Also implements `core.Sourced`.
 | `WithBatchSize(n)` | 64 | Chunks per `Embed()` call. |
 | `WithMaxContentSize(n)` | 50 MB | Reject files larger than this. `0` disables. |
 | `WithExtractor(ct, e)` | — | Register or override an extractor for a `ContentType`. Use this to delegate PDF/DOCX parsing to an external parser (liteparse, LlamaParse) — see Recipe 8 in [examples.md](examples.md). |
-| `WithGraphExtraction(p)` | disabled | LLM-based relationship extraction using `core.Provider` `p`. |
-| `WithSequenceEdges(true)` | `false` | Add `RelSequence` edges between consecutive chunks (no LLM). |
+| `WithGraphExtraction(p, cfg)` | disabled | LLM-based (and optional sequence) relationship extraction. `p` is the `core.Provider`; `cfg` is an `ingest.GraphExtractionConfig` struct. Pass `nil` for `p` with `cfg.SequenceEdges = true` to emit only deterministic sequence edges. The zero-value `GraphExtractionConfig` reproduces all framework defaults. |
 | `WithContextualEnrichment(p)` | disabled | Prepend LLM-generated context to each chunk before embedding. |
-| `WithMinEdgeWeight(w)` | 0 | Drop edges below this confidence score. |
-| `WithMaxEdgesPerChunk(n)` | 0 (unlimited) | Cap edges per source chunk. |
-| `WithGraphBatchSize(n)` | 5 | Chunks per LLM graph extraction call. |
-| `WithGraphBatchOverlap(n)` | 0 | Overlapping chunks between consecutive extraction windows. |
-| `WithSemanticBatching(true)` | `false` | Group semantically similar chunks for extraction (overrides overlap). |
-| `WithGraphDocContext(n)` | 0 | Include up to `n` bytes of source document in each extraction prompt. |
 | `WithBatchConcurrency(n)` | 1 | Parallel pipelines during `IngestBatch`. |
 | `WithBatchCrossDocEdges(true)` | `false` | Auto-run cross-document edge extraction after `IngestBatch`. |
 | `WithImageEmbedding(p)` | disabled | Embed page images as chunks via a multimodal embedding provider. |
@@ -275,25 +268,48 @@ Same signature as `HybridRetriever.Retrieve`. Also implements `core.Sourced`.
 | `WithRetrieverTracer(t)` | nil | `core.Tracer`. |
 | `WithRetrieverLogger(l)` | nil | `*slog.Logger`. |
 
-### GraphRetriever options (`rag.GraphRetrieverOption`)
+### `ingest.GraphExtractionConfig`
 
-| Option | Default | Description |
-|---|---|---|
-| `WithMaxHops(n)` | 2 | Maximum traversal hops from seed chunks. |
-| `WithVectorWeight(w)` | 0.7 | Weight for vector scores in final blend. |
-| `WithGraphWeight(w)` | 0.3 | Weight for graph scores in final blend. |
-| `WithHopDecay([]float32)` | `{1.0, 0.7, 0.5}` | Score multiplier per hop. Length caps `maxHops`. |
-| `WithBidirectional(true)` | `false` | Traverse both outgoing and incoming edges. |
-| `WithRelationFilter(types...)` | nil (all types) | Only traverse the specified relation types. |
-| `WithMinTraversalScore(s)` | 0 | Skip edges with weight below this. |
-| `WithSeedTopK(k)` | 10 | Seed chunks from initial vector search. |
-| `WithSeedKeywordWeight(w)` | 0 | When > 0, merge keyword results into seed set (requires `core.KeywordSearcher`). |
-| `WithGraphTopK(n)` | 0 | Reserve `n` slots for graph-discovered chunks (prevents seed dominance). |
-| `WithMaxFrontierSize(n)` | 0 (unlimited) | Cap BFS frontier per hop. |
-| `WithGraphReranker(r)` | nil | Reranker after graph score blending. |
-| `WithGraphFilters(f...)` | nil | `core.ChunkFilter` for initial vector search. |
-| `WithGraphRetrieverTracer(t)` | nil | `core.Tracer`. |
-| `WithGraphRetrieverLogger(l)` | nil | `*slog.Logger`. |
+Configuration struct passed as the second argument to `WithGraphExtraction`. The zero value reproduces all framework defaults.
+
+```go
+type GraphExtractionConfig struct {
+    BatchSize        int     // chunks per LLM extraction call (default 5)
+    BatchOverlap     int     // chunks shared between consecutive sliding-window batches (default 0); ignored when SemanticBatching is true
+    Workers          int     // max concurrent LLM calls (default 3)
+    MinEdgeWeight    float32 // drop edges below this weight (default 0, no filtering)
+    MaxEdgesPerChunk int     // cap edges per source chunk (default 0, unlimited)
+    DocContextBytes  int     // max source-document bytes included in each extraction prompt (default 0, disabled)
+    SemanticBatching bool    // group nearest-neighbor chunks instead of sliding window (forces BatchOverlap=0)
+    SequenceEdges    bool    // add RelSequence edges between consecutive chunks (no LLM required)
+}
+```
+
+### `rag.GraphRetrieverConfig`
+
+Configuration struct passed directly to `NewGraphRetriever`. The zero value reproduces all defaults.
+
+```go
+type GraphRetrieverConfig struct {
+    MaxHops           int                  // BFS traversal depth (default 2)
+    GraphWeight       float32              // weight for graph scores in final blend (default 0.3)
+    VectorWeight      float32              // weight for vector scores in final blend (default 0.7)
+    HopDecay          []float32            // per-hop score multiplier (default {1.0, 0.7, 0.5})
+    Bidirectional     bool                 // traverse outgoing AND incoming edges (default false)
+    RelationFilter    []core.RelationType  // restrict traversal to these relation types (nil = all)
+    MinTraversalScore float32              // skip edges below this weight (default 0)
+    SeedTopK          int                  // seed chunks from initial vector search (default 10)
+    SeedKeywordWeight float32              // keyword search weight in seed RRF merge (default 0, disabled)
+    GraphTopK         int                  // reserved slots for graph-discovered chunks (default 0, single pool)
+    MaxFrontierSize   int                  // cap BFS frontier per hop (default 0, unlimited)
+    Reranker          Reranker             // optional reranker after graph score blending
+    Filters           []core.ChunkFilter   // metadata filters for initial vector search
+    Tracer            core.Tracer
+    Logger            *slog.Logger
+}
+```
+
+Weight normalization: if `GraphWeight + VectorWeight` differs from `1.0` by more than `0.01`, `NewGraphRetriever` normalizes both proportionally. If `HopDecay` is shorter than `MaxHops`, the last element is repeated to pad it.
 
 ### Chunker options (`ingest.ChunkerOption`)
 

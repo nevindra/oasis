@@ -70,6 +70,8 @@ type ScheduledActionStore interface {
 type ScoreStore interface {
 	SaveScores(ctx context.Context, rows []ScoreRow) error
 	ListScores(ctx context.Context, filter ScoreFilter) ([]ScoreRow, error)
+	// GetScore returns the score with the given id. It returns ErrNotFound
+	// (use errors.Is) when no score has that id, mirroring MemoryItemStore.Get.
 	GetScore(ctx context.Context, id string) (ScoreRow, error)
 	DeleteScores(ctx context.Context, filter ScoreFilter) (int, error)
 }
@@ -102,6 +104,8 @@ type ScoreRow struct {
 // ignored (no constraint).
 type ScoreFilter struct {
 	ScorerID string
+	// RunID scopes results to a single run. Empty means no run constraint.
+	RunID    string
 	EntityID string
 	Source   ScorerSource
 	Since    time.Time

@@ -25,7 +25,7 @@ func TestExtractCrossDocumentEdges(t *testing.T) {
 	}
 
 	emb := &mockEmbeddingProvider{embedding: []float32{0.5, 0.5}}
-	ing := NewIngestor(store, emb, WithGraphExtraction(provider))
+	ing := NewIngestor(store, emb, WithGraphExtraction(provider, GraphExtractionConfig{}))
 
 	count, err := ing.ExtractCrossDocumentEdges(context.Background())
 	if err != nil {

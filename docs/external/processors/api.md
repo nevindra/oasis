@@ -326,15 +326,27 @@ Keyword and regex blocklist for user messages. Keywords are matched
 case-insensitively as substrings.
 
 ```go
-func NewKeywordGuard(keywords ...string) *KeywordGuard
+func NewKeywordGuard(keywords []string, opts ...KeywordOption) *KeywordGuard
 
-func (g *KeywordGuard) WithRegex(patterns ...*regexp.Regexp) *KeywordGuard
-func (g *KeywordGuard) WithResponse(msg string) *KeywordGuard
-func (g *KeywordGuard) WithKeywordLogger(l *slog.Logger) *KeywordGuard
+type KeywordOption func(*KeywordGuard)
+
+func KeywordRegex(patterns ...*regexp.Regexp) KeywordOption  // regex matched against raw (non-lowercased) content
+func KeywordLogger(l *slog.Logger) KeywordOption             // log blocked requests at WARN
+func KeywordResponse(msg string) KeywordOption               // override the halt response message
 ```
 
-`WithRegex`, `WithResponse`, and `WithKeywordLogger` return the guard for
-builder-style chaining.
+Pass options as variadic arguments to `NewKeywordGuard`. The previous
+receiver methods `WithRegex`, `WithKeywordLogger`, and `WithResponse` have
+been removed — use the functional option constructors instead.
+
+```go
+guard := guardrail.NewKeywordGuard(
+    []string{"forbidden", "blocked"},
+    guardrail.KeywordRegex(regexp.MustCompile(`(?i)secret\d+`)),
+    guardrail.KeywordResponse("This content is not allowed."),
+    guardrail.KeywordLogger(slog.Default()),
+)
+```
 
 ### `MaxToolCallsGuard` (PostProcessor)
 

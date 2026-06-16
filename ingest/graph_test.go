@@ -359,6 +359,138 @@ func TestParseEdgeResponse_SimilarTo(t *testing.T) {
 	}
 }
 
+// --- GraphExtractionConfig consolidation tests ---
+
+func TestGraphExtractionConfig_ZeroValueReproducesDefaults(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	provider := &mockGraphProvider{response: `{"edges":[]}`}
+
+	// Zero-value config must reproduce the historical NewIngestor defaults.
+	ing := NewIngestor(store, emb, WithGraphExtraction(provider, GraphExtractionConfig{}))
+
+	if ing.graphProvider != provider {
+		t.Error("graphProvider not set")
+	}
+	if ing.graphBatchSize != 5 {
+		t.Errorf("graphBatchSize = %d, want 5 (default)", ing.graphBatchSize)
+	}
+	if ing.graphWorkers != 3 {
+		t.Errorf("graphWorkers = %d, want 3 (default)", ing.graphWorkers)
+	}
+	if ing.graphBatchOverlap != 0 {
+		t.Errorf("graphBatchOverlap = %d, want 0 (default)", ing.graphBatchOverlap)
+	}
+	if ing.minEdgeWeight != 0 {
+		t.Errorf("minEdgeWeight = %f, want 0 (default)", ing.minEdgeWeight)
+	}
+	if ing.maxEdgesPerChunk != 0 {
+		t.Errorf("maxEdgesPerChunk = %d, want 0 (default)", ing.maxEdgesPerChunk)
+	}
+	if ing.graphDocContextBytes != 0 {
+		t.Errorf("graphDocContextBytes = %d, want 0 (default)", ing.graphDocContextBytes)
+	}
+	if ing.semanticBatching {
+		t.Error("semanticBatching = true, want false (default)")
+	}
+	if ing.sequenceEdges {
+		t.Error("sequenceEdges = true, want false (default)")
+	}
+}
+
+func TestGraphExtractionConfig_FieldsApplied(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	provider := &mockGraphProvider{response: `{"edges":[]}`}
+
+	cfg := GraphExtractionConfig{
+		BatchSize:        8,
+		BatchOverlap:     2,
+		Workers:          6,
+		MinEdgeWeight:    0.5,
+		MaxEdgesPerChunk: 4,
+		DocContextBytes:  50_000,
+		SequenceEdges:    true,
+	}
+	ing := NewIngestor(store, emb, WithGraphExtraction(provider, cfg))
+
+	if ing.graphBatchSize != 8 {
+		t.Errorf("graphBatchSize = %d, want 8", ing.graphBatchSize)
+	}
+	if ing.graphBatchOverlap != 2 {
+		t.Errorf("graphBatchOverlap = %d, want 2", ing.graphBatchOverlap)
+	}
+	if ing.graphWorkers != 6 {
+		t.Errorf("graphWorkers = %d, want 6", ing.graphWorkers)
+	}
+	if ing.minEdgeWeight != 0.5 {
+		t.Errorf("minEdgeWeight = %f, want 0.5", ing.minEdgeWeight)
+	}
+	if ing.maxEdgesPerChunk != 4 {
+		t.Errorf("maxEdgesPerChunk = %d, want 4", ing.maxEdgesPerChunk)
+	}
+	if ing.graphDocContextBytes != 50_000 {
+		t.Errorf("graphDocContextBytes = %d, want 50000", ing.graphDocContextBytes)
+	}
+	if !ing.sequenceEdges {
+		t.Error("sequenceEdges = false, want true")
+	}
+}
+
+func TestGraphExtractionConfig_SequenceEdgesWithoutProvider(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+
+	// SequenceEdges must work with a nil provider (no LLM needed).
+	ing := NewIngestor(store, emb, WithGraphExtraction(nil, GraphExtractionConfig{SequenceEdges: true}))
+
+	if ing.graphProvider != nil {
+		t.Error("graphProvider should be nil")
+	}
+	if !ing.sequenceEdges {
+		t.Error("sequenceEdges should be true even without a provider")
+	}
+}
+
+func TestGraphExtractionConfig_SemanticBatchingZeroesOverlap(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	provider := &mockGraphProvider{response: `{"edges":[]}`}
+
+	cfg := GraphExtractionConfig{
+		BatchSize:        5,
+		BatchOverlap:     3,
+		SemanticBatching: true,
+	}
+	ing := NewIngestor(store, emb, WithGraphExtraction(provider, cfg))
+
+	if !ing.semanticBatching {
+		t.Error("semanticBatching should be true")
+	}
+	// Overlap is meaningless under semantic batching; it must be zeroed.
+	if ing.graphBatchOverlap != 0 {
+		t.Errorf("graphBatchOverlap = %d, want 0 (semantic batching zeroes overlap)", ing.graphBatchOverlap)
+	}
+}
+
+func TestGraphExtractionConfig_OverlapClampedToBatchSize(t *testing.T) {
+	store := &mockStore{}
+	emb := &mockEmbedding{}
+	provider := &mockGraphProvider{response: `{"edges":[]}`}
+
+	// Overlap >= BatchSize is invalid (would stall the sliding window). It must
+	// be corrected to be strictly less than BatchSize.
+	cfg := GraphExtractionConfig{
+		BatchSize:    5,
+		BatchOverlap: 10,
+	}
+	ing := NewIngestor(store, emb, WithGraphExtraction(provider, cfg))
+
+	if ing.graphBatchOverlap >= ing.graphBatchSize {
+		t.Errorf("graphBatchOverlap = %d must be < graphBatchSize = %d", ing.graphBatchOverlap, ing.graphBatchSize)
+	}
+}
+
 type mockGraphProvider struct {
 	response      string
 	onChat        func()

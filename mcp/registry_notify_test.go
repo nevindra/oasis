@@ -48,3 +48,29 @@ func TestRegistry_RouteNotification_Emits(t *testing.T) {
 		}
 	}
 }
+
+// TestRegistry_RouteNotification_MalformedJSON asserts that malformed
+// notification params do not produce a phantom zero-value event: routeNotification
+// must check the unmarshal error and return without emitting.
+func TestRegistry_RouteNotification_MalformedJSON(t *testing.T) {
+	r := NewRegistry(WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	events := r.Subscribe()
+
+	// Methods that decode a typed params struct — each must drop malformed JSON.
+	malformed := []string{
+		"notifications/message",
+		"notifications/progress",
+		"notifications/resources/updated",
+	}
+	for _, method := range malformed {
+		// Bad JSON for the params field (not an object).
+		r.routeNotification("srv", method, json.RawMessage(`{not valid json`))
+	}
+
+	select {
+	case e := <-events:
+		t.Fatalf("expected no event for malformed params, got %+v", e)
+	case <-time.After(100 * time.Millisecond):
+		// No event emitted — correct.
+	}
+}

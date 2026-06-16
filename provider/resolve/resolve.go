@@ -59,13 +59,13 @@ func EmbeddingProvider(cfg EmbeddingConfig) (oasis.EmbeddingProvider, error) {
 		}
 		var opts []openaicompat.EmbeddingOption
 		if cfg.Provider != "openai" {
-			opts = append(opts, openaicompat.WithEmbeddingName(cfg.Provider))
+			opts = append(opts, openaicompat.WithName(cfg.Provider))
 		}
 		return openaicompat.NewEmbedding(cfg.APIKey, cfg.Model, baseURL, cfg.Dimensions, opts...), nil
 	default:
 		if cfg.BaseURL != "" {
 			return openaicompat.NewEmbedding(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Dimensions,
-				openaicompat.WithEmbeddingName(cfg.Provider),
+				openaicompat.WithName(cfg.Provider),
 			), nil
 		}
 		return nil, fmt.Errorf("resolve: embedding provider %q not supported (provide BaseURL for custom providers)", cfg.Provider)

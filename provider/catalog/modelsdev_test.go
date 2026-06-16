@@ -45,9 +45,13 @@ func TestFetchModelsDevProviders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	providers, err := fetchModelsDev(context.Background(), srv.URL)
+	ct := &countingTransport{base: http.DefaultTransport}
+	providers, err := fetchModelsDev(context.Background(), srv.URL, &http.Client{Transport: ct})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if ct.calls == 0 {
+		t.Fatal("expected the injected HTTP client to be used by fetchModelsDev")
 	}
 	if len(providers) != 1 {
 		t.Fatalf("expected 1 provider, got %d", len(providers))

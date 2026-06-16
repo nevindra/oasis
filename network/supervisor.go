@@ -86,9 +86,16 @@ func (r *restartAgent) Execute(ctx context.Context, task core.AgentTask, opts ..
 		}
 		lastErr = err
 		if r.delay > 0 && attempt < r.max {
+			// Why: use time.NewTimer + t.Stop() to avoid leaking the timer goroutine
+			// when ctx is cancelled before the delay elapses. time.After creates a
+			// goroutine that runs until the timer fires; if we return early via
+			// ctx.Done(), that goroutine is orphaned. NewTimer + explicit Stop()
+			// cleans up immediately.
+			t := time.NewTimer(r.delay)
 			select {
-			case <-time.After(r.delay):
+			case <-t.C:
 			case <-ctx.Done():
+				t.Stop()
 				return core.AgentResult{}, ctx.Err()
 			}
 		}

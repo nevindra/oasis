@@ -4,6 +4,7 @@ package memory
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/nevindra/oasis/core"
@@ -62,6 +63,8 @@ func (m *AgentMemory) BuildMessages(ctx context.Context, agentName, systemPrompt
 	}
 
 	// Fast path: skip the full retrieve pipeline when no memory backend is configured.
+	// Why: working memory reads from m.itemStore, so when m.itemStore == nil the
+	// LoadWorkingMemory processor is a no-op anyway and the fast path stays correct.
 	if m.store == nil && m.itemStore == nil && m.embedding == nil &&
 		len(m.retrieveProcs) == 0 && !m.semanticRecall && m.maxTokens == 0 {
 		var out []core.ChatMessage
@@ -127,6 +130,13 @@ func (m *AgentMemory) defaultRetrieveChain() []RetrieveProcessor {
 	}
 	if m.itemStore != nil {
 		chain = append(chain, LoadPinned{})
+		// Why: working memory is the canonical KindNote scratchpad — always
+		// loaded by exact ID, never ranked by similarity. Guard against
+		// double-loading when WithRecallKinds(KindNote) also pulls notes through
+		// BatchedRecall, which would render the same content twice.
+		if m.workingMemory && !slices.Contains(m.recallKinds, KindNote) {
+			chain = append(chain, LoadWorkingMemory{Scope: m.workingMemoryScope})
+		}
 		chain = append(chain, BatchedRecall{
 			Kinds: m.recallKinds,
 			TopK:  m.recallTopK,

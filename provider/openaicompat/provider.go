@@ -47,7 +47,7 @@ func NewProvider(apiKey, model, baseURL string, opts ...ProviderOption) *Provide
 		name:    "openai",
 	}
 	for _, opt := range opts {
-		opt(p)
+		opt.applyProvider(p)
 	}
 	return p
 }
