@@ -1700,7 +1700,8 @@ DX ergonomics patch addressing friction from real-world migration feedback.
 - `renderers/` directory — PDF, DOCX, XLSX, PPTX renderer scripts removed.
 - `requirements.txt` — Python deps for renderers (library deps remain in Dockerfile for direct agent use).
 
-[Unreleased]: https://github.com/nevindra/oasis/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/nevindra/oasis/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/nevindra/oasis/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/nevindra/oasis/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/nevindra/oasis/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/nevindra/oasis/compare/v0.17.4...v0.19.0
