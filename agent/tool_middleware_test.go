@@ -101,7 +101,6 @@ func TestLoggingMiddleware_LogsStartAndFinish(t *testing.T) {
 	}
 }
 
-
 func TestTimingMiddleware_PassesThrough(t *testing.T) {
 	called := false
 	tool := core.ApplyToolMiddleware(

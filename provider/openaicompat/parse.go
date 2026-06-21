@@ -39,6 +39,7 @@ func ParseResponse(resp ChatResponse) (oasis.ChatResponse, error) {
 	choice := resp.Choices[0]
 	if choice.Message != nil {
 		out.Content = choice.Message.Content
+		out.Thinking = choice.Message.ReasoningContent
 		out.ToolCalls = ParseToolCalls(choice.Message.ToolCalls)
 		out.Attachments = imagesToAttachments(choice.Message.Images)
 	}

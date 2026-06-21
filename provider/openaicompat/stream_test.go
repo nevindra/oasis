@@ -412,6 +412,152 @@ func TestStreamSSE_AnthropicCacheUsageInlineChunk(t *testing.T) {
 	}
 }
 
+// TestStreamSSE_ReasoningThenContent verifies the full Start→Delta×N→End lifecycle
+// for a DashScope/DeepSeek-style stream: reasoning deltas first, then content.
+func TestStreamSSE_ReasoningThenContent(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"chatcmpl-r1","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me think"}}]}`,
+		`{"id":"chatcmpl-r1","choices":[{"index":0,"delta":{"reasoning_content":" step by step"}}]}`,
+		`{"id":"chatcmpl-r1","choices":[{"index":0,"delta":{"content":"The answer is 42"}}]}`,
+		`{"id":"chatcmpl-r1","choices":[{"index":0,"delta":{"content":"."}}]}`,
+		`{"id":"chatcmpl-r1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 20)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+
+	var events []oasis.StreamEvent
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	// Expected event sequence: ReasoningStart, ReasoningDelta, ReasoningDelta, ReasoningEnd, TextDelta, TextDelta
+	wantTypes := []oasis.StreamEventType{
+		oasis.EventReasoningStart,
+		oasis.EventReasoningDelta,
+		oasis.EventReasoningDelta,
+		oasis.EventReasoningEnd,
+		oasis.EventTextDelta,
+		oasis.EventTextDelta,
+	}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("expected %d events, got %d: %v", len(wantTypes), len(events), events)
+	}
+	for i, e := range events {
+		if e.Type != wantTypes[i] {
+			t.Errorf("events[%d]: expected %q, got %q", i, wantTypes[i], e.Type)
+		}
+	}
+
+	// Reasoning deltas carry content.
+	if events[1].Content != "Let me think" {
+		t.Errorf("first reasoning delta content: expected %q, got %q", "Let me think", events[1].Content)
+	}
+	if events[2].Content != " step by step" {
+		t.Errorf("second reasoning delta content: expected %q, got %q", " step by step", events[2].Content)
+	}
+
+	// Per core contract (core/stream.go), EventReasoningEnd carries the full
+	// reassembled reasoning text.
+	if events[3].Content != "Let me think step by step" {
+		t.Errorf("reasoning-end content: expected %q, got %q", "Let me think step by step", events[3].Content)
+	}
+
+	// Full reasoning accumulated in Thinking.
+	if resp.Thinking != "Let me think step by step" {
+		t.Errorf("Thinking: expected %q, got %q", "Let me think step by step", resp.Thinking)
+	}
+	if resp.Content != "The answer is 42." {
+		t.Errorf("Content: expected %q, got %q", "The answer is 42.", resp.Content)
+	}
+}
+
+// TestStreamSSE_ReasoningOnly verifies that a stream with only reasoning_content
+// (no content delta) still closes the reasoning block with EventReasoningEnd.
+func TestStreamSSE_ReasoningOnly(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"chatcmpl-r2","choices":[{"index":0,"delta":{"reasoning_content":"Thinking..."}}]}`,
+		`{"id":"chatcmpl-r2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 10)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+
+	var events []oasis.StreamEvent
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	wantTypes := []oasis.StreamEventType{
+		oasis.EventReasoningStart,
+		oasis.EventReasoningDelta,
+		oasis.EventReasoningEnd,
+	}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("expected %d events, got %d: %v", len(wantTypes), len(events), events)
+	}
+	for i, e := range events {
+		if e.Type != wantTypes[i] {
+			t.Errorf("events[%d]: expected %q, got %q", i, wantTypes[i], e.Type)
+		}
+	}
+
+	// Post-loop EventReasoningEnd carries the full reassembled reasoning text.
+	if events[2].Content != "Thinking..." {
+		t.Errorf("reasoning-end content: expected %q, got %q", "Thinking...", events[2].Content)
+	}
+
+	if resp.Thinking != "Thinking..." {
+		t.Errorf("Thinking: expected %q, got %q", "Thinking...", resp.Thinking)
+	}
+}
+
+// TestStreamSSE_NoReasoningNoRegressions verifies that a normal stream without
+// reasoning_content produces zero reasoning events and empty Thinking.
+func TestStreamSSE_NoReasoningNoRegressions(t *testing.T) {
+	sse := buildSSE(
+		`{"id":"chatcmpl-r3","choices":[{"index":0,"delta":{"content":"Hello"}}]}`,
+		`{"id":"chatcmpl-r3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		"[DONE]",
+	)
+
+	reader := strings.NewReader(sse)
+	ch := make(chan oasis.StreamEvent, 10)
+
+	resp, err := StreamSSE(context.Background(), reader, ch)
+	if err != nil {
+		t.Fatalf("StreamSSE returned error: %v", err)
+	}
+
+	var events []oasis.StreamEvent
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	// Only one TextDelta; no reasoning events.
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d: %v", len(events), events)
+	}
+	if events[0].Type != oasis.EventTextDelta {
+		t.Errorf("expected %q, got %q", oasis.EventTextDelta, events[0].Type)
+	}
+	if resp.Thinking != "" {
+		t.Errorf("expected empty Thinking for no-reasoning stream, got %q", resp.Thinking)
+	}
+}
+
 func TestStreamSSE_NoSystemFingerprintNoMeta(t *testing.T) {
 	sse := buildSSE(
 		`{"id":"chatcmpl-nsfp","choices":[{"index":0,"delta":{"content":"Hi"}}]}`,

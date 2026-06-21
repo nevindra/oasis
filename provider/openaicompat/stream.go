@@ -31,10 +31,12 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
 	var fullContent strings.Builder
+	var fullReasoning strings.Builder
 	var usage oasis.Usage
 	var finishReason string
 	var systemFingerprint string
 	var attachments []oasis.Attachment
+	reasoning := false // true while inside a reasoning block (Start emitted, End not yet)
 
 	// Accumulate tool calls across chunks. OpenAI streams tool calls
 	// incrementally: each chunk has an index, and arguments arrive as string fragments.
@@ -101,6 +103,39 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 			continue
 		}
 
+		// Accumulate reasoning (chain-of-thought) content from reasoning models.
+		if delta.ReasoningContent != "" {
+			if !reasoning {
+				reasoning = true
+				if ch != nil {
+					select {
+					case ch <- oasis.StreamEvent{Type: oasis.EventReasoningStart}:
+					case <-ctx.Done():
+						return oasis.ChatResponse{}, ctx.Err()
+					}
+				}
+			}
+			fullReasoning.WriteString(delta.ReasoningContent)
+			if ch != nil {
+				select {
+				case ch <- oasis.StreamEvent{Type: oasis.EventReasoningDelta, Content: delta.ReasoningContent}:
+				case <-ctx.Done():
+					return oasis.ChatResponse{}, ctx.Err()
+				}
+			}
+		}
+		// Reasoning block ends when the first content or tool delta arrives.
+		if reasoning && (delta.Content != "" || len(delta.ToolCalls) > 0) {
+			reasoning = false
+			if ch != nil {
+				select {
+				case ch <- oasis.StreamEvent{Type: oasis.EventReasoningEnd, Content: fullReasoning.String()}:
+				case <-ctx.Done():
+					return oasis.ChatResponse{}, ctx.Err()
+				}
+			}
+		}
+
 		// Accumulate text content.
 		if delta.Content != "" {
 			fullContent.WriteString(delta.Content)
@@ -158,6 +193,15 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 		return oasis.ChatResponse{}, err
 	}
 
+	// Close any open reasoning block (reasoning ran to stream end without content).
+	if reasoning && ch != nil {
+		select {
+		case ch <- oasis.StreamEvent{Type: oasis.EventReasoningEnd, Content: fullReasoning.String()}:
+		case <-ctx.Done():
+			return oasis.ChatResponse{}, ctx.Err()
+		}
+	}
+
 	// Build final tool calls.
 	var oasisToolCalls []oasis.ToolCall
 	for _, tc := range toolCalls {
@@ -174,6 +218,7 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 
 	out := oasis.ChatResponse{
 		Content:      fullContent.String(),
+		Thinking:     fullReasoning.String(),
 		ToolCalls:    oasisToolCalls,
 		Attachments:  attachments,
 		Usage:        usage,

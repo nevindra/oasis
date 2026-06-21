@@ -17,10 +17,10 @@ func (s stubScorer) Score(_ context.Context, run ScorerRun) (Score, error) {
 func TestScorerInterfaceAndValueTypes(t *testing.T) {
 	var sc Scorer = stubScorer{id: "stub"}
 	run := ScorerRun{
-		Input:   "q",
-		Output:  "a",
-		Source:  ScorerSourceLive,
-		Steps:   []StepTrace{{Name: "tool", Type: StepTypeTool}},
+		Input:  "q",
+		Output: "a",
+		Source: ScorerSourceLive,
+		Steps:  []StepTrace{{Name: "tool", Type: StepTypeTool}},
 		Expected: &ExpectedTrajectory{
 			Steps:    []ExpectedStep{{Name: "tool"}},
 			Strategy: OrderedSubset,

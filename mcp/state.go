@@ -78,16 +78,16 @@ func (NoopLifecycle) OnToolResult(string, string, *CallToolResult, error) {}
 type EventType int
 
 const (
-	EventConnected          EventType = iota
-	EventDisconnected                 // 1
-	EventReconnecting                 // 2
-	EventToolCall                     // 3
-	EventToolResult                   // 4
-	EventProgress                     // 5 — tool-call progress (opt-in)
-	EventLog                          // 6 — server logging/message
-	EventResourceUpdated              // 7 — resources/updated for a subscribed URI
-	EventResourceListChanged          // 8 — resources/list_changed
-	EventPromptListChanged            // 9 — prompts/list_changed
+	EventConnected           EventType = iota
+	EventDisconnected                  // 1
+	EventReconnecting                  // 2
+	EventToolCall                      // 3
+	EventToolResult                    // 4
+	EventProgress                      // 5 — tool-call progress (opt-in)
+	EventLog                           // 6 — server logging/message
+	EventResourceUpdated               // 7 — resources/updated for a subscribed URI
+	EventResourceListChanged           // 8 — resources/list_changed
+	EventPromptListChanged             // 9 — prompts/list_changed
 )
 
 // Event is a single lifecycle event emitted by the registry. Fields below the

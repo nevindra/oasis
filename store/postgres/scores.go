@@ -133,5 +133,5 @@ func scanScores(rows pgx.Rows) ([]oasis.ScoreRow, error) {
 
 // itoa avoids importing strconv at every call site for placeholder numbering.
 func itoa(i int) string {
-	return string(rune('0'+i)) // placeholders 1..9; widen if a filter ever exceeds 9 args
+	return string(rune('0' + i)) // placeholders 1..9; widen if a filter ever exceeds 9 args
 }

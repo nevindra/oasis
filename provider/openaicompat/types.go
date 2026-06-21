@@ -334,6 +334,9 @@ type ChoiceMessage struct {
 	// is the de-facto OpenAI-compatible convention (OpenRouter and others):
 	// each entry is {"type":"image_url","image_url":{"url":"data:<mime>;base64,<...>"}}.
 	Images []ImageOut `json:"images,omitempty"`
+	// ReasoningContent carries chain-of-thought text from reasoning models
+	// (DashScope/Qwen, DeepSeek-R1, GLM). Present on both message and delta.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // ImageOut is a generated-image entry in a response message's `images` array.

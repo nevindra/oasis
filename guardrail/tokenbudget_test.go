@@ -13,7 +13,7 @@ func TestTokenBudgetTrimsOldest(t *testing.T) {
 	long := strings.Repeat("x", 300)
 	req := core.ChatRequest{Messages: []core.ChatMessage{
 		{Role: "system", Content: "sys"},
-		{Role: "user", Content: long},     // oldest user turn — should be trimmed
+		{Role: "user", Content: long}, // oldest user turn — should be trimmed
 		{Role: "assistant", Content: "ok"},
 		{Role: "user", Content: "newest"}, // preserved (most recent)
 	}}

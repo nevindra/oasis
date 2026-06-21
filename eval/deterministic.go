@@ -28,7 +28,7 @@ func (exactMatch) Score(_ context.Context, run core.ScorerRun) (core.Score, erro
 type containsScorer struct{}
 
 // Contains scores 1 when GroundTruth is a non-empty substring of Output, else 0.
-func Contains() core.Scorer { return containsScorer{} }
+func Contains() core.Scorer       { return containsScorer{} }
 func (containsScorer) ID() string { return "contains" }
 func (containsScorer) Score(_ context.Context, run core.ScorerRun) (core.Score, error) {
 	v := 0.0

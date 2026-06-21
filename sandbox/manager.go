@@ -71,9 +71,9 @@ type Health struct {
 
 // RuntimeInfo reports whether the host pieces needed to launch a VM are present.
 type RuntimeInfo struct {
-	Backend       string `json:"backend"`        // e.g. "firecracker"
+	Backend       string `json:"backend"` // e.g. "firecracker"
 	KernelPath    string `json:"kernel_path"`
-	KernelOK      bool   `json:"kernel_ok"`      // kernel file exists & is readable
+	KernelOK      bool   `json:"kernel_ok"` // kernel file exists & is readable
 	RootfsImage   string `json:"rootfs_image"`
 	RootfsOK      bool   `json:"rootfs_ok"`      // rootfs file exists & is readable
 	FCBinary      string `json:"fc_binary"`      // resolved firecracker binary path
@@ -93,7 +93,7 @@ type PoolStats struct {
 // EgressInfo reports the default egress policy applied to new sandboxes.
 type EgressInfo struct {
 	Enabled   bool   `json:"enabled"`
-	Mode      string `json:"mode"`       // "allow" | "deny" | ""
+	Mode      string `json:"mode"` // "allow" | "deny" | ""
 	RuleCount int    `json:"rule_count"`
 }
 
