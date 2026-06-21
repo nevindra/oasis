@@ -404,6 +404,59 @@ func TestParseResponse_OpenAICacheUsage(t *testing.T) {
 // OpenAI nested field and Anthropic top-level fields appear in the same payload.
 // The OpenAI nested field takes precedence for CachedTokens (it's checked first),
 // and CacheCreationTokens still comes from the Anthropic field.
+// TestParseResponse_ReasoningContent verifies that reasoning_content in the
+// non-stream response maps to ChatResponse.Thinking.
+func TestParseResponse_ReasoningContent(t *testing.T) {
+	resp := ChatResponse{
+		ID: "chatcmpl-rc",
+		Choices: []Choice{
+			{
+				Message: &ChoiceMessage{
+					Role:             "assistant",
+					Content:          "42",
+					ReasoningContent: "I must think carefully.",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	result, err := ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse returned error: %v", err)
+	}
+
+	if result.Content != "42" {
+		t.Errorf("expected Content %q, got %q", "42", result.Content)
+	}
+	if result.Thinking != "I must think carefully." {
+		t.Errorf("expected Thinking %q, got %q", "I must think carefully.", result.Thinking)
+	}
+}
+
+// TestParseResponse_NoReasoningContent verifies that Thinking is empty when
+// reasoning_content is absent (no regression).
+func TestParseResponse_NoReasoningContent(t *testing.T) {
+	resp := ChatResponse{
+		ID: "chatcmpl-norc",
+		Choices: []Choice{
+			{
+				Message:      &ChoiceMessage{Content: "Hello"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	result, err := ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse returned error: %v", err)
+	}
+
+	if result.Thinking != "" {
+		t.Errorf("expected empty Thinking when reasoning_content absent, got %q", result.Thinking)
+	}
+}
+
 func TestParseResponse_BothFormats(t *testing.T) {
 	resp := ChatResponse{
 		ID: "chatcmpl-hybrid",
