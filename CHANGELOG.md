@@ -23,6 +23,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   (`OutputModalities: ["video"]`) and routes them to the native endpoint even
   under the OpenAI-compatible `qwen` platform.
 
+## [0.22.0] - 2026-06-21
+
 ### Added
 
 - **`provider/openaicompat` reasoning/thinking support** — parses the `reasoning_content` field emitted by reasoning models (DashScope/Qwen, DeepSeek-R1, GLM) on both message and delta. Non-streaming responses populate `ChatResponse.Thinking`; streaming emits `EventReasoningStart` → `EventReasoningDelta` → `EventReasoningEnd` (the reasoning block closes on the first content/tool delta, or at stream end) and accumulates the full text into `ChatResponse.Thinking`.
