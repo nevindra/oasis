@@ -299,6 +299,29 @@ func (p *Provider) videoInput(prompt string, atts []oasis.Attachment, v *oasis.V
 			media = append(media, map[string]any{"type": "reference_image", "url": ref(img)})
 		}
 		return map[string]any{"prompt": prompt, "media": media}, nil
+	case strings.Contains(model, "r2v"):
+		// Reference-to-video: identity-preserving generation from reference
+		// images/videos (+ optional first_frame). The media ORDER defines the
+		// prompt's "Image n" / "Video n" identifiers, so preserve attachment order.
+		var media []map[string]any
+		for i := range atts {
+			switch atts[i].Role {
+			case "reference_image", "reference_video", "first_frame":
+				m := map[string]any{"type": atts[i].Role, "url": ref(&atts[i])}
+				if atts[i].ReferenceVoice != "" {
+					m["reference_voice"] = atts[i].ReferenceVoice
+				}
+				media = append(media, m)
+			}
+		}
+		if len(media) == 0 {
+			return nil, &oasis.ErrLLM{Provider: p.Name(), Message: "r2v requires at least one reference image or video"}
+		}
+		in := map[string]any{"prompt": prompt, "media": media}
+		if v != nil && v.NegativePrompt != "" {
+			in["negative_prompt"] = v.NegativePrompt
+		}
+		return in, nil
 	case strings.Contains(model, "i2v"):
 		// Native continuation: a prior clip seeds the next segment directly.
 		if clip := byRole("first_clip"); clip != nil {
@@ -355,6 +378,9 @@ func videoParameters(v *oasis.VideoOptions) map[string]any {
 	}
 	if v.Watermark != nil {
 		params["watermark"] = *v.Watermark
+	}
+	if v.Seed != nil {
+		params["seed"] = *v.Seed
 	}
 	return params
 }
@@ -565,7 +591,8 @@ func isWanModel(model string) bool {
 // callers must check this before isWanModel.
 func isVideoModel(model string) bool {
 	m := strings.ToLower(model)
-	return strings.Contains(m, "t2v") || strings.Contains(m, "i2v") || strings.Contains(m, "videoedit")
+	return strings.Contains(m, "t2v") || strings.Contains(m, "i2v") ||
+		strings.Contains(m, "r2v") || strings.Contains(m, "videoedit")
 }
 
 // attachmentRef returns the reference DashScope should use for an attachment:

@@ -310,6 +310,9 @@ type Attachment struct {
 	// Wan video roles: first_frame, last_frame, driving_audio, first_clip,
 	// reference_image, audio. Empty → inferred from mime (back-compat).
 	Role string `json:"role,omitempty"`
+	// ReferenceVoice is an audio URL attached to a reference_image/reference_video
+	// in Wan r2v, defining that subject's voice timbre. Ignored by other modes.
+	ReferenceVoice string `json:"reference_voice,omitempty"`
 }
 
 // NewAttachment constructs an Attachment from raw inline bytes.
@@ -412,6 +415,7 @@ type VideoOptions struct {
 	NegativePrompt string // "" = omit
 	PromptExtend   *bool  // nil = omit
 	Watermark      *bool  // nil = omit
+	Seed           *int   // nil = omit (random); set for reproducible output
 }
 
 type ChatRequest struct {

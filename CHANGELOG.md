@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-01
+
+### Added
+
+- **Wan r2v (reference-to-video) support** — the `wan2.7-r2v` model is now in the
+  DashScope catalog and recognized as a video model. Attachments tagged with the
+  `reference_image`, `reference_video`, or `first_frame` roles are sent as ordered
+  `media` entries so the prompt's `Image n` / `Video n` identifiers line up with
+  attachment order.
+- **`core.Attachment.ReferenceVoice`** — an audio URL attached to a
+  `reference_image` / `reference_video` in Wan r2v that defines that subject's
+  voice timbre. Ignored by other modes.
+- **`core.VideoOptions.Seed`** — optional `*int` seed for reproducible video
+  output; `nil` omits it so DashScope picks a random seed.
+
 ## [0.24.0] - 2026-06-30
 
 ### Added
