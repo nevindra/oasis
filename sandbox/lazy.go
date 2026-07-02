@@ -246,6 +246,14 @@ func (l *lazySandbox) WorkspaceInfo(ctx context.Context) (WorkspaceInfoResult, e
 	return sb.WorkspaceInfo(ctx)
 }
 
+func (l *lazySandbox) GuestIP(ctx context.Context) (string, error) {
+	sb, err := l.get(ctx)
+	if err != nil {
+		return "", err
+	}
+	return sb.GuestIP(ctx)
+}
+
 func (l *lazySandbox) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

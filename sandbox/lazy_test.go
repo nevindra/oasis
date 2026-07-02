@@ -77,6 +77,7 @@ func (m *mockSandbox) WebSearch(context.Context, sandbox.WebSearchRequest) (sand
 func (m *mockSandbox) WorkspaceInfo(context.Context) (sandbox.WorkspaceInfoResult, error) {
 	return sandbox.WorkspaceInfoResult{}, nil
 }
+func (m *mockSandbox) GuestIP(context.Context) (string, error) { return "", nil }
 func (m *mockSandbox) Close() error {
 	m.closed.Store(true)
 	return nil

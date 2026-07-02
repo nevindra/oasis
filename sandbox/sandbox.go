@@ -58,6 +58,10 @@ type Sandbox interface {
 	// WorkspaceInfo returns environment information about the sandbox.
 	WorkspaceInfo(ctx context.Context) (WorkspaceInfoResult, error)
 
+	// GuestIP returns the VM's guest IP for host-side networking (reverse
+	// proxy). Errors for vsock-only sandboxes.
+	GuestIP(ctx context.Context) (string, error)
+
 	// Close releases resources held by this sandbox instance. Container
 	// lifecycle (stop, remove) is managed by Manager, not by Close.
 	Close() error

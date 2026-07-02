@@ -177,7 +177,8 @@ func (m *mockSandbox) WebSearch(ctx context.Context, req WebSearchRequest) (WebS
 	return WebSearchResult{}, nil
 }
 
-func (m *mockSandbox) Close() error { return nil }
+func (m *mockSandbox) GuestIP(context.Context) (string, error) { return "", nil }
+func (m *mockSandbox) Close() error                             { return nil }
 
 // mockSandbox drives a browser, so it satisfies both interfaces.
 var (
@@ -226,7 +227,8 @@ func (lightSandbox) WebSearch(context.Context, WebSearchRequest) (WebSearchResul
 func (lightSandbox) WorkspaceInfo(context.Context) (WorkspaceInfoResult, error) {
 	return WorkspaceInfoResult{}, nil
 }
-func (lightSandbox) Close() error { return nil }
+func (lightSandbox) GuestIP(context.Context) (string, error) { return "", nil }
+func (lightSandbox) Close() error                             { return nil }
 
 var _ Sandbox = lightSandbox{}
 
