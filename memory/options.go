@@ -31,6 +31,23 @@ type HistoryConfig struct {
 	Semantic     bool                   // use semantic-similarity trimming when over budget
 	TrimEmbedder core.EmbeddingProvider // nil = use main embedder
 	KeepRecent   int                    // messages to keep regardless of relevance (default 3 when Semantic=true)
+
+	// ReplayToolCalls expands persisted step traces back into
+	// tool_call/tool_result message pairs when history is replayed, so the
+	// model keeps seeing WHAT ran in earlier turns (and the results) instead
+	// of only the final answer text. Off by default: plain-text history is
+	// the cheapest, most trim-tolerant shape.
+	ReplayToolCalls bool
+	// ReplayVerbatimTurns is how many of the most recent assistant turns
+	// replay their full tool outputs (RawOutput). Older turns replay the
+	// bounded display digest (≤500 chars per step) so long threads don't
+	// drag every historical tool payload forever. Default 2 when
+	// ReplayToolCalls is set.
+	ReplayVerbatimTurns int
+	// ProtectedTools always replay their full output regardless of turn age
+	// — for tools whose output IS durable instruction state (e.g. a skill
+	// activation body that must steer the whole thread).
+	ProtectedTools []string
 }
 
 // WithHistory configures history loading and trimming from a single HistoryConfig.
@@ -47,6 +64,11 @@ func WithHistory(cfg HistoryConfig) Option {
 		if cfg.KeepRecent > 0 {
 			c.KeepRecent = cfg.KeepRecent
 		}
+		c.ReplayToolCalls = cfg.ReplayToolCalls
+		if cfg.ReplayVerbatimTurns > 0 {
+			c.ReplayVerbatimTurns = cfg.ReplayVerbatimTurns
+		}
+		c.ProtectedTools = cfg.ProtectedTools
 	}
 }
 

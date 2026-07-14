@@ -37,6 +37,11 @@ type AgentMemory struct {
 	trimmingEmbedding core.EmbeddingProvider
 	keepRecent        int
 
+	// Tool-exchange replay knobs (see HistoryConfig).
+	replayToolCalls     bool
+	replayVerbatimTurns int
+	protectedTools      []string
+
 	// Recall knobs
 	semanticRecall   bool
 	semanticMinScore float32
@@ -99,6 +104,12 @@ type AgentMemoryConfig struct {
 	// of relevance. Default 3 when SemanticTrimming is enabled.
 	KeepRecent int
 
+	// ReplayToolCalls / ReplayVerbatimTurns / ProtectedTools control replay
+	// of persisted tool exchanges into history — see HistoryConfig.
+	ReplayToolCalls     bool
+	ReplayVerbatimTurns int
+	ProtectedTools      []string
+
 	SemanticRecall   bool
 	SemanticMinScore float32
 	RecallKinds      []core.MemoryKind
@@ -145,6 +156,12 @@ func (m *AgentMemory) Init(cfg AgentMemoryConfig) {
 	m.semanticTrimming = cfg.SemanticTrimming
 	m.trimmingEmbedding = cfg.TrimmingEmbedding
 	m.keepRecent = cfg.KeepRecent
+	m.replayToolCalls = cfg.ReplayToolCalls
+	m.replayVerbatimTurns = cfg.ReplayVerbatimTurns
+	if m.replayToolCalls && m.replayVerbatimTurns <= 0 {
+		m.replayVerbatimTurns = 2
+	}
+	m.protectedTools = cfg.ProtectedTools
 	m.semanticRecall = cfg.SemanticRecall
 	m.semanticMinScore = cfg.SemanticMinScore
 	m.recallKinds = cfg.RecallKinds

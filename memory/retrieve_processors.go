@@ -206,20 +206,26 @@ func (t TrimToBudget) Process(ctx context.Context, in *RetrieveContext) error {
 		return nil
 	}
 
-	var trimmed []core.ChatMessage
+	// Trim by selecting which ORIGINAL rows survive, never by rebuilding
+	// role+content copies — the stored rows carry Metadata (persisted step
+	// traces) that tool-exchange replay needs downstream.
 	if t.Semantic && t.Embedder != nil {
 		keepRecent := t.KeepRecent
 		if keepRecent <= 0 {
 			keepRecent = defaultKeepRecent
 		}
-		trimmed = doSemanticTrim(ctx, t.Embedder, t.TrimCache, msgs, 0, len(msgs), total, t.Budget, in.Embedding, keepRecent)
-	} else {
-		trimmed = trimHistoryOldestFirst(msgs, 0, len(msgs), total, t.Budget)
+		if dropSet, ok := semanticDropSet(ctx, t.Embedder, t.TrimCache, msgs, 0, len(msgs), total, t.Budget, in.Embedding, keepRecent); ok {
+			out := make([]core.Message, 0, len(in.History)-len(dropSet))
+			for i, m := range in.History {
+				if !dropSet[i] {
+					out = append(out, m)
+				}
+			}
+			in.History = out
+			return nil
+		}
+		// Embedding pipeline failed — oldest-first fallback below.
 	}
-	out := make([]core.Message, 0, len(trimmed))
-	for _, m := range trimmed {
-		out = append(out, core.Message{Role: m.Role, Content: m.Content})
-	}
-	in.History = out
+	in.History = in.History[oldestFirstCut(msgs, total, t.Budget):]
 	return nil
 }

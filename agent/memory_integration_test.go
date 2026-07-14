@@ -541,3 +541,198 @@ func (v *vectorEmbedding) Name() string    { return "vector-test" }
 
 // Confirm vectorEmbedding satisfies core.EmbeddingProvider.
 var _ core.EmbeddingProvider = (*vectorEmbedding)(nil)
+
+// waitForStored polls the recording store until at least n messages are
+// persisted or the deadline passes. PersistTurn runs on a background
+// goroutine, so assertions must not race it.
+func waitForStored(t *testing.T, store *recordingStore, n int) []core.Message {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stored := store.storedMessages()
+		if len(stored) >= n || time.Now().After(deadline) {
+			return stored
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Regression: a hook-forced Stop (OnIterationComplete → Stop) must persist
+// the turn to conversation memory exactly like a natural stop. Previously
+// finalizeIterationStop skipped Mem.PersistTurn, so any turn ended by a stop
+// hook — e.g. a terminal interaction tool that hands control back to the
+// user — vanished from the thread store, and the next Execute on the same
+// ThreadID replayed history with the whole exchange missing.
+func TestConversationMemory_PersistsOnHookStop_ToolCallPath(t *testing.T) {
+	store := &recordingStore{}
+	provider := &twoIterProvider{}
+
+	hook := func(ctx context.Context, iter int, snap *IterationSnapshot) (IterationDecision, error) {
+		// Mirror a terminal-interaction guard: stop as soon as the tool ran.
+		if len(snap.ToolCalls) > 0 {
+			return Stop(core.AgentResult{Output: "asked the user"}), nil
+		}
+		return Continue(), nil
+	}
+
+	agent := New("test", "test", provider,
+		WithMemory(memory.WithStore(store)),
+		WithTools(mockTool{}),
+		WithHooks(Hooks{OnIterationComplete: hook}),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{
+		Input:    "make me a deck",
+		ThreadID: "thread-hook-stop-tools",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "asked the user" {
+		t.Errorf("Output = %q, want %q", result.Output, "asked the user")
+	}
+
+	stored := waitForStored(t, store, 2)
+	if len(stored) < 2 {
+		t.Fatalf("expected at least 2 stored messages after hook stop, got %d", len(stored))
+	}
+	if stored[0].Role != "user" || stored[0].Content != "make me a deck" {
+		t.Errorf("first stored = %q/%q, want user/make me a deck", stored[0].Role, stored[0].Content)
+	}
+	foundAsst := false
+	for _, m := range stored {
+		if m.Role == "assistant" && m.Content == "asked the user" {
+			foundAsst = true
+		}
+	}
+	if !foundAsst {
+		t.Errorf("assistant message not persisted on hook stop: %+v", stored)
+	}
+	for _, m := range stored {
+		if m.ThreadID != "thread-hook-stop-tools" {
+			t.Errorf("stored message thread = %q, want thread-hook-stop-tools", m.ThreadID)
+		}
+	}
+}
+
+// Same regression on the no-tool-call (final response) path: the hook stops
+// after a plain text iteration.
+func TestConversationMemory_PersistsOnHookStop_FinalResponsePath(t *testing.T) {
+	store := &recordingStore{}
+	provider := &mockProvider{
+		name:      "test",
+		responses: []core.ChatResponse{{Content: "draft answer"}},
+	}
+
+	hook := func(ctx context.Context, iter int, snap *IterationSnapshot) (IterationDecision, error) {
+		return Stop(core.AgentResult{Output: "final answer"}), nil
+	}
+
+	agent := New("test", "test", provider,
+		WithMemory(memory.WithStore(store)),
+		WithHooks(Hooks{OnIterationComplete: hook}),
+	)
+
+	result, err := agent.Execute(context.Background(), AgentTask{
+		Input:    "quick question",
+		ThreadID: "thread-hook-stop-final",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "final answer" {
+		t.Errorf("Output = %q, want %q", result.Output, "final answer")
+	}
+
+	stored := waitForStored(t, store, 2)
+	if len(stored) < 2 {
+		t.Fatalf("expected at least 2 stored messages after hook stop, got %d", len(stored))
+	}
+	if stored[0].Role != "user" || stored[0].Content != "quick question" {
+		t.Errorf("first stored = %q/%q, want user/quick question", stored[0].Role, stored[0].Content)
+	}
+	foundAsst := false
+	for _, m := range stored {
+		if m.Role == "assistant" && m.Content == "final answer" {
+			foundAsst = true
+		}
+	}
+	if !foundAsst {
+		t.Errorf("assistant message not persisted on hook stop: %+v", stored)
+	}
+}
+
+// End-to-end tool-exchange replay (opencode-style full-fidelity history):
+// turn 1 calls a tool; with HistoryConfig.ReplayToolCalls the SECOND turn's
+// provider payload must contain turn 1's tool_call/tool_result pair — not
+// just the final answer text — so the model keeps cross-turn awareness of
+// what ran (e.g. an activated skill's instructions).
+func TestConversationMemory_ReplaysToolExchangeNextTurn(t *testing.T) {
+	store := &recordingStore{}
+	provider := &twoIterProvider{}
+
+	agentOne := New("test", "test", provider,
+		WithMemory(memory.WithStore(store), memory.WithHistory(memory.HistoryConfig{
+			ReplayToolCalls: true,
+			ProtectedTools:  []string{"greet"},
+		})),
+		WithTools(mockTool{}),
+	)
+	if _, err := agentOne.Execute(context.Background(), AgentTask{
+		Input: "say hello", ThreadID: "thread-replay",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored := waitForStored(t, store, 2)
+	if len(stored) < 2 {
+		t.Fatalf("turn 1 not persisted, got %d messages", len(stored))
+	}
+	// Feed what turn 1 persisted back as turn 2's history.
+	store.mu.Lock()
+	store.history = append([]core.Message(nil), store.stored...)
+	store.mu.Unlock()
+
+	provider2 := &twoIterProvider{}
+	agentTwo := New("test", "test", provider2,
+		WithMemory(memory.WithStore(store), memory.WithHistory(memory.HistoryConfig{
+			ReplayToolCalls: true,
+			ProtectedTools:  []string{"greet"},
+		})),
+		WithTools(mockTool{}),
+	)
+	if _, err := agentTwo.Execute(context.Background(), AgentTask{
+		Input: "and again", ThreadID: "thread-replay",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inspect the FIRST provider request of turn 2: it must replay turn 1's
+	// tool exchange as a paired call + result.
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	reqs := provider2.reqs
+	if len(reqs) == 0 {
+		t.Fatal("no provider requests captured on turn 2")
+	}
+	first := reqs[0]
+	var callID string
+	for _, m := range first.Messages {
+		for _, tc := range m.ToolCalls {
+			if tc.Name == "greet" {
+				callID = tc.ID
+			}
+		}
+	}
+	if callID == "" {
+		t.Fatalf("turn 2 payload has no replayed greet tool call; messages: %+v", first.Messages)
+	}
+	paired := false
+	for _, m := range first.Messages {
+		if m.ToolCallID == callID && m.Content == "hello from greet" {
+			paired = true
+		}
+	}
+	if !paired {
+		t.Fatalf("replayed tool call %q has no paired full result; messages: %+v", callID, first.Messages)
+	}
+}

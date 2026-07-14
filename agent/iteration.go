@@ -364,7 +364,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 				return terminateIteration(ctx, cfg, ch, state, core.FinishError, AgentResult{}, fmt.Errorf("OnIterationComplete: %w", hookErr))
 			}
 			if decision.IsStop() {
-				return finalizeIterationStop(ctx, cfg, ch, state, decision, ep)
+				return finalizeIterationStop(ctx, cfg, task, ch, state, decision, ep)
 			}
 			if decision.IsInject() {
 				for _, m := range decision.Msgs() {
@@ -696,7 +696,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 			return terminateIteration(ctx, cfg, ch, state, core.FinishError, AgentResult{}, fmt.Errorf("OnIterationComplete: %w", hookErr))
 		}
 		if decision.IsStop() {
-			return finalizeIterationStop(ctx, cfg, ch, state, decision, ep)
+			return finalizeIterationStop(ctx, cfg, task, ch, state, decision, ep)
 		}
 		if decision.IsInject() {
 			for _, m := range decision.Msgs() {
@@ -871,9 +871,14 @@ func terminateIteration(ctx context.Context, cfg *LoopConfig, ch chan<- core.Str
 // finalizeIterationStop handles the IsStop() branch of an OnIterationComplete
 // decision, attaching accumulated loop state to the hook's result and
 // finalizing the run.
-func finalizeIterationStop(ctx context.Context, cfg *LoopConfig, ch chan<- core.StreamEvent, state *loopState, decision IterationDecision, ep iterEndParams) iterationResult {
+func finalizeIterationStop(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<- core.StreamEvent, state *loopState, decision IterationDecision, ep iterEndParams) iterationResult {
 	endIteration(ep, core.FinishStop)
 	r := decision.Result()
+	// A hook-forced stop ends the turn as authoritatively as a natural final
+	// response — persist it like the natural-stop path does, or the exchange
+	// never reaches the thread store and the next Execute on this ThreadID
+	// starts with a hole in its history.
+	cfg.Mem.PersistTurn(ctx, cfg.Name, task, task.Input, r.Output, state.steps)
 	state.patchTerminal(&r, core.FinishStop)
 	finalizeRun(ctx, ch, state, cfg.Name, core.FinishStop, r)
 	return iterationResult{outcome: iterDone, final: r}
