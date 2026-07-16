@@ -226,7 +226,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 				}
 			}
 			endIteration(ep, core.FinishSuspended)
-			return terminateIteration(ctx, cfg, ch, state, core.FinishSuspended, AgentResult{SuspendPayload: s.Payload, SuspendProtocol: s.tag}, s)
+			return terminateIteration(ctx, cfg, task, ch, state, core.FinishSuspended, AgentResult{SuspendPayload: s.Payload, SuspendProtocol: s.tag}, s)
 		}
 		res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
 		reason := core.FinishError
@@ -234,7 +234,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 			reason = core.FinishHalted
 		}
 		endIteration(ep, reason)
-		return terminateIteration(ctx, cfg, ch, state, reason, res, retErr)
+		return terminateIteration(ctx, cfg, task, ch, state, reason, res, retErr)
 	}
 
 	var resp core.ChatResponse
@@ -252,7 +252,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 				cfg.Logger.Error("PrepareStep hook failed", "agent", cfg.Name, "iteration", i, "error", err)
 			}
 			endIteration(ep, core.FinishError)
-			return terminateIteration(ctx, cfg, ch, state, core.FinishError, AgentResult{}, fmt.Errorf("PrepareStep: %w", err))
+			return terminateIteration(ctx, cfg, task, ch, state, core.FinishError, AgentResult{}, fmt.Errorf("PrepareStep: %w", err))
 		}
 		if ctrl.Model != nil {
 			iterProvider = ctrl.Model
@@ -274,7 +274,13 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 	// markers via openaicompat.WithCacheControl directly.
 	applyPromptCacheMarkers(req.Messages, cfg.DisablePromptCaching)
 
-	useStream := ch != nil && (len(req.Tools) == 0 || !state.hasAgentTools)
+	// Stream whenever a channel exists — including delegation (agent_*)
+	// iterations. Historically agent tools disabled live streaming because a
+	// subagent's forwarded text deltas were indistinguishable from the
+	// router's own; forwardSubagentStream now stamps child deltas with the
+	// agent name, so consumers can separate the two and the router's text
+	// streams token-by-token instead of arriving as one chunk per iteration.
+	useStream := ch != nil
 	passCh := ch
 	if len(req.Tools) > 0 && !useStream {
 		passCh = nil
@@ -293,11 +299,20 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 		endIteration(ep, core.FinishError)
 		if r, handled := handleOnError(iterCtx, cfg, state, i, err); handled {
 			if r.outcome == iterDone {
+				// Halt-with-result and hook-error exits bypass
+				// terminateIteration; persist like it would. r.err is the
+				// terminal error (e.g. a failed OnError hook supersedes the
+				// original LLM error).
+				persistErr := r.err
+				if persistErr == nil {
+					persistErr = err
+				}
+				persistInterruptedTurn(iterCtx, cfg, task, state, r.final.Output, persistErr)
 				finalizeRun(ctx, ch, state, cfg.Name, core.FinishError, r.final)
 			}
 			return r
 		}
-		return terminateIteration(ctx, cfg, ch, state, core.FinishError, AgentResult{}, err)
+		return terminateIteration(ctx, cfg, task, ch, state, core.FinishError, AgentResult{}, err)
 	}
 	if cfg.Logger.Enabled(ctx, slog.LevelDebug) {
 		cfg.Logger.Debug("LLM call completed", "agent", cfg.Name, "iteration", i,
@@ -361,12 +376,24 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 			decision, hookErr := cfg.OnIterationComplete(iterCtx, i, snap)
 			if hookErr != nil {
 				endIteration(ep, core.FinishError)
-				return terminateIteration(ctx, cfg, ch, state, core.FinishError, AgentResult{}, fmt.Errorf("OnIterationComplete: %w", hookErr))
+				return terminateIteration(ctx, cfg, task, ch, state, core.FinishError, AgentResult{}, fmt.Errorf("OnIterationComplete: %w", hookErr))
 			}
 			if decision.IsStop() {
 				return finalizeIterationStop(ctx, cfg, task, ch, state, decision, ep)
 			}
 			if decision.IsInject() {
+				// The turn continues past this no-tool iteration, so its
+				// visible text is mid-turn narration — record it as a text
+				// step or it exists only in state.messages (in-run) and
+				// vanishes from the persisted turn's replay.
+				if strings.TrimSpace(content) != "" {
+					state.steps = appendStepBounded(state.steps, core.StepTrace{
+						Name:      "text",
+						Type:      core.StepTypeText,
+						Output:    TruncateStr(content, 500),
+						RawOutput: content,
+					}, cfg.MaxStepsResolved)
+				}
 				for _, m := range decision.Msgs() {
 					state.messages = append(state.messages, m)
 					if state.compressThreshold > 0 {
@@ -407,6 +434,32 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 	})
 	if state.compressThreshold > 0 {
 		state.messageRuneCount += utf8.RuneCountInString(resp.Content)
+	}
+
+	// Record visible narration accompanying this iteration's tool calls as a
+	// text step, in order, BEFORE the tool steps it precedes. Without this
+	// the turn's interleaved text exists only in the live stream: history
+	// replay reconstructs the turn from steps + final content, so mid-turn
+	// segments would vanish from the thread's persisted record.
+	if strings.TrimSpace(resp.Content) != "" {
+		state.steps = appendStepBounded(state.steps, core.StepTrace{
+			Name:      "text",
+			Type:      core.StepTypeText,
+			Output:    TruncateStr(resp.Content, 500),
+			RawOutput: resp.Content,
+		}, cfg.MaxStepsResolved)
+
+		// Non-streamed iterations (agent-tools mode disables live streaming)
+		// never emitted this narration to the event channel at all — the
+		// consumer's transcript loses every mid-turn segment. Emit it as one
+		// text delta BEFORE the tool-call events so consumers see the turn's
+		// interleaved text in order.
+		if ch != nil && !streamedThisIter {
+			select {
+			case ch <- core.StreamEvent{Type: core.EventTextDelta, Content: resp.Content}:
+			case <-ctx.Done():
+			}
+		}
 	}
 
 	transformsActive := len(cfg.ToolTransforms) > 0 || len(cfg.ToolTransformMatchers) > 0
@@ -596,7 +649,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 					}
 				}
 				endIteration(ep, core.FinishSuspended)
-				return terminateIteration(ctx, cfg, ch, state, core.FinishSuspended, AgentResult{SuspendPayload: s.Payload, SuspendProtocol: s.tag}, s)
+				return terminateIteration(ctx, cfg, task, ch, state, core.FinishSuspended, AgentResult{SuspendPayload: s.Payload, SuspendProtocol: s.tag}, s)
 			}
 			res, retErr := handleProcessorErrorWithSteps(err, state.totalUsage, state.steps)
 			reason := core.FinishError
@@ -604,7 +657,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 				reason = core.FinishHalted
 			}
 			endIteration(ep, reason)
-			return terminateIteration(ctx, cfg, ch, state, reason, res, retErr)
+			return terminateIteration(ctx, cfg, task, ch, state, reason, res, retErr)
 		}
 		if postProcessed != nil {
 			postProcessed[j] = result
@@ -693,7 +746,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 		decision, hookErr := cfg.OnIterationComplete(iterCtx, i, snap)
 		if hookErr != nil {
 			endIteration(ep, core.FinishError)
-			return terminateIteration(ctx, cfg, ch, state, core.FinishError, AgentResult{}, fmt.Errorf("OnIterationComplete: %w", hookErr))
+			return terminateIteration(ctx, cfg, task, ch, state, core.FinishError, AgentResult{}, fmt.Errorf("OnIterationComplete: %w", hookErr))
 		}
 		if decision.IsStop() {
 			return finalizeIterationStop(ctx, cfg, task, ch, state, decision, ep)
@@ -797,6 +850,10 @@ func runPostLLMOrHandle(
 		}
 		res.FinishReason = reason
 		endIteration(ep, reason)
+		// Terminal exit that bypasses terminateIteration — persist like it
+		// would, or a PostLLM halt/error after real tool work leaves a hole
+		// in thread history.
+		persistInterruptedTurn(iterCtx, cfg, task, state, res.Output, retErr)
 		finalizeRun(ctx, ch, state, cfg.Name, reason, res)
 		return iterationResult{outcome: iterDone, final: res, err: retErr}, true
 	}
@@ -854,8 +911,36 @@ func handleOnError(ctx context.Context, cfg *LoopConfig, state *loopState, i int
 	return iterationResult{}, false
 }
 
+// persistInterruptedTurn persists an error/halted turn that did real work
+// (produced output or ran tools), so later turns on this thread still see
+// the side effects (files written, delegations run) recorded in state.steps.
+// Without this an errored turn vanishes from thread history entirely while
+// other stores (e.g. a UI transcript) keep it — the two views diverge
+// permanently. Skipped when the turn produced no output AND no steps:
+// nothing of consequence happened, and callers that retry the same task
+// (e.g. context-overflow self-heal) must not accumulate ghost turns.
+func persistInterruptedTurn(ctx context.Context, cfg *LoopConfig, task AgentTask, state *loopState, output string, err error) {
+	if cfg.Mem == nil || (output == "" && len(state.steps) == 0) {
+		return
+	}
+	asst := output
+	if asst == "" {
+		if err != nil {
+			asst = "[Turn interrupted by error: " + err.Error() + "]"
+		} else {
+			asst = "[Turn interrupted before a final response]"
+		}
+	}
+	cfg.Mem.PersistTurn(ctx, cfg.Name, task, task.Input, asst, state.steps)
+}
+
 // terminateIteration builds the standard AgentResult for a terminal exit.
-func terminateIteration(ctx context.Context, cfg *LoopConfig, ch chan<- core.StreamEvent, state *loopState, reason core.FinishReason, extra AgentResult, err error) iterationResult {
+func terminateIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<- core.StreamEvent, state *loopState, reason core.FinishReason, extra AgentResult, err error) iterationResult {
+	// Suspended turns resume later and persist on their terminal exit; every
+	// other terminal exit persists here (subject to the did-real-work gate).
+	if reason != core.FinishSuspended {
+		persistInterruptedTurn(ctx, cfg, task, state, extra.Output, err)
+	}
 	result := AgentResult{
 		Output:          extra.Output,
 		Thinking:        extra.Thinking,

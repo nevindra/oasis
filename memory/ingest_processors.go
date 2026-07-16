@@ -51,6 +51,12 @@ func (PersistMessages) Process(ctx context.Context, in *IngestContext) error {
 	if in.Store == nil || in.Task.ThreadID == "" {
 		return nil
 	}
+	// Both rows share the same second-granular created_at; within-turn and
+	// cross-turn ordering rides on the UUIDv7 ID tiebreak (stores ORDER BY
+	// created_at, id) — user ID is generated before assistant ID. The old
+	// `asst = now + 1` fabricated a future timestamp that mis-ordered
+	// history whenever the NEXT turn persisted within the same wall second
+	// (its user row sorted before this turn's assistant row).
 	now := core.NowUnix()
 	user := core.Message{
 		ID:        core.NewID(),
@@ -64,7 +70,7 @@ func (PersistMessages) Process(ctx context.Context, in *IngestContext) error {
 		ThreadID:  in.Task.ThreadID,
 		Role:      "assistant",
 		Content:   truncateStr(in.AsstText, maxPersistContentLen),
-		CreatedAt: now + 1,
+		CreatedAt: now,
 	}
 	if len(in.Steps) > 0 {
 		// Marshal at the boundary; Message.Metadata is opaque JSON.

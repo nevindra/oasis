@@ -148,6 +148,11 @@ const (
 	StepTypeAgent StepTraceType = "agent"
 	// StepTypeStep marks a workflow step (one entry per workflow node).
 	StepTypeStep StepTraceType = "step"
+	// StepTypeText marks a visible assistant text segment emitted mid-turn
+	// (narration accompanying tool calls). Recorded so history replay can
+	// reproduce the turn's interleaved text instead of only its final
+	// response. Output/RawOutput carry the text; Input/RawArgs are empty.
+	StepTypeText StepTraceType = "text"
 )
 
 // StepTrace records the execution of a single tool call or agent delegation.

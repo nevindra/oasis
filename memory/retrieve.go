@@ -109,7 +109,7 @@ func (m *AgentMemory) BuildMessages(ctx context.Context, agentName, systemPrompt
 		// Expand persisted step traces back into tool_call/tool_result pairs
 		// (see replay.go). Expansion happens AFTER trimming, per whole stored
 		// message, so a trim can never split an assistant call from its result.
-		out = append(out, expandHistory(in.History, m.replayVerbatimTurns, m.protectedTools)...)
+		out = append(out, expandHistory(in.History, m.replayVerbatimTurns, m.verbatimOutputBudget, m.protectedTools)...)
 	} else {
 		for _, msg := range in.History {
 			out = append(out, core.ChatMessage{Role: core.Role(msg.Role), Content: msg.Content})

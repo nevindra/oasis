@@ -177,7 +177,7 @@ func forceSynthesis(ctx context.Context, cfg *LoopConfig, task AgentTask, ch cha
 	}
 	if err != nil {
 		cfg.Logger.Error("synthesis LLM call failed", "agent", cfg.Name, "error", err)
-		r := terminateIteration(ctx, cfg, ch, state, core.FinishError, AgentResult{}, err)
+		r := terminateIteration(ctx, cfg, task, ch, state, core.FinishError, AgentResult{}, err)
 		return r.final, r.err
 	}
 	cfg.Logger.Info("synthesis completed", "agent", cfg.Name,

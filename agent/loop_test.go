@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -347,9 +348,9 @@ func TestDispatchParallelContextCancellation(t *testing.T) {
 	// be filled with context error markers.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	callCount := 0
+	var callCount atomic.Int64
 	dispatch := func(ctx context.Context, tc core.ToolCall) DispatchResult {
-		callCount++
+		callCount.Add(1)
 		if tc.Name == "slow" {
 			// Simulate a slow tool — cancel the context and block.
 			cancel()
@@ -606,7 +607,7 @@ func TestTerminateIteration_PinsContractFields(t *testing.T) {
 	}
 	cfg := LoopConfig{Name: "test", Config: Config{Logger: nopLogger}}
 	extra := AgentResult{SuspendPayload: json.RawMessage(`"x"`), SuspendProtocol: "tag"}
-	res := terminateIteration(context.Background(), &cfg, nil, state, core.FinishSuspended, extra, nil)
+	res := terminateIteration(context.Background(), &cfg, AgentTask{}, nil, state, core.FinishSuspended, extra, nil)
 	if res.outcome != iterDone {
 		t.Fatalf("outcome = %v, want iterDone", res.outcome)
 	}
