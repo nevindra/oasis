@@ -38,12 +38,16 @@ type HistoryConfig struct {
 	// of only the final answer text. Off by default: plain-text history is
 	// the cheapest, most trim-tolerant shape.
 	ReplayToolCalls bool
-	// ReplayVerbatimTurns is how many of the most recent assistant turns
-	// replay their full tool outputs (RawOutput). Older turns replay the
-	// bounded display digest (≤500 chars per step) so long threads don't
-	// drag every historical tool payload forever. Default 2 when
-	// ReplayToolCalls is set.
+	// ReplayVerbatimTurns is the FLOOR of most-recent assistant turns that
+	// always replay their full tool outputs (RawOutput) regardless of size.
+	// Default 2 when ReplayToolCalls is set.
 	ReplayVerbatimTurns int
+	// VerbatimOutputBudget extends the verbatim window beyond the floor:
+	// walking newest→oldest, turns keep replaying full outputs while their
+	// cumulative raw-output size (chars) fits this budget. Once exhausted,
+	// older turns replay the bounded display digest (≤500 chars per step).
+	// 0 = floor-only (the pre-budget behavior).
+	VerbatimOutputBudget int
 	// ProtectedTools always replay their full output regardless of turn age
 	// — for tools whose output IS durable instruction state (e.g. a skill
 	// activation body that must steer the whole thread).
@@ -67,6 +71,9 @@ func WithHistory(cfg HistoryConfig) Option {
 		c.ReplayToolCalls = cfg.ReplayToolCalls
 		if cfg.ReplayVerbatimTurns > 0 {
 			c.ReplayVerbatimTurns = cfg.ReplayVerbatimTurns
+		}
+		if cfg.VerbatimOutputBudget > 0 {
+			c.VerbatimOutputBudget = cfg.VerbatimOutputBudget
 		}
 		c.ProtectedTools = cfg.ProtectedTools
 	}

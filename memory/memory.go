@@ -38,9 +38,10 @@ type AgentMemory struct {
 	keepRecent        int
 
 	// Tool-exchange replay knobs (see HistoryConfig).
-	replayToolCalls     bool
-	replayVerbatimTurns int
-	protectedTools      []string
+	replayToolCalls      bool
+	replayVerbatimTurns  int
+	verbatimOutputBudget int
+	protectedTools       []string
 
 	// Recall knobs
 	semanticRecall   bool
@@ -72,8 +73,9 @@ type AgentMemory struct {
 	tracer core.Tracer
 
 	// Cached processor chains (built once at Init, reused per call)
-	cachedRetrieveChain []RetrieveProcessor
-	cachedIngestChain   []IngestProcessor
+	cachedRetrieveChain    []RetrieveProcessor
+	cachedSyncIngestChain  []IngestProcessor
+	cachedAsyncIngestChain []IngestProcessor
 
 	// Background goroutine discipline
 	semOnce       sync.Once
@@ -104,11 +106,13 @@ type AgentMemoryConfig struct {
 	// of relevance. Default 3 when SemanticTrimming is enabled.
 	KeepRecent int
 
-	// ReplayToolCalls / ReplayVerbatimTurns / ProtectedTools control replay
-	// of persisted tool exchanges into history — see HistoryConfig.
-	ReplayToolCalls     bool
-	ReplayVerbatimTurns int
-	ProtectedTools      []string
+	// ReplayToolCalls / ReplayVerbatimTurns / VerbatimOutputBudget /
+	// ProtectedTools control replay of persisted tool exchanges into
+	// history — see HistoryConfig.
+	ReplayToolCalls      bool
+	ReplayVerbatimTurns  int
+	VerbatimOutputBudget int
+	ProtectedTools       []string
 
 	SemanticRecall   bool
 	SemanticMinScore float32
@@ -161,6 +165,7 @@ func (m *AgentMemory) Init(cfg AgentMemoryConfig) {
 	if m.replayToolCalls && m.replayVerbatimTurns <= 0 {
 		m.replayVerbatimTurns = 2
 	}
+	m.verbatimOutputBudget = cfg.VerbatimOutputBudget
 	m.protectedTools = cfg.ProtectedTools
 	m.semanticRecall = cfg.SemanticRecall
 	m.semanticMinScore = cfg.SemanticMinScore
@@ -182,7 +187,8 @@ func (m *AgentMemory) Init(cfg AgentMemoryConfig) {
 	m.tracer = cfg.Tracer
 
 	m.cachedRetrieveChain = m.defaultRetrieveChain()
-	m.cachedIngestChain = m.defaultIngestChain()
+	m.cachedSyncIngestChain = m.syncIngestChain()
+	m.cachedAsyncIngestChain = m.asyncIngestChain()
 }
 
 // initSem lazily initializes the ingest semaphore.
@@ -222,58 +228,106 @@ func truncateStr(s string, n int) string {
 // Ensure context is imported (used by future methods added in later tasks).
 var _ = context.Background
 
-const persistBackpressureTimeout = 30 * time.Second
 const persistTimeout = 30 * time.Second
 
-// defaultIngestChain returns the default ingest pipeline. Order matters:
-// EnsureThread first so subsequent processors see the row; PersistMessages
-// before any LLM call so messages are durable even if extraction fails;
-// FactExtractor/Deduper before Embedder so candidates carrying supersedes
-// can resolve first; Upserter terminal; TitleGenerator and DecayProbabilistic
-// last (don't block anyone else).
-func (m *AgentMemory) defaultIngestChain() []IngestProcessor {
-	chain := []IngestProcessor{
+// syncPersistTimeout bounds the inline (blocking) message persist. It is much
+// tighter than persistTimeout: the sync chain is a handful of cheap DB
+// statements on the agent loop's hot path, and a degraded store must not
+// stall Execute for 30s per turn.
+const syncPersistTimeout = 5 * time.Second
+
+// syncIngestChain returns the processors that must complete before a turn is
+// considered durable: the thread row and the user/assistant message rows.
+// DB-only, no LLM or embedding calls — cheap enough to run inline.
+func (m *AgentMemory) syncIngestChain() []IngestProcessor {
+	return []IngestProcessor{
 		EnsureThread{},
 		PersistMessages{},
 	}
+}
+
+// asyncIngestChain returns the enrichment processors that may run in the
+// background after the turn is durable. Order matters: FactExtractor/Deduper
+// before Embedder so candidates carrying supersedes can resolve first;
+// Upserter terminal; TitleGenerator and DecayProbabilistic last (don't block
+// anyone else).
+func (m *AgentMemory) asyncIngestChain() []IngestProcessor {
+	var chain []IngestProcessor
 	if m.provider != nil {
 		chain = append(chain, FactExtractor{})
 	}
 	if m.embedding != nil {
 		chain = append(chain, Deduper{}, Embedder{})
 	}
-	chain = append(chain, Upserter{})
+	// Upserter and DecayProbabilistic act only on the item store; without
+	// one they are no-ops, and skipping them lets PersistTurn avoid spawning
+	// an enrichment goroutine at all on messages-only deployments.
+	if m.itemStore != nil {
+		chain = append(chain, Upserter{})
+	}
 	if m.autoTitle && m.provider != nil {
 		chain = append(chain, TitleGenerator{})
 	}
-	chain = append(chain, DecayProbabilistic{})
+	if m.itemStore != nil {
+		chain = append(chain, DecayProbabilistic{})
+	}
 	chain = append(chain, m.ingestProcs...) // user-appended processors run last
 	return chain
 }
 
-// PersistTurn runs the ingest pipeline for a completed agent turn in the
-// background. Bounded by maxIngestGoroutines. Falls back to lightweight
-// persist (messages only, no LLM) when all slots are busy.
+// PersistTurn persists a completed agent turn. The thread and message rows
+// are written synchronously before it returns, so a caller that observes
+// PersistTurn (and therefore Agent.Execute) returning is guaranteed that a
+// subsequent history read sees this turn — a fast follow-up message can no
+// longer race past it. Memory enrichment (fact extraction, embeddings,
+// titles) still runs in the background, bounded by maxIngestGoroutines; when
+// all slots are busy the enrichment is skipped — never the messages, and
+// never by blocking the agent loop.
 func (m *AgentMemory) PersistTurn(ctx context.Context, agentName string, task core.AgentTask, userText, asstText string, steps []core.StepTrace) {
-	if m.store == nil || task.ThreadID == "" {
+	if m == nil || m.store == nil || task.ThreadID == "" {
 		return
 	}
 	m.initSem()
 
-	fullPersist := true
+	in := &IngestContext{
+		AgentName: agentName,
+		Task:      task,
+		UserText:  userText,
+		AsstText:  asstText,
+		Steps:     steps,
+		Store:     m.store,
+		ItemStore: m.itemStore,
+		Embedding: m.embedding,
+		Provider:  m.provider,
+		Logger:    m.logger,
+	}
+
+	// Durability first: thread + messages inline. WithoutCancel because the
+	// turn may be ending on a canceled/errored context and the rows must
+	// still land.
+	syncCtx, cancelSync := context.WithTimeout(context.WithoutCancel(ctx), syncPersistTimeout)
+	defer cancelSync()
+	if m.tracer != nil {
+		var span core.Span
+		syncCtx, span = m.tracer.Start(syncCtx, "agent.memory.persist",
+			core.StringAttr("thread_id", task.ThreadID))
+		defer span.End()
+	}
+	if err := runIngestPipeline(syncCtx, in, m.cachedSyncIngestChain); err != nil {
+		m.logger.Error("persist messages failed", "thread_id", task.ThreadID, "error", err)
+	}
+
+	async := m.cachedAsyncIngestChain
+	if len(async) == 0 {
+		return
+	}
 	select {
 	case m.sem <- struct{}{}:
 	default:
-		m.logger.Warn("ingest backpressure: lightweight persist", "thread_id", task.ThreadID)
-		fullPersist = false
-		t := time.NewTimer(persistBackpressureTimeout)
-		select {
-		case m.sem <- struct{}{}:
-			t.Stop()
-		case <-t.C:
-			m.logger.Error("ingest backpressure: dropping turn", "thread_id", task.ThreadID)
-			return
-		}
+		// All slots busy. Messages are already durable; skip enrichment
+		// rather than blocking the agent loop or dropping the turn.
+		m.logger.Warn("ingest backpressure: skipping memory enrichment", "thread_id", task.ThreadID)
+		return
 	}
 
 	m.wg.Add(1)
@@ -291,24 +345,7 @@ func (m *AgentMemory) PersistTurn(ctx context.Context, agentName string, task co
 			defer span.End()
 		}
 
-		in := &IngestContext{
-			AgentName: agentName,
-			Task:      task,
-			UserText:  userText,
-			AsstText:  asstText,
-			Steps:     steps,
-			Store:     m.store,
-			ItemStore: m.itemStore,
-			Embedding: m.embedding,
-			Provider:  m.provider,
-			Logger:    m.logger,
-		}
-
-		chain := m.cachedIngestChain
-		if !fullPersist {
-			chain = []IngestProcessor{EnsureThread{}, PersistMessages{}}
-		}
-		if err := runIngestPipeline(bgCtx, in, chain); err != nil {
+		if err := runIngestPipeline(bgCtx, in, async); err != nil {
 			m.logger.Error("ingest pipeline error", "error", err)
 		}
 	}()

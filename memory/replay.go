@@ -56,7 +56,38 @@ func expandHistoryMessage(msg core.Message, seq int, verbatim bool, protected ma
 		return []core.ChatMessage{{Role: msg.Role, Content: msg.Content}}
 	}
 	out := make([]core.ChatMessage, 0, len(steps)*2+1)
+	// pendingText carries a StepTypeText narration segment onto the NEXT
+	// tool-call message as its Content — reproducing the wire shape the model
+	// actually produced (one assistant message with content + tool_calls).
+	// Replaying narration as standalone assistant messages instead teaches
+	// the model that bare text mid-task is normal, and a generated bare-text
+	// message terminates the loop — narrate-then-stall regressions.
+	pendingText := ""
 	for i, st := range steps {
+		if st.Type == core.StepTypeText {
+			// Mid-turn narration recorded by the loop. Verbatim turns replay
+			// the full text; older turns replay the ≤500-char display digest
+			// so a chatty model's narration can't accumulate unboundedly in
+			// long threads (narration is invisible to the row-content trim).
+			txt := st.Output
+			if txt == "" {
+				txt = truncateStr(st.RawOutput, 500)
+			}
+			if verbatim && st.RawOutput != "" {
+				txt = st.RawOutput
+			}
+			if strings.TrimSpace(txt) != "" {
+				// Concatenate rather than overwrite: an inject-continue text
+				// step can be directly followed by the next iteration's
+				// narration step (both precede the same tool call).
+				if pendingText != "" {
+					pendingText += "\n\n" + txt
+				} else {
+					pendingText = txt
+				}
+			}
+			continue
+		}
 		if st.Type != core.StepTypeTool && st.Type != core.StepTypeAgent {
 			continue
 		}
@@ -83,13 +114,20 @@ func expandHistoryMessage(msg core.Message, seq int, verbatim bool, protected ma
 		out = append(out,
 			core.ChatMessage{
 				Role:      core.RoleAssistant,
+				Content:   pendingText,
 				ToolCalls: []core.ToolCall{{ID: callID, Name: name, Args: args}},
 			},
 			core.ToolResultMessage(callID, output),
 		)
+		pendingText = ""
 	}
+	// Close with the turn's final text. A trailing narration segment with no
+	// following tool call (hook-stopped turns) is the same visible text as
+	// the row content — prefer the row content and drop the duplicate.
 	if strings.TrimSpace(msg.Content) != "" {
 		out = append(out, core.ChatMessage{Role: msg.Role, Content: msg.Content})
+	} else if strings.TrimSpace(pendingText) != "" {
+		out = append(out, core.ChatMessage{Role: core.RoleAssistant, Content: pendingText})
 	}
 	if len(out) == 0 {
 		// Steps existed but none were replayable and the turn had no text;
@@ -99,24 +137,64 @@ func expandHistoryMessage(msg core.Message, seq int, verbatim bool, protected ma
 	return out
 }
 
+// turnReplayCost estimates the replay size of an assistant row's full tool
+// outputs, in runes-as-bytes (len of the raw strings — close enough for a
+// budget knob). Excluded: text steps (they replay small digests on old turns
+// anyway) and protected tools (they replay full REGARDLESS of the window, so
+// charging them would shrink the window without saving anything).
+func turnReplayCost(msg core.Message, protected map[string]bool) int {
+	cost := 0
+	for _, st := range decodeSteps(msg) {
+		if st.Type != core.StepTypeTool && st.Type != core.StepTypeAgent {
+			continue
+		}
+		if protected[st.Name] || (st.Type == core.StepTypeAgent && protected["agent_"+st.Name]) {
+			continue
+		}
+		if st.RawOutput != "" {
+			cost += len(st.RawOutput)
+		} else {
+			cost += len(st.Output)
+		}
+	}
+	return cost
+}
+
 // expandHistory applies expandHistoryMessage across the loaded history.
-// The most recent verbatimTurns assistant turns replay full tool outputs;
-// older turns fall back to display digests (protected tools excepted).
-func expandHistory(history []core.Message, verbatimTurns int, protected []string) []core.ChatMessage {
+//
+// Verbatim window: walking newest→oldest, assistant turns replay their full
+// tool outputs while the verbatimBudget (chars of raw output) lasts; the most
+// recent verbatimTurns are a floor and always replay verbatim regardless of
+// size. The window is contiguous — once a turn doesn't fit, every older turn
+// falls back to display digests (≤500 chars per step; protected tools
+// excepted) so long threads don't drag every historical payload forever, but
+// without the old hard cliff two turns back.
+func expandHistory(history []core.Message, verbatimTurns, verbatimBudget int, protected []string) []core.ChatMessage {
 	protectedSet := make(map[string]bool, len(protected))
 	for _, p := range protected {
 		protectedSet[p] = true
 	}
-	// Mark the last verbatimTurns assistant rows as verbatim.
 	verbatimFrom := len(history) // index from which assistant rows are verbatim
-	if verbatimTurns > 0 {
-		remaining := verbatimTurns
-		for i := len(history) - 1; i >= 0 && remaining > 0; i-- {
-			if history[i].Role == core.RoleAssistant {
-				verbatimFrom = i
-				remaining--
-			}
+	floor := verbatimTurns
+	budget := verbatimBudget
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role != core.RoleAssistant {
+			continue
 		}
+		cost := turnReplayCost(history[i], protectedSet)
+		if floor > 0 {
+			// Floor turns always replay verbatim; they still consume budget
+			// so a huge recent turn doesn't extend the window further back.
+			verbatimFrom = i
+			floor--
+			budget -= cost
+			continue
+		}
+		if budget <= 0 || cost > budget {
+			break
+		}
+		verbatimFrom = i
+		budget -= cost
 	}
 	out := make([]core.ChatMessage, 0, len(history))
 	for i, msg := range history {
