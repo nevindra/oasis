@@ -409,6 +409,17 @@ func forwardSubagentStream(
 				ev.Type == core.EventIterationStart || ev.Type == core.EventIterationFinish {
 				continue
 			}
+			// Stamp anonymous content deltas with the subagent's name so a
+			// consumer can tell the child's streamed text/reasoning apart
+			// from the parent's own narration (the parent also streams now
+			// that delegation tools no longer disable live streaming).
+			// Events that already carry a Name (tool events, nested
+			// subagents' stamped deltas) pass through untouched.
+			if ev.Name == "" && (ev.Type == core.EventTextDelta ||
+				ev.Type == core.EventReasoningStart || ev.Type == core.EventReasoningDelta ||
+				ev.Type == core.EventReasoningEnd || ev.Type == core.EventThinking) {
+				ev.Name = agentName
+			}
 			select {
 			case ch <- ev:
 			case <-ctx.Done():
