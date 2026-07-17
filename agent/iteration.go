@@ -771,7 +771,11 @@ func callLLM(fwdCtx, spanCtx context.Context, cfg *LoopConfig, req core.ChatRequ
 	start := time.Now()
 	llmCtx := spanCtx
 	var llmSpan core.Span
-	if cfg.Tracer != nil {
+	// Skip the umbrella span when the provider is already instrumented
+	// (observer.WrapProvider) — it emits its own llm.generate span with full
+	// GenAI attributes, and a duplicate parent only adds noise to the tree.
+	_, observed := provider.(interface{ ObservedByOasis() })
+	if cfg.Tracer != nil && !observed {
 		llmCtx, llmSpan = cfg.Tracer.Start(spanCtx, "llm.generate",
 			core.StringAttr("provider", llmModel))
 	}

@@ -60,10 +60,18 @@ type otelSpanWrapper struct {
 func (w *otelSpanWrapper) Name() string                    { return w.inner.Name() }
 func (w *otelSpanWrapper) Definition() core.ToolDefinition { return w.inner.Definition() }
 func (w *otelSpanWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
-	ctx, span := w.tracer.Start(ctx, "tool.execute",
+	attrs := []core.SpanAttr{
 		core.StringAttr("tool.name", w.inner.Name()),
 		core.IntAttr("tool.args_bytes", len(args)),
-	)
+		core.StringAttr("langfuse.observation.type", "tool"),
+	}
+	if core.TraceContentEnabled() {
+		attrs = append(attrs, core.StringAttr("langfuse.observation.input", truncateForSpan(string(args))))
+	}
+	// Span named after the tool (a bounded set): observability backends
+	// filter and target observations by name, and "tool.execute" for every
+	// tool would make per-tool analysis impossible.
+	ctx, span := w.tracer.Start(ctx, w.inner.Name(), attrs...)
 	defer span.End()
 	r, err := w.inner.ExecuteRaw(ctx, args)
 	if err != nil {
@@ -71,8 +79,20 @@ func (w *otelSpanWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) 
 	}
 	if r.Error != "" {
 		span.SetAttr(core.StringAttr("tool.error", r.Error))
+	} else if err == nil && core.TraceContentEnabled() {
+		span.SetAttr(core.StringAttr("langfuse.observation.output", truncateForSpan(r.Content)))
 	}
 	return r, err
+}
+
+// toolSpanPayloadCap bounds tool arg/result payloads recorded on spans.
+const toolSpanPayloadCap = 40_000
+
+func truncateForSpan(s string) string {
+	if len(s) <= toolSpanPayloadCap {
+		return s
+	}
+	return s[:toolSpanPayloadCap] + "…(truncated)"
 }
 
 // HasOTelSpanMiddleware reports whether the chain already includes an

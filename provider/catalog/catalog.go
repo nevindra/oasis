@@ -41,6 +41,22 @@ type ModelCatalog struct {
 
 	ttl     time.Duration
 	refresh RefreshStrategy
+
+	wrapper ProviderWrapper
+}
+
+// ProviderWrapper decorates every provider the catalog creates. modelID is
+// the full "provider/model" identifier. Used to attach cross-cutting
+// concerns (e.g. observer.WrapProvider for tracing) at one seam instead of
+// at every CreateProvider call site.
+type ProviderWrapper func(p oasis.Provider, modelID string) oasis.Provider
+
+// SetProviderWrapper installs w for all subsequent CreateProvider /
+// CreateProviderByID calls. Pass nil to remove. Safe for concurrent use.
+func (c *ModelCatalog) SetProviderWrapper(w ProviderWrapper) {
+	c.mu.Lock()
+	c.wrapper = w
+	c.mu.Unlock()
 }
 
 // providerEntry tracks a registered provider and its cached models.
@@ -365,9 +381,17 @@ func (c *ModelCatalog) CreateProvider(ctx context.Context, modelID string) (oasi
 	}
 	platform := entry.platform
 	apiKey := entry.apiKey
+	wrap := c.wrapper
 	c.mu.RUnlock()
 
-	return createProvider(platform, apiKey, model)
+	p, err := createProvider(platform, apiKey, model)
+	if err != nil {
+		return nil, err
+	}
+	if wrap != nil {
+		p = wrap(p, modelID)
+	}
+	return p, nil
 }
 
 // CreateProviderByID creates a provider using separate provider and model strings.

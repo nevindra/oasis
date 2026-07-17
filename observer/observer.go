@@ -97,7 +97,7 @@ func Init(ctx context.Context, pricing map[string]oasis.ModelPricing) (*Instrume
 	)
 	global.SetLoggerProvider(lp)
 
-	inst, err := newInstruments(pricing)
+	inst, err := NewInstruments(pricing)
 	if err != nil {
 		_ = tp.Shutdown(ctx)
 		_ = mp.Shutdown(ctx)
@@ -116,7 +116,13 @@ func Init(ctx context.Context, pricing map[string]oasis.ModelPricing) (*Instrume
 	return inst, shutdown, nil
 }
 
-func newInstruments(pricing map[string]oasis.ModelPricing) (*Instruments, error) {
+// NewInstruments builds observer instruments from the process-global OTEL
+// providers (otel.GetTracerProvider / GetMeterProvider / log global). Use it
+// when the host application configures its own providers — e.g. a
+// traces-only OTLP pipeline to Langfuse — instead of calling Init, which
+// wires trace+metric+log exporters to one endpoint. Signals whose global
+// provider was never configured degrade to no-ops.
+func NewInstruments(pricing map[string]oasis.ModelPricing) (*Instruments, error) {
 	tracer := otel.Tracer(scopeName)
 	meter := otel.Meter(scopeName)
 	logger := global.GetLoggerProvider().Logger(scopeName)

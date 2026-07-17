@@ -32,6 +32,9 @@ func (o *ObservedEmbedding) Embed(ctx context.Context, texts []string) ([][]floa
 	ctx, span := o.inst.Tracer.Start(ctx, "llm.embed", trace.WithAttributes(
 		AttrLLMModel.String(o.model),
 		AttrLLMProvider.String(o.inner.Name()),
+		AttrGenAIRequestModel.String(o.model),
+		AttrGenAISystem.String(o.inner.Name()),
+		AttrObservationType.String("embedding"),
 		AttrEmbedTextCount.Int(len(texts)),
 		AttrEmbedDimensions.Int(o.inner.Dimensions()),
 	))

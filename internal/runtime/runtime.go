@@ -454,9 +454,15 @@ func (c *Runtime) ExecuteWithSpan(
 
 	var span core.Span
 	if c.Tracer != nil {
-		ctx, span = c.Tracer.Start(ctx, "agent.execute",
+		attrs := []core.SpanAttr{
 			core.StringAttr("agent.name", c.name),
-			core.StringAttr("agent.type", agentType))
+			core.StringAttr("agent.type", agentType),
+			core.StringAttr("langfuse.observation.type", "agent"),
+		}
+		if core.TraceContentEnabled() {
+			attrs = append(attrs, core.StringAttr("langfuse.observation.input", task.Input))
+		}
+		ctx, span = c.Tracer.Start(ctx, "agent.execute", attrs...)
 		defer span.End()
 	}
 
@@ -479,6 +485,9 @@ func (c *Runtime) ExecuteWithSpan(
 			span.SetAttr(core.StringAttr("agent.status", "error"))
 		} else {
 			span.SetAttr(core.StringAttr("agent.status", "ok"))
+			if core.TraceContentEnabled() && result.Output != "" {
+				span.SetAttr(core.StringAttr("langfuse.observation.output", result.Output))
+			}
 		}
 	}
 

@@ -85,9 +85,9 @@ func (m *mockEmbedding) Embed(_ context.Context, _ []string) ([][]float32, error
 // without any real OTEL backend.
 func testInstruments(t *testing.T) *Instruments {
 	t.Helper()
-	inst, err := newInstruments(nil)
+	inst, err := NewInstruments(nil)
 	if err != nil {
-		t.Fatalf("newInstruments: %v", err)
+		t.Fatalf("NewInstruments: %v", err)
 	}
 	return inst
 }

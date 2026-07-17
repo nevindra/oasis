@@ -158,8 +158,9 @@ func TestOTelSpanMiddleware_EmitsSpanPerCall(t *testing.T) {
 	if tracer.count() != 1 {
 		t.Fatalf("spans = %d, want 1", tracer.count())
 	}
-	if tracer.spans[0].name != "tool.execute" {
-		t.Errorf("span name = %q, want tool.execute", tracer.spans[0].name)
+	// Span is named after the tool so backends can filter per tool.
+	if tracer.spans[0].name != "rec" {
+		t.Errorf("span name = %q, want rec (the tool name)", tracer.spans[0].name)
 	}
 }
 
