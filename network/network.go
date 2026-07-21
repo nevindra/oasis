@@ -16,8 +16,13 @@ import (
 
 // agentToolParamSchema is the shared parameter schema for all agent_* tool
 // definitions. Allocated once at init time; consumers treat it as immutable.
+//
+// The task is a full, self-contained assignment written by the router — NOT a
+// verbatim copy of the user's message. The subagent cannot see the parent
+// conversation, so every fact it needs must be inlined here (mirrors the
+// deepagents task(description) contract).
 var agentToolParamSchema = json.RawMessage(
-	`{"type":"object","properties":{"task":{"type":"string","description":"The user's original message, copied verbatim. Do not paraphrase, translate, or summarize."}},"required":["task"]}`,
+	`{"type":"object","properties":{"task":{"type":"string","description":"The complete, self-contained assignment for the subagent. The subagent CANNOT see this conversation: include every fact, constraint, and piece of prior context it needs, plus what its final report must contain. Preserve the user's language and exact figures."}},"required":["task"]}`,
 )
 
 // Option configures a Network. Pass Option values to network.New.
@@ -44,6 +49,42 @@ func WithAgentOptions(opts ...agent.AgentOption) Option {
 //	)
 func WithChildren(children ...core.Agent) Option {
 	return func(n *Network) { n.pendingChildren = append(n.pendingChildren, children...) }
+}
+
+// WithChildTimeout bounds every delegation to a child agent. When d > 0 each
+// dispatchAgent call runs the child under context.WithTimeout(ctx, d); on
+// expiry that delegation fails with an "error: ..." tool result while sibling
+// delegations keep running, so a hung child cannot stall the router forever.
+// Zero (the default) means no per-delegation timeout.
+func WithChildTimeout(d time.Duration) Option {
+	return func(n *Network) { n.childTimeout = d }
+}
+
+// delegationToolDescription is the LLM-facing description of an agent_<name>
+// tool. It wraps the child's own description with the delegation contract
+// (blocking call, isolated context, parallel batching) so the router does not
+// need prompt-side guidance to use the tool correctly.
+func delegationToolDescription(name, desc string) string {
+	return "Delegate a task to the '" + name + "' subagent. " + desc +
+		" The call blocks until the subagent finishes and returns its final report as the tool result" +
+		` (a result starting with "error: " means it failed — retry once or report the failure; never silently redo its work yourself).` +
+		" The subagent cannot see this conversation, so the task must be fully self-contained." +
+		" To run independent delegations in parallel, issue all of them together in a single turn." +
+		" Never re-delegate a task that already returned a result."
+}
+
+// delegationLedger tracks delegations within one Execute run so the router
+// cannot run the same (agent, task) twice: a repeat while the first call is
+// in flight is rejected, and a repeat after completion replays the cached
+// result. Failed delegations are evicted so the router may retry them.
+type delegationLedger struct {
+	mu   sync.Mutex
+	recs map[string]*delegationRecord
+}
+
+type delegationRecord struct {
+	done   bool
+	output string
 }
 
 // Network is an Agent that coordinates subagents and tools via an LLM router.
@@ -82,6 +123,10 @@ type Network struct {
 	// spawnCount is incremented on each successful spawn; protected by n.mu.
 	spawnPolicy *SpawnPolicy
 	spawnCount  int
+
+	// childTimeout, when > 0, bounds each delegation to a child agent.
+	// Set via WithChildTimeout.
+	childTimeout time.Duration
 }
 
 // New constructs a Network — a router LLM coordinating zero or more child
@@ -220,6 +265,9 @@ func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch 
 // Tool policies registered via WithRouter(agent.WithToolConfig(...)) are
 // honoured via cfg.ResolveToolPolicy.
 func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.StreamEvent, executeTool agent.ToolExecFunc, executeToolStream agent.ToolExecStreamFunc, resolvedToolDefs []core.ToolDefinition, isStreamingTool func(string) bool, cfg *agent.Config) agent.DispatchFunc {
+	// One ledger per Execute run: makeDispatch is called from buildLoopConfig
+	// on every Execute, so the dedup scope is exactly one routing loop.
+	ledger := &delegationLedger{recs: make(map[string]*delegationRecord)}
 	agentRouter := func(ctx context.Context, tc core.ToolCall) (agent.DispatchResult, bool) {
 		if tc.Name == core.ToolSpawnAgent {
 			if n.spawnPolicy == nil {
@@ -230,7 +278,7 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 		if !strings.HasPrefix(tc.Name, core.ToolPrefixAgent) {
 			return agent.DispatchResult{}, false
 		}
-		return n.dispatchAgent(ctx, tc, parentTask, ch), true
+		return n.dispatchAgent(ctx, tc, parentTask, ch, ledger), true
 	}
 	// Wrap DispatchBuiltins to inject ask_user and execute_plan callbacks,
 	// breaking the runtime→agent cycle.
@@ -251,8 +299,10 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 }
 
 // dispatchAgent handles delegation to a subagent. Emits agent-start/finish
-// streaming events when ch is non-nil.
-func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, parentTask agent.AgentTask, ch chan<- core.StreamEvent) agent.DispatchResult {
+// streaming events when ch is non-nil; the finish event carries IsError and
+// the "error: ..." text when the child failed. The ledger rejects duplicate
+// in-flight delegations and replays completed ones instead of re-executing.
+func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, parentTask agent.AgentTask, ch chan<- core.StreamEvent, ledger *delegationLedger) agent.DispatchResult {
 	agentName := tc.Name[len(core.ToolPrefixAgent):]
 	n.mu.RLock()
 	sub, ok := n.agents[agentName]
@@ -268,12 +318,51 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, parentTas
 		return agent.DispatchResult{Content: "error: invalid agent call args: " + err.Error(), IsError: true}
 	}
 
+	// Duplicate-delegation guard: identical (agent, task) within one run.
+	ledgerKey := agentName + "\x00" + params.Task
+	if ledger != nil {
+		ledger.mu.Lock()
+		if rec, exists := ledger.recs[ledgerKey]; exists {
+			if !rec.done {
+				ledger.mu.Unlock()
+				return agent.DispatchResult{
+					Content: fmt.Sprintf("error: duplicate delegation — %q is already running this exact task; wait for its result instead of re-delegating", agentName),
+					IsError: true,
+				}
+			}
+			output := rec.output
+			ledger.mu.Unlock()
+			n.Logger().Info("replaying completed delegation", "network", n.Name(), "agent", agentName)
+			return agent.DispatchResult{
+				Content: fmt.Sprintf("note: %q already completed this exact task earlier in this run. Its result is repeated below — do not delegate it again.\n\n%s", agentName, output),
+			}
+		}
+		ledger.recs[ledgerKey] = &delegationRecord{}
+		ledger.mu.Unlock()
+	}
+	// settle finalizes the ledger entry: successes are cached for replay,
+	// failures are evicted so the router can retry the same task.
+	settle := func(output string, failed bool) {
+		if ledger == nil {
+			return
+		}
+		ledger.mu.Lock()
+		if failed {
+			delete(ledger.recs, ledgerKey)
+		} else if rec := ledger.recs[ledgerKey]; rec != nil {
+			rec.done = true
+			rec.output = output
+		}
+		ledger.mu.Unlock()
+	}
+
 	n.Logger().Info("delegating to subagent", "network", n.Name(), "agent", agentName, "task", agent.TruncateStr(params.Task, 80))
 
 	if ch != nil {
 		select {
 		case ch <- core.StreamEvent{Type: core.EventAgentStart, Name: agentName, Content: params.Task}:
 		case <-ctx.Done():
+			settle("", true)
 			return agent.DispatchResult{Content: ctx.Err().Error(), IsError: true}
 		}
 	}
@@ -283,14 +372,26 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, parentTas
 	subTask := parentTask
 	subTask.Input = params.Task
 
+	// Per-delegation timeout: a hung child fails this one delegation instead
+	// of stalling the whole routing loop.
+	execCtx := ctx
+	if n.childTimeout > 0 {
+		var cancel context.CancelFunc
+		execCtx, cancel = context.WithTimeout(ctx, n.childTimeout)
+		defer cancel()
+	}
+
 	start := time.Now()
-	result, err := agent.ExecuteAgent(ctx, sub, agentName, subTask, ch, n.Logger())
+	result, err := agent.ExecuteAgent(execCtx, sub, agentName, subTask, ch, n.Logger())
 	elapsed := time.Since(start)
+	if err != nil && ctx.Err() == nil && execCtx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("subagent %q timed out after %s: %w", agentName, n.childTimeout, err)
+	}
 
 	if ch != nil {
-		output := ""
-		if err == nil {
-			output = result.Output
+		output := result.Output
+		if err != nil {
+			output = "error: " + err.Error()
 		}
 		select {
 		case ch <- core.StreamEvent{
@@ -299,15 +400,18 @@ func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, parentTas
 			Content:  output,
 			Usage:    result.Usage,
 			Duration: elapsed,
+			IsError:  err != nil,
 		}:
 		case <-ctx.Done():
 		}
 	}
 
 	if err != nil {
+		settle("", true)
 		n.Logger().Error("subagent failed", "network", n.Name(), "agent", agentName, "error", err, "duration", elapsed)
 		return agent.DispatchResult{Content: "error: " + err.Error(), IsError: true}
 	}
+	settle(result.Output, false)
 	n.Logger().Info("subagent completed", "network", n.Name(), "agent", agentName,
 		"duration", elapsed,
 		"input_tokens", result.Usage.InputTokens,
@@ -358,7 +462,7 @@ func (n *Network) buildToolDefsLocked(toolDefs []core.ToolDefinition) []core.Too
 	for _, name := range n.sortedAgentNames {
 		defs = append(defs, core.ToolDefinition{
 			Name:        core.ToolPrefixAgent + name,
-			Description: n.agents[name].Description(),
+			Description: delegationToolDescription(name, n.agents[name].Description()),
 			Parameters:  agentToolParamSchema,
 		})
 	}

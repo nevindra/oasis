@@ -223,6 +223,11 @@ type StreamEvent struct {
 	// Duration is the wall-clock time for the completed step.
 	// Set on agent-finish and tool-call-result events. Zero value otherwise.
 	Duration time.Duration `json:"duration,omitempty"`
+	// IsError reports that the step this event describes failed. Set on
+	// agent-finish events when the delegated subagent returned an error
+	// (Content then carries the "error: ..." text the router sees). False on
+	// success and on all other event types.
+	IsError bool `json:"is_error,omitempty"`
 	// FinishReason is set on EventRunFinish events only. Empty on other types.
 	FinishReason FinishReason `json:"finish_reason,omitempty"`
 	// Warnings is set on EventRunFinish events when the run accumulated
