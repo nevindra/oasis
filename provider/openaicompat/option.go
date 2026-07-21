@@ -102,3 +102,10 @@ func WithCacheControl(messageIndices ...int) Option {
 		}
 	}
 }
+
+// WithParallelToolCalls explicitly sets the parallel_tool_calls request flag,
+// overriding BuildBody's default (true whenever >1 tool is offered). Pass
+// false for gateways that reject or mishandle batched tool calls.
+func WithParallelToolCalls(v bool) Option {
+	return func(r *ChatRequest) { r.ParallelToolCalls = &v }
+}

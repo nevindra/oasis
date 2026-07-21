@@ -875,3 +875,27 @@ func TestMessage_WireUnchanged(t *testing.T) {
 		t.Fatalf("block message wire = %s, want %s", got2, want)
 	}
 }
+
+// BuildBody must request parallel tool calls whenever multiple tools are
+// offered — DashScope/Qwen default the flag to false, which silently forces
+// routers into sequential delegation (deepagents §5.4: prompt AND API gate).
+func TestBuildBodyParallelToolCalls(t *testing.T) {
+	tools := []oasis.ToolDefinition{
+		{Name: "a", Description: "a"},
+		{Name: "b", Description: "b"},
+	}
+	req := BuildBody(nil, tools, "m", nil)
+	if req.ParallelToolCalls == nil || !*req.ParallelToolCalls {
+		t.Fatal("parallel_tool_calls not set with >1 tool")
+	}
+
+	one := BuildBody(nil, tools[:1], "m", nil)
+	if one.ParallelToolCalls != nil {
+		t.Fatal("parallel_tool_calls should be omitted with a single tool")
+	}
+
+	off := BuildBody(nil, tools, "m", nil, WithParallelToolCalls(false))
+	if off.ParallelToolCalls == nil || *off.ParallelToolCalls {
+		t.Fatal("WithParallelToolCalls(false) should override the default")
+	}
+}

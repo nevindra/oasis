@@ -141,6 +141,13 @@ func BuildBody(messages []oasis.ChatMessage, tools []oasis.ToolDefinition, model
 
 	if len(tools) > 0 {
 		req.Tools = BuildToolDefs(tools)
+		// Enable multi-tool-call responses on gateways that default it off
+		// (DashScope/Qwen); matches OpenAI's own default. Overridable via
+		// WithParallelToolCalls.
+		if len(tools) > 1 {
+			t := true
+			req.ParallelToolCalls = &t
+		}
 	}
 
 	// Structured output: enforce JSON response matching the schema.
