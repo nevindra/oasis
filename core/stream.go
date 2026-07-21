@@ -228,6 +228,13 @@ type StreamEvent struct {
 	// (Content then carries the "error: ..." text the router sees). False on
 	// success and on all other event types.
 	IsError bool `json:"is_error,omitempty"`
+	// Agent is the name of the delegated subagent whose run produced this
+	// event, stamped on every event forwarded from a child into the parent's
+	// stream (tool calls, reasoning, text, ...). Empty for the executing
+	// agent's own events. Lets consumers separate a child's activity from
+	// the parent's without heuristics; preserved (not overwritten) across
+	// nested forwarding so it names the originating agent.
+	Agent string `json:"agent,omitempty"`
 	// FinishReason is set on EventRunFinish events only. Empty on other types.
 	FinishReason FinishReason `json:"finish_reason,omitempty"`
 	// Warnings is set on EventRunFinish events when the run accumulated

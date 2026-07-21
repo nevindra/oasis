@@ -276,3 +276,93 @@ func TestAgentFinishEventCarriesError(t *testing.T) {
 		t.Errorf("agent-finish content = %q, want error text", finish.Content)
 	}
 }
+
+// streamingStubAgent emits events into its stream before returning, to test
+// how child events are forwarded into the parent's channel.
+type streamingStubAgent struct {
+	name string
+	desc string
+	evs  []core.StreamEvent
+}
+
+func (s *streamingStubAgent) Name() string        { return s.name }
+func (s *streamingStubAgent) Description() string { return s.desc }
+func (s *streamingStubAgent) Execute(_ context.Context, _ agent.AgentTask, opts ...core.RunOption) (agent.AgentResult, error) {
+	rcfg := core.ApplyRunOptions(opts...)
+	if rcfg.Stream != nil {
+		for _, ev := range s.evs {
+			rcfg.Stream <- ev
+		}
+		close(rcfg.Stream)
+	}
+	return agent.AgentResult{Output: "done"}, nil
+}
+
+// TestForwardedChildEventsCarryAgentStamp: every event a child emits during a
+// delegation (tool calls included) reaches the parent stream with Agent set
+// to the child's name, so consumers can separate child activity from the
+// router's own transcript.
+func TestForwardedChildEventsCarryAgentStamp(t *testing.T) {
+	sub := &streamingStubAgent{
+		name: "worker",
+		desc: "Emits events",
+		evs: []core.StreamEvent{
+			{Type: core.EventToolCallStart, ID: "t1", Name: "shell", Args: json.RawMessage(`{}`)},
+			{Type: core.EventToolCallResult, ID: "t1", Name: "shell", Content: "ok"},
+			{Type: core.EventTextDelta, Content: "child text"},
+		},
+	}
+
+	router := &routerCallbackProvider{
+		name: "router",
+		onChat: func(req core.ChatRequest) core.ChatResponse {
+			if countAssistantToolTurns(req) == 0 {
+				return core.ChatResponse{ToolCalls: []core.ToolCall{delegationCall("1", "worker", "emit stuff")}}
+			}
+			return core.ChatResponse{Content: "final"}
+		},
+	}
+
+	net := New("net", "test", router, WithChildren(sub))
+
+	ch := make(chan core.StreamEvent, 128)
+	var collected []core.StreamEvent
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ev := range ch {
+			collected = append(collected, ev)
+		}
+	}()
+	if _, err := net.Execute(context.Background(), agent.AgentTask{Input: "go"}, core.WithStream(ch)); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	var childTool, childText, routerOwn bool
+	for _, ev := range collected {
+		if ev.Type == core.EventToolCallStart && ev.Name == "shell" {
+			if ev.Agent != "worker" {
+				t.Errorf("child tool event Agent = %q, want %q", ev.Agent, "worker")
+			}
+			childTool = true
+		}
+		if ev.Type == core.EventTextDelta && ev.Content == "child text" {
+			if ev.Agent != "worker" {
+				t.Errorf("child text event Agent = %q, want %q", ev.Agent, "worker")
+			}
+			childText = true
+		}
+		// The network's own agent-start/finish events must NOT be stamped —
+		// they are the parent's delegation markers, not child activity.
+		if ev.Type == core.EventAgentStart || ev.Type == core.EventAgentFinish {
+			if ev.Agent != "" {
+				t.Errorf("%s event Agent = %q, want empty", ev.Type, ev.Agent)
+			}
+			routerOwn = true
+		}
+	}
+	if !childTool || !childText || !routerOwn {
+		t.Fatalf("missing expected events: tool=%v text=%v own=%v (got %d events)", childTool, childText, routerOwn, len(collected))
+	}
+}
