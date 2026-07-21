@@ -420,6 +420,14 @@ func forwardSubagentStream(
 				ev.Type == core.EventReasoningEnd || ev.Type == core.EventThinking) {
 				ev.Name = agentName
 			}
+			// Stamp EVERY forwarded event with the child's name (tool calls
+			// and reasoning included), so consumers can keep a child's
+			// activity out of the parent's own transcript. Preserve an
+			// existing stamp from nested forwarding — it names the
+			// originating (deepest) agent.
+			if ev.Agent == "" {
+				ev.Agent = agentName
+			}
 			select {
 			case ch <- ev:
 			case <-ctx.Done():

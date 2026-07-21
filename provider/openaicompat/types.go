@@ -34,6 +34,12 @@ type ChatRequest struct {
 	Seed             *int            `json:"seed,omitempty"`
 	ResponseFormat   *ResponseFormat `json:"response_format,omitempty"`
 	ToolChoice       *ToolChoice     `json:"tool_choice,omitempty"`
+	// ParallelToolCalls asks the model to batch independent tool calls in one
+	// response. OpenAI defaults this to true, but several compatible gateways
+	// (notably DashScope/Qwen) default it to FALSE — without it a router agent
+	// can never fan out delegations/tools in parallel no matter what the
+	// prompt says. BuildBody sets it whenever more than one tool is offered.
+	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 	// Modalities requests output modalities (e.g. ["text","image"]). Providers
 	// that support image generation (OpenRouter, image-capable gateways) return
 	// generated images when "image" is present. Omitted = text only.
