@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/nevindra/oasis/core"
 	"github.com/nevindra/oasis/memory"
@@ -117,6 +118,19 @@ type Config struct {
 	// cache the matching prefix across iterations. Providers without cache
 	// support ignore the bits. Set via agent.WithoutPromptCaching.
 	DisablePromptCaching bool
+
+	// SelfCloneMax, when > 0, registers the spawn_subagent built-in: the
+	// agent may spawn up to this many ephemeral copies of itself per run
+	// (same prompt/tools, fresh context, no memory) to parallelize
+	// self-contained subtasks. SelfCloneTimeout bounds each copy's run
+	// (0 = unbounded). Set via agent.WithSelfClone. Clones themselves are
+	// built with SelfCloneMax=0, so they cannot spawn further copies.
+	SelfCloneMax     int
+	SelfCloneTimeout time.Duration
+	// SelfCloneName overrides the base used for clone names ("<base>-N").
+	// Useful when the agent's runtime Name is an opaque run identifier; set
+	// via agent.WithSelfCloneName. Empty = the agent's Name.
+	SelfCloneName string
 
 	// Hook fields
 	PrepareStep         PrepareStep

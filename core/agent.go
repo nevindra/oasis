@@ -24,6 +24,16 @@ const (
 	// Wired by agent.WithPlanExecution and dispatched by the runtime.
 	ToolExecutePlan = "execute_plan"
 
+	// ToolTask is the unified delegation built-in (deepagents' task shape):
+	// one tool routes to named subagents on a network roster and/or "self"
+	// (an ephemeral copy of the calling agent, enabled via
+	// agent.WithSelfClone).
+	ToolTask = "task"
+
+	// ToolSelfClone is the legacy self-clone tool name; still dispatched for
+	// compatibility, no longer advertised (ToolTask covers it).
+	ToolSelfClone = "spawn_subagent"
+
 	// ToolSpawnAgent is the Network built-in that lets the router add new
 	// children at runtime. Wired by network.WithDynamicSpawning.
 	ToolSpawnAgent = "spawn_agent"
