@@ -138,11 +138,11 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 	planDef := executePlanToolDef()
 	toolDefs, executeTool, executeToolStream, isStreamingTool := a.ResolveTools(ctx, task, nil, &askDef, &planDef)
 
-	// Self-cloning: advertise spawn_subagent. Appended on a copy — the
-	// resolved slice may be the runtime's cached defs.
+	// Self-cloning: advertise the unified task tool (subagent enum: "self").
+	// Appended on a copy — the resolved slice may be the runtime's cached defs.
 	if cfg.SelfCloneMax > 0 {
 		defs := make([]core.ToolDefinition, 0, len(toolDefs)+1)
-		toolDefs = append(append(defs, toolDefs...), selfCloneToolDef(cfg.SelfCloneMax))
+		toolDefs = append(append(defs, toolDefs...), BuildTaskToolDef(nil, true, cfg.SelfCloneMax))
 	}
 
 	var dispatch DispatchFunc
@@ -169,8 +169,10 @@ func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream Tool
 	// Wrap DispatchBuiltins to inject the ask_user and execute_plan callbacks,
 	// breaking the runtime→agent cycle.
 	builtins := func(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool) {
-		if tc.Name == core.ToolSelfClone && cfg.SelfCloneMax > 0 {
-			return a.dispatchSelfClone(ctx, tc, ch, cfg), true
+		// Unified task tool (and its legacy spawn_subagent alias): for a
+		// plain agent the only routing target is "self".
+		if (tc.Name == core.ToolTask || tc.Name == core.ToolSelfClone) && cfg.SelfCloneMax > 0 {
+			return a.dispatchTaskSelf(ctx, tc, ch, cfg), true
 		}
 		return a.DispatchBuiltins(ctx, tc, dispatch, executeAskUser, executePlan)
 	}

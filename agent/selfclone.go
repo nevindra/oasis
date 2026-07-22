@@ -88,27 +88,42 @@ func cloneCounterFrom(ctx context.Context) *atomic.Int32 {
 	return v
 }
 
-// dispatchSelfClone handles one spawn_subagent call for an LLMAgent.
-func (a *LLMAgent) dispatchSelfClone(ctx context.Context, tc core.ToolCall, ch chan<- core.StreamEvent, cfg *Config) DispatchResult {
+// dispatchTaskSelf handles a task/spawn_subagent call routed to "self" for an
+// LLMAgent: parses the task text (unified or legacy args) and runs a clone.
+func (a *LLMAgent) dispatchTaskSelf(ctx context.Context, tc core.ToolCall, ch chan<- core.StreamEvent, cfg *Config) DispatchResult {
+	taskText, errResult := ParseTaskArgs(tc, TaskSelf)
+	if errResult != nil {
+		return *errResult
+	}
 	parentTask, _ := TaskFromContext(ctx)
 	_, provider := a.ResolvePromptAndProviderWith(ctx, parentTask, cfg)
-	return ExecuteSelfClone(ctx, a.Name(), a.Description(), provider, cfg, tc, ch, a.Logger())
+	return ExecuteSelfClone(ctx, a.Name(), a.Description(), provider, cfg, taskText, ch, a.Logger())
 }
 
-// ExecuteSelfClone runs one spawn_subagent call on behalf of any
-// runtime-based agent (LLMAgent or a network router): builds a fresh copy
-// from cfg, runs the task to completion, and returns the copy's final report
-// as the tool result. Emits agent-start/agent-finish stream events so
-// consumers render clones exactly like network delegations.
-func ExecuteSelfClone(ctx context.Context, parentName, description string, provider core.Provider, cfg *Config, tc core.ToolCall, ch chan<- core.StreamEvent, logger *slog.Logger) DispatchResult {
-	var args selfCloneArgs
+// ParseTaskArgs extracts the task text from a task/spawn_subagent call and
+// validates the subagent target against want ("" in args tolerates the
+// legacy spawn_subagent shape). Returns a non-nil error result on mismatch.
+func ParseTaskArgs(tc core.ToolCall, want string) (string, *DispatchResult) {
+	var args TaskToolArgs
 	if err := json.Unmarshal(tc.Args, &args); err != nil {
-		return DispatchResult{Content: "error: invalid spawn_subagent args: " + err.Error(), IsError: true}
+		return "", &DispatchResult{Content: "error: invalid " + tc.Name + " args: " + err.Error(), IsError: true}
+	}
+	if args.Subagent != "" && args.Subagent != want {
+		return "", &DispatchResult{Content: fmt.Sprintf("error: unknown subagent %q — valid: %q", args.Subagent, want), IsError: true}
 	}
 	if args.Task == "" {
-		return DispatchResult{Content: "error: spawn_subagent requires a non-empty task", IsError: true}
+		return "", &DispatchResult{Content: "error: " + tc.Name + " requires a non-empty task", IsError: true}
 	}
+	return args.Task, nil
+}
 
+// ExecuteSelfClone runs one self-clone task on behalf of any runtime-based
+// agent (LLMAgent or a network router): builds a fresh copy from cfg, runs
+// the task to completion, and returns the copy's final report as the tool
+// result. Emits agent-start/agent-finish stream events so consumers render
+// clones exactly like network delegations.
+func ExecuteSelfClone(ctx context.Context, parentName, description string, provider core.Provider, cfg *Config, taskText string, ch chan<- core.StreamEvent, logger *slog.Logger) DispatchResult {
+	args := selfCloneArgs{Task: taskText}
 	counter := cloneCounterFrom(ctx)
 	if counter == nil {
 		// Defensive: no per-run counter means no budget tracking — refuse

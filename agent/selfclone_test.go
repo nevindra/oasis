@@ -34,7 +34,7 @@ func (p *selfCloneProvider) ChatStream(_ context.Context, req core.ChatRequest, 
 		// A clone's run: check its advertised tools, answer immediately.
 		p.mu.Lock()
 		for _, t := range req.Tools {
-			if t.Name == core.ToolSelfClone {
+			if t.Name == core.ToolSelfClone || t.Name == core.ToolTask {
 				p.cloneSawSpawnTool = true
 			}
 		}

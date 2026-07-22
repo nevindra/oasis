@@ -429,3 +429,88 @@ func TestNetworkRouterSelfClone(t *testing.T) {
 		}
 	}
 }
+
+// TestUnifiedTaskTool: the roster is advertised as ONE task tool (no agent_*
+// defs), and task calls route by subagent — to a child, to "self" (router
+// clone), and unknown targets error with the valid list.
+func TestUnifiedTaskTool(t *testing.T) {
+	var childExecs atomic.Int32
+	sub := &stubAgent{
+		name: "worker",
+		desc: "Does work",
+		fn: func(task agent.AgentTask) (agent.AgentResult, error) {
+			childExecs.Add(1)
+			return agent.AgentResult{Output: "child report: " + task.Input}, nil
+		},
+	}
+
+	var advertised []string
+	var results []string
+	router := &routerCallbackProvider{
+		name: "router",
+		onChat: func(req core.ChatRequest) core.ChatResponse {
+			last := req.Messages[len(req.Messages)-1]
+			if strings.HasPrefix(last.Content, "SOLO:") {
+				return core.ChatResponse{Content: "clone did " + last.Content}
+			}
+			for _, m := range req.Messages {
+				if m.Role == "tool" {
+					results = append(results, m.Content)
+				}
+			}
+			if countAssistantToolTurns(req) == 0 {
+				advertised = nil
+				for _, tl := range req.Tools {
+					advertised = append(advertised, tl.Name)
+				}
+				a1, _ := json.Marshal(map[string]string{"subagent": "worker", "task": "part one"})
+				a2, _ := json.Marshal(map[string]string{"subagent": "self", "task": "SOLO:part two"})
+				a3, _ := json.Marshal(map[string]string{"subagent": "ghost", "task": "part three"})
+				return core.ChatResponse{ToolCalls: []core.ToolCall{
+					{ID: "1", Name: core.ToolTask, Args: a1},
+					{ID: "2", Name: core.ToolTask, Args: a2},
+					{ID: "3", Name: core.ToolTask, Args: a3},
+				}}
+			}
+			return core.ChatResponse{Content: "merged"}
+		},
+	}
+
+	net := New("team", "unified", router,
+		WithChildren(sub),
+		WithAgentOptions(agent.WithSelfClone(4, time.Minute)),
+	)
+
+	result, err := net.Execute(context.Background(), agent.AgentTask{Input: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "merged" {
+		t.Errorf("output = %q, want merged", result.Output)
+	}
+	if childExecs.Load() != 1 {
+		t.Errorf("child executed %d times, want 1", childExecs.Load())
+	}
+
+	// Advertised defs: exactly one task tool, no agent_* or spawn_subagent.
+	taskDefs := 0
+	for _, name := range advertised {
+		if name == core.ToolTask {
+			taskDefs++
+		}
+		if strings.HasPrefix(name, core.ToolPrefixAgent) || name == core.ToolSelfClone {
+			t.Errorf("legacy delegation def %q still advertised", name)
+		}
+	}
+	if taskDefs != 1 {
+		t.Errorf("task defs advertised = %d, want 1", taskDefs)
+	}
+
+	// Tool results: child report, clone report, unknown-subagent error.
+	joined := strings.Join(results, "\n")
+	for _, want := range []string{"child report: part one", "clone did SOLO:part two", `unknown subagent "ghost"`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("tool results missing %q in:\n%s", want, joined)
+		}
+	}
+}

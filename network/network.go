@@ -279,20 +279,22 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 			}
 			return n.dispatchSpawn(ctx, tc.Args), true
 		}
-		if tc.Name == core.ToolSelfClone {
-			if n.SelfCloneMax <= 0 {
-				return agent.DispatchResult{Content: "error: spawn_subagent invoked without WithSelfClone", IsError: true}, true
-			}
-			// The clone is a plain LLMAgent built from the router's own
-			// config — it inherits the router's prompt and direct tools but
-			// not the agent_* delegation surface (those are dispatch-level,
-			// not registry tools).
-			return agent.ExecuteSelfClone(ctx, n.Name(), n.Description(), provider, cfg, tc, ch, n.Logger()), true
+		if tc.Name == core.ToolTask || tc.Name == core.ToolSelfClone {
+			return n.dispatchTask(ctx, tc, parentTask, ch, ledger, cfg, provider), true
 		}
 		if !strings.HasPrefix(tc.Name, core.ToolPrefixAgent) {
 			return agent.DispatchResult{}, false
 		}
-		return n.dispatchAgent(ctx, tc, parentTask, ch, ledger), true
+		// Legacy agent_<name> call shape — still dispatched, no longer
+		// advertised (the unified task tool covers the roster).
+		agentName := tc.Name[len(core.ToolPrefixAgent):]
+		var params struct {
+			Task string `json:"task"`
+		}
+		if err := json.Unmarshal(tc.Args, &params); err != nil {
+			return agent.DispatchResult{Content: "error: invalid agent call args: " + err.Error(), IsError: true}, true
+		}
+		return n.dispatchAgent(ctx, agentName, params.Task, parentTask, ch, ledger), true
 	}
 	// Wrap DispatchBuiltins to inject ask_user and execute_plan callbacks,
 	// breaking the runtime→agent cycle.
@@ -312,25 +314,52 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 	})
 }
 
-// dispatchAgent handles delegation to a subagent. Emits agent-start/finish
+// dispatchTask routes one unified task tool call (or its legacy
+// spawn_subagent alias): "self" spawns a clone of the router; any roster name
+// delegates to that child; anything else errors with the valid targets.
+func (n *Network) dispatchTask(ctx context.Context, tc core.ToolCall, parentTask agent.AgentTask, ch chan<- core.StreamEvent, ledger *delegationLedger, cfg *agent.Config, provider core.Provider) agent.DispatchResult {
+	var args agent.TaskToolArgs
+	if err := json.Unmarshal(tc.Args, &args); err != nil {
+		return agent.DispatchResult{Content: "error: invalid " + tc.Name + " args: " + err.Error(), IsError: true}
+	}
+	if args.Task == "" {
+		return agent.DispatchResult{Content: "error: " + tc.Name + " requires a non-empty task", IsError: true}
+	}
+	// Legacy spawn_subagent carries no subagent field — it always meant self.
+	if args.Subagent == "" && tc.Name == core.ToolSelfClone {
+		args.Subagent = agent.TaskSelf
+	}
+	if args.Subagent == agent.TaskSelf {
+		if n.SelfCloneMax <= 0 {
+			return agent.DispatchResult{Content: "error: subagent \"self\" is not available on this agent", IsError: true}
+		}
+		// The clone is a plain LLMAgent built from the router's own config —
+		// it inherits the router's prompt and direct tools but not the
+		// delegation surface (that is dispatch-level, not registry tools).
+		return agent.ExecuteSelfClone(ctx, n.Name(), n.Description(), provider, cfg, args.Task, ch, n.Logger())
+	}
+	return n.dispatchAgent(ctx, args.Subagent, args.Task, parentTask, ch, ledger)
+}
+
+// dispatchAgent handles delegation to a named child. Emits agent-start/finish
 // streaming events when ch is non-nil; the finish event carries IsError and
 // the "error: ..." text when the child failed. The ledger rejects duplicate
 // in-flight delegations and replays completed ones instead of re-executing.
-func (n *Network) dispatchAgent(ctx context.Context, tc core.ToolCall, parentTask agent.AgentTask, ch chan<- core.StreamEvent, ledger *delegationLedger) agent.DispatchResult {
-	agentName := tc.Name[len(core.ToolPrefixAgent):]
+func (n *Network) dispatchAgent(ctx context.Context, agentName, taskText string, parentTask agent.AgentTask, ch chan<- core.StreamEvent, ledger *delegationLedger) agent.DispatchResult {
 	n.mu.RLock()
 	sub, ok := n.agents[agentName]
+	names := make([]string, len(n.sortedAgentNames))
+	copy(names, n.sortedAgentNames)
 	n.mu.RUnlock()
 	if !ok {
-		return agent.DispatchResult{Content: fmt.Sprintf("error: unknown agent %q", agentName), IsError: true}
+		valid := strings.Join(names, ", ")
+		if n.SelfCloneMax > 0 {
+			valid += ", self"
+		}
+		return agent.DispatchResult{Content: fmt.Sprintf("error: unknown subagent %q — valid: %s", agentName, valid), IsError: true}
 	}
 
-	var params struct {
-		Task string `json:"task"`
-	}
-	if err := json.Unmarshal(tc.Args, &params); err != nil {
-		return agent.DispatchResult{Content: "error: invalid agent call args: " + err.Error(), IsError: true}
-	}
+	params := struct{ Task string }{Task: taskText}
 
 	// Duplicate-delegation guard: identical (agent, task) within one run.
 	ledgerKey := agentName + "\x00" + params.Task
@@ -472,13 +501,18 @@ func (n *Network) buildToolDefs(toolDefs []core.ToolDefinition) []core.ToolDefin
 // RemoveAgent, dispatchSpawn) rebuild the tool defs under the write lock
 // without re-acquiring RLock and deadlocking.
 func (n *Network) buildToolDefsLocked(toolDefs []core.ToolDefinition) []core.ToolDefinition {
-	defs := make([]core.ToolDefinition, 0, len(n.sortedAgentNames)+len(toolDefs)+1)
-	for _, name := range n.sortedAgentNames {
-		defs = append(defs, core.ToolDefinition{
-			Name:        core.ToolPrefixAgent + name,
-			Description: delegationToolDescription(name, n.agents[name].Description()),
-			Parameters:  agentToolParamSchema,
-		})
+	defs := make([]core.ToolDefinition, 0, len(toolDefs)+2)
+	// ONE unified task tool covers the whole roster (and "self" when
+	// self-cloning is enabled) — deepagents' task(description, subagent_type)
+	// shape — instead of one agent_<name> tool per child. Legacy agent_* and
+	// spawn_subagent calls still dispatch for compatibility; they are just no
+	// longer advertised.
+	if len(n.sortedAgentNames) > 0 || n.SelfCloneMax > 0 {
+		targets := make([]agent.TaskTarget, 0, len(n.sortedAgentNames))
+		for _, name := range n.sortedAgentNames {
+			targets = append(targets, agent.TaskTarget{Name: name, Description: n.agents[name].Description()})
+		}
+		defs = append(defs, agent.BuildTaskToolDef(targets, n.SelfCloneMax > 0, n.SelfCloneMax))
 	}
 	if n.spawnPolicy != nil {
 		defs = append(defs, core.ToolDefinition{
@@ -486,9 +520,6 @@ func (n *Network) buildToolDefsLocked(toolDefs []core.ToolDefinition) []core.Too
 			Description: "Dynamically create a new sub-agent to handle a specialized task. Provide name (unique), description, and system prompt.",
 			Parameters:  spawnAgentParamSchema,
 		})
-	}
-	if n.SelfCloneMax > 0 {
-		defs = append(defs, agent.SelfCloneToolDef(n.SelfCloneMax))
 	}
 	defs = append(defs, toolDefs...)
 	return defs
