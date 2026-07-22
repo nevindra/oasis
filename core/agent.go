@@ -24,6 +24,11 @@ const (
 	// Wired by agent.WithPlanExecution and dispatched by the runtime.
 	ToolExecutePlan = "execute_plan"
 
+	// ToolSelfClone is the built-in that lets an agent spawn ephemeral
+	// copies of itself (same prompt/tools, fresh context) to parallelize
+	// self-contained subtasks. Enabled via agent.WithSelfClone.
+	ToolSelfClone = "spawn_subagent"
+
 	// ToolSpawnAgent is the Network built-in that lets the router add new
 	// children at runtime. Wired by network.WithDynamicSpawning.
 	ToolSpawnAgent = "spawn_agent"
