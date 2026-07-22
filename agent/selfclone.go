@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -88,16 +89,59 @@ func cloneCounterFrom(ctx context.Context) *atomic.Int32 {
 	return v
 }
 
-// dispatchTaskSelf handles a task/spawn_subagent call routed to "self" for an
-// LLMAgent: parses the task text (unified or legacy args) and runs a clone.
-func (a *LLMAgent) dispatchTaskSelf(ctx context.Context, tc core.ToolCall, ch chan<- core.StreamEvent, cfg *Config) DispatchResult {
-	taskText, errResult := ParseTaskArgs(tc, TaskSelf)
-	if errResult != nil {
-		return *errResult
+// dispatchTaskCall routes a task/spawn_subagent call for a plain agent:
+// "self" spawns an ephemeral clone (when enabled); a roster name is forwarded
+// to the TaskDelegate installed by the spawning network, so a router's
+// self-clone can delegate to the same specialists as the router itself.
+// Returns handled=false when the agent has neither capability — the call
+// then falls through to registry dispatch (and fails as an unknown tool).
+func (a *LLMAgent) dispatchTaskCall(ctx context.Context, tc core.ToolCall, ch chan<- core.StreamEvent, cfg *Config) (DispatchResult, bool) {
+	if cfg.SelfCloneMax <= 0 && cfg.TaskDelegate == nil {
+		return DispatchResult{}, false
+	}
+	var args TaskToolArgs
+	if err := json.Unmarshal(tc.Args, &args); err != nil {
+		return DispatchResult{Content: "error: invalid " + tc.Name + " args: " + err.Error(), IsError: true}, true
+	}
+	if args.Task == "" {
+		return DispatchResult{Content: "error: " + tc.Name + " requires a non-empty task", IsError: true}, true
+	}
+	// Legacy spawn_subagent carries no subagent field — it always meant self.
+	if args.Subagent == "" && tc.Name == core.ToolSelfClone {
+		args.Subagent = TaskSelf
+	}
+	if args.Subagent != TaskSelf {
+		if cfg.TaskDelegate != nil {
+			for _, t := range cfg.TaskRoster {
+				if t.Name == args.Subagent {
+					return cfg.TaskDelegate(ctx, args.Subagent, args.Task, ch), true
+				}
+			}
+		}
+		return DispatchResult{Content: fmt.Sprintf("error: unknown subagent %q — valid: %s", args.Subagent, validTaskTargets(cfg)), IsError: true}, true
+	}
+	if cfg.SelfCloneMax <= 0 {
+		return DispatchResult{Content: `error: subagent "self" is not available here — delegate to a roster subagent or do the work yourself with your own tools`, IsError: true}, true
 	}
 	parentTask, _ := TaskFromContext(ctx)
 	_, provider := a.ResolvePromptAndProviderWith(ctx, parentTask, cfg)
-	return ExecuteSelfClone(ctx, a.Name(), a.Description(), provider, cfg, taskText, ch, a.Logger())
+	return ExecuteSelfClone(ctx, a.Name(), a.Description(), provider, cfg, args.Task, ch, a.Logger()), true
+}
+
+// validTaskTargets renders an agent's valid task subagent values for error
+// messages: the roster names (when a delegate is installed) plus "self"
+// (when cloning is enabled).
+func validTaskTargets(cfg *Config) string {
+	names := make([]string, 0, len(cfg.TaskRoster)+1)
+	if cfg.TaskDelegate != nil {
+		for _, t := range cfg.TaskRoster {
+			names = append(names, fmt.Sprintf("%q", t.Name))
+		}
+	}
+	if cfg.SelfCloneMax > 0 {
+		names = append(names, `"self"`)
+	}
+	return strings.Join(names, ", ")
 }
 
 // ParseTaskArgs extracts the task text from a task/spawn_subagent call and

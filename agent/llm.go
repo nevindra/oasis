@@ -138,11 +138,13 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 	planDef := executePlanToolDef()
 	toolDefs, executeTool, executeToolStream, isStreamingTool := a.ResolveTools(ctx, task, nil, &askDef, &planDef)
 
-	// Self-cloning: advertise the unified task tool (subagent enum: "self").
-	// Appended on a copy — the resolved slice may be the runtime's cached defs.
-	if cfg.SelfCloneMax > 0 {
+	// Delegation surface: advertise the unified task tool when the agent can
+	// spawn "self" copies and/or carries a roster delegate (a network
+	// router's self-clone keeps its coordinator's roster). Appended on a
+	// copy — the resolved slice may be the runtime's cached defs.
+	if cfg.SelfCloneMax > 0 || len(cfg.TaskRoster) > 0 {
 		defs := make([]core.ToolDefinition, 0, len(toolDefs)+1)
-		toolDefs = append(append(defs, toolDefs...), BuildTaskToolDef(nil, true, cfg.SelfCloneMax))
+		toolDefs = append(append(defs, toolDefs...), BuildTaskToolDef(cfg.TaskRoster, cfg.SelfCloneMax > 0, cfg.SelfCloneMax))
 	}
 
 	var dispatch DispatchFunc
@@ -169,10 +171,13 @@ func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream Tool
 	// Wrap DispatchBuiltins to inject the ask_user and execute_plan callbacks,
 	// breaking the runtime→agent cycle.
 	builtins := func(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool) {
-		// Unified task tool (and its legacy spawn_subagent alias): for a
-		// plain agent the only routing target is "self".
-		if (tc.Name == core.ToolTask || tc.Name == core.ToolSelfClone) && cfg.SelfCloneMax > 0 {
-			return a.dispatchTaskSelf(ctx, tc, ch, cfg), true
+		// Unified task tool (and its legacy spawn_subagent alias): "self"
+		// spawns a clone; a roster name routes through the TaskDelegate a
+		// spawning network installed (router self-clones).
+		if tc.Name == core.ToolTask || tc.Name == core.ToolSelfClone {
+			if res, handled := a.dispatchTaskCall(ctx, tc, ch, cfg); handled {
+				return res, true
+			}
 		}
 		return a.DispatchBuiltins(ctx, tc, dispatch, executeAskUser, executePlan)
 	}

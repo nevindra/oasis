@@ -334,11 +334,33 @@ func (n *Network) dispatchTask(ctx context.Context, tc core.ToolCall, parentTask
 			return agent.DispatchResult{Content: "error: subagent \"self\" is not available on this agent", IsError: true}
 		}
 		// The clone is a plain LLMAgent built from the router's own config —
-		// it inherits the router's prompt and direct tools but not the
-		// delegation surface (that is dispatch-level, not registry tools).
-		return agent.ExecuteSelfClone(ctx, n.Name(), n.Description(), provider, cfg, args.Task, ch, n.Logger())
+		// it inherits the router's prompt and direct tools PLUS the router's
+		// delegation surface: its task tool advertises the same roster, and a
+		// call to a roster name routes back through this network's dispatch
+		// (shared ledger, child timeout, stream events). Without this, a
+		// clone whose inherited coordinator prompt says "route research to X"
+		// could only fail with "unknown subagent" and grind through the work
+		// itself. Clones still cannot spawn further clones.
+		cloneCfg := *cfg
+		cloneCfg.TaskRoster = n.taskRoster()
+		cloneCfg.TaskDelegate = func(ctx context.Context, subagent, taskText string, cch chan<- core.StreamEvent) agent.DispatchResult {
+			return n.dispatchAgent(ctx, subagent, taskText, parentTask, cch, ledger)
+		}
+		return agent.ExecuteSelfClone(ctx, n.Name(), n.Description(), provider, &cloneCfg, args.Task, ch, n.Logger())
 	}
 	return n.dispatchAgent(ctx, args.Subagent, args.Task, parentTask, ch, ledger)
+}
+
+// taskRoster snapshots the current roster as task-tool targets — the
+// delegation surface handed to the router's self-clones.
+func (n *Network) taskRoster() []agent.TaskTarget {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	targets := make([]agent.TaskTarget, 0, len(n.sortedAgentNames))
+	for _, name := range n.sortedAgentNames {
+		targets = append(targets, agent.TaskTarget{Name: name, Description: n.agents[name].Description()})
+	}
+	return targets
 }
 
 // dispatchAgent handles delegation to a named child. Emits agent-start/finish

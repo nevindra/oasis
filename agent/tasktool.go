@@ -13,13 +13,13 @@ import (
 	"strings"
 
 	"github.com/nevindra/oasis/core"
+	"github.com/nevindra/oasis/internal/runtime"
 )
 
 // TaskTarget is one deliverable-to entry advertised in the task tool.
-type TaskTarget struct {
-	Name        string
-	Description string
-}
+// Aliased to the runtime type so it can ride on Config (Config.TaskRoster)
+// without an agent→runtime cycle.
+type TaskTarget = runtime.TaskRosterEntry
 
 // TaskSelf is the reserved subagent value for spawning an ephemeral copy of
 // the calling agent.
