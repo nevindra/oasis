@@ -236,6 +236,10 @@ func (n *Network) Execute(ctx context.Context, task agent.AgentTask, opts ...cor
 		defer cancel()
 	}
 	ctx = agent.WithTaskContext(ctx, task)
+	if n.SelfCloneMax > 0 {
+		// Per-run spawn budget for the router's spawn_subagent built-in.
+		ctx = agent.WithCloneScope(ctx)
+	}
 	return n.ExecuteWithSpan(ctx, task, rcfg.Stream, "Network", "network",
 		func(ctx context.Context, task agent.AgentTask, ch chan<- core.StreamEvent) *agent.LoopConfig {
 			return n.buildLoopConfig(ctx, task, ch, ro)
@@ -254,7 +258,7 @@ func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch 
 	// Network does not use ask_user, execute_plan, or spawn_agent builtins.
 	toolDefs, executeTool, executeToolStream, isStreamingTool := n.ResolveTools(ctx, task, n.buildToolDefs, nil, nil)
 	lc := runtime.AcquireLoopConfig()
-	*lc = n.BaseLoopConfig("network:"+n.Name(), prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs, isStreamingTool, cfg), cfg, n.ResolveMem(opts))
+	*lc = n.BaseLoopConfig("network:"+n.Name(), prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs, isStreamingTool, cfg, provider), cfg, n.ResolveMem(opts))
 	return lc
 }
 
@@ -264,7 +268,7 @@ func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch 
 // implementing StreamingAnyTool emit progress events via executeToolStream.
 // Tool policies registered via WithRouter(agent.WithToolConfig(...)) are
 // honoured via cfg.ResolveToolPolicy.
-func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.StreamEvent, executeTool agent.ToolExecFunc, executeToolStream agent.ToolExecStreamFunc, resolvedToolDefs []core.ToolDefinition, isStreamingTool func(string) bool, cfg *agent.Config) agent.DispatchFunc {
+func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.StreamEvent, executeTool agent.ToolExecFunc, executeToolStream agent.ToolExecStreamFunc, resolvedToolDefs []core.ToolDefinition, isStreamingTool func(string) bool, cfg *agent.Config, provider core.Provider) agent.DispatchFunc {
 	// One ledger per Execute run: makeDispatch is called from buildLoopConfig
 	// on every Execute, so the dedup scope is exactly one routing loop.
 	ledger := &delegationLedger{recs: make(map[string]*delegationRecord)}
@@ -274,6 +278,16 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 				return agent.DispatchResult{Content: "error: spawn_agent invoked without WithDynamicSpawning", IsError: true}, true
 			}
 			return n.dispatchSpawn(ctx, tc.Args), true
+		}
+		if tc.Name == core.ToolSelfClone {
+			if n.SelfCloneMax <= 0 {
+				return agent.DispatchResult{Content: "error: spawn_subagent invoked without WithSelfClone", IsError: true}, true
+			}
+			// The clone is a plain LLMAgent built from the router's own
+			// config — it inherits the router's prompt and direct tools but
+			// not the agent_* delegation surface (those are dispatch-level,
+			// not registry tools).
+			return agent.ExecuteSelfClone(ctx, n.Name(), n.Description(), provider, cfg, tc, ch, n.Logger()), true
 		}
 		if !strings.HasPrefix(tc.Name, core.ToolPrefixAgent) {
 			return agent.DispatchResult{}, false
@@ -472,6 +486,9 @@ func (n *Network) buildToolDefsLocked(toolDefs []core.ToolDefinition) []core.Too
 			Description: "Dynamically create a new sub-agent to handle a specialized task. Provide name (unique), description, and system prompt.",
 			Parameters:  spawnAgentParamSchema,
 		})
+	}
+	if n.SelfCloneMax > 0 {
+		defs = append(defs, agent.SelfCloneToolDef(n.SelfCloneMax))
 	}
 	defs = append(defs, toolDefs...)
 	return defs

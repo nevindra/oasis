@@ -366,3 +366,66 @@ func TestForwardedChildEventsCarryAgentStamp(t *testing.T) {
 		t.Fatalf("missing expected events: tool=%v text=%v own=%v (got %d events)", childTool, childText, routerOwn, len(collected))
 	}
 }
+
+// TestNetworkRouterSelfClone: a router with WithSelfClone fans out copies of
+// ITSELF (not children) — two spawn_subagent calls in one message run two
+// router clones concurrently, named <network>-N.
+func TestNetworkRouterSelfClone(t *testing.T) {
+	router := &routerCallbackProvider{
+		name: "router",
+		onChat: func(req core.ChatRequest) core.ChatResponse {
+			last := req.Messages[len(req.Messages)-1]
+			if strings.HasPrefix(last.Content, "PART:") {
+				return core.ChatResponse{Content: "clone did " + last.Content}
+			}
+			if countAssistantToolTurns(req) == 0 {
+				argsA, _ := json.Marshal(map[string]string{"task": "PART:A"})
+				argsB, _ := json.Marshal(map[string]string{"task": "PART:B"})
+				return core.ChatResponse{ToolCalls: []core.ToolCall{
+					{ID: "1", Name: core.ToolSelfClone, Args: argsA},
+					{ID: "2", Name: core.ToolSelfClone, Args: argsB},
+				}}
+			}
+			return core.ChatResponse{Content: "router merged"}
+		},
+	}
+
+	sub := &stubAgent{name: "worker", desc: "unused child", fn: func(agent.AgentTask) (agent.AgentResult, error) {
+		return agent.AgentResult{Output: "child"}, nil
+	}}
+
+	net := New("team", "router with clones", router,
+		WithChildren(sub),
+		WithAgentOptions(agent.WithSelfClone(4, time.Minute)),
+	)
+
+	ch := make(chan core.StreamEvent, 256)
+	var starts []string
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ev := range ch {
+			if ev.Type == core.EventAgentStart {
+				starts = append(starts, ev.Name)
+			}
+		}
+	}()
+
+	result, err := net.Execute(context.Background(), agent.AgentTask{Input: "split"}, core.WithStream(ch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	if result.Output != "router merged" {
+		t.Errorf("output = %q, want router merged", result.Output)
+	}
+	if len(starts) != 2 {
+		t.Fatalf("agent starts = %v, want 2 clone starts", starts)
+	}
+	for _, s := range starts {
+		if !strings.HasPrefix(s, "team-") {
+			t.Errorf("clone name %q, want team-N", s)
+		}
+	}
+}

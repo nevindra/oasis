@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,12 @@ type selfCloneArgs struct {
 
 var selfCloneSchema = core.DeriveSchema[selfCloneArgs]()
 
+// SelfCloneToolDef is the LLM-facing definition of the spawn_subagent tool.
+// Exported so network routers can advertise it alongside their agent_* defs.
+func SelfCloneToolDef(maxPerRun int) core.ToolDefinition {
+	return selfCloneToolDef(maxPerRun)
+}
+
 // selfCloneToolDef is the LLM-facing definition of the spawn_subagent tool.
 func selfCloneToolDef(maxPerRun int) core.ToolDefinition {
 	return core.ToolDefinition{
@@ -62,16 +69,31 @@ func withCloneCounter(ctx context.Context) context.Context {
 	return context.WithValue(ctx, cloneCounterKey{}, &atomic.Int32{})
 }
 
+// WithCloneScope attaches a fresh per-run spawn budget to ctx. LLMAgent does
+// this automatically in Execute; network routers must call it at the top of
+// their Execute when self-cloning is enabled.
+func WithCloneScope(ctx context.Context) context.Context {
+	return withCloneCounter(ctx)
+}
+
 func cloneCounterFrom(ctx context.Context) *atomic.Int32 {
 	v, _ := ctx.Value(cloneCounterKey{}).(*atomic.Int32)
 	return v
 }
 
-// dispatchSelfClone handles one spawn_subagent call: builds a fresh copy of
-// the agent, runs the task to completion, and returns the copy's final report
+// dispatchSelfClone handles one spawn_subagent call for an LLMAgent.
+func (a *LLMAgent) dispatchSelfClone(ctx context.Context, tc core.ToolCall, ch chan<- core.StreamEvent, cfg *Config) DispatchResult {
+	parentTask, _ := TaskFromContext(ctx)
+	_, provider := a.ResolvePromptAndProviderWith(ctx, parentTask, cfg)
+	return ExecuteSelfClone(ctx, a.Name(), a.Description(), provider, cfg, tc, ch, a.Logger())
+}
+
+// ExecuteSelfClone runs one spawn_subagent call on behalf of any
+// runtime-based agent (LLMAgent or a network router): builds a fresh copy
+// from cfg, runs the task to completion, and returns the copy's final report
 // as the tool result. Emits agent-start/agent-finish stream events so
 // consumers render clones exactly like network delegations.
-func (a *LLMAgent) dispatchSelfClone(ctx context.Context, tc core.ToolCall, ch chan<- core.StreamEvent, cfg *Config) DispatchResult {
+func ExecuteSelfClone(ctx context.Context, parentName, description string, provider core.Provider, cfg *Config, tc core.ToolCall, ch chan<- core.StreamEvent, logger *slog.Logger) DispatchResult {
 	var args selfCloneArgs
 	if err := json.Unmarshal(tc.Args, &args); err != nil {
 		return DispatchResult{Content: "error: invalid spawn_subagent args: " + err.Error(), IsError: true}
@@ -94,12 +116,12 @@ func (a *LLMAgent) dispatchSelfClone(ctx context.Context, tc core.ToolCall, ch c
 		}
 	}
 
-	cloneName := fmt.Sprintf("%s-%d", a.Name(), n)
+	cloneName := fmt.Sprintf("%s-%d", parentName, n)
 	parentTask, _ := TaskFromContext(ctx)
 	subTask := parentTask
 	subTask.Input = args.Task
 
-	a.Logger().Info("spawning self-clone", "agent", a.Name(), "clone", cloneName, "task", TruncateStr(args.Task, 80))
+	logger.Info("spawning self-clone", "agent", parentName, "clone", cloneName, "task", TruncateStr(args.Task, 80))
 
 	if ch != nil {
 		select {
@@ -109,8 +131,7 @@ func (a *LLMAgent) dispatchSelfClone(ctx context.Context, tc core.ToolCall, ch c
 		}
 	}
 
-	_, provider := a.ResolvePromptAndProviderWith(ctx, parentTask, cfg)
-	clone := newCloneAgent(cloneName, a.Description(), provider, cfg)
+	clone := newCloneAgent(cloneName, description, provider, cfg)
 
 	execCtx := ctx
 	if cfg.SelfCloneTimeout > 0 {
@@ -120,7 +141,7 @@ func (a *LLMAgent) dispatchSelfClone(ctx context.Context, tc core.ToolCall, ch c
 	}
 
 	start := time.Now()
-	result, err := ExecuteAgent(execCtx, clone, cloneName, subTask, ch, a.Logger())
+	result, err := ExecuteAgent(execCtx, clone, cloneName, subTask, ch, logger)
 	elapsed := time.Since(start)
 	if err != nil && ctx.Err() == nil && execCtx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("subagent %q timed out after %s: %w", cloneName, cfg.SelfCloneTimeout, err)
@@ -145,10 +166,10 @@ func (a *LLMAgent) dispatchSelfClone(ctx context.Context, tc core.ToolCall, ch c
 	}
 
 	if err != nil {
-		a.Logger().Error("self-clone failed", "agent", a.Name(), "clone", cloneName, "error", err, "duration", elapsed)
+		logger.Error("self-clone failed", "agent", parentName, "clone", cloneName, "error", err, "duration", elapsed)
 		return DispatchResult{Content: "error: " + err.Error(), IsError: true}
 	}
-	a.Logger().Info("self-clone completed", "agent", a.Name(), "clone", cloneName,
+	logger.Info("self-clone completed", "agent", parentName, "clone", cloneName,
 		"duration", elapsed,
 		"input_tokens", result.Usage.InputTokens,
 		"output_tokens", result.Usage.OutputTokens)
