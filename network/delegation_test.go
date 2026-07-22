@@ -514,3 +514,87 @@ func TestUnifiedTaskTool(t *testing.T) {
 		}
 	}
 }
+
+// TestRouterCloneDelegatesToRoster: a router self-clone keeps the router's
+// delegation surface — its task tool advertises the roster (without "self",
+// clones cannot spawn further clones) and a task call addressed to a roster
+// name routes back through the network's dispatch to that child.
+func TestRouterCloneDelegatesToRoster(t *testing.T) {
+	var childExecs atomic.Int32
+	var childTask string
+	sub := &stubAgent{
+		name: "worker",
+		desc: "Does work",
+		fn: func(task agent.AgentTask) (agent.AgentResult, error) {
+			childExecs.Add(1)
+			childTask = task.Input
+			return agent.AgentResult{Output: "worker report: " + task.Input}, nil
+		},
+	}
+
+	var cloneTaskParams string // task def params advertised to the clone
+	var cloneSawReport bool
+	router := &routerCallbackProvider{
+		name: "router",
+		onChat: func(req core.ChatRequest) core.ChatResponse {
+			isCloneRun := false
+			for _, m := range req.Messages {
+				if m.Role == "user" && m.Content == "CLONEWORK" {
+					isCloneRun = true
+				}
+			}
+			if isCloneRun {
+				if countAssistantToolTurns(req) == 0 {
+					for _, tl := range req.Tools {
+						if tl.Name == core.ToolTask {
+							cloneTaskParams = string(tl.Parameters)
+						}
+					}
+					args, _ := json.Marshal(map[string]string{"subagent": "worker", "task": "from clone"})
+					return core.ChatResponse{ToolCalls: []core.ToolCall{{ID: "c1", Name: core.ToolTask, Args: args}}}
+				}
+				last := req.Messages[len(req.Messages)-1]
+				if strings.Contains(last.Content, "worker report: from clone") {
+					cloneSawReport = true
+				}
+				return core.ChatResponse{Content: "clone merged"}
+			}
+			if countAssistantToolTurns(req) == 0 {
+				args, _ := json.Marshal(map[string]string{"subagent": "self", "task": "CLONEWORK"})
+				return core.ChatResponse{ToolCalls: []core.ToolCall{{ID: "r1", Name: core.ToolTask, Args: args}}}
+			}
+			return core.ChatResponse{Content: "router merged"}
+		},
+	}
+
+	net := New("team", "router with clones", router,
+		WithChildren(sub),
+		WithAgentOptions(agent.WithSelfClone(2, time.Minute)),
+	)
+
+	result, err := net.Execute(context.Background(), agent.AgentTask{Input: "MAIN"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "router merged" {
+		t.Errorf("output = %q, want router merged", result.Output)
+	}
+	if childExecs.Load() != 1 {
+		t.Fatalf("child executed %d times, want 1 (clone's delegation must reach the roster child)", childExecs.Load())
+	}
+	if childTask != "from clone" {
+		t.Errorf("child task = %q, want %q", childTask, "from clone")
+	}
+	if !cloneSawReport {
+		t.Error("clone never received the worker's report as its task tool result")
+	}
+	if cloneTaskParams == "" {
+		t.Fatal("clone was not offered the task tool")
+	}
+	if !strings.Contains(cloneTaskParams, `"worker"`) {
+		t.Errorf("clone task def enum missing roster child: %s", cloneTaskParams)
+	}
+	if strings.Contains(cloneTaskParams, `"self"`) {
+		t.Errorf("clone task def must not offer \"self\" (no recursive clones): %s", cloneTaskParams)
+	}
+}

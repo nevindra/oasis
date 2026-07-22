@@ -71,6 +71,18 @@ type InputHandler interface {
 	RequestInput(ctx context.Context, req InputRequest) (InputResponse, error)
 }
 
+// TaskRosterEntry is one named delegation target advertised in an agent's
+// unified task tool (aliased as agent.TaskTarget).
+type TaskRosterEntry struct {
+	Name        string
+	Description string
+}
+
+// TaskDelegateFunc routes a task tool call addressed to a named roster
+// subagent (never "self"). ch is the caller's stream channel, so delegation
+// lifecycle events surface in the caller's stream.
+type TaskDelegateFunc func(ctx context.Context, subagent, task string, ch chan<- core.StreamEvent) DispatchResult
+
 // Config holds shared configuration for LLMAgent and Network.
 // All fields are exported so that the agent package can alias Config and still
 // access them through the alias in agent subfiles.
@@ -131,6 +143,16 @@ type Config struct {
 	// Useful when the agent's runtime Name is an opaque run identifier; set
 	// via agent.WithSelfCloneName. Empty = the agent's Name.
 	SelfCloneName string
+
+	// TaskRoster + TaskDelegate give a plain agent a delegation surface
+	// without being a network: the task tool advertises the roster entries as
+	// subagent targets, and dispatch forwards a task call addressed to one of
+	// them to TaskDelegate. Set by network routers on the Config of their
+	// self-clones, so a clone of a coordinator keeps the coordinator's roster
+	// — its delegations route back through the spawning network's dispatch
+	// (shared ledger, child timeout, stream events).
+	TaskRoster   []TaskRosterEntry
+	TaskDelegate TaskDelegateFunc
 
 	// Hook fields
 	PrepareStep         PrepareStep
