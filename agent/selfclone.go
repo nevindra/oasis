@@ -33,6 +33,13 @@ func WithSelfClone(maxPerRun int, timeout time.Duration) AgentOption {
 	}
 }
 
+// WithSelfCloneName overrides the base used for clone names ("<base>-N").
+// Useful when the agent's runtime Name is an opaque run identifier that would
+// make ugly clone labels in consumer UIs.
+func WithSelfCloneName(base string) AgentOption {
+	return func(c *Config) { c.SelfCloneName = base }
+}
+
 type selfCloneArgs struct {
 	Task string `json:"task" describe:"The complete, self-contained assignment for your copy. It CANNOT see this conversation: include every fact, constraint, and piece of context it needs, plus what its final report must contain."`
 }
@@ -116,7 +123,11 @@ func ExecuteSelfClone(ctx context.Context, parentName, description string, provi
 		}
 	}
 
-	cloneName := fmt.Sprintf("%s-%d", parentName, n)
+	base := cfg.SelfCloneName
+	if base == "" {
+		base = parentName
+	}
+	cloneName := fmt.Sprintf("%s-%d", base, n)
 	parentTask, _ := TaskFromContext(ctx)
 	subTask := parentTask
 	subTask.Input = args.Task
