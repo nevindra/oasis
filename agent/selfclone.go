@@ -216,5 +216,14 @@ func newCloneAgent(name, description string, provider core.Provider, cfg *Config
 	cloneCfg.MemoryInitialized = false
 	clone := &LLMAgent{}
 	runtime.Init(&clone.Runtime, name, description, provider, &cloneCfg)
+	// Mirror agent.New: pre-compute the advertised tool definitions for the
+	// non-dynamic path. Without this the clone's ResolveTools returned the
+	// never-populated cache — tools stayed EXECUTABLE (registry dispatch) but
+	// the model was offered ZERO definitions, so clones couldn't call tools.
+	if !clone.HasDynamicTools() {
+		askDef := askUserToolDef()
+		planDef := executePlanToolDef()
+		clone.SetCachedToolDefs(clone.CacheBuiltinToolDefs(clone.Tools().AllDefinitions(), &askDef, &planDef))
+	}
 	return clone
 }
