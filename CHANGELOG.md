@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-07-28
+
 ### Changed
 
 - **BREAKING: consolidated sandbox file tools** — `sandbox.Tools` now registers
