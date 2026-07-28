@@ -743,7 +743,10 @@ func browserReadTool(sb BrowserSandbox) toolImpl {
 				if err != nil {
 					return oasis.ToolResult{Error: err.Error()}, nil
 				}
-				return oasis.TextResult(fmt.Sprintf("screenshot captured (%d bytes)", len(data))), nil
+				return oasis.ToolResult{
+					Content:     fmt.Sprintf("screenshot captured (%d bytes); the image is attached to this result", len(data)),
+					Attachments: []oasis.Attachment{{MimeType: "image/png", Data: data}},
+				}, nil
 			case "snapshot":
 				snap, err := sb.BrowserSnapshot(ctx, SnapshotOpts{
 					Filter:   p.Filter,

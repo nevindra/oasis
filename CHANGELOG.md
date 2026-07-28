@@ -40,6 +40,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
   itself. Default (`auto`) preserves the child's normal surface. The
   restriction rides the context (`agent.WithLeafRole`/`agent.IsLeafRole`) and
   covers the whole subtree.
+- **Tool result images now reach the LLM** — a tool result carrying image
+  attachments (e.g. `browser_read` `action:'screenshot'`) injects them into
+  the conversation as a synthetic user message right after the batch's
+  tool-result messages, since neither OpenAI-compatible APIs nor Gemini
+  accept multimodal blocks on tool-role messages. Vision-capable models can
+  therefore actually see screenshots instead of a byte-count string. Only
+  the newest 2 such messages keep their attachments (older ones collapse to
+  a text stub) and at most 4 images inject per iteration, so screenshot
+  loops stay bounded. The synthetic message lives only in the in-flight
+  loop; `PersistTurn` sees steps, not messages, so persisted history and
+  UIs are unaffected.
+- `browser_read` `action:'screenshot'` now returns the captured PNG as an
+  `image/png` attachment on the tool result (previously the bytes were
+  discarded and only "screenshot captured (N bytes)" was returned).
 
 ## [0.32.0] - 2026-07-28
 

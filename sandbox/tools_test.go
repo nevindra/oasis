@@ -882,6 +882,13 @@ func TestBrowserReadScreenshotDispatch(t *testing.T) {
 	if !strings.Contains(decodeContent(t, result), "13 bytes") {
 		t.Errorf("content = %q, want size info", decodeContent(t, result))
 	}
+	if len(result.Attachments) != 1 {
+		t.Fatalf("attachments = %d, want 1 (the PNG must reach the LLM)", len(result.Attachments))
+	}
+	att := result.Attachments[0]
+	if att.MimeType != "image/png" || string(att.Data) != "fake-png-data" {
+		t.Errorf("attachment = %q %d bytes, want image/png with raw screenshot bytes", att.MimeType, len(att.Data))
+	}
 }
 
 func TestBrowserReadUnknownActionErrors(t *testing.T) {

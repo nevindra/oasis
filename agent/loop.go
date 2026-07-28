@@ -33,6 +33,22 @@ const maxAccumulatedAttachments = 50
 // attachments collected from tool/agent results during the execution loop.
 const maxAccumulatedAttachmentBytes int64 = 50 * 1024 * 1024 // 50 MB
 
+// maxBatchToolImages caps how many image attachments from one iteration's
+// tool results are re-sent to the LLM (see injectToolImages).
+const maxBatchToolImages = 4
+
+// maxLiveToolImages caps how many injected tool-image messages keep their
+// attachments in the conversation history; older ones are stripped so
+// request size stays bounded as a loop keeps taking screenshots.
+const maxLiveToolImages = 2
+
+// toolImageMessageContent marks the synthetic user message that carries tool
+// result images to the LLM. Also used to recognize such messages for pruning.
+const toolImageMessageContent = "[The image(s) produced by the tool result(s) above are attached to this message for visual inspection.]"
+
+// toolImagePrunedContent replaces pruned tool-image messages.
+const toolImagePrunedContent = "[An earlier tool result image was removed to conserve context.]"
+
 // RunLoop is the exported alias for runLoop, used by the network package
 // (which cannot call unexported functions) as the runLoopFn callback to
 // Runtime.ExecuteWithSpan.
