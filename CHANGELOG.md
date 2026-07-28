@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-07-28
+
 ### Changed
 
 - **BREAKING: consolidated sandbox browser tools 8 → 2** — `browser` gains
