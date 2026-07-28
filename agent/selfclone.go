@@ -99,12 +99,25 @@ func (a *LLMAgent) dispatchTaskCall(ctx context.Context, tc core.ToolCall, ch ch
 	if cfg.SelfCloneMax <= 0 && cfg.TaskDelegate == nil {
 		return DispatchResult{}, false
 	}
+	// An agent dispatched with role "leaf" must not delegate further, even if
+	// its config still carries a delegation surface (defs are also stripped in
+	// buildLoopConfig; this guards replayed or hallucinated calls).
+	if IsLeafRole(ctx) {
+		return DispatchResult{Content: "error: delegation is disabled for this task (role: leaf) — do the work yourself with your own tools", IsError: true}, true
+	}
 	var args TaskToolArgs
 	if err := json.Unmarshal(tc.Args, &args); err != nil {
 		return DispatchResult{Content: "error: invalid " + tc.Name + " args: " + err.Error(), IsError: true}, true
 	}
-	if args.Task == "" {
-		return DispatchResult{Content: "error: " + tc.Name + " requires a non-empty task", IsError: true}, true
+	taskText := args.EffectiveTask()
+	if taskText == "" {
+		return DispatchResult{Content: "error: " + tc.Name + " requires a non-empty goal", IsError: true}, true
+	}
+	if !args.ValidRole() {
+		return DispatchResult{Content: fmt.Sprintf("error: invalid role %q — valid: %q, %q", args.Role, RoleAuto, RoleLeaf), IsError: true}, true
+	}
+	if args.IsLeaf() {
+		ctx = WithLeafRole(ctx)
 	}
 	// Legacy spawn_subagent carries no subagent field — it always meant self.
 	if args.Subagent == "" && tc.Name == core.ToolSelfClone {
@@ -114,7 +127,7 @@ func (a *LLMAgent) dispatchTaskCall(ctx context.Context, tc core.ToolCall, ch ch
 		if cfg.TaskDelegate != nil {
 			for _, t := range cfg.TaskRoster {
 				if t.Name == args.Subagent {
-					return cfg.TaskDelegate(ctx, args.Subagent, args.Task, ch), true
+					return cfg.TaskDelegate(ctx, args.Subagent, taskText, ch), true
 				}
 			}
 		}
@@ -125,7 +138,7 @@ func (a *LLMAgent) dispatchTaskCall(ctx context.Context, tc core.ToolCall, ch ch
 	}
 	parentTask, _ := TaskFromContext(ctx)
 	_, provider := a.ResolvePromptAndProviderWith(ctx, parentTask, cfg)
-	return ExecuteSelfClone(ctx, a.Name(), a.Description(), provider, cfg, args.Task, ch, a.Logger()), true
+	return ExecuteSelfClone(ctx, a.Name(), a.Description(), provider, cfg, taskText, ch, a.Logger()), true
 }
 
 // validTaskTargets renders an agent's valid task subagent values for error
@@ -155,10 +168,11 @@ func ParseTaskArgs(tc core.ToolCall, want string) (string, *DispatchResult) {
 	if args.Subagent != "" && args.Subagent != want {
 		return "", &DispatchResult{Content: fmt.Sprintf("error: unknown subagent %q — valid: %q", args.Subagent, want), IsError: true}
 	}
-	if args.Task == "" {
-		return "", &DispatchResult{Content: "error: " + tc.Name + " requires a non-empty task", IsError: true}
+	taskText := args.EffectiveTask()
+	if taskText == "" {
+		return "", &DispatchResult{Content: "error: " + tc.Name + " requires a non-empty goal", IsError: true}
 	}
-	return args.Task, nil
+	return taskText, nil
 }
 
 // ExecuteSelfClone runs one self-clone task on behalf of any runtime-based

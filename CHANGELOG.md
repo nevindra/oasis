@@ -6,6 +6,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: unified delegation tool renamed `task` → `delegate_task`** —
+  `core.ToolTask` is now `"delegate_task"`; the old `"task"` name still
+  dispatches (new `core.ToolTaskLegacy`, same treatment as `spawn_subagent`
+  and `agent_*`) so tool calls replayed from history keep working, but it is
+  no longer advertised.
+- **delegate_task arguments: `goal` + `context` replace `task`** — the schema
+  now requires `goal` (the assignment) and offers optional `context`
+  (background: file paths, constraints, prior findings), composed into the
+  child's input as `<goal>\n\nContext:\n<context>`. The legacy `task` field is
+  still parsed as a fallback for replayed calls
+  (`agent.TaskToolArgs.EffectiveTask`).
+
+### Added
+
+- **`role: "leaf"` on delegate_task** — dispatching a subagent (roster child,
+  nested router, or `"self"` clone) with `role: "leaf"` strips its delegation
+  surface for that run: the delegate_task/spawn_agent defs are not advertised
+  and stray delegation calls are refused, so the child must do the work
+  itself. Default (`auto`) preserves the child's normal surface. The
+  restriction rides the context (`agent.WithLeafRole`/`agent.IsLeafRole`) and
+  covers the whole subtree.
+
 ## [0.32.0] - 2026-07-28
 
 ### Changed
