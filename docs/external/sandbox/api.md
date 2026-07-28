@@ -221,12 +221,12 @@ Use `BrowserNavigate` + `BrowserText` as fallback.
 func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool
 ```
 
-Returns the full set of agent tools backed by `sb`. The 20 tools generated
+Returns the full set of agent tools backed by `sb`. The 18 tools generated
 (when `sb` also satisfies `BrowserSandbox`):
-`shell`, `execute_code`, `file_read`, `file_write`, `file_edit`, `file_glob`,
-`file_grep`, `file_tree`, `http_fetch`, `workspace_info`, `browser`, `screenshot`,
-`mcp_call`, `snapshot`, `page_text`, `export_pdf`, `browser_eval`, `browser_find`,
-`browser_wait`, `web_search`. `deliver_file` is added automatically when a writable
+`shell`, `execute_code`, `file_read`, `file_write`, `file_edit`, `file_search`
+(one tool with `target: content|files|tree` for grep/glob/tree), `http_fetch`,
+`workspace_info`, `browser`, `screenshot`, `mcp_call`, `snapshot`, `page_text`,
+`export_pdf`, `browser_eval`, `browser_find`, `browser_wait`, `web_search`. `deliver_file` is added automatically when a writable
 mount or `FileDelivery` is configured. Browser tools are omitted when `sb` does not
 implement `BrowserSandbox`.
 

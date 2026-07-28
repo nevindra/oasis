@@ -26,6 +26,7 @@ type mockSandbox struct {
 	editFileFn     func(ctx context.Context, req EditFileRequest) error
 	globFilesFn    func(ctx context.Context, req GlobRequest) (GlobResult, error)
 	grepFilesFn    func(ctx context.Context, req GrepRequest) (GrepResult, error)
+	treeFn         func(ctx context.Context, req TreeRequest) (TreeResult, error)
 	browserNavFn   func(ctx context.Context, url string) error
 	browserActFn   func(ctx context.Context, action BrowserAction) (BrowserResult, error)
 	screenshotFn   func(ctx context.Context) ([]byte, error)
@@ -147,6 +148,9 @@ func (m *mockSandbox) BrowserPDF(ctx context.Context) ([]byte, error) {
 }
 
 func (m *mockSandbox) Tree(ctx context.Context, req TreeRequest) (TreeResult, error) {
+	if m.treeFn != nil {
+		return m.treeFn(ctx, req)
+	}
 	return TreeResult{}, nil
 }
 
@@ -403,9 +407,7 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		"file_read":      false,
 		"file_write":     false,
 		"file_edit":      false,
-		"file_glob":      false,
-		"file_grep":      false,
-		"file_tree":      false,
+		"file_search":    false,
 		"http_fetch":     false,
 		"workspace_info": false,
 		"browser":        false,
@@ -452,83 +454,126 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		}
 	}
 
-	if len(tools) != 20 {
-		t.Errorf("got %d tools, want 20", len(tools))
+	if len(tools) != 18 {
+		t.Errorf("got %d tools, want 18", len(tools))
 	}
 }
 
-func TestFileEditToolDispatch(t *testing.T) {
-	var captured EditFileRequest
+// editMock returns a mockSandbox whose file store holds a single file with
+// the given content, plus a pointer to the content the tool wrote back.
+func editMock(path, content string) (*mockSandbox, *string) {
+	written := new(string)
 	sb := &mockSandbox{
-		editFileFn: func(_ context.Context, req EditFileRequest) error {
-			captured = req
+		downloadFileFn: func(_ context.Context, p string) (io.ReadCloser, error) {
+			if p != path {
+				return nil, fmt.Errorf("not found: %s", p)
+			}
+			return io.NopCloser(strings.NewReader(content)), nil
+		},
+		writeFileFn: func(_ context.Context, req WriteFileRequest) error {
+			*written = req.Content
 			return nil
 		},
 	}
+	return sb, written
+}
 
-	tools := Tools(sb)
-	var found bool
-	for _, tool := range tools {
-		def := tool.Definition()
+func TestFileEditToolDispatch(t *testing.T) {
+	sb, written := editMock("/app/main.py", "import os\nprint('hello')\nprint('bye')\n")
 
-		if def.Name == "file_edit" {
-			found = true
-			args := json.RawMessage(`{"path":"/app/main.py","old_string":"print('hello')","new_string":"print('hello world')"}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if captured.Path != "/app/main.py" {
-				t.Errorf("path = %q, want %q", captured.Path, "/app/main.py")
-			}
-			if captured.Old != "print('hello')" {
-				t.Errorf("old = %q, want %q", captured.Old, "print('hello')")
-			}
-			if captured.New != "print('hello world')" {
-				t.Errorf("new = %q, want %q", captured.New, "print('hello world')")
-			}
-			if decodeContent(t, result) != "edited /app/main.py" {
-				t.Errorf("content = %q, want %q", decodeContent(t, result), "edited /app/main.py")
-			}
-			if result.Error != "" {
-				t.Errorf("unexpected error field: %q", result.Error)
-			}
-		}
-		_ = def
-
-	}
-	if !found {
+	edit := findToolByName(Tools(sb), "file_edit")
+	if edit == nil {
 		t.Fatal("file_edit tool not found")
 	}
-}
-
-func TestFileEditToolError(t *testing.T) {
-	sb := &mockSandbox{
-		editFileFn: func(_ context.Context, req EditFileRequest) error {
-			return fmt.Errorf("string not found in file")
-		},
+	args := json.RawMessage(`{"path":"/app/main.py","old_string":"print('hello')","new_string":"print('hello world')"}`)
+	result, err := edit.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	tools := Tools(sb)
-	for _, tool := range tools {
-		def := tool.Definition()
-
-		if def.Name == "file_edit" {
-			args := json.RawMessage(`{"path":"/app/main.py","old_string":"missing","new_string":"new"}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if result.Error == "" {
-				t.Error("expected error field to be set")
-			}
+	if result.Error != "" {
+		t.Fatalf("unexpected error field: %q", result.Error)
+	}
+	if *written != "import os\nprint('hello world')\nprint('bye')\n" {
+		t.Errorf("written = %q", *written)
+	}
+	content := decodeContent(t, result)
+	if !strings.HasPrefix(content, "edited /app/main.py (1 replacement)") {
+		t.Errorf("content should start with edit summary, got %q", content)
+	}
+	for _, want := range []string{"@@ -1,4 +1,4 @@", "-print('hello')", "+print('hello world')", " import os"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("diff missing %q in:\n%s", want, content)
 		}
-		_ = def
-
 	}
 }
 
-func TestFileGlobToolDispatch(t *testing.T) {
+func TestFileEditToolReplaceAll(t *testing.T) {
+	sb, written := editMock("/app/a.txt", "foo\nbar\nfoo\n")
+
+	edit := findToolByName(Tools(sb), "file_edit")
+	args := json.RawMessage(`{"path":"/app/a.txt","old_string":"foo","new_string":"baz","replace_all":true}`)
+	result, err := edit.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("unexpected error field: %q", result.Error)
+	}
+	if *written != "baz\nbar\nbaz\n" {
+		t.Errorf("written = %q", *written)
+	}
+	if !strings.HasPrefix(decodeContent(t, result), "edited /app/a.txt (2 replacements)") {
+		t.Errorf("content = %q", decodeContent(t, result))
+	}
+}
+
+func TestFileEditToolAmbiguousWithoutReplaceAll(t *testing.T) {
+	sb, written := editMock("/app/a.txt", "foo\nbar\nfoo\n")
+
+	edit := findToolByName(Tools(sb), "file_edit")
+	args := json.RawMessage(`{"path":"/app/a.txt","old_string":"foo","new_string":"baz"}`)
+	result, err := edit.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Error, "2 times") || !strings.Contains(result.Error, "replace_all") {
+		t.Errorf("error should report count and suggest replace_all, got %q", result.Error)
+	}
+	if *written != "" {
+		t.Errorf("file should not be written on ambiguity, wrote %q", *written)
+	}
+}
+
+func TestFileEditToolNotFoundError(t *testing.T) {
+	sb, _ := editMock("/app/main.py", "print('hi')\n")
+
+	edit := findToolByName(Tools(sb), "file_edit")
+	args := json.RawMessage(`{"path":"/app/main.py","old_string":"missing","new_string":"new"}`)
+	result, err := edit.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Error, "not found") {
+		t.Errorf("expected not-found error, got %q", result.Error)
+	}
+}
+
+func TestEditDiffMergesNearbyReplacements(t *testing.T) {
+	before := "a\nfoo1\nfoo2\nb\n"
+	// Two occurrences on adjacent lines must merge into one hunk with
+	// both replacements applied, not two hunks that each miss the other.
+	diff := editDiff(before, "foo", "qux")
+	if strings.Count(diff, "@@") != 2 { // one hunk header has two @@
+		t.Fatalf("want a single hunk, got:\n%s", diff)
+	}
+	for _, want := range []string{"-foo1", "-foo2", "+qux1", "+qux2"} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("diff missing %q:\n%s", want, diff)
+		}
+	}
+}
+
+func TestFileSearchFilesDispatch(t *testing.T) {
 	var captured GlobRequest
 	sb := &mockSandbox{
 		globFilesFn: func(_ context.Context, req GlobRequest) (GlobResult, error) {
@@ -537,67 +582,49 @@ func TestFileGlobToolDispatch(t *testing.T) {
 		},
 	}
 
-	tools := Tools(sb)
-	var found bool
-	for _, tool := range tools {
-		def := tool.Definition()
-
-		if def.Name == "file_glob" {
-			found = true
-			args := json.RawMessage(`{"pattern":"**/*.py","path":"/app"}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if captured.Pattern != "**/*.py" {
-				t.Errorf("pattern = %q, want %q", captured.Pattern, "**/*.py")
-			}
-			if captured.Path != "/app" {
-				t.Errorf("path = %q, want %q", captured.Path, "/app")
-			}
-			want := "/app/main.py\n/app/lib/utils.py"
-			if decodeContent(t, result) != want {
-				t.Errorf("content = %q, want %q", decodeContent(t, result), want)
-			}
-			if result.Error != "" {
-				t.Errorf("unexpected error field: %q", result.Error)
-			}
-		}
-		_ = def
-
+	search := findToolByName(Tools(sb), "file_search")
+	if search == nil {
+		t.Fatal("file_search tool not found")
 	}
-	if !found {
-		t.Fatal("file_glob tool not found")
+	args := json.RawMessage(`{"target":"files","pattern":"**/*.py","path":"/app"}`)
+	result, err := search.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.Pattern != "**/*.py" {
+		t.Errorf("pattern = %q, want %q", captured.Pattern, "**/*.py")
+	}
+	if captured.Path != "/app" {
+		t.Errorf("path = %q, want %q", captured.Path, "/app")
+	}
+	want := "/app/main.py\n/app/lib/utils.py"
+	if decodeContent(t, result) != want {
+		t.Errorf("content = %q, want %q", decodeContent(t, result), want)
+	}
+	if result.Error != "" {
+		t.Errorf("unexpected error field: %q", result.Error)
 	}
 }
 
-func TestFileGlobToolNoMatches(t *testing.T) {
+func TestFileSearchFilesNoMatches(t *testing.T) {
 	sb := &mockSandbox{
 		globFilesFn: func(_ context.Context, req GlobRequest) (GlobResult, error) {
 			return GlobResult{}, nil
 		},
 	}
 
-	tools := Tools(sb)
-	for _, tool := range tools {
-		def := tool.Definition()
-
-		if def.Name == "file_glob" {
-			args := json.RawMessage(`{"pattern":"**/*.rs"}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if decodeContent(t, result) != "no files matched" {
-				t.Errorf("content = %q, want %q", decodeContent(t, result), "no files matched")
-			}
-		}
-		_ = def
-
+	search := findToolByName(Tools(sb), "file_search")
+	args := json.RawMessage(`{"target":"files","pattern":"**/*.rs"}`)
+	result, err := search.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decodeContent(t, result) != "no files matched" {
+		t.Errorf("content = %q, want %q", decodeContent(t, result), "no files matched")
 	}
 }
 
-func TestFileGrepToolDispatch(t *testing.T) {
+func TestFileSearchContentDispatch(t *testing.T) {
 	var captured GrepRequest
 	sb := &mockSandbox{
 		grepFilesFn: func(_ context.Context, req GrepRequest) (GrepResult, error) {
@@ -609,66 +636,141 @@ func TestFileGrepToolDispatch(t *testing.T) {
 		},
 	}
 
-	tools := Tools(sb)
-	var found bool
-	for _, tool := range tools {
-		def := tool.Definition()
-
-		if def.Name == "file_grep" {
-			found = true
-			args := json.RawMessage(`{"pattern":"def main","path":"/app","glob":"*.py"}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if captured.Pattern != "def main" {
-				t.Errorf("pattern = %q, want %q", captured.Pattern, "def main")
-			}
-			if captured.Path != "/app" {
-				t.Errorf("path = %q, want %q", captured.Path, "/app")
-			}
-			if captured.Glob != "*.py" {
-				t.Errorf("glob = %q, want %q", captured.Glob, "*.py")
-			}
-			want := "/app/main.py:42: def main():\n/app/lib/utils.py:10: def main_helper():"
-			if decodeContent(t, result) != want {
-				t.Errorf("content = %q, want %q", decodeContent(t, result), want)
-			}
-			if result.Error != "" {
-				t.Errorf("unexpected error field: %q", result.Error)
-			}
-		}
-		_ = def
-
+	search := findToolByName(Tools(sb), "file_search")
+	if search == nil {
+		t.Fatal("file_search tool not found")
 	}
-	if !found {
-		t.Fatal("file_grep tool not found")
+	// target omitted → content is the default.
+	args := json.RawMessage(`{"pattern":"def main","path":"/app","glob":"*.py"}`)
+	result, err := search.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.Pattern != "def main" {
+		t.Errorf("pattern = %q, want %q", captured.Pattern, "def main")
+	}
+	if captured.Path != "/app" {
+		t.Errorf("path = %q, want %q", captured.Path, "/app")
+	}
+	if captured.Glob != "*.py" {
+		t.Errorf("glob = %q, want %q", captured.Glob, "*.py")
+	}
+	want := "/app/main.py:42: def main():\n/app/lib/utils.py:10: def main_helper():"
+	if decodeContent(t, result) != want {
+		t.Errorf("content = %q, want %q", decodeContent(t, result), want)
+	}
+	if result.Error != "" {
+		t.Errorf("unexpected error field: %q", result.Error)
 	}
 }
 
-func TestFileGrepToolNoMatches(t *testing.T) {
+func TestFileSearchContentNoMatches(t *testing.T) {
 	sb := &mockSandbox{
 		grepFilesFn: func(_ context.Context, req GrepRequest) (GrepResult, error) {
 			return GrepResult{}, nil
 		},
 	}
 
-	tools := Tools(sb)
-	for _, tool := range tools {
-		def := tool.Definition()
+	search := findToolByName(Tools(sb), "file_search")
+	args := json.RawMessage(`{"pattern":"nonexistent"}`)
+	result, err := search.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decodeContent(t, result) != "no matches found" {
+		t.Errorf("content = %q, want %q", decodeContent(t, result), "no matches found")
+	}
+}
 
-		if def.Name == "file_grep" {
-			args := json.RawMessage(`{"pattern":"nonexistent"}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if decodeContent(t, result) != "no matches found" {
-				t.Errorf("content = %q, want %q", decodeContent(t, result), "no matches found")
-			}
+func TestFileSearchContextLineNumbers(t *testing.T) {
+	sb := &mockSandbox{
+		grepFilesFn: func(_ context.Context, req GrepRequest) (GrepResult, error) {
+			return GrepResult{Matches: []GrepMatch{
+				{Path: "a.go", Line: 10, Content: "match one", ContextBefore: []string{"b8", "b9"}, ContextAfter: []string{"a11"}},
+				{Path: "a.go", Line: 20, Content: "match two", ContextBefore: []string{"b18", "b19"}},
+			}}, nil
+		},
+	}
+
+	search := findToolByName(Tools(sb), "file_search")
+	args := json.RawMessage(`{"pattern":"match","context":2}`)
+	result, err := search.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := decodeContent(t, result)
+	// Before-context line numbers must count up to the match line for
+	// every match, not drift with the match index.
+	for _, want := range []string{"a.go:8- b8", "a.go:9- b9", "a.go:10: match one", "a.go:11- a11", "a.go:18- b18", "a.go:19- b19", "a.go:20: match two"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
 		}
-		_ = def
+	}
+}
 
+func TestFileSearchTreeDispatch(t *testing.T) {
+	var captured TreeRequest
+	sb := &mockSandbox{
+		treeFn: func(_ context.Context, req TreeRequest) (TreeResult, error) {
+			captured = req
+			return TreeResult{Tree: "app/\n  main.py", Files: 1, Dirs: 1}, nil
+		},
+	}
+
+	search := findToolByName(Tools(sb), "file_search")
+	args := json.RawMessage(`{"target":"tree","path":"/app","depth":2}`)
+	result, err := search.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.Path != "/app" || captured.Depth != 2 {
+		t.Errorf("tree request not forwarded: %+v", captured)
+	}
+	if decodeContent(t, result) != "app/\n  main.py\n\n1 files, 1 directories" {
+		t.Errorf("content = %q", decodeContent(t, result))
+	}
+}
+
+func TestFileSearchRejectsBadTarget(t *testing.T) {
+	search := findToolByName(Tools(&mockSandbox{}), "file_search")
+
+	result, err := search.ExecuteRaw(context.Background(), json.RawMessage(`{"target":"bogus","pattern":"x"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Error, "bogus") {
+		t.Errorf("expected unknown-target error, got %q", result.Error)
+	}
+
+	result, err = search.ExecuteRaw(context.Background(), json.RawMessage(`{"target":"files"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Error, "pattern is required") {
+		t.Errorf("expected missing-pattern error, got %q", result.Error)
+	}
+}
+
+func TestFileSearchFilesAcceptsGlobAsPattern(t *testing.T) {
+	var captured GlobRequest
+	sb := &mockSandbox{
+		globFilesFn: func(_ context.Context, req GlobRequest) (GlobResult, error) {
+			captured = req
+			return GlobResult{Files: []string{"/app/main.py"}}, nil
+		},
+	}
+
+	search := findToolByName(Tools(sb), "file_search")
+	args := json.RawMessage(`{"target":"files","glob":"**/*.py","path":"/app"}`)
+	result, err := search.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("glob-as-pattern should be accepted, got error %q", result.Error)
+	}
+	if captured.Pattern != "**/*.py" {
+		t.Errorf("pattern = %q, want glob value forwarded", captured.Pattern)
 	}
 }
 
@@ -1177,13 +1279,13 @@ func TestTools_NonBrowserSandboxOmitsBrowserTools(t *testing.T) {
 		}
 	}
 	// 12 core tools, no browser tools, no deliver_file (no destination).
-	if len(tools) != 12 {
-		t.Errorf("got %d tools for non-browser sandbox, want 12", len(tools))
+	if len(tools) != 10 {
+		t.Errorf("got %d tools for non-browser sandbox, want 10", len(tools))
 	}
 
 	// A browser-capable sandbox still gets the full set.
-	if got := len(Tools(&mockSandbox{})); got != 20 {
-		t.Errorf("got %d tools for browser sandbox, want 20", got)
+	if got := len(Tools(&mockSandbox{})); got != 18 {
+		t.Errorf("got %d tools for browser sandbox, want 18", got)
 	}
 }
 
