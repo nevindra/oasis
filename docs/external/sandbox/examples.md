@@ -202,7 +202,7 @@ the browser when plain HTTP is blocked.
 
 ```go
 agent := oasis.NewLLMAgent("researcher", `You are a web research assistant.
-When http_fetch fails with a bot-protection error, use browser(navigate) + page_text instead.`,
+When http_fetch fails with a bot-protection error, use browser(navigate) + browser_read(action='text') instead.`,
     provider,
     oasis.WithSandbox(sb, sandbox.Tools(sb)...),
 )
@@ -214,23 +214,24 @@ result, _ := agent.Execute(ctx, oasis.AgentTask{
 
 **Plain-English walkthrough:**
 
-- No special Go code is needed — `sandbox.Tools(sb)` includes `browser`, `snapshot`,
-  `page_text`, `browser_find`, and `screenshot` automatically.
+- No special Go code is needed — `sandbox.Tools(sb)` includes `browser` and
+  `browser_read` automatically.
 - The system prompt hint tells the LLM to fall back from `http_fetch` (a plain GET)
   to the browser stack when it hits a WAF. The `http_fetch` tool itself surfaces
   guidance text in its error response when it detects a 403/502.
-- The LLM will typically: call `browser(action=navigate, url=...)` → call `snapshot`
-  to see the page structure → call `page_text` to extract readable text.
+- The LLM will typically: call `browser(action=navigate, url=...)` → call
+  `browser_read(action='snapshot')` to see the page structure → call
+  `browser_read(action='text')` to extract readable text.
 
 **Variations:**
 
-- Add `screenshot` to the prompt instructions if you want the LLM to capture visual
-  evidence of the page state.
-- Use `browser_eval` to read JavaScript values (form field content, local storage,
-  etc.) that do not appear in the accessibility tree.
-- Use `browser_find` + `browser(action=click)` for reliable form interaction:
-  `browser_find("submit button")` returns a `Ref` you can pass to
-  `browser(action=click, ref=...)`.
+- Add `browser_read(action='screenshot')` to the prompt instructions if you want
+  the LLM to capture visual evidence of the page state.
+- Use `browser(action='eval')` to read JavaScript values (form field content,
+  local storage, etc.) that do not appear in the accessibility tree.
+- Use `browser(action='find')` + `browser(action='click')` for reliable form
+  interaction: `browser(action='find', query='submit button')` returns a `Ref`
+  you can pass to `browser(action=click, ref=...)`.
 
 ---
 

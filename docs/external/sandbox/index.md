@@ -24,7 +24,7 @@ requires a Docker-compatible runtime. Use `tools/http` or your own `AnyTool`
 implementations instead.
 
 **Sandbox vs. HTTP tool:** use `http_fetch` (included in the sandbox tool set) for
-simple GET requests. Use the browser stack (`browser` + `page_text`) when the target
+simple GET requests. Use the browser stack (`browser` + `browser_read`) when the target
 site blocks plain HTTP or requires JavaScript rendering. The sandbox gives you both
 in one place; a plain HTTP tool gives you neither.
 

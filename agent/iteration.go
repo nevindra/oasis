@@ -533,6 +533,11 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 	var firstTrace StepTrace
 	haveFirstTrace := false
 
+	// batchImages collects image attachments from this batch's tool results
+	// for re-injection into the conversation as a user message once all
+	// tool-result messages are appended (see injectToolImages).
+	var batchImages []core.Attachment
+
 	// Process results sequentially.
 	for j, tc := range resp.ToolCalls {
 		state.totalUsage.InputTokens += results[j].usage.InputTokens
@@ -631,6 +636,15 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 			state.accumulatedAttachments = append(state.accumulatedAttachments, a)
 			state.accumulatedAttachmentBytes += aSize
 		}
+		// Tool-role messages cannot carry multimodal blocks (OpenAI-compatible
+		// APIs and Gemini only accept them on user/assistant messages), so
+		// image attachments are collected here and re-sent to the LLM via a
+		// synthetic user message after this batch's results.
+		for _, a := range results[j].attachments {
+			if strings.HasPrefix(a.MimeType, "image/") && len(batchImages) < maxBatchToolImages {
+				batchImages = append(batchImages, a)
+			}
+		}
 
 		result := core.ToolResult{Content: results[j].content}
 		if err := cfg.Processors.RunPostTool(iterCtx, tc, &result); err != nil {
@@ -726,6 +740,9 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 				}
 			}
 		}
+	}
+	if len(batchImages) > 0 {
+		injectToolImages(state, batchImages)
 	}
 	// Compress context if over budget.
 	if state.compressThreshold > 0 && state.messageRuneCount > state.compressThreshold {
@@ -983,6 +1000,37 @@ func finalizeIterationStop(ctx context.Context, cfg *LoopConfig, task AgentTask,
 // the nearest rune start satisfies the contract in O(chunks) — no per-rune
 // decode of the payload. Multi-byte content yields slightly more chunks than
 // a rune-exact split; the contract is only an upper bound per chunk.
+// injectToolImages appends a synthetic user-role message carrying image
+// attachments returned by tool results, so vision-capable models see the
+// pixels on the next request. Providers cannot put images inside tool-role
+// messages (OpenAI-compatible APIs and Gemini only accept multimodal blocks
+// on user/assistant messages), so the images ride a follow-up user message
+// instead — the same effect as Anthropic's image blocks inside tool_result.
+// Only the newest maxLiveToolImages such messages keep their attachments;
+// older ones are stripped so a screenshot-heavy loop stays bounded.
+func injectToolImages(state *loopState, images []core.Attachment) {
+	live := 1 // the message appended below
+	for i := len(state.messages) - 1; i >= 0; i-- {
+		m := &state.messages[i]
+		if m.Role != core.RoleUser || m.Content != toolImageMessageContent {
+			continue
+		}
+		live++
+		if live > maxLiveToolImages {
+			m.Content = toolImagePrunedContent
+			m.Attachments = nil
+		}
+	}
+	state.messages = append(state.messages, core.ChatMessage{
+		Role:        core.RoleUser,
+		Content:     toolImageMessageContent,
+		Attachments: images,
+	})
+	if state.compressThreshold > 0 {
+		state.messageRuneCount += utf8.RuneCountInString(toolImageMessageContent)
+	}
+}
+
 func splitContentRunes(s string, maxRunes int) []string {
 	if len(s) <= maxRunes {
 		return []string{s}

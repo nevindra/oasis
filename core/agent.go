@@ -24,11 +24,15 @@ const (
 	// Wired by agent.WithPlanExecution and dispatched by the runtime.
 	ToolExecutePlan = "execute_plan"
 
-	// ToolTask is the unified delegation built-in (deepagents' task shape):
-	// one tool routes to named subagents on a network roster and/or "self"
-	// (an ephemeral copy of the calling agent, enabled via
+	// ToolTask is the unified delegation built-in (Hermes' delegate_task
+	// shape): one tool routes to named subagents on a network roster and/or
+	// "self" (an ephemeral copy of the calling agent, enabled via
 	// agent.WithSelfClone).
-	ToolTask = "task"
+	ToolTask = "delegate_task"
+
+	// ToolTaskLegacy is the pre-rename delegation tool name; still dispatched
+	// for compatibility (history replays old calls), no longer advertised.
+	ToolTaskLegacy = "task"
 
 	// ToolSelfClone is the legacy self-clone tool name; still dispatched for
 	// compatibility, no longer advertised (ToolTask covers it).

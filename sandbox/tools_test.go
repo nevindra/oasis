@@ -36,6 +36,8 @@ type mockSandbox struct {
 	browserTextFn  func(ctx context.Context, opts TextOpts) (BrowserTextResult, error)
 	browserPDFFn   func(ctx context.Context) ([]byte, error)
 	browserWaitFn  func(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error)
+	browserEvalFn  func(ctx context.Context, expression string) (string, error)
+	browserFindFn  func(ctx context.Context, query string) (BrowserFindResult, error)
 }
 
 func (m *mockSandbox) Shell(ctx context.Context, req ShellRequest) (ShellResult, error) {
@@ -163,10 +165,16 @@ func (m *mockSandbox) WorkspaceInfo(ctx context.Context) (WorkspaceInfoResult, e
 }
 
 func (m *mockSandbox) BrowserEval(ctx context.Context, expression string) (string, error) {
+	if m.browserEvalFn != nil {
+		return m.browserEvalFn(ctx, expression)
+	}
 	return "", nil
 }
 
 func (m *mockSandbox) BrowserFind(ctx context.Context, query string) (BrowserFindResult, error) {
+	if m.browserFindFn != nil {
+		return m.browserFindFn(ctx, query)
+	}
 	return BrowserFindResult{}, nil
 }
 
@@ -411,14 +419,8 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		"http_fetch":     false,
 		"workspace_info": false,
 		"browser":        false,
-		"screenshot":     false,
+		"browser_read":   false,
 		"mcp_call":       false,
-		"snapshot":       false,
-		"page_text":      false,
-		"export_pdf":     false,
-		"browser_eval":   false,
-		"browser_find":   false,
-		"browser_wait":   false,
 		"web_search":     false,
 	}
 
@@ -454,8 +456,8 @@ func TestToolDefinitionsComplete(t *testing.T) {
 		}
 	}
 
-	if len(tools) != 18 {
-		t.Errorf("got %d tools, want 18", len(tools))
+	if len(tools) != 12 {
+		t.Errorf("got %d tools, want 12", len(tools))
 	}
 }
 
@@ -774,7 +776,17 @@ func TestFileSearchFilesAcceptsGlobAsPattern(t *testing.T) {
 	}
 }
 
-func TestSnapshotToolDispatch(t *testing.T) {
+// browserReadTool fetches the registered browser_read tool or fails the test.
+func browserReadTestTool(t *testing.T, sb Sandbox) oasis.AnyTool {
+	t.Helper()
+	tool := findToolByName(Tools(sb), "browser_read")
+	if tool == nil {
+		t.Fatal("browser_read tool not registered")
+	}
+	return tool
+}
+
+func TestBrowserReadSnapshotDispatch(t *testing.T) {
 	var captured SnapshotOpts
 	sb := &mockSandbox{
 		snapshotFn: func(_ context.Context, opts SnapshotOpts) (PageSnapshot, error) {
@@ -790,40 +802,26 @@ func TestSnapshotToolDispatch(t *testing.T) {
 		},
 	}
 
-	tools := Tools(sb)
-	var found bool
-	for _, tool := range tools {
-		def := tool.Definition()
-
-		if def.Name == "snapshot" {
-			found = true
-			args := json.RawMessage(`{"filter":"interactive"}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if captured.Filter != "interactive" {
-				t.Errorf("filter = %q, want %q", captured.Filter, "interactive")
-			}
-			if !strings.Contains(decodeContent(t, result), "[e0] link \"Home\"") {
-				t.Errorf("content missing e0 node: %q", decodeContent(t, result))
-			}
-			if !strings.Contains(decodeContent(t, result), "[e1] button \"Submit\"") {
-				t.Errorf("content missing e1 node: %q", decodeContent(t, result))
-			}
-			if result.Error != "" {
-				t.Errorf("unexpected error: %q", result.Error)
-			}
-		}
-		_ = def
-
+	tool := browserReadTestTool(t, sb)
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"snapshot","filter":"interactive"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !found {
-		t.Fatal("snapshot tool not found")
+	if captured.Filter != "interactive" {
+		t.Errorf("filter = %q, want %q", captured.Filter, "interactive")
+	}
+	if !strings.Contains(decodeContent(t, result), "[e0] link \"Home\"") {
+		t.Errorf("content missing e0 node: %q", decodeContent(t, result))
+	}
+	if !strings.Contains(decodeContent(t, result), "[e1] button \"Submit\"") {
+		t.Errorf("content missing e1 node: %q", decodeContent(t, result))
+	}
+	if result.Error != "" {
+		t.Errorf("unexpected error: %q", result.Error)
 	}
 }
 
-func TestPageTextToolDispatch(t *testing.T) {
+func TestBrowserReadTextDispatch(t *testing.T) {
 	var captured TextOpts
 	sb := &mockSandbox{
 		browserTextFn: func(_ context.Context, opts TextOpts) (BrowserTextResult, error) {
@@ -836,64 +834,149 @@ func TestPageTextToolDispatch(t *testing.T) {
 		},
 	}
 
-	tools := Tools(sb)
-	var found bool
-	for _, tool := range tools {
-		def := tool.Definition()
-
-		if def.Name == "page_text" {
-			found = true
-			args := json.RawMessage(`{"raw":true,"max_chars":500}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !captured.Raw {
-				t.Error("expected raw=true")
-			}
-			if captured.MaxChars != 500 {
-				t.Errorf("max_chars = %d, want 500", captured.MaxChars)
-			}
-			if decodeContent(t, result) != "Welcome to Example." {
-				t.Errorf("content = %q, want %q", decodeContent(t, result), "Welcome to Example.")
-			}
-		}
-		_ = def
-
+	tool := browserReadTestTool(t, sb)
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"text","raw":true,"max_chars":500}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !found {
-		t.Fatal("page_text tool not found")
+	if !captured.Raw {
+		t.Error("expected raw=true")
+	}
+	if captured.MaxChars != 500 {
+		t.Errorf("max_chars = %d, want 500", captured.MaxChars)
+	}
+	if decodeContent(t, result) != "Welcome to Example." {
+		t.Errorf("content = %q, want %q", decodeContent(t, result), "Welcome to Example.")
 	}
 }
 
-func TestExportPDFToolDispatch(t *testing.T) {
+func TestBrowserReadPDFDispatch(t *testing.T) {
 	sb := &mockSandbox{
 		browserPDFFn: func(_ context.Context) ([]byte, error) {
 			return []byte("%PDF-1.4-fake"), nil
 		},
 	}
 
-	tools := Tools(sb)
-	var found bool
-	for _, tool := range tools {
-		def := tool.Definition()
-
-		if def.Name == "export_pdf" {
-			found = true
-			args := json.RawMessage(`{}`)
-			result, err := tool.ExecuteRaw(context.Background(), args)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !strings.Contains(decodeContent(t, result), "13 bytes") {
-				t.Errorf("content = %q, want size info", decodeContent(t, result))
-			}
-		}
-		_ = def
-
+	tool := browserReadTestTool(t, sb)
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"pdf"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !found {
-		t.Fatal("export_pdf tool not found")
+	if !strings.Contains(decodeContent(t, result), "13 bytes") {
+		t.Errorf("content = %q, want size info", decodeContent(t, result))
+	}
+}
+
+func TestBrowserReadScreenshotDispatch(t *testing.T) {
+	sb := &mockSandbox{
+		screenshotFn: func(_ context.Context) ([]byte, error) {
+			return []byte("fake-png-data"), nil
+		},
+	}
+
+	tool := browserReadTestTool(t, sb)
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"screenshot"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(decodeContent(t, result), "13 bytes") {
+		t.Errorf("content = %q, want size info", decodeContent(t, result))
+	}
+	if len(result.Attachments) != 1 {
+		t.Fatalf("attachments = %d, want 1 (the PNG must reach the LLM)", len(result.Attachments))
+	}
+	att := result.Attachments[0]
+	if att.MimeType != "image/png" || string(att.Data) != "fake-png-data" {
+		t.Errorf("attachment = %q %d bytes, want image/png with raw screenshot bytes", att.MimeType, len(att.Data))
+	}
+}
+
+func TestBrowserReadUnknownActionErrors(t *testing.T) {
+	tool := browserReadTestTool(t, &mockSandbox{})
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"dom"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Error, `unknown action "dom"`) {
+		t.Errorf("error = %q, want unknown-action", result.Error)
+	}
+}
+
+func TestBrowserToolEvalDispatch(t *testing.T) {
+	var captured string
+	sb := &mockSandbox{
+		browserEvalFn: func(_ context.Context, expression string) (string, error) {
+			captured = expression
+			return "Example Title", nil
+		},
+	}
+
+	tool := findToolByName(Tools(sb), "browser")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"eval","expression":"document.title"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured != "document.title" {
+		t.Errorf("expression = %q", captured)
+	}
+	if decodeContent(t, result) != "Example Title" {
+		t.Errorf("content = %q", decodeContent(t, result))
+	}
+
+	missing, _ := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"eval"}`))
+	if !strings.Contains(missing.Error, "requires 'expression'") {
+		t.Errorf("error = %q, want expression-required", missing.Error)
+	}
+}
+
+func TestBrowserToolFindDispatch(t *testing.T) {
+	var captured string
+	sb := &mockSandbox{
+		browserFindFn: func(_ context.Context, query string) (BrowserFindResult, error) {
+			captured = query
+			return BrowserFindResult{Ref: "e7", Confidence: "high", Score: 0.92}, nil
+		},
+	}
+
+	tool := findToolByName(Tools(sb), "browser")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"find","query":"submit button"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured != "submit button" {
+		t.Errorf("query = %q", captured)
+	}
+	if got := decodeContent(t, result); !strings.Contains(got, "ref: e7") || !strings.Contains(got, "high") {
+		t.Errorf("content = %q", got)
+	}
+}
+
+// TestBrowserSchemaCarriesActionEnums guards the enum struct tags: the derived
+// browser schema must advertise all 13 actions, browser_read all 4.
+func TestBrowserSchemaCarriesActionEnums(t *testing.T) {
+	type actionSchema struct {
+		Properties struct {
+			Action struct {
+				Enum []string `json:"enum"`
+			} `json:"action"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	for name, wantEnum := range map[string]int{"browser": 13, "browser_read": 4} {
+		tool := findToolByName(Tools(&mockSandbox{}), name)
+		if tool == nil {
+			t.Fatalf("%s not registered", name)
+		}
+		var s actionSchema
+		if err := json.Unmarshal(tool.Definition().Parameters, &s); err != nil {
+			t.Fatalf("%s schema: %v", name, err)
+		}
+		if len(s.Properties.Action.Enum) != wantEnum {
+			t.Errorf("%s action enum has %d values, want %d", name, len(s.Properties.Action.Enum), wantEnum)
+		}
+		if len(s.Required) != 1 || s.Required[0] != "action" {
+			t.Errorf("%s required = %v, want [action]", name, s.Required)
+		}
 	}
 }
 
@@ -1228,11 +1311,7 @@ func findToolByName(tools []oasis.AnyTool, name string) oasis.AnyTool {
 
 func TestTools_WithoutBrowserOmitsBrowserTools(t *testing.T) {
 	sb := &mockSandbox{}
-	browserNames := map[string]bool{
-		"browser": true, "screenshot": true, "snapshot": true,
-		"page_text": true, "export_pdf": true, "browser_eval": true,
-		"browser_find": true, "browser_wait": true,
-	}
+	browserNames := map[string]bool{"browser": true, "browser_read": true}
 
 	full := Tools(sb)
 	var fullHasBrowser bool
@@ -1266,11 +1345,7 @@ func TestTools_WithoutBrowserOmitsBrowserTools(t *testing.T) {
 }
 
 func TestTools_NonBrowserSandboxOmitsBrowserTools(t *testing.T) {
-	browserNames := map[string]bool{
-		"browser": true, "screenshot": true, "snapshot": true,
-		"page_text": true, "export_pdf": true, "browser_eval": true,
-		"browser_find": true, "browser_wait": true,
-	}
+	browserNames := map[string]bool{"browser": true, "browser_read": true}
 
 	tools := Tools(lightSandbox{})
 	for _, tl := range tools {
@@ -1278,14 +1353,14 @@ func TestTools_NonBrowserSandboxOmitsBrowserTools(t *testing.T) {
 			t.Errorf("non-browser sandbox registered browser tool %q", tl.Definition().Name)
 		}
 	}
-	// 12 core tools, no browser tools, no deliver_file (no destination).
+	// 10 core tools, no browser tools, no deliver_file (no destination).
 	if len(tools) != 10 {
 		t.Errorf("got %d tools for non-browser sandbox, want 10", len(tools))
 	}
 
 	// A browser-capable sandbox still gets the full set.
-	if got := len(Tools(&mockSandbox{})); got != 18 {
-		t.Errorf("got %d tools for browser sandbox, want 18", got)
+	if got := len(Tools(&mockSandbox{})); got != 12 {
+		t.Errorf("got %d tools for browser sandbox, want 12", got)
 	}
 }
 
@@ -1446,25 +1521,22 @@ func TestBrowserWaitToolDispatch(t *testing.T) {
 		},
 	}
 
-	for _, tool := range Tools(sb) {
-		if tool.Definition().Name != "browser_wait" {
-			continue
-		}
-		args := json.RawMessage(`{"kind":"selector","value":"#login","timeout_ms":5000,"state":"visible"}`)
-		result, err := tool.ExecuteRaw(context.Background(), args)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if captured.Kind != "selector" || captured.Value != "#login" ||
-			captured.TimeoutMs != 5000 || captured.State != "visible" {
-			t.Errorf("opts not forwarded: %+v", captured)
-		}
-		if got := decodeContent(t, result); got != "condition met (selector) after 840ms" {
-			t.Errorf("content = %q", got)
-		}
-		return
+	tool := findToolByName(Tools(sb), "browser")
+	if tool == nil {
+		t.Fatal("browser tool not registered")
 	}
-	t.Fatal("browser_wait tool not registered")
+	args := json.RawMessage(`{"action":"wait","wait_kind":"selector","wait_value":"#login","timeout_ms":5000,"state":"visible"}`)
+	result, err := tool.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.Kind != "selector" || captured.Value != "#login" ||
+		captured.TimeoutMs != 5000 || captured.State != "visible" {
+		t.Errorf("opts not forwarded: %+v", captured)
+	}
+	if got := decodeContent(t, result); got != "condition met (selector) after 840ms" {
+		t.Errorf("content = %q", got)
+	}
 }
 
 func TestBrowserWaitToolRendersTimeout(t *testing.T) {
@@ -1479,21 +1551,18 @@ func TestBrowserWaitToolRendersTimeout(t *testing.T) {
 		},
 	}
 
-	for _, tool := range Tools(sb) {
-		if tool.Definition().Name != "browser_wait" {
-			continue
-		}
-		result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"kind":"selector","value":"#x"}`))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		got := decodeContent(t, result)
-		if !strings.Contains(got, "NOT met") || !strings.Contains(got, "snapshot") {
-			t.Errorf("content = %q, want NOT met + snapshot hint", got)
-		}
-		return
+	tool := findToolByName(Tools(sb), "browser")
+	if tool == nil {
+		t.Fatal("browser tool not registered")
 	}
-	t.Fatal("browser_wait tool not registered")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"wait","wait_kind":"selector","wait_value":"#x"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := decodeContent(t, result)
+	if !strings.Contains(got, "NOT met") || !strings.Contains(got, "browser_read(action='snapshot')") {
+		t.Errorf("content = %q, want NOT met + snapshot hint", got)
+	}
 }
 
 func TestFindMountForPathPrefersDeepest(t *testing.T) {

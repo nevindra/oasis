@@ -141,8 +141,10 @@ func (a *LLMAgent) buildLoopConfig(ctx context.Context, task AgentTask, ch chan<
 	// Delegation surface: advertise the unified task tool when the agent can
 	// spawn "self" copies and/or carries a roster delegate (a network
 	// router's self-clone keeps its coordinator's roster). Appended on a
-	// copy — the resolved slice may be the runtime's cached defs.
-	if cfg.SelfCloneMax > 0 || len(cfg.TaskRoster) > 0 {
+	// copy — the resolved slice may be the runtime's cached defs. Skipped
+	// entirely when this run was dispatched with role "leaf": the child must
+	// do the work itself (dispatchTaskCall refuses stray calls as backstop).
+	if !IsLeafRole(ctx) && (cfg.SelfCloneMax > 0 || len(cfg.TaskRoster) > 0) {
 		defs := make([]core.ToolDefinition, 0, len(toolDefs)+1)
 		toolDefs = append(append(defs, toolDefs...), BuildTaskToolDef(cfg.TaskRoster, cfg.SelfCloneMax > 0, cfg.SelfCloneMax))
 	}
@@ -171,10 +173,10 @@ func (a *LLMAgent) makeDispatch(executeTool ToolExecFunc, executeToolStream Tool
 	// Wrap DispatchBuiltins to inject the ask_user and execute_plan callbacks,
 	// breaking the runtime→agent cycle.
 	builtins := func(ctx context.Context, tc core.ToolCall, dispatch DispatchFunc) (DispatchResult, bool) {
-		// Unified task tool (and its legacy spawn_subagent alias): "self"
-		// spawns a clone; a roster name routes through the TaskDelegate a
-		// spawning network installed (router self-clones).
-		if tc.Name == core.ToolTask || tc.Name == core.ToolSelfClone {
+		// Unified delegate_task tool (and its legacy task / spawn_subagent
+		// aliases): "self" spawns a clone; a roster name routes through the
+		// TaskDelegate a spawning network installed (router self-clones).
+		if tc.Name == core.ToolTask || tc.Name == core.ToolTaskLegacy || tc.Name == core.ToolSelfClone {
 			if res, handled := a.dispatchTaskCall(ctx, tc, ch, cfg); handled {
 				return res, true
 			}

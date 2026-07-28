@@ -6,6 +6,55 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: consolidated sandbox browser tools 8 → 2** — `browser` gains
+  the utility actions `eval` (was `browser_eval`), `find` (was
+  `browser_find`), and `wait` (was `browser_wait`; args renamed
+  `kind`/`value` → `wait_kind`/`wait_value` so the wait condition never
+  shares a schema property with the select action's `value`). A new
+  `browser_read` tool (`action: screenshot|snapshot|text|pdf`) replaces
+  `screenshot`, `snapshot`, `page_text`, and `export_pdf` with unchanged
+  per-action params. The six retired names are no longer registered — a
+  stale-name call surfaces the standard recoverable unknown-tool error;
+  replayed history is unaffected because replay never re-dispatches tools.
+  `WithoutBrowser()` still gates the whole set.
+- **BREAKING: unified delegation tool renamed `task` → `delegate_task`** —
+  `core.ToolTask` is now `"delegate_task"`; the old `"task"` name still
+  dispatches (new `core.ToolTaskLegacy`, same treatment as `spawn_subagent`
+  and `agent_*`) so tool calls replayed from history keep working, but it is
+  no longer advertised.
+- **delegate_task arguments: `goal` + `context` replace `task`** — the schema
+  now requires `goal` (the assignment) and offers optional `context`
+  (background: file paths, constraints, prior findings), composed into the
+  child's input as `<goal>\n\nContext:\n<context>`. The legacy `task` field is
+  still parsed as a fallback for replayed calls
+  (`agent.TaskToolArgs.EffectiveTask`).
+
+### Added
+
+- **`role: "leaf"` on delegate_task** — dispatching a subagent (roster child,
+  nested router, or `"self"` clone) with `role: "leaf"` strips its delegation
+  surface for that run: the delegate_task/spawn_agent defs are not advertised
+  and stray delegation calls are refused, so the child must do the work
+  itself. Default (`auto`) preserves the child's normal surface. The
+  restriction rides the context (`agent.WithLeafRole`/`agent.IsLeafRole`) and
+  covers the whole subtree.
+- **Tool result images now reach the LLM** — a tool result carrying image
+  attachments (e.g. `browser_read` `action:'screenshot'`) injects them into
+  the conversation as a synthetic user message right after the batch's
+  tool-result messages, since neither OpenAI-compatible APIs nor Gemini
+  accept multimodal blocks on tool-role messages. Vision-capable models can
+  therefore actually see screenshots instead of a byte-count string. Only
+  the newest 2 such messages keep their attachments (older ones collapse to
+  a text stub) and at most 4 images inject per iteration, so screenshot
+  loops stay bounded. The synthetic message lives only in the in-flight
+  loop; `PersistTurn` sees steps, not messages, so persisted history and
+  UIs are unaffected.
+- `browser_read` `action:'screenshot'` now returns the captured PNG as an
+  `image/png` attachment on the tool result (previously the bytes were
+  discarded and only "screenshot captured (N bytes)" was returned).
+
 ## [0.32.0] - 2026-07-28
 
 ### Changed

@@ -257,6 +257,19 @@ func (n *Network) buildLoopConfig(ctx context.Context, task agent.AgentTask, ch 
 	prompt, provider := n.ResolvePromptAndProviderWith(ctx, task, cfg)
 	// Network does not use ask_user, execute_plan, or spawn_agent builtins.
 	toolDefs, executeTool, executeToolStream, isStreamingTool := n.ResolveTools(ctx, task, n.buildToolDefs, nil, nil)
+	// A router dispatched with role "leaf" keeps its direct tools but loses
+	// its delegation surface. Filtered here (not in the cached buildToolDefs)
+	// because the restriction is per-run context, not network state.
+	if agent.IsLeafRole(ctx) {
+		kept := make([]core.ToolDefinition, 0, len(toolDefs))
+		for _, d := range toolDefs {
+			if d.Name == core.ToolTask || d.Name == core.ToolSpawnAgent {
+				continue
+			}
+			kept = append(kept, d)
+		}
+		toolDefs = kept
+	}
 	lc := runtime.AcquireLoopConfig()
 	*lc = n.BaseLoopConfig("network:"+n.Name(), prompt, provider, toolDefs, n.makeDispatch(task, ch, executeTool, executeToolStream, toolDefs, isStreamingTool, cfg, provider), cfg, n.ResolveMem(opts))
 	return lc
@@ -274,12 +287,15 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 	ledger := &delegationLedger{recs: make(map[string]*delegationRecord)}
 	agentRouter := func(ctx context.Context, tc core.ToolCall) (agent.DispatchResult, bool) {
 		if tc.Name == core.ToolSpawnAgent {
+			if agent.IsLeafRole(ctx) {
+				return agent.DispatchResult{Content: "error: delegation is disabled for this task (role: leaf) — do the work yourself with your own tools", IsError: true}, true
+			}
 			if n.spawnPolicy == nil {
 				return agent.DispatchResult{Content: "error: spawn_agent invoked without WithDynamicSpawning", IsError: true}, true
 			}
 			return n.dispatchSpawn(ctx, tc.Args), true
 		}
-		if tc.Name == core.ToolTask || tc.Name == core.ToolSelfClone {
+		if tc.Name == core.ToolTask || tc.Name == core.ToolTaskLegacy || tc.Name == core.ToolSelfClone {
 			return n.dispatchTask(ctx, tc, parentTask, ch, ledger, cfg, provider), true
 		}
 		if !strings.HasPrefix(tc.Name, core.ToolPrefixAgent) {
@@ -287,6 +303,9 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 		}
 		// Legacy agent_<name> call shape — still dispatched, no longer
 		// advertised (the unified task tool covers the roster).
+		if agent.IsLeafRole(ctx) {
+			return agent.DispatchResult{Content: "error: delegation is disabled for this task (role: leaf) — do the work yourself with your own tools", IsError: true}, true
+		}
 		agentName := tc.Name[len(core.ToolPrefixAgent):]
 		var params struct {
 			Task string `json:"task"`
@@ -318,12 +337,27 @@ func (n *Network) makeDispatch(parentTask agent.AgentTask, ch chan<- core.Stream
 // spawn_subagent alias): "self" spawns a clone of the router; any roster name
 // delegates to that child; anything else errors with the valid targets.
 func (n *Network) dispatchTask(ctx context.Context, tc core.ToolCall, parentTask agent.AgentTask, ch chan<- core.StreamEvent, ledger *delegationLedger, cfg *agent.Config, provider core.Provider) agent.DispatchResult {
+	// A router dispatched with role "leaf" must not fan out, even though its
+	// whole job is coordination — the caller explicitly asked for focused
+	// work (defs are also stripped in buildLoopConfig; this guards replays).
+	if agent.IsLeafRole(ctx) {
+		return agent.DispatchResult{Content: "error: delegation is disabled for this task (role: leaf) — do the work yourself with your own tools", IsError: true}
+	}
 	var args agent.TaskToolArgs
 	if err := json.Unmarshal(tc.Args, &args); err != nil {
 		return agent.DispatchResult{Content: "error: invalid " + tc.Name + " args: " + err.Error(), IsError: true}
 	}
-	if args.Task == "" {
-		return agent.DispatchResult{Content: "error: " + tc.Name + " requires a non-empty task", IsError: true}
+	taskText := args.EffectiveTask()
+	if taskText == "" {
+		return agent.DispatchResult{Content: "error: " + tc.Name + " requires a non-empty goal", IsError: true}
+	}
+	if !args.ValidRole() {
+		return agent.DispatchResult{Content: fmt.Sprintf("error: invalid role %q — valid: %q, %q", args.Role, agent.RoleAuto, agent.RoleLeaf), IsError: true}
+	}
+	// The leaf restriction rides the context so it reaches the child's
+	// Execute regardless of implementation (LLMAgent, nested network, clone).
+	if args.IsLeaf() {
+		ctx = agent.WithLeafRole(ctx)
 	}
 	// Legacy spawn_subagent carries no subagent field — it always meant self.
 	if args.Subagent == "" && tc.Name == core.ToolSelfClone {
@@ -346,9 +380,9 @@ func (n *Network) dispatchTask(ctx context.Context, tc core.ToolCall, parentTask
 		cloneCfg.TaskDelegate = func(ctx context.Context, subagent, taskText string, cch chan<- core.StreamEvent) agent.DispatchResult {
 			return n.dispatchAgent(ctx, subagent, taskText, parentTask, cch, ledger)
 		}
-		return agent.ExecuteSelfClone(ctx, n.Name(), n.Description(), provider, &cloneCfg, args.Task, ch, n.Logger())
+		return agent.ExecuteSelfClone(ctx, n.Name(), n.Description(), provider, &cloneCfg, taskText, ch, n.Logger())
 	}
-	return n.dispatchAgent(ctx, args.Subagent, args.Task, parentTask, ch, ledger)
+	return n.dispatchAgent(ctx, args.Subagent, taskText, parentTask, ch, ledger)
 }
 
 // taskRoster snapshots the current roster as task-tool targets — the
