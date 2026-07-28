@@ -213,7 +213,7 @@ func (t *contextReadingTool) ExecuteRaw(ctx context.Context, args json.RawMessag
 }
 
 // TestNetworkWithSkillsRegistersSkillTools verifies that a Network built with
-// agent.WithSkills registers skill_discover and skill_activate in its tool
+// agent.WithSkills registers skills_list and skill_view in its tool
 // registry, mirroring the same wiring that LLMAgent performs.
 func TestNetworkWithSkillsRegistersSkillTools(t *testing.T) {
 	provider := &mockProvider{
@@ -231,7 +231,7 @@ func TestNetworkWithSkillsRegistersSkillTools(t *testing.T) {
 		toolNames[d.Name] = true
 	}
 
-	for _, want := range []string{"skill_discover", "skill_activate"} {
+	for _, want := range []string{"skills_list", "skill_view"} {
 		if !toolNames[want] {
 			t.Errorf("tool %q not found in Network tool registry; registered tools: %v", want, toolNames)
 		}

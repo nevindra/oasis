@@ -249,7 +249,7 @@ func buildSkillCatalog(ctx context.Context, p skills.SkillProvider, active []ski
 	}
 	var b strings.Builder
 	b.WriteString("# Available Skills\n\n")
-	b.WriteString("You can load any of these skills for detailed instructions. Use skill_activate(name) (or skill_search to find one by topic) before applying a skill.\n\n")
+	b.WriteString("You can load any of these skills for detailed instructions. Use skill_view(name) (or skills_list with a query to find one by topic) before applying a skill.\n\n")
 	n := 0
 	for _, s := range summaries {
 		if activeNames[s.Name] {

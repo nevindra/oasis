@@ -5,6 +5,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -42,6 +43,7 @@ type AgentMemory struct {
 	replayVerbatimTurns  int
 	verbatimOutputBudget int
 	protectedTools       []string
+	protectTool          func(name string, args json.RawMessage) bool
 
 	// Recall knobs
 	semanticRecall   bool
@@ -113,6 +115,7 @@ type AgentMemoryConfig struct {
 	ReplayVerbatimTurns  int
 	VerbatimOutputBudget int
 	ProtectedTools       []string
+	ProtectTool          func(name string, args json.RawMessage) bool
 
 	SemanticRecall   bool
 	SemanticMinScore float32
@@ -167,6 +170,7 @@ func (m *AgentMemory) Init(cfg AgentMemoryConfig) {
 	}
 	m.verbatimOutputBudget = cfg.VerbatimOutputBudget
 	m.protectedTools = cfg.ProtectedTools
+	m.protectTool = cfg.ProtectTool
 	m.semanticRecall = cfg.SemanticRecall
 	m.semanticMinScore = cfg.SemanticMinScore
 	m.recallKinds = cfg.RecallKinds

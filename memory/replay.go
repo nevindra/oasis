@@ -14,6 +14,29 @@ import (
 // that the call happened (name + args), just not its body.
 const prunedToolOutputPlaceholder = "[Old tool result content cleared]"
 
+// toolProtector decides whether a replayed tool call keeps its full output
+// regardless of turn age: a name allow-list plus an optional argument-aware
+// predicate (see HistoryConfig.ProtectTool).
+type toolProtector struct {
+	set map[string]bool
+	fn  func(name string, args json.RawMessage) bool
+}
+
+func newToolProtector(names []string, fn func(string, json.RawMessage) bool) toolProtector {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return toolProtector{set: set, fn: fn}
+}
+
+func (p toolProtector) is(name string, args json.RawMessage) bool {
+	if p.set[name] {
+		return true
+	}
+	return p.fn != nil && p.fn(name, args)
+}
+
 // stepsMetadata is the shape PersistMessages writes into the assistant
 // message's Metadata column: {"steps": [...]}.
 type stepsMetadata struct {
@@ -50,7 +73,7 @@ func decodeSteps(msg core.Message) []core.StepTrace {
 // tool payload forever. Tools listed in protected always replay in full
 // regardless of age — the analog of opencode's PRUNE_PROTECTED_TOOLS, used
 // for skill activation whose instructions must survive the whole thread.
-func expandHistoryMessage(msg core.Message, seq int, verbatim bool, protected map[string]bool) []core.ChatMessage {
+func expandHistoryMessage(msg core.Message, seq int, verbatim bool, protected toolProtector) []core.ChatMessage {
 	steps := decodeSteps(msg)
 	if len(steps) == 0 {
 		return []core.ChatMessage{{Role: msg.Role, Content: msg.Content}}
@@ -105,7 +128,7 @@ func expandHistoryMessage(msg core.Message, seq int, verbatim bool, protected ma
 			args, _ = json.Marshal(map[string]string{"input": st.Input})
 		}
 		output := st.RawOutput
-		if !verbatim && !protected[name] && !protected[st.Name] {
+		if !verbatim && !protected.is(name, args) && !protected.is(st.Name, args) {
 			output = st.Output
 		}
 		if strings.TrimSpace(output) == "" {
@@ -142,13 +165,13 @@ func expandHistoryMessage(msg core.Message, seq int, verbatim bool, protected ma
 // budget knob). Excluded: text steps (they replay small digests on old turns
 // anyway) and protected tools (they replay full REGARDLESS of the window, so
 // charging them would shrink the window without saving anything).
-func turnReplayCost(msg core.Message, protected map[string]bool) int {
+func turnReplayCost(msg core.Message, protected toolProtector) int {
 	cost := 0
 	for _, st := range decodeSteps(msg) {
 		if st.Type != core.StepTypeTool && st.Type != core.StepTypeAgent {
 			continue
 		}
-		if protected[st.Name] || (st.Type == core.StepTypeAgent && protected["agent_"+st.Name]) {
+		if protected.is(st.Name, st.RawArgs) || (st.Type == core.StepTypeAgent && protected.is("agent_"+st.Name, st.RawArgs)) {
 			continue
 		}
 		if st.RawOutput != "" {
@@ -169,11 +192,8 @@ func turnReplayCost(msg core.Message, protected map[string]bool) int {
 // falls back to display digests (≤500 chars per step; protected tools
 // excepted) so long threads don't drag every historical payload forever, but
 // without the old hard cliff two turns back.
-func expandHistory(history []core.Message, verbatimTurns, verbatimBudget int, protected []string) []core.ChatMessage {
-	protectedSet := make(map[string]bool, len(protected))
-	for _, p := range protected {
-		protectedSet[p] = true
-	}
+func expandHistory(history []core.Message, verbatimTurns, verbatimBudget int, protected []string, protectFn func(string, json.RawMessage) bool) []core.ChatMessage {
+	protectedSet := newToolProtector(protected, protectFn)
 	verbatimFrom := len(history) // index from which assistant rows are verbatim
 	floor := verbatimTurns
 	budget := verbatimBudget

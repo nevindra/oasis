@@ -23,7 +23,7 @@ func TestExpandHistory_PlainMessagesPassThrough(t *testing.T) {
 		{Role: core.RoleUser, Content: "hi"},
 		{Role: core.RoleAssistant, Content: "hello"},
 	}
-	out := expandHistory(history, 2, 0, nil)
+	out := expandHistory(history, 2, 0, nil, nil)
 	if len(out) != 2 {
 		t.Fatalf("len = %d, want 2", len(out))
 	}
@@ -42,7 +42,7 @@ func TestExpandHistory_RecentTurnReplaysVerbatim(t *testing.T) {
 				RawArgs: json.RawMessage(`{"query":"climate"}`), RawOutput: "full search results body"},
 		})},
 	}
-	out := expandHistory(history, 2, 0, nil)
+	out := expandHistory(history, 2, 0, nil, nil)
 	// user, assistant(tool_call), tool, assistant(text)
 	if len(out) != 4 {
 		t.Fatalf("len = %d, want 4: %+v", len(out), out)
@@ -77,7 +77,7 @@ func TestExpandHistory_OldTurnReplaysDigest(t *testing.T) {
 		{Role: core.RoleUser, Content: "next"},
 		{Role: core.RoleAssistant, Content: "recent answer"},
 	}
-	out := expandHistory(history, 1, 0, nil) // only the LAST assistant turn is verbatim
+	out := expandHistory(history, 1, 0, nil, nil) // only the LAST assistant turn is verbatim
 	var toolResult *core.ChatMessage
 	for i := range out {
 		if out[i].ToolCallID != "" {
@@ -105,7 +105,7 @@ func TestExpandHistory_ProtectedToolAlwaysVerbatim(t *testing.T) {
 		{Role: core.RoleUser, Content: "next"},
 		{Role: core.RoleAssistant, Content: "recent answer"},
 	}
-	out := expandHistory(history, 1, 0, []string{"skill_activate"})
+	out := expandHistory(history, 1, 0, []string{"skill_activate"}, nil)
 	found := false
 	for _, m := range out {
 		if m.ToolCallID != "" && m.Content == skillBody {
@@ -117,13 +117,64 @@ func TestExpandHistory_ProtectedToolAlwaysVerbatim(t *testing.T) {
 	}
 }
 
+// The ProtectTool predicate protects per-call on (name, args): a skill_view
+// activation (no file_path) replays in full while a skill_view companion-file
+// read from the same turn falls back to its digest.
+func TestExpandHistory_ProtectToolPredicate(t *testing.T) {
+	skillBody := "# Skill: deck-building\nfull instructions..."
+	fileBody := strings.Repeat("reference file body ", 100)
+	old := core.Message{Role: core.RoleAssistant, Content: "", Metadata: stepsMeta(t, []core.StepTrace{
+		{Name: "skill_view", Type: core.StepTypeTool, Output: "activation digest…",
+			RawArgs: json.RawMessage(`{"name":"deck-building"}`), RawOutput: skillBody},
+		{Name: "skill_view", Type: core.StepTypeTool, Output: "file digest…",
+			RawArgs: json.RawMessage(`{"name":"deck-building","file_path":"refs/a.md"}`), RawOutput: fileBody},
+	})}
+	history := []core.Message{
+		old,
+		{Role: core.RoleUser, Content: "next"},
+		{Role: core.RoleAssistant, Content: "recent answer"},
+	}
+	protectFn := func(name string, args json.RawMessage) bool {
+		if name != "skill_view" {
+			return false
+		}
+		var p struct {
+			FilePath string `json:"file_path"`
+		}
+		_ = json.Unmarshal(args, &p)
+		return p.FilePath == ""
+	}
+	out := expandHistory(history, 1, 0, nil, protectFn)
+	var gotActivation, gotFileDigest bool
+	for _, m := range out {
+		if m.ToolCallID == "" {
+			continue
+		}
+		if m.Content == skillBody {
+			gotActivation = true
+		}
+		if m.Content == "file digest…" {
+			gotFileDigest = true
+		}
+		if m.Content == fileBody {
+			t.Fatal("file read must NOT replay in full on an old turn")
+		}
+	}
+	if !gotActivation {
+		t.Fatalf("activation output must replay in full; messages: %+v", out)
+	}
+	if !gotFileDigest {
+		t.Fatalf("file read must replay its digest; messages: %+v", out)
+	}
+}
+
 // A step with no surviving output replays the cleared-content placeholder,
 // and agent-delegation steps get their "agent_" prefix restored.
 func TestExpandHistory_PlaceholderAndAgentPrefix(t *testing.T) {
 	msg := core.Message{Role: core.RoleAssistant, Content: "ok", Metadata: stepsMeta(t, []core.StepTrace{
 		{Name: "Batur", Type: core.StepTypeAgent, Input: "hitung 35jt x 12"},
 	})}
-	out := expandHistory([]core.Message{msg}, 0, 0, nil)
+	out := expandHistory([]core.Message{msg}, 0, 0, nil, nil)
 	if len(out) != 3 {
 		t.Fatalf("len = %d, want 3: %+v", len(out), out)
 	}
@@ -141,7 +192,7 @@ func TestExpandHistory_PlaceholderAndAgentPrefix(t *testing.T) {
 // Malformed metadata must never break replay — fall back to plain text.
 func TestExpandHistory_MalformedMetadataFallsBack(t *testing.T) {
 	msg := core.Message{Role: core.RoleAssistant, Content: "answer", Metadata: json.RawMessage(`{not json`)}
-	out := expandHistory([]core.Message{msg}, 2, 0, nil)
+	out := expandHistory([]core.Message{msg}, 2, 0, nil, nil)
 	if len(out) != 1 || out[0].Content != "answer" {
 		t.Fatalf("malformed metadata must fall back to plain message: %+v", out)
 	}
