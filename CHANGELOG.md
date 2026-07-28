@@ -6,6 +6,39 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: consolidated sandbox file tools** — `sandbox.Tools` now registers
+  `file_search` (`target: content|files|tree`) in place of `file_glob`,
+  `file_grep`, and `file_tree`; per-target params (`glob`, `context`, `depth`,
+  `exclude`, `limit`) carry over unchanged, and `target=files` accepts the
+  pattern via `glob` too (models often put it there). `file_edit` gained `replace_all`
+  and now returns a unified diff of the applied change; it is implemented as a
+  tool-layer read-modify-write (capped at 10 MB), so `Sandbox.EditFile` is no
+  longer called by the tool (the interface method remains). Also fixed
+  before-context line numbers in grep output drifting with the match index,
+  and tightened all sandbox file tool descriptions.
+
+- **BREAKING: consolidated skill tools** — `skills.NewSkillTools` now returns
+  three tools instead of seven: `skills_list` (listing + optional ranked
+  `query`, absorbing `skill_discover` and `skill_search`), `skill_view`
+  (activation with the companion-file list inlined, or a companion-file read
+  via `file_path`, absorbing `skill_activate`, `skill_list_resources`, and
+  `skill_read`), and `skill_manage` (`action: create|update|delete`, absorbing
+  `skill_create` and `skill_update` and finally exposing
+  `SkillWriter.DeleteSkill`). `skill_manage` still registers only when the
+  provider implements `SkillWriter`; `skill_view` file reads require
+  `SkillResources`.
+
+### Added
+
+- **`memory.HistoryConfig.ProtectTool`** — optional argument-aware predicate
+  extending `ProtectedTools`: a replayed call keeps its full output when its
+  name is listed OR the predicate returns true for its `(name, raw args)`.
+  Lets one tool serve both durable-instruction calls and bulk reads (e.g.
+  `skill_view` activations replay verbatim forever while its companion-file
+  reads age into digests).
+
 ## [0.26.0] - 2026-07-14
 
 ### Added

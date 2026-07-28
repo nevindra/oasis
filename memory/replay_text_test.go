@@ -22,7 +22,7 @@ func TestExpandHistory_TextStepsAttachToNextToolCall(t *testing.T) {
 			{Name: "edit_file", Type: core.StepTypeTool, Output: "saved", RawOutput: "saved index.html"},
 		})},
 	}
-	out := expandHistory(history, 2, 0, nil)
+	out := expandHistory(history, 2, 0, nil, nil)
 	// user, call(+narration), result, call(+narration), result, final
 	if len(out) != 6 {
 		t.Fatalf("len = %d, want 6: %+v", len(out), out)
@@ -54,7 +54,7 @@ func TestExpandHistory_TrailingTextNotDuplicated(t *testing.T) {
 			{Name: "text", Type: core.StepTypeText, Output: "same final text", RawOutput: "same final text"},
 		})},
 	}
-	out := expandHistory(history, 2, 0, nil)
+	out := expandHistory(history, 2, 0, nil, nil)
 	count := 0
 	for _, m := range out {
 		if m.Content == "same final text" {
@@ -75,7 +75,7 @@ func TestExpandHistory_TrailingTextWithoutFinalContent(t *testing.T) {
 			{Name: "text", Type: core.StepTypeText, Output: "interrupted narration", RawOutput: "interrupted narration"},
 		})},
 	}
-	out := expandHistory(history, 2, 0, nil)
+	out := expandHistory(history, 2, 0, nil, nil)
 	last := out[len(out)-1]
 	if last.Content != "interrupted narration" {
 		t.Fatalf("trailing narration dropped: %+v", out)
@@ -96,7 +96,7 @@ func TestExpandHistory_TextStepDigestOnOldTurns(t *testing.T) {
 			{Name: "web_search", Type: core.StepTypeTool, Output: "digest", RawOutput: "full body"},
 		})},
 	}
-	out := expandHistory(history, 1, 0, nil) // only the last turn verbatim
+	out := expandHistory(history, 1, 0, nil, nil) // only the last turn verbatim
 	if len(out[0].Content) != 500 {
 		t.Fatalf("old turn's narration should be the 500-char digest, got len %d", len(out[0].Content))
 	}
@@ -130,7 +130,7 @@ func TestExpandHistory_ProtectedToolsFreeOfBudget(t *testing.T) {
 	}
 	// Floor 1 (t3, cost 1000, budget 2500→1500); t2's only step is protected
 	// (cost 0, stays in window); t1 (1000 ≤ 1500) also verbatim.
-	out := expandHistory(history, 1, 2500, protected)
+	out := expandHistory(history, 1, 2500, protected, nil)
 	// Each turn expands to [call, result, final]: t1=out[0..2], t2=out[3..5], t3=out[6..8].
 	if len(out[1].Content) != 1000 {
 		t.Fatalf("t1 should be verbatim (protected skill must not consume budget), got len %d", len(out[1].Content))
@@ -157,7 +157,7 @@ func TestExpandHistory_VerbatimBudgetWindow(t *testing.T) {
 
 	// Floor 1, budget 2500: t4 (floor, cost 1000, budget→1500), t3 (1000 ≤
 	// 1500, budget→500), t2 (1000 > 500 → stop). t1, t2 digest.
-	out := expandHistory(history, 1, 2500, nil)
+	out := expandHistory(history, 1, 2500, nil, nil)
 	byTurn := map[string]string{}
 	for i := 0; i < len(out); i += 3 { // call, result, final per turn
 		byTurn[out[i+2].Content] = out[i+1].Content
@@ -176,7 +176,7 @@ func TestExpandHistory_VerbatimBudgetWindow(t *testing.T) {
 	}
 
 	// Zero budget: floor-only (old behavior).
-	out = expandHistory(history, 2, 0, nil)
+	out = expandHistory(history, 2, 0, nil, nil)
 	byTurn = map[string]string{}
 	for i := 0; i < len(out); i += 3 {
 		byTurn[out[i+2].Content] = out[i+1].Content

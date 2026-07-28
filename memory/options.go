@@ -2,6 +2,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"log/slog"
 
 	"github.com/nevindra/oasis/core"
@@ -52,6 +53,13 @@ type HistoryConfig struct {
 	// — for tools whose output IS durable instruction state (e.g. a skill
 	// activation body that must steer the whole thread).
 	ProtectedTools []string
+	// ProtectTool optionally extends ProtectedTools with an argument-aware
+	// predicate: a replayed call is protected when its name is listed in
+	// ProtectedTools OR ProtectTool returns true for its (name, raw args).
+	// Use this when one tool serves both durable-instruction calls and bulk
+	// reads that must not be pinned verbatim (e.g. skill_view activations vs
+	// its companion-file reads).
+	ProtectTool func(name string, args json.RawMessage) bool
 }
 
 // WithHistory configures history loading and trimming from a single HistoryConfig.
@@ -76,6 +84,7 @@ func WithHistory(cfg HistoryConfig) Option {
 			c.VerbatimOutputBudget = cfg.VerbatimOutputBudget
 		}
 		c.ProtectedTools = cfg.ProtectedTools
+		c.ProtectTool = cfg.ProtectTool
 	}
 }
 

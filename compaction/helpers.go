@@ -96,7 +96,7 @@ func StripMediaBlocks(messages []core.ChatMessage) []core.ChatMessage {
 // compactableToolNamesDefault is the package-level whitelist of tool
 // names whose results are safe to compact/drop during summarization.
 // Tools NOT in this list are preserved verbatim by default — including
-// skill_activate, ask_user, and any other instructional-result tool.
+// skill_view, ask_user, and any other instructional-result tool.
 //
 // Callers extend this list for their own tool registry (e.g., Athena
 // appends pptx_read, kb_search).

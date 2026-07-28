@@ -23,10 +23,11 @@
 //	// skill.Instructions now includes referenced skills
 //
 // Agents automatically register skill-management tools when configured with
-// WithSkills: skill_discover, skill_activate, and skill_search are always
-// registered; skill_create and skill_update when the provider implements
-// SkillWriter; skill_read and skill_list_resources when it implements
-// SkillResources.
+// WithSkills: skills_list (listing + ranked search) and skill_view (load a
+// skill's instructions and file list, or read a companion file) are always
+// registered; skill_manage (create/update/delete) only when the provider
+// implements SkillWriter. Companion-file reads through skill_view require the
+// provider to implement SkillResources.
 //
 // See the main oasis package for agent configuration and types.
 package skills
