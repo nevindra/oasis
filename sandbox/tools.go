@@ -59,8 +59,7 @@ func WithFileDelivery(fd FileDelivery) ToolsOption {
 	return func(c *toolsConfig) { c.delivery = fd }
 }
 
-// WithoutBrowser omits the browser tool set (browser, screenshot, snapshot,
-// page_text, export_pdf, browser_eval, browser_find, browser_wait) from the
+// WithoutBrowser omits the browser tool set (browser, browser_read) from the
 // returned tools. Use for "light" sandboxes that have no browser capability,
 // so the model is never offered tools that would fail.
 func WithoutBrowser() ToolsOption {
@@ -154,41 +153,32 @@ type fileSearchArgs struct {
 type emptyArgs struct{}
 
 type browserArgs struct {
-	Action    string `json:"action" describe:"Browser action: navigate, click, type, fill, scroll, key, hover, press, select, focus"`
-	Ref       string `json:"ref,omitempty" describe:"Element reference from snapshot (e.g., 'e5'). REQUIRED for click, type, fill, hover, focus, select actions."`
-	URL       string `json:"url,omitempty" describe:"URL for navigate action"`
-	X         int    `json:"x,omitempty" describe:"X coordinate (fallback when ref not available)"`
-	Y         int    `json:"y,omitempty" describe:"Y coordinate (fallback when ref not available)"`
-	Text      string `json:"text,omitempty" describe:"Text to type or fill into the element specified by ref"`
+	Action string `json:"action" enum:"navigate,click,type,fill,scroll,key,hover,press,select,focus,eval,find,wait" describe:"Browser action. Interaction: navigate, click, type, fill, scroll, key, hover, press, select, focus. Utility: eval (run JavaScript), find (locate an element by description), wait (wait for a page condition)."`
+	Ref    string `json:"ref,omitempty" describe:"Element reference from browser_read(action='snapshot') (e.g., 'e5'). REQUIRED for click, type, fill, hover, focus, select actions."`
+	URL    string `json:"url,omitempty" describe:"URL for navigate action"`
+	X      int    `json:"x,omitempty" describe:"X coordinate (fallback when ref not available)"`
+	Y      int    `json:"y,omitempty" describe:"Y coordinate (fallback when ref not available)"`
+	Text   string `json:"text,omitempty" describe:"Text to type or fill into the element specified by ref"`
 	Key       string `json:"key,omitempty" describe:"Key to press (e.g., 'Enter', 'Tab', 'Escape')"`
 	Direction string `json:"direction,omitempty" describe:"Scroll direction: up, down, left, right"`
-	Value     string `json:"value,omitempty" describe:"Option value for select action"`
+	// Value stays select-only; wait carries its own wait_value field so the two
+	// meanings never share one schema property.
+	Value      string `json:"value,omitempty" describe:"Option value for select action"`
+	Expression string `json:"expression,omitempty" describe:"eval action: JavaScript expression to evaluate (e.g., 'document.title', 'document.querySelector(\"input\").value')"`
+	Query      string `json:"query,omitempty" describe:"find action: natural-language description of the element (e.g., 'submit button', 'email input'). Returns the best matching ref with confidence and score."`
+	WaitKind   string `json:"wait_kind,omitempty" enum:"selector,text,url,load,time,function" describe:"wait action: what to wait for — selector, text, url, load, time, function"`
+	WaitValue  string `json:"wait_value,omitempty" describe:"wait action: CSS selector (selector), text to appear (text), URL glob (url), load state ready-state|content-loaded|network-idle (load), JS expression (function). Unused for time."`
+	TimeoutMs  int    `json:"timeout_ms,omitempty" describe:"wait action: max wait in milliseconds (default 10000, max 30000). For wait_kind=time this is the delay itself."`
+	State      string `json:"state,omitempty" describe:"wait action, wait_kind=selector only: visible (default) or hidden"`
 }
 
-type snapshotArgs struct {
-	Filter   string `json:"filter,omitempty" describe:"Set to 'interactive' to show only actionable elements"`
-	Selector string `json:"selector,omitempty" describe:"CSS selector to scope snapshot to a subtree"`
-	Depth    int    `json:"depth,omitempty" describe:"Tree traversal depth limit (0 = unlimited)"`
-}
-
-type pageTextArgs struct {
-	Raw      bool `json:"raw,omitempty" describe:"true = raw innerText, false = readability extraction (default)"`
-	MaxChars int  `json:"max_chars,omitempty" describe:"Truncation limit in characters (0 = unlimited)"`
-}
-
-type browserEvalArgs struct {
-	Expression string `json:"expression" describe:"JavaScript expression to evaluate (e.g., 'document.title', 'document.querySelector(\"input\").value')"`
-}
-
-type browserFindArgs struct {
-	Query string `json:"query" describe:"Natural-language description of the element (e.g., 'submit button', 'email input', 'search box')"`
-}
-
-type browserWaitArgs struct {
-	Kind      string `json:"kind" describe:"What to wait for: selector, text, url, load, time, function"`
-	Value     string `json:"value,omitempty" describe:"Depends on kind — CSS selector (selector), text to appear (text), URL glob (url), load state: ready-state|content-loaded|network-idle (load), JS expression (function). Unused for time."`
-	TimeoutMs int    `json:"timeout_ms,omitempty" describe:"Max wait in milliseconds (default 10000, max 30000). For kind=time this is the delay itself."`
-	State     string `json:"state,omitempty" describe:"selector kind only: visible (default) or hidden"`
+type browserReadArgs struct {
+	Action   string `json:"action" enum:"screenshot,snapshot,text,pdf" describe:"What to read from the current page: screenshot (capture image), snapshot (accessibility tree with element refs e0, e1, ... for browser interactions), text (readable text content — much cheaper than screenshots, ideal for information gathering), pdf (export page as PDF)"`
+	Filter   string `json:"filter,omitempty" describe:"snapshot action: set to 'interactive' to show only actionable elements"`
+	Selector string `json:"selector,omitempty" describe:"snapshot action: CSS selector to scope the snapshot to a subtree"`
+	Depth    int    `json:"depth,omitempty" describe:"snapshot action: tree traversal depth limit (0 = unlimited)"`
+	Raw      bool   `json:"raw,omitempty" describe:"text action: true = raw innerText, false = readability extraction (default)"`
+	MaxChars int    `json:"max_chars,omitempty" describe:"text action: truncation limit in characters (0 = unlimited)"`
 }
 
 type httpFetchArgs struct {
@@ -238,16 +228,7 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 	// caller has not opted out via WithoutBrowser. Mirrors the
 	// FilesystemMounter assertion pattern in mounter.go.
 	if b, ok := sb.(BrowserSandbox); ok && !cfg.noBrowser {
-		tools = append(tools,
-			browserTool(b),
-			screenshotTool(b),
-			snapshotTool(b),
-			pageTextTool(b),
-			exportPDFTool(b),
-			browserEvalTool(b),
-			browserFindTool(b),
-			browserWaitTool(b),
-		)
+		tools = append(tools, browserTool(b), browserReadTool(b))
 	}
 
 	// Register deliver_file when ANY destination is available — either an
@@ -616,7 +597,7 @@ func fileSearchTool(sb Sandbox) toolImpl {
 
 func httpFetchTool(sb Sandbox) toolImpl {
 	return newTool("http_fetch",
-		"Fetch a URL and return readable text (raw=true for unprocessed HTML). Plain HTTP GET — sites with bot protection may return 403/502; in that case use browser(action='navigate') + page_text instead.",
+		"Fetch a URL and return readable text (raw=true for unprocessed HTML). Plain HTTP GET — sites with bot protection may return 403/502; in that case use browser(action='navigate') + browser_read(action='text') instead.",
 		string(core.DeriveSchema[httpFetchArgs]()),
 		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 			var p httpFetchArgs
@@ -628,7 +609,7 @@ func httpFetchTool(sb Sandbox) toolImpl {
 				errMsg := err.Error()
 				if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "502") || strings.Contains(errMsg, "503") ||
 					strings.Contains(errMsg, "stream error") || strings.Contains(errMsg, "connection reset") {
-					errMsg += ". This site likely has bot protection. Use browser(action='navigate', url='...') + page_text() instead."
+					errMsg += ". This site likely has bot protection. Use browser(action='navigate', url='...') + browser_read(action='text') instead."
 				}
 				return oasis.ToolResult{Error: errMsg}, nil
 			}
@@ -656,12 +637,53 @@ func workspaceInfoTool(sb Sandbox) toolImpl {
 
 func browserTool(sb BrowserSandbox) toolImpl {
 	return newTool("browser",
-		"Interact with the sandbox browser. Use element refs from the snapshot tool for precise interactions. IMPORTANT: click, type, fill, hover, focus, and select actions REQUIRE a ref (element reference) or coordinates — there is no implicit focus.",
+		"Interact with the sandbox browser: navigate and act on elements, run JavaScript (eval), locate elements by description (find), or wait for a page condition (wait). Use element refs from browser_read(action='snapshot') for precise interactions. IMPORTANT: click, type, fill, hover, focus, and select actions REQUIRE a ref (element reference) or coordinates — there is no implicit focus.",
 		string(core.DeriveSchema[browserArgs]()),
 		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 			var p browserArgs
 			if err := json.Unmarshal(args, &p); err != nil {
 				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
+			}
+			switch p.Action {
+			case "eval":
+				if p.Expression == "" {
+					return oasis.ToolResult{Error: "eval action requires 'expression' parameter"}, nil
+				}
+				result, err := sb.BrowserEval(ctx, p.Expression)
+				if err != nil {
+					return oasis.ToolResult{Error: err.Error()}, nil
+				}
+				return oasis.TextResult(result), nil
+			case "find":
+				if p.Query == "" {
+					return oasis.ToolResult{Error: "find action requires 'query' parameter (natural-language element description)"}, nil
+				}
+				result, err := sb.BrowserFind(ctx, p.Query)
+				if err != nil {
+					return oasis.ToolResult{Error: err.Error()}, nil
+				}
+				return oasis.TextResult(fmt.Sprintf("ref: %s (confidence: %s, score: %.2f)", result.Ref, result.Confidence, result.Score)), nil
+			case "wait":
+				if p.WaitKind == "" {
+					return oasis.ToolResult{Error: "wait action requires 'wait_kind' parameter (selector, text, url, load, time, function)"}, nil
+				}
+				res, err := sb.BrowserWait(ctx, BrowserWaitOpts{
+					Kind:      p.WaitKind,
+					Value:     p.WaitValue,
+					TimeoutMs: p.TimeoutMs,
+					State:     p.State,
+				})
+				if err != nil {
+					return oasis.ToolResult{Error: err.Error()}, nil
+				}
+				if res.Satisfied {
+					return oasis.TextResult(fmt.Sprintf("condition met (%s) after %dms", res.Kind, res.ElapsedMs)), nil
+				}
+				msg := fmt.Sprintf("condition NOT met (%s) after %dms", res.Kind, res.ElapsedMs)
+				if res.Detail != "" {
+					msg += ": " + res.Detail
+				}
+				return oasis.TextResult(msg + ". Use browser_read(action='snapshot') to inspect the current page state."), nil
 			}
 			if p.Action == "navigate" && p.URL != "" {
 				if err := sb.BrowserNavigate(ctx, p.URL); err != nil {
@@ -675,7 +697,7 @@ func browserTool(sb BrowserSandbox) toolImpl {
 				if p.Ref == "" && p.X == 0 && p.Y == 0 {
 					return oasis.ToolResult{Error: fmt.Sprintf(
 						"%s action requires a 'ref' (element reference from snapshot) or x/y coordinates. "+
-							"Use the snapshot tool first to find the element ref, then pass it as ref (e.g., ref: 'e5').", p.Action,
+							"Use browser_read(action='snapshot') first to find the element ref, then pass it as ref (e.g., ref: 'e5').", p.Action,
 					)}, nil
 				}
 			case "scroll":
@@ -706,72 +728,52 @@ func browserTool(sb BrowserSandbox) toolImpl {
 		})
 }
 
-func screenshotTool(sb BrowserSandbox) toolImpl {
-	return newTool("screenshot",
-		"Take a screenshot of the sandbox browser",
-		string(core.DeriveSchema[emptyArgs]()),
+func browserReadTool(sb BrowserSandbox) toolImpl {
+	return newTool("browser_read",
+		"Read the current browser page: take a screenshot, get the accessibility tree (element refs e0, e1, ... for the browser tool), extract readable text, or export as PDF.",
+		string(core.DeriveSchema[browserReadArgs]()),
 		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-			data, err := sb.BrowserScreenshot(ctx)
-			if err != nil {
-				return oasis.ToolResult{Error: err.Error()}, nil
-			}
-			return oasis.TextResult(fmt.Sprintf("screenshot captured (%d bytes)", len(data))), nil
-		})
-}
-
-func snapshotTool(sb BrowserSandbox) toolImpl {
-	return newTool("snapshot",
-		"Get the accessibility tree of the current browser page. Returns element references (e0, e1, ...) that can be used with the browser tool for precise interactions.",
-		string(core.DeriveSchema[snapshotArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-			var p snapshotArgs
+			var p browserReadArgs
 			if err := json.Unmarshal(args, &p); err != nil {
 				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 			}
-			snap, err := sb.BrowserSnapshot(ctx, SnapshotOpts{
-				Filter:   p.Filter,
-				Selector: p.Selector,
-				Depth:    p.Depth,
-			})
-			if err != nil {
-				return oasis.ToolResult{Error: err.Error()}, nil
+			switch p.Action {
+			case "screenshot":
+				data, err := sb.BrowserScreenshot(ctx)
+				if err != nil {
+					return oasis.ToolResult{Error: err.Error()}, nil
+				}
+				return oasis.TextResult(fmt.Sprintf("screenshot captured (%d bytes)", len(data))), nil
+			case "snapshot":
+				snap, err := sb.BrowserSnapshot(ctx, SnapshotOpts{
+					Filter:   p.Filter,
+					Selector: p.Selector,
+					Depth:    p.Depth,
+				})
+				if err != nil {
+					return oasis.ToolResult{Error: err.Error()}, nil
+				}
+				var out strings.Builder
+				fmt.Fprintf(&out, "url: %s\ntitle: %s\n", snap.URL, snap.Title)
+				for _, n := range snap.Nodes {
+					fmt.Fprintf(&out, "[%s] %s %q\n", n.Ref, n.Role, n.Name)
+				}
+				return oasis.TextResult(out.String()), nil
+			case "text":
+				result, err := sb.BrowserText(ctx, TextOpts{Raw: p.Raw, MaxChars: p.MaxChars})
+				if err != nil {
+					return oasis.ToolResult{Error: err.Error()}, nil
+				}
+				return oasis.TextResult(result.Text), nil
+			case "pdf":
+				data, err := sb.BrowserPDF(ctx)
+				if err != nil {
+					return oasis.ToolResult{Error: err.Error()}, nil
+				}
+				return oasis.TextResult(fmt.Sprintf("pdf exported (%d bytes)", len(data))), nil
+			default:
+				return oasis.ToolResult{Error: fmt.Sprintf("unknown action %q: use screenshot, snapshot, text, or pdf", p.Action)}, nil
 			}
-			var out strings.Builder
-			fmt.Fprintf(&out, "url: %s\ntitle: %s\n", snap.URL, snap.Title)
-			for _, n := range snap.Nodes {
-				fmt.Fprintf(&out, "[%s] %s %q\n", n.Ref, n.Role, n.Name)
-			}
-			return oasis.TextResult(out.String()), nil
-		})
-}
-
-func pageTextTool(sb BrowserSandbox) toolImpl {
-	return newTool("page_text",
-		"Extract readable text content from the current browser page. Ideal for RAG and information gathering — much cheaper than screenshots.",
-		string(core.DeriveSchema[pageTextArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-			var p pageTextArgs
-			if err := json.Unmarshal(args, &p); err != nil {
-				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-			}
-			result, err := sb.BrowserText(ctx, TextOpts{Raw: p.Raw, MaxChars: p.MaxChars})
-			if err != nil {
-				return oasis.ToolResult{Error: err.Error()}, nil
-			}
-			return oasis.TextResult(result.Text), nil
-		})
-}
-
-func exportPDFTool(sb BrowserSandbox) toolImpl {
-	return newTool("export_pdf",
-		"Export the current browser page as a PDF document.",
-		string(core.DeriveSchema[emptyArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-			data, err := sb.BrowserPDF(ctx)
-			if err != nil {
-				return oasis.ToolResult{Error: err.Error()}, nil
-			}
-			return oasis.TextResult(fmt.Sprintf("pdf exported (%d bytes)", len(data))), nil
 		})
 }
 
@@ -801,72 +803,6 @@ func webSearchTool(sb Sandbox) toolImpl {
 				out.WriteString("\n")
 			}
 			return oasis.TextResult(out.String()), nil
-		})
-}
-
-func browserEvalTool(sb BrowserSandbox) toolImpl {
-	return newTool("browser_eval",
-		"Execute JavaScript in the current browser tab. Useful for reading form values, checking element states, extracting data, or interacting with page APIs that aren't accessible through the accessibility tree.",
-		string(core.DeriveSchema[browserEvalArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-			var p browserEvalArgs
-			if err := json.Unmarshal(args, &p); err != nil {
-				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-			}
-			result, err := sb.BrowserEval(ctx, p.Expression)
-			if err != nil {
-				return oasis.ToolResult{Error: err.Error()}, nil
-			}
-			return oasis.TextResult(result), nil
-		})
-}
-
-func browserFindTool(sb BrowserSandbox) toolImpl {
-	return newTool("browser_find",
-		"Find an element ref using a natural-language description instead of manually searching the snapshot. Returns the best matching element ref, confidence level, and score.",
-		string(core.DeriveSchema[browserFindArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-			var p browserFindArgs
-			if err := json.Unmarshal(args, &p); err != nil {
-				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-			}
-			result, err := sb.BrowserFind(ctx, p.Query)
-			if err != nil {
-				return oasis.ToolResult{Error: err.Error()}, nil
-			}
-			return oasis.TextResult(fmt.Sprintf("ref: %s (confidence: %s, score: %.2f)", result.Ref, result.Confidence, result.Score)), nil
-		})
-}
-
-func browserWaitTool(sb BrowserSandbox) toolImpl {
-	return newTool("browser_wait",
-		"Wait for a page condition after navigate/click instead of polling with screenshots. Returns satisfied=false on timeout (never errors) — if not satisfied, take a snapshot to inspect the actual page state.",
-		string(core.DeriveSchema[browserWaitArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
-			var p browserWaitArgs
-			if err := json.Unmarshal(args, &p); err != nil {
-				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
-			}
-			if p.Kind == "" {
-				return oasis.ToolResult{Error: "kind is required (selector, text, url, load, time, function)"}, nil
-			}
-			res, err := sb.BrowserWait(ctx, BrowserWaitOpts{
-				Kind:      p.Kind,
-				Value:     p.Value,
-				TimeoutMs: p.TimeoutMs,
-				State:     p.State,
-			})
-			if err != nil {
-				return oasis.ToolResult{Error: err.Error()}, nil
-			}
-			if res.Satisfied {
-				return oasis.TextResult(fmt.Sprintf("condition met (%s) after %dms", res.Kind, res.ElapsedMs)), nil
-			}
-			msg := fmt.Sprintf("condition NOT met (%s) after %dms", res.Kind, res.ElapsedMs)
-			if res.Detail != "" {
-				msg += ": " + res.Detail
-			}
-			return oasis.TextResult(msg + ". Take a snapshot to inspect the current page state."), nil
 		})
 }
 

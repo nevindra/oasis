@@ -8,6 +8,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ### Changed
 
+- **BREAKING: consolidated sandbox browser tools 8 → 2** — `browser` gains
+  the utility actions `eval` (was `browser_eval`), `find` (was
+  `browser_find`), and `wait` (was `browser_wait`; args renamed
+  `kind`/`value` → `wait_kind`/`wait_value` so the wait condition never
+  shares a schema property with the select action's `value`). A new
+  `browser_read` tool (`action: screenshot|snapshot|text|pdf`) replaces
+  `screenshot`, `snapshot`, `page_text`, and `export_pdf` with unchanged
+  per-action params. The six retired names are no longer registered — a
+  stale-name call surfaces the standard recoverable unknown-tool error;
+  replayed history is unaffected because replay never re-dispatches tools.
+  `WithoutBrowser()` still gates the whole set.
 - **BREAKING: unified delegation tool renamed `task` → `delegate_task`** —
   `core.ToolTask` is now `"delegate_task"`; the old `"task"` name still
   dispatches (new `core.ToolTaskLegacy`, same treatment as `spawn_subagent`
