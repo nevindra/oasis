@@ -203,9 +203,9 @@ func TestTrimToBudget_PreservesMetadata(t *testing.T) {
 	meta := stepsMeta(t, []core.StepTrace{{Name: "greet", Type: core.StepTypeTool, Output: "hi"}})
 	long := strings.Repeat("x", 4000)
 	in := &RetrieveContext{History: []core.Message{
-		{Role: core.RoleUser, Content: long},                           // will be trimmed away
-		{Role: core.RoleAssistant, Content: "keep", Metadata: meta},    // must survive WITH metadata
-		{Role: core.RoleUser, Content: "recent question"},              // must survive
+		{Role: core.RoleUser, Content: long},                        // will be trimmed away
+		{Role: core.RoleAssistant, Content: "keep", Metadata: meta}, // must survive WITH metadata
+		{Role: core.RoleUser, Content: "recent question"},           // must survive
 	}}
 	if err := (TrimToBudget{Budget: 60}).Process(t.Context(), in); err != nil {
 		t.Fatal(err)

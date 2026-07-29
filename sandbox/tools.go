@@ -153,12 +153,12 @@ type fileSearchArgs struct {
 type emptyArgs struct{}
 
 type browserArgs struct {
-	Action string `json:"action" enum:"navigate,click,type,fill,scroll,key,hover,press,select,focus,eval,find,wait" describe:"Browser action. Interaction: navigate, click, type, fill, scroll, key, hover, press, select, focus. Utility: eval (run JavaScript), find (locate an element by description), wait (wait for a page condition)."`
-	Ref    string `json:"ref,omitempty" describe:"Element reference from browser_read(action='snapshot') (e.g., 'e5'). REQUIRED for click, type, fill, hover, focus, select actions."`
-	URL    string `json:"url,omitempty" describe:"URL for navigate action"`
-	X      int    `json:"x,omitempty" describe:"X coordinate (fallback when ref not available)"`
-	Y      int    `json:"y,omitempty" describe:"Y coordinate (fallback when ref not available)"`
-	Text   string `json:"text,omitempty" describe:"Text to type or fill into the element specified by ref"`
+	Action    string `json:"action" enum:"navigate,click,type,fill,scroll,key,hover,press,select,focus,eval,find,wait" describe:"Browser action. Interaction: navigate, click, type, fill, scroll, key, hover, press, select, focus. Utility: eval (run JavaScript), find (locate an element by description), wait (wait for a page condition)."`
+	Ref       string `json:"ref,omitempty" describe:"Element reference from browser_read(action='snapshot') (e.g., 'e5'). REQUIRED for click, type, fill, hover, focus, select actions."`
+	URL       string `json:"url,omitempty" describe:"URL for navigate action"`
+	X         int    `json:"x,omitempty" describe:"X coordinate (fallback when ref not available)"`
+	Y         int    `json:"y,omitempty" describe:"Y coordinate (fallback when ref not available)"`
+	Text      string `json:"text,omitempty" describe:"Text to type or fill into the element specified by ref"`
 	Key       string `json:"key,omitempty" describe:"Key to press (e.g., 'Enter', 'Tab', 'Escape')"`
 	Direction string `json:"direction,omitempty" describe:"Scroll direction: up, down, left, right"`
 	// Value stays select-only; wait carries its own wait_value field so the two
