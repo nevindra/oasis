@@ -174,6 +174,7 @@ type browserArgs struct {
 
 type browserReadArgs struct {
 	Action   string `json:"action" enum:"screenshot,snapshot,text,pdf" describe:"What to read from the current page: screenshot (capture image), snapshot (accessibility tree with element refs e0, e1, ... for browser interactions), text (readable text content — much cheaper than screenshots, ideal for information gathering), pdf (export page as PDF)"`
+	Path     string `json:"path,omitempty" describe:"screenshot/pdf actions: absolute sandbox path to save the capture as a file (e.g. /workspace/outputs/page.png). Required for pdf, optional for screenshot. Use this when the user wants the capture as a file — the saved file can then be processed with file tools or sent to the user with deliver_file"`
 	Filter   string `json:"filter,omitempty" describe:"snapshot action: set to 'interactive' to show only actionable elements"`
 	Selector string `json:"selector,omitempty" describe:"snapshot action: CSS selector to scope the snapshot to a subtree"`
 	Depth    int    `json:"depth,omitempty" describe:"snapshot action: tree traversal depth limit (0 = unlimited)"`
@@ -228,7 +229,7 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 	// caller has not opted out via WithoutBrowser. Mirrors the
 	// FilesystemMounter assertion pattern in mounter.go.
 	if b, ok := sb.(BrowserSandbox); ok && !cfg.noBrowser {
-		tools = append(tools, browserTool(b), browserReadTool(b))
+		tools = append(tools, browserTool(b), browserReadTool(sb, b, cfg))
 	}
 
 	// Register deliver_file when ANY destination is available — either an
@@ -728,9 +729,24 @@ func browserTool(sb BrowserSandbox) toolImpl {
 		})
 }
 
-func browserReadTool(sb BrowserSandbox) toolImpl {
+// saveCapture writes captured browser bytes (screenshot PNG, exported PDF) to
+// a sandbox path and publishes them to whichever writable mount covers the
+// path, mirroring what file_write does for text content. The upload makes the
+// file available to shell/file tools inside the VM; the mount publish makes it
+// visible to the host application (and, through it, the user).
+func saveCapture(ctx context.Context, sb Sandbox, cfg *toolsConfig, path string, data []byte) error {
+	if err := sb.UploadFile(ctx, path, bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("save to %s: %w", path, err)
+	}
+	if err := publishToMount(ctx, cfg, path, data); err != nil {
+		return fmt.Errorf("saved to %s but publish failed: %w", path, err)
+	}
+	return nil
+}
+
+func browserReadTool(sb Sandbox, b BrowserSandbox, cfg *toolsConfig) toolImpl {
 	return newTool("browser_read",
-		"Read the current browser page: take a screenshot, get the accessibility tree (element refs e0, e1, ... for the browser tool), extract readable text, or export as PDF.",
+		"Read the current browser page: take a screenshot, get the accessibility tree (element refs e0, e1, ... for the browser tool), extract readable text, or export as PDF. Pass 'path' to save a screenshot or PDF as a file (for processing, or for sending to the user).",
 		string(core.DeriveSchema[browserReadArgs]()),
 		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 			var p browserReadArgs
@@ -739,16 +755,23 @@ func browserReadTool(sb BrowserSandbox) toolImpl {
 			}
 			switch p.Action {
 			case "screenshot":
-				data, err := sb.BrowserScreenshot(ctx)
+				data, err := b.BrowserScreenshot(ctx)
 				if err != nil {
 					return oasis.ToolResult{Error: err.Error()}, nil
 				}
+				content := fmt.Sprintf("screenshot captured (%d bytes); the image is attached to this result", len(data))
+				if p.Path != "" {
+					if err := saveCapture(ctx, sb, cfg, p.Path, data); err != nil {
+						return oasis.ToolResult{Error: err.Error()}, nil
+					}
+					content = fmt.Sprintf("screenshot captured (%d bytes) and saved to %s; the image is attached to this result", len(data), p.Path)
+				}
 				return oasis.ToolResult{
-					Content:     fmt.Sprintf("screenshot captured (%d bytes); the image is attached to this result", len(data)),
+					Content:     content,
 					Attachments: []oasis.Attachment{{MimeType: "image/png", Data: data}},
 				}, nil
 			case "snapshot":
-				snap, err := sb.BrowserSnapshot(ctx, SnapshotOpts{
+				snap, err := b.BrowserSnapshot(ctx, SnapshotOpts{
 					Filter:   p.Filter,
 					Selector: p.Selector,
 					Depth:    p.Depth,
@@ -763,17 +786,26 @@ func browserReadTool(sb BrowserSandbox) toolImpl {
 				}
 				return oasis.TextResult(out.String()), nil
 			case "text":
-				result, err := sb.BrowserText(ctx, TextOpts{Raw: p.Raw, MaxChars: p.MaxChars})
+				result, err := b.BrowserText(ctx, TextOpts{Raw: p.Raw, MaxChars: p.MaxChars})
 				if err != nil {
 					return oasis.ToolResult{Error: err.Error()}, nil
 				}
 				return oasis.TextResult(result.Text), nil
 			case "pdf":
-				data, err := sb.BrowserPDF(ctx)
+				// Unlike screenshots, PDF bytes cannot be attached for the
+				// model to see — a file is the only useful output, so path
+				// is required rather than silently discarding the export.
+				if p.Path == "" {
+					return oasis.ToolResult{Error: "pdf action requires 'path' to save the exported PDF (e.g. /workspace/outputs/page.pdf)"}, nil
+				}
+				data, err := b.BrowserPDF(ctx)
 				if err != nil {
 					return oasis.ToolResult{Error: err.Error()}, nil
 				}
-				return oasis.TextResult(fmt.Sprintf("pdf exported (%d bytes)", len(data))), nil
+				if err := saveCapture(ctx, sb, cfg, p.Path, data); err != nil {
+					return oasis.ToolResult{Error: err.Error()}, nil
+				}
+				return oasis.TextResult(fmt.Sprintf("pdf exported (%d bytes) and saved to %s", len(data), p.Path)), nil
 			default:
 				return oasis.ToolResult{Error: fmt.Sprintf("unknown action %q: use screenshot, snapshot, text, or pdf", p.Action)}, nil
 			}
