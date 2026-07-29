@@ -23,6 +23,12 @@ func toolResultToDispatch(result core.ToolResult, err error) DispatchResult {
 	if result.Error != "" {
 		return DispatchResult{Content: "error: " + result.Error, IsError: true}
 	}
+	if result.Content == "" && len(result.Attachments) == 0 && result.UI == nil {
+		// A fully-empty success reaches the model as {"role":"tool","content":""},
+		// indistinguishable from a no-op — and reaches UIs as a result that can't
+		// be paired with its call. Floor it with an explicit confirmation.
+		return DispatchResult{Content: "(tool completed with no output)"}
+	}
 	return DispatchResult{Content: result.Content, Attachments: result.Attachments, UI: result.UI}
 }
 

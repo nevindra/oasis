@@ -1669,3 +1669,51 @@ func TestFindMountForPathPrefersDeepest(t *testing.T) {
 		t.Errorf("key = %q, want %q", key, "report.md")
 	}
 }
+
+func TestBrowserToolSilentSuccessSynthesizesMessage(t *testing.T) {
+	sb := &mockSandbox{
+		browserActFn: func(_ context.Context, _ BrowserAction) (BrowserResult, error) {
+			return BrowserResult{Success: true}, nil // backend succeeded silently
+		},
+	}
+	tool := findToolByName(Tools(sb), "browser")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"scroll","direction":"down"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := decodeContent(t, result); got != "scrolled down" {
+		t.Errorf("content = %q, want %q", got, "scrolled down")
+	}
+}
+
+func TestBrowserToolFailedActionSurfacesError(t *testing.T) {
+	sb := &mockSandbox{
+		browserActFn: func(_ context.Context, _ BrowserAction) (BrowserResult, error) {
+			return BrowserResult{Success: false}, nil // failed with no message
+		},
+	}
+	tool := findToolByName(Tools(sb), "browser")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"click","ref":"e5"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "click failed" {
+		t.Errorf("error = %q, want %q", result.Error, "click failed")
+	}
+}
+
+func TestShellToolQuietSuccess(t *testing.T) {
+	sb := &mockSandbox{
+		shellFn: func(_ context.Context, _ ShellRequest) (ShellResult, error) {
+			return ShellResult{ExitCode: 0}, nil
+		},
+	}
+	tool := findToolByName(Tools(sb), "shell")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"command":"mkdir -p x"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := decodeContent(t, result); got != "(exit 0, no output)" {
+		t.Errorf("content = %q, want %q", got, "(exit 0, no output)")
+	}
+}

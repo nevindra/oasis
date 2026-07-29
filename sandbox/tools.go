@@ -266,6 +266,11 @@ func shellTool(sb Sandbox) toolImpl {
 			output := res.Output
 			if res.ExitCode != 0 {
 				output = fmt.Sprintf("exit code %d\n%s", res.ExitCode, output)
+			} else if output == "" {
+				// Quiet commands (mkdir, cp, git add) succeed with no stdout —
+				// surface the exit code so success is distinguishable from a
+				// dropped result.
+				output = "(exit 0, no output)"
 			}
 			return oasis.TextResult(output), nil
 		})
@@ -298,6 +303,9 @@ func executeCodeTool(sb Sandbox) toolImpl {
 			if res.Stderr != "" {
 				output += "\nstderr: " + res.Stderr
 			}
+			if output == "" {
+				output = "(ran successfully, no output)"
+			}
 			return oasis.TextResult(output), nil
 		})
 }
@@ -314,6 +322,9 @@ func fileReadTool(sb Sandbox) toolImpl {
 			fc, err := sb.ReadFile(ctx, ReadFileRequest{Path: p.Path, Offset: p.Offset, Limit: p.Limit})
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
+			}
+			if fc.Content == "" {
+				return oasis.TextResult("(file is empty or offset is past the end)"), nil
 			}
 			return oasis.TextResult(fc.Content), nil
 		})
@@ -725,7 +736,28 @@ func browserTool(sb BrowserSandbox) toolImpl {
 			if err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
-			return oasis.TextResult(res.Message), nil
+			if !res.Success {
+				msg := res.Message
+				if msg == "" {
+					msg = p.Action + " failed"
+				}
+				return oasis.ToolResult{Error: msg}, nil
+			}
+			// Interaction backends often succeed silently (scroll, key presses);
+			// synthesize a confirmation so the model can tell a completed action
+			// from a dropped one.
+			msg := res.Message
+			if msg == "" {
+				switch p.Action {
+				case "scroll":
+					msg = "scrolled " + p.Direction
+				case "key", "press":
+					msg = "pressed " + p.Key
+				default:
+					msg = p.Action + " done"
+				}
+			}
+			return oasis.TextResult(msg), nil
 		})
 }
 
@@ -855,6 +887,11 @@ func mcpCallTool(sb Sandbox) toolImpl {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
 			if res.IsError {
+				// An empty Error field reads as success downstream (dispatch
+				// gates on Error != "") — never let a reported error be empty.
+				if res.Content == "" {
+					return oasis.ToolResult{Error: "MCP tool reported an error with no message"}, nil
+				}
 				return oasis.ToolResult{Error: res.Content}, nil
 			}
 			return oasis.TextResult(res.Content), nil

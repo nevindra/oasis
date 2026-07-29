@@ -515,6 +515,11 @@ func (n *Network) dispatchAgent(ctx context.Context, agentName, taskText string,
 		"duration", elapsed,
 		"input_tokens", result.Usage.InputTokens,
 		"output_tokens", result.Usage.OutputTokens)
+	if result.Output == "" && len(result.Attachments) == 0 {
+		// The tool description promises a final report or an "error: " prefix;
+		// an empty output satisfies neither and reads as a silent no-op.
+		return agent.DispatchResult{Content: "(subagent completed but returned no output)", Usage: result.Usage}
+	}
 	return agent.DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
 }
 
