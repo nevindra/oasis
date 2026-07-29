@@ -257,6 +257,11 @@ func ExecuteSelfClone(ctx context.Context, parentName, description string, provi
 		"duration", elapsed,
 		"input_tokens", result.Usage.InputTokens,
 		"output_tokens", result.Usage.OutputTokens)
+	if result.Output == "" && len(result.Attachments) == 0 {
+		// Mirrors the network delegation path: an empty clone output reads as
+		// a silent no-op to the parent.
+		return DispatchResult{Content: "(subagent completed but returned no output)", Usage: result.Usage}
+	}
 	return DispatchResult{Content: result.Output, Usage: result.Usage, Attachments: result.Attachments}
 }
 

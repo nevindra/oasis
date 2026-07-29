@@ -44,3 +44,23 @@ func TestDispatchParallel_PropagatesUI(t *testing.T) {
 		}
 	}
 }
+
+func TestToolResultToDispatch_EmptyResultFloor(t *testing.T) {
+	dr := toolResultToDispatch(core.ToolResult{}, nil)
+	if dr.Content != "(tool completed with no output)" {
+		t.Fatalf("content = %q, want the empty-output floor", dr.Content)
+	}
+	if dr.IsError {
+		t.Fatal("floor must not be an error")
+	}
+	// A result carrying attachments or UI keeps its empty content — the
+	// payload itself is the output.
+	withAtt := toolResultToDispatch(core.ToolResult{Attachments: []core.Attachment{{}}}, nil)
+	if withAtt.Content != "" {
+		t.Fatalf("attachment result content = %q, want empty", withAtt.Content)
+	}
+	withUI := toolResultToDispatch(core.ToolResult{UI: &core.UIComponent{Name: "Card"}}, nil)
+	if withUI.Content != "" {
+		t.Fatalf("ui result content = %q, want empty", withUI.Content)
+	}
+}

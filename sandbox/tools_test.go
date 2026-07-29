@@ -38,6 +38,7 @@ type mockSandbox struct {
 	browserWaitFn  func(ctx context.Context, opts BrowserWaitOpts) (BrowserWaitResult, error)
 	browserEvalFn  func(ctx context.Context, expression string) (string, error)
 	browserFindFn  func(ctx context.Context, query string) (BrowserFindResult, error)
+	uploads        map[string][]byte
 }
 
 func (m *mockSandbox) Shell(ctx context.Context, req ShellRequest) (ShellResult, error) {
@@ -90,6 +91,13 @@ func (m *mockSandbox) GrepFiles(ctx context.Context, req GrepRequest) (GrepResul
 }
 
 func (m *mockSandbox) UploadFile(ctx context.Context, path string, data io.Reader) error {
+	if m.uploads != nil {
+		body, err := io.ReadAll(data)
+		if err != nil {
+			return err
+		}
+		m.uploads[path] = body
+	}
 	return nil
 }
 
@@ -850,20 +858,39 @@ func TestBrowserReadTextDispatch(t *testing.T) {
 	}
 }
 
-func TestBrowserReadPDFDispatch(t *testing.T) {
+func TestBrowserReadPDFRequiresPath(t *testing.T) {
+	tool := browserReadTestTool(t, &mockSandbox{})
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"pdf"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Error, "requires 'path'") {
+		t.Errorf("error = %q, want path-required (pdf bytes must never be silently discarded)", result.Error)
+	}
+}
+
+func TestBrowserReadPDFSavesToPath(t *testing.T) {
 	sb := &mockSandbox{
+		uploads: map[string][]byte{},
 		browserPDFFn: func(_ context.Context) ([]byte, error) {
 			return []byte("%PDF-1.4-fake"), nil
 		},
 	}
 
 	tool := browserReadTestTool(t, sb)
-	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"pdf"}`))
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"pdf","path":"/workspace/outputs/page.pdf"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(decodeContent(t, result), "13 bytes") {
-		t.Errorf("content = %q, want size info", decodeContent(t, result))
+	if result.Error != "" {
+		t.Fatalf("tool error: %s", result.Error)
+	}
+	got := decodeContent(t, result)
+	if !strings.Contains(got, "13 bytes") || !strings.Contains(got, "/workspace/outputs/page.pdf") {
+		t.Errorf("content = %q, want size + saved path", got)
+	}
+	if string(sb.uploads["/workspace/outputs/page.pdf"]) != "%PDF-1.4-fake" {
+		t.Errorf("uploaded = %q, want raw pdf bytes in sandbox", sb.uploads["/workspace/outputs/page.pdf"])
 	}
 }
 
@@ -888,6 +915,70 @@ func TestBrowserReadScreenshotDispatch(t *testing.T) {
 	att := result.Attachments[0]
 	if att.MimeType != "image/png" || string(att.Data) != "fake-png-data" {
 		t.Errorf("attachment = %q %d bytes, want image/png with raw screenshot bytes", att.MimeType, len(att.Data))
+	}
+}
+
+func TestBrowserReadScreenshotSavesToPath(t *testing.T) {
+	sb := &mockSandbox{
+		uploads: map[string][]byte{},
+		screenshotFn: func(_ context.Context) ([]byte, error) {
+			return []byte("fake-png-data"), nil
+		},
+	}
+
+	tool := browserReadTestTool(t, sb)
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"screenshot","path":"/workspace/outputs/shot.png"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("tool error: %s", result.Error)
+	}
+	if !strings.Contains(decodeContent(t, result), "saved to /workspace/outputs/shot.png") {
+		t.Errorf("content = %q, want saved-path mention", decodeContent(t, result))
+	}
+	if string(sb.uploads["/workspace/outputs/shot.png"]) != "fake-png-data" {
+		t.Errorf("uploaded = %q, want raw png bytes in sandbox", sb.uploads["/workspace/outputs/shot.png"])
+	}
+	// The vision attachment must survive the save.
+	if len(result.Attachments) != 1 || result.Attachments[0].MimeType != "image/png" {
+		t.Fatalf("attachments = %v, want the PNG still attached", result.Attachments)
+	}
+}
+
+// A screenshot saved under a writable mount must publish to the mount backend,
+// same as file_write — that is what makes it reachable by the host app/user.
+func TestBrowserReadScreenshotPublishesToMount(t *testing.T) {
+	mount := newFakeMount()
+	sb := &mockSandbox{
+		uploads: map[string][]byte{},
+		screenshotFn: func(_ context.Context) ([]byte, error) {
+			return []byte("fake-png-data"), nil
+		},
+	}
+
+	tool := findToolByName(Tools(sb, WithMounts([]MountSpec{{
+		Path:    "/workspace/outputs",
+		Backend: mount,
+		Mode:    MountReadWrite,
+	}}, NewManifest())), "browser_read")
+	if tool == nil {
+		t.Fatal("browser_read tool not registered")
+	}
+
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"screenshot","path":"/workspace/outputs/shot.png"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("tool error: %s", result.Error)
+	}
+	entry, ok := mount.entries["shot.png"]
+	if !ok || string(entry.data) != "fake-png-data" {
+		t.Errorf("mount entry = %v %q, want published png bytes", ok, entry.data)
+	}
+	if entry.mime != "image/png" {
+		t.Errorf("mime = %q, want image/png", entry.mime)
 	}
 }
 
@@ -1576,5 +1667,53 @@ func TestFindMountForPathPrefersDeepest(t *testing.T) {
 	}
 	if key != "report.md" {
 		t.Errorf("key = %q, want %q", key, "report.md")
+	}
+}
+
+func TestBrowserToolSilentSuccessSynthesizesMessage(t *testing.T) {
+	sb := &mockSandbox{
+		browserActFn: func(_ context.Context, _ BrowserAction) (BrowserResult, error) {
+			return BrowserResult{Success: true}, nil // backend succeeded silently
+		},
+	}
+	tool := findToolByName(Tools(sb), "browser")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"scroll","direction":"down"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := decodeContent(t, result); got != "scrolled down" {
+		t.Errorf("content = %q, want %q", got, "scrolled down")
+	}
+}
+
+func TestBrowserToolFailedActionSurfacesError(t *testing.T) {
+	sb := &mockSandbox{
+		browserActFn: func(_ context.Context, _ BrowserAction) (BrowserResult, error) {
+			return BrowserResult{Success: false}, nil // failed with no message
+		},
+	}
+	tool := findToolByName(Tools(sb), "browser")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"click","ref":"e5"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "click failed" {
+		t.Errorf("error = %q, want %q", result.Error, "click failed")
+	}
+}
+
+func TestShellToolQuietSuccess(t *testing.T) {
+	sb := &mockSandbox{
+		shellFn: func(_ context.Context, _ ShellRequest) (ShellResult, error) {
+			return ShellResult{ExitCode: 0}, nil
+		},
+	}
+	tool := findToolByName(Tools(sb), "shell")
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"command":"mkdir -p x"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := decodeContent(t, result); got != "(exit 0, no output)" {
+		t.Errorf("content = %q, want %q", got, "(exit 0, no output)")
 	}
 }

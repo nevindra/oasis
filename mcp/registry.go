@@ -180,16 +180,29 @@ func mapMCPResult(r *CallToolResult) *oasis.ToolResult {
 		return &oasis.ToolResult{Error: "MCP returned nil result"}
 	}
 	var content string
+	dropped := 0
 	for _, block := range r.Content {
 		if block.Type == "text" {
 			if content != "" {
 				content += "\n"
 			}
 			content += block.Text
+		} else {
+			dropped++
 		}
 	}
 	if r.IsError {
+		// An empty Error field reads as success downstream (dispatch gates on
+		// Error != "") — never let a reported error be empty.
+		if content == "" {
+			content = "MCP tool reported an error with no message"
+		}
 		return &oasis.ToolResult{Error: content}
+	}
+	if content == "" && dropped > 0 {
+		// Image/resource/audio blocks are not forwarded; without this note the
+		// call would look like a silent no-op.
+		content = fmt.Sprintf("(MCP tool returned %d non-text content block(s) that cannot be displayed)", dropped)
 	}
 	result := oasis.TextResult(content)
 	return &result
