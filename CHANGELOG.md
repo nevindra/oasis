@@ -6,6 +6,34 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-07-29
+
+### Added
+
+- **`browser_read` gains a `path` argument to save captures as files** —
+  `action: screenshot` (optional) and `action: pdf` (required) now accept an
+  absolute sandbox path; the capture is uploaded into the sandbox FS via the
+  binary-safe `Sandbox.UploadFile` and published to any writable mount
+  covering the path (same as `file_write`), so it lands in host-visible
+  storage and can be handed to the user with `deliver_file` or processed
+  with file tools. The screenshot's vision attachment is preserved.
+  **BREAKING (minor):** `pdf` without `path` now errors instead of silently
+  discarding the exported bytes. `browserReadTool` signature is now
+  `(sb Sandbox, b BrowserSandbox, cfg *toolsConfig)`.
+
+### Fixed
+
+- **Never hand the model an empty tool result** — an empty `ToolResult`
+  reached the LLM as `{"role":"tool","content":""}`, indistinguishable from
+  a no-op, and several paths actively hid failures. dispatch floors a
+  fully-empty success with "(tool completed with no output)"; browser reads
+  the previously-dead `BrowserResult.Success` (a failed click was reported
+  as success) and synthesizes messages for silently succeeding actions;
+  shell/execute_code report "(exit 0, no output)"; file_read notes an empty
+  file or past-EOF offset; mcp `isError` with no message no longer collapses
+  to a success, and non-text content blocks are noted instead of dropped;
+  an output-less subagent report says so instead of returning "".
+
 ## [0.33.0] - 2026-07-28
 
 ### Changed
