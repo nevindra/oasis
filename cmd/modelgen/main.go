@@ -203,7 +203,7 @@ func generateModels(entries []modelEntry) string {
 	b.WriteString(fmt.Sprintf("// Generated at: %s\n", time.Now().UTC().Format(time.RFC3339)))
 	b.WriteString(fmt.Sprintf("// Source: %s\n", modelsDevURL))
 	b.WriteString(fmt.Sprintf("// Models: %d\n", len(entries)))
-	b.WriteString("\npackage catalog\n\nimport oasis \"github.com/nevindra/oasis\"\n\n")
+	b.WriteString("\npackage catalog\n\nimport oasis \"github.com/nevindra/oasis/core\"\n\n")
 	b.WriteString("// staticModels is the pre-compiled model registry.\n")
 	b.WriteString("// Updated by: go generate ./provider/catalog/...\n")
 	b.WriteString("// Source: models.dev API\n")
@@ -295,7 +295,7 @@ func generatePlatforms(platforms []platformEntry) string {
 	b.WriteString(fmt.Sprintf("// Generated at: %s\n", time.Now().UTC().Format(time.RFC3339)))
 	b.WriteString(fmt.Sprintf("// Source: %s\n", modelsDevURL))
 	b.WriteString(fmt.Sprintf("// Platforms: %d\n", len(platforms)))
-	b.WriteString("\npackage catalog\n\nimport oasis \"github.com/nevindra/oasis\"\n\n")
+	b.WriteString("\npackage catalog\n\nimport oasis \"github.com/nevindra/oasis/core\"\n\n")
 	b.WriteString("func init() {\n")
 	b.WriteString("\tgeneratedPlatforms = []oasis.Platform{\n")
 
