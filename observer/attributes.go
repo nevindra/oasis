@@ -4,14 +4,11 @@ import "go.opentelemetry.io/otel/attribute"
 
 // Attribute keys for LLM observability spans and metrics.
 var (
-	AttrLLMModel    = attribute.Key("llm.model")
+	// llm.model_name / llm.provider match OpenInference so Arize resolves the
+	// model on generation spans; the same keys double as metric labels.
+	AttrLLMModel    = attribute.Key("llm.model_name")
 	AttrLLMProvider = attribute.Key("llm.provider")
 	AttrLLMMethod   = attribute.Key("llm.method")
-
-	AttrTokensInput  = attribute.Key("llm.tokens.input")
-	AttrTokensOutput = attribute.Key("llm.tokens.output")
-	AttrTokensCached = attribute.Key("llm.tokens.cached")
-	AttrCostUSD      = attribute.Key("llm.cost_usd")
 
 	AttrToolCount = attribute.Key("llm.tool_count")
 	AttrToolNames = attribute.Key("llm.tool_names")

@@ -35,7 +35,8 @@ func (t *otelTracer) Start(ctx context.Context, name string, attrs ...oasis.Span
 
 // otelSpan implements oasis.Span using an OTEL trace.Span.
 type otelSpan struct {
-	inner trace.Span
+	inner   trace.Span
+	errored bool
 }
 
 func (s *otelSpan) SetAttr(attrs ...oasis.SpanAttr) {
@@ -55,11 +56,17 @@ func (s *otelSpan) Event(name string, attrs ...oasis.SpanAttr) {
 }
 
 func (s *otelSpan) Error(err error) {
+	s.errored = true
 	s.inner.RecordError(err)
 	s.inner.SetStatus(codes.Error, err.Error())
 }
 
 func (s *otelSpan) End() {
+	// OTel never sets OK implicitly — an unset status exports as UNSET,
+	// which observability backends treat as unscored/incomplete.
+	if !s.errored {
+		s.inner.SetStatus(codes.Ok, "")
+	}
 	s.inner.End()
 }
 

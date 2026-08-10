@@ -78,6 +78,7 @@ func compressMessages(ctx context.Context, cfg *LoopConfig, task AgentTask, mess
 	if cfg.Tracer != nil {
 		var span core.Span
 		compressCtx, span = cfg.Tracer.Start(ctx, "agent.loop.compress",
+			core.StringAttr("openinference.span.kind", "CHAIN"),
 			core.IntAttr("original_runes", currentRuneCount),
 			core.IntAttr("messages_compressed", len(toRemove)))
 		defer span.End()

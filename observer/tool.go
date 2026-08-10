@@ -33,9 +33,20 @@ func (o *ObservedTool) Definition() oasis.ToolDefinition {
 
 func (o *ObservedTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 	name := o.inner.Name()
-	ctx, span := o.inst.Tracer.Start(ctx, "tool.execute", trace.WithAttributes(
+	def := o.inner.Definition()
+	startAttrs := []attribute.KeyValue{
+		AttrSpanKind.String(SpanKindTool),
 		AttrToolName.String(name),
-	))
+		attribute.String("tool.description", def.Description),
+		attribute.String("tool.parameters", string(def.Parameters)),
+	}
+	if oasis.TraceContentEnabled() {
+		startAttrs = append(startAttrs,
+			AttrInputValue.String(truncateRunes(string(args), maxMessageContent)),
+			AttrInputMime.String(MimeJSON),
+		)
+	}
+	ctx, span := o.inst.Tracer.Start(ctx, "tool.execute", trace.WithAttributes(startAttrs...))
 	defer span.End()
 	start := time.Now()
 
@@ -50,12 +61,20 @@ func (o *ObservedTool) ExecuteRaw(ctx context.Context, args json.RawMessage) (oa
 		status = "error"
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "")
 	}
 
 	span.SetAttributes(
 		AttrToolStatus.String(status),
 		AttrToolResultLength.Int(len(result.Content)),
 	)
+	if result.Error == "" && err == nil && oasis.TraceContentEnabled() {
+		span.SetAttributes(
+			AttrOutputValue.String(truncateRunes(result.Content, maxMessageContent)),
+			AttrOutputMime.String(MimeText),
+		)
+	}
 
 	o.inst.ToolExecutions.Add(ctx, 1, metric.WithAttributes(
 		AttrToolName.String(name),

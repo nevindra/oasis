@@ -457,10 +457,10 @@ func (c *Runtime) ExecuteWithSpan(
 		attrs := []core.SpanAttr{
 			core.StringAttr("agent.name", c.name),
 			core.StringAttr("agent.type", agentType),
-			core.StringAttr("langfuse.observation.type", "agent"),
+			core.StringAttr("openinference.span.kind", "AGENT"),
 		}
 		if core.TraceContentEnabled() {
-			attrs = append(attrs, core.StringAttr("langfuse.observation.input", task.Input))
+			attrs = append(attrs, core.StringAttr("input.value", task.Input))
 		}
 		ctx, span = c.Tracer.Start(ctx, "agent.execute", attrs...)
 		defer span.End()
@@ -486,7 +486,7 @@ func (c *Runtime) ExecuteWithSpan(
 		} else {
 			span.SetAttr(core.StringAttr("agent.status", "ok"))
 			if core.TraceContentEnabled() && result.Output != "" {
-				span.SetAttr(core.StringAttr("langfuse.observation.output", result.Output))
+				span.SetAttr(core.StringAttr("output.value", result.Output))
 			}
 		}
 	}

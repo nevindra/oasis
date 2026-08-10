@@ -176,6 +176,7 @@ func forceSynthesis(ctx context.Context, cfg *LoopConfig, task AgentTask, ch cha
 	if cfg.Tracer != nil {
 		var synthSpan core.Span
 		synthCtx, synthSpan = cfg.Tracer.Start(ctx, "agent.loop.synthesis",
+			core.StringAttr("openinference.span.kind", "CHAIN"),
 			core.IntAttr("iteration", cfg.MaxIter),
 			core.BoolAttr("forced", true))
 		defer synthSpan.End()

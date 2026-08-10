@@ -188,6 +188,7 @@ func runIteration(ctx context.Context, cfg *LoopConfig, task AgentTask, ch chan<
 	var iterSpan core.Span
 	if cfg.Tracer != nil {
 		iterCtx, iterSpan = cfg.Tracer.Start(ctx, "agent.iteration",
+			core.StringAttr("openinference.span.kind", "CHAIN"),
 			core.IntAttr("iteration", i),
 			core.BoolAttr("has_tools", len(cfg.Tools) > 0))
 	}
@@ -794,6 +795,8 @@ func callLLM(fwdCtx, spanCtx context.Context, cfg *LoopConfig, req core.ChatRequ
 	_, observed := provider.(interface{ ObservedByOasis() })
 	if cfg.Tracer != nil && !observed {
 		llmCtx, llmSpan = cfg.Tracer.Start(spanCtx, "llm.generate",
+			core.StringAttr("openinference.span.kind", "LLM"),
+			core.StringAttr("llm.model_name", llmModel),
 			core.StringAttr("provider", llmModel))
 	}
 
