@@ -33,21 +33,28 @@ func (o *ObservedProvider) ObservedByOasis() {}
 
 func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<- oasis.StreamEvent) (oasis.ChatResponse, error) {
 	startAttrs := []attribute.KeyValue{
+		AttrSpanKind.String(SpanKindLLM),
 		AttrLLMModel.String(o.model),
 		AttrLLMProvider.String(o.inner.Name()),
 		AttrGenAIRequestModel.String(o.model),
 		AttrGenAISystem.String(o.inner.Name()),
-		AttrObservationType.String("generation"),
 	}
 	if gp := req.GenerationParams; gp != nil {
+		params := map[string]any{}
 		if gp.Temperature != nil {
 			startAttrs = append(startAttrs, attribute.Float64("gen_ai.request.temperature", *gp.Temperature))
+			params["temperature"] = *gp.Temperature
 		}
 		if gp.TopP != nil {
 			startAttrs = append(startAttrs, attribute.Float64("gen_ai.request.top_p", *gp.TopP))
+			params["top_p"] = *gp.TopP
 		}
 		if gp.MaxTokens != nil {
 			startAttrs = append(startAttrs, attribute.Int("gen_ai.request.max_tokens", *gp.MaxTokens))
+			params["max_tokens"] = *gp.MaxTokens
+		}
+		if len(params) > 0 {
+			startAttrs = append(startAttrs, AttrInvocationParams.String(marshalCapped(params)))
 		}
 	}
 	if n := len(req.Tools); n > 0 {
@@ -55,12 +62,16 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 			AttrToolCount.Int(n),
 			// Which tools the model could call on THIS request — the advertised
 			// set varies per call (selector filtering, mid-run expansion), so
-			// record it as filterable observation metadata.
-			attribute.String("langfuse.observation.metadata.advertised_tools", toolNamesList(req.Tools)),
+			// record it as filterable span metadata.
+			AttrToolNames.String(toolNamesList(req.Tools)),
 		)
 	}
 	if oasis.TraceContentEnabled() {
-		startAttrs = append(startAttrs, AttrObservationInput.String(ChatInputJSON(req)))
+		startAttrs = append(startAttrs,
+			AttrInputValue.String(ChatInputJSON(req)),
+			AttrInputMime.String(MimeJSON),
+		)
+		startAttrs = append(startAttrs, InputMessageAttrs(req)...)
 	}
 	ctx, span := o.inst.Tracer.Start(ctx, "llm.generate", trace.WithAttributes(startAttrs...))
 	defer span.End()
@@ -102,6 +113,8 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 		status = "error"
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "")
 	}
 
 	span.SetAttributes(AttrStreamChunks.Int(chunks))
@@ -109,7 +122,9 @@ func (o *ObservedProvider) ChatStream(ctx context.Context, req oasis.ChatRequest
 		span.SetAttributes(AttrCompletionStartTime.String(firstChunk.UTC().Format(time.RFC3339Nano)))
 	}
 	if err == nil && oasis.TraceContentEnabled() {
-		span.SetAttributes(AttrObservationOutput.String(ChatOutputJSON(resp)))
+		span.SetAttributes(AttrOutputValue.String(ChatOutputJSON(resp)))
+		span.SetAttributes(AttrOutputMime.String(MimeJSON))
+		span.SetAttributes(OutputMessageAttrs(resp)...)
 	}
 	if resp.FinishReason != "" {
 		span.SetAttributes(attribute.String("gen_ai.response.finish_reasons", string(resp.FinishReason)))
@@ -128,18 +143,23 @@ func (o *ObservedProvider) record(ctx context.Context, span trace.Span, method, 
 	)
 
 	span.SetAttributes(
-		AttrTokensInput.Int(usage.InputTokens),
-		AttrTokensOutput.Int(usage.OutputTokens),
-		AttrTokensCached.Int(usage.CachedTokens),
-		AttrCostUSD.Float64(cost),
+		AttrTokenCountPrompt.Int(usage.InputTokens),
+		AttrTokenCountCompletion.Int(usage.OutputTokens),
+		AttrTokenCountTotal.Int(usage.InputTokens+usage.OutputTokens),
 		AttrGenAIInputTokens.Int(usage.InputTokens),
 		AttrGenAIOutputTokens.Int(usage.OutputTokens),
 	)
 	if usage.CachedTokens > 0 {
-		span.SetAttributes(AttrGenAICachedTokens.Int(usage.CachedTokens))
+		span.SetAttributes(
+			AttrTokenCountCacheRead.Int(usage.CachedTokens),
+			AttrGenAICachedTokens.Int(usage.CachedTokens),
+		)
 	}
 	if cost > 0 {
-		span.SetAttributes(AttrGenAICost.Float64(cost))
+		span.SetAttributes(
+			AttrLLMCostTotal.Float64(cost),
+			AttrGenAICost.Float64(cost),
+		)
 	}
 
 	o.inst.TokenUsage.Add(ctx, int64(usage.InputTokens), metric.WithAttributes(

@@ -30,11 +30,12 @@ func (o *ObservedEmbedding) Dimensions() int { return o.inner.Dimensions() }
 
 func (o *ObservedEmbedding) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	ctx, span := o.inst.Tracer.Start(ctx, "llm.embed", trace.WithAttributes(
+		AttrSpanKind.String(SpanKindEmbedding),
+		attribute.Key("embedding.model_name").String(o.model),
 		AttrLLMModel.String(o.model),
 		AttrLLMProvider.String(o.inner.Name()),
 		AttrGenAIRequestModel.String(o.model),
 		AttrGenAISystem.String(o.inner.Name()),
-		AttrObservationType.String("embedding"),
 		AttrEmbedTextCount.Int(len(texts)),
 		AttrEmbedDimensions.Int(o.inner.Dimensions()),
 	))
@@ -49,6 +50,8 @@ func (o *ObservedEmbedding) Embed(ctx context.Context, texts []string) ([][]floa
 		status = "error"
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "")
 	}
 
 	attrs := metric.WithAttributes(

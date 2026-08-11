@@ -60,13 +60,18 @@ type otelSpanWrapper struct {
 func (w *otelSpanWrapper) Name() string                    { return w.inner.Name() }
 func (w *otelSpanWrapper) Definition() core.ToolDefinition { return w.inner.Definition() }
 func (w *otelSpanWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) (core.ToolResult, error) {
+	def := w.inner.Definition()
 	attrs := []core.SpanAttr{
 		core.StringAttr("tool.name", w.inner.Name()),
 		core.IntAttr("tool.args_bytes", len(args)),
-		core.StringAttr("langfuse.observation.type", "tool"),
+		core.StringAttr("openinference.span.kind", "TOOL"),
+		core.StringAttr("tool.description", def.Description),
+		core.StringAttr("tool.parameters", string(def.Parameters)),
 	}
 	if core.TraceContentEnabled() {
-		attrs = append(attrs, core.StringAttr("langfuse.observation.input", truncateForSpan(string(args))))
+		attrs = append(attrs,
+			core.StringAttr("input.value", truncateForSpan(string(args))),
+			core.StringAttr("input.mime_type", "application/json"))
 	}
 	// Span named after the tool (a bounded set): observability backends
 	// filter and target observations by name, and "tool.execute" for every
@@ -80,7 +85,7 @@ func (w *otelSpanWrapper) ExecuteRaw(ctx context.Context, args json.RawMessage) 
 	if r.Error != "" {
 		span.SetAttr(core.StringAttr("tool.error", r.Error))
 	} else if err == nil && core.TraceContentEnabled() {
-		span.SetAttr(core.StringAttr("langfuse.observation.output", truncateForSpan(r.Content)))
+		span.SetAttr(core.StringAttr("output.value", truncateForSpan(r.Content)))
 	}
 	return r, err
 }
