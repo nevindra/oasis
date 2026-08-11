@@ -6,6 +6,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-08-11
+
+### Changed
+
+- **Observability spans emit OpenInference semantic conventions** — every
+  `langfuse.observation.*` span attribute is replaced with the OpenInference
+  conventions Arize and Phoenix read natively: `openinference.span.kind`
+  (LLM / TOOL / AGENT / CHAIN / EMBEDDING) on all spans,
+  `input.value` / `output.value` (+ mime types), `llm.token_count.*` and
+  `llm.cost.total` alongside the existing `gen_ai.*` keys, `llm.model_name`,
+  `llm.invocation_parameters` JSON, and flattened
+  `llm.input_messages.{i}.message.*` / `llm.output_messages.0.*` so backends
+  render role-labeled conversations. Tool spans carry `tool.description` +
+  `tool.parameters`; spans set status OK on clean end; payload caps raised
+  (200k runes/message, 1MB/attribute) so large system prompts export
+  untruncated.
+- Model registry refreshed from models.dev.
+
+### Fixed
+
+- **modelgen emits the `core` import path in generated files** — generated
+  registries previously referenced the wrong package path.
+
 ## [0.34.0] - 2026-07-29
 
 ### Added
