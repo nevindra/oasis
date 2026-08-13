@@ -530,7 +530,7 @@ func TestExcludeGlobsAthenaConfigures(t *testing.T) {
 		{"*.swp", "docs/.notes.md.swp", "swap.md", "a name that merely starts the same"},
 		{"**/__pycache__/**", "a/b/__pycache__/x.pyc", "a/b/pycache/x.pyc", "the directory is spelled differently"},
 		{"**/.cache/**", "app/.cache/blob", "app/cache/blob", "no leading dot"},
-		{"node_modules/**", "node_modules/pkg/index.js", "src/node_modules_notes.md", "a file about node_modules is not in it"},
+		{"**/node_modules/**", "landing-page/node_modules/react/index.js", "src/node_modules_notes.md", "a file about node_modules is not in it"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.pattern, func(t *testing.T) {
@@ -549,12 +549,13 @@ func TestExcludeGlobsAthenaConfigures(t *testing.T) {
 // it matches any number of segments, including none.
 func TestExcludeGlobsSpanPathSegments(t *testing.T) {
 	for _, key := range []string{
-		"node_modules/index.js",
-		"node_modules/pkg/index.js",
-		"node_modules/@scope/pkg/dist/deep/index.js",
+		"node_modules/index.js",                    // "**/" matching zero leading segments
+		"node_modules/pkg/index.js",                //
+		"landing-page/node_modules/react/index.js", // the nested install, one level down
+		"a/b/c/node_modules/@scope/pkg/dist/x.js",  // and deeper, with segments on both sides
 	} {
-		if matchFilters(key, nil, []string{"node_modules/**"}) {
-			t.Errorf("node_modules/** did not exclude %q", key)
+		if matchFilters(key, nil, []string{"**/node_modules/**"}) {
+			t.Errorf("**/node_modules/** did not exclude %q", key)
 		}
 	}
 	for _, key := range []string{
@@ -564,6 +565,41 @@ func TestExcludeGlobsSpanPathSegments(t *testing.T) {
 	} {
 		if matchFilters(key, nil, []string{"**/.cache/**"}) {
 			t.Errorf("**/.cache/** did not exclude %q", key)
+		}
+	}
+}
+
+// TestAnchoredDirExcludeMissesNestedDirs is the negative control for the pattern
+// above, and the reason athena's list changed shape.
+//
+// "node_modules/**" reads as "exclude node_modules", and every reader of the
+// list took it that way. It is not what it means: without a leading "**/" the
+// pattern is anchored to the mount root, and the basename half of globMatches
+// cannot save it — the basename of a key inside a dependency tree is
+// "index.js", which the pattern does not describe either. An agent that ran an
+// install inside a subdirectory of /workspace therefore published the entire
+// tree, and athena's files table has the rows to show for it.
+//
+// This test exists so that the fix cannot be mistaken for a cosmetic tidy-up:
+// the two forms genuinely disagree, on exactly the key that caused the damage.
+func TestAnchoredDirExcludeMissesNestedDirs(t *testing.T) {
+	const nested = "landing-page/node_modules/react/cjs/react-jsx-runtime.development.js"
+
+	// matchFilters reports whether the key PASSES the filter, so true here is
+	// the leak: the anchored pattern lets the nested dependency tree through.
+	if !matchFilters(nested, nil, []string{"node_modules/**"}) {
+		t.Errorf("the anchored form now excludes %q — if globMatches gained an implicit "+
+			"'anywhere' rule, athena's leading '**/' is redundant and this test should go", nested)
+	}
+	if matchFilters(nested, nil, []string{"**/node_modules/**"}) {
+		t.Errorf("the anywhere form failed to exclude %q; the fix does not work", nested)
+	}
+
+	// And the anywhere form gives up nothing: everything the anchored form
+	// caught, it still catches.
+	for _, key := range []string{"node_modules/index.js", "node_modules/pkg/dist/a.js"} {
+		if matchFilters(key, nil, []string{"**/node_modules/**"}) {
+			t.Errorf("**/node_modules/** is not a superset: it kept %q, which the anchored form excluded", key)
 		}
 	}
 }
