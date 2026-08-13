@@ -13,8 +13,21 @@ type MountMode int
 
 const (
 	// MountReadOnly: host → sandbox only. Files are prefetched at sandbox
-	// start. Writes from inside the sandbox to paths under this mount are
-	// allowed locally but never published to the backend.
+	// start.
+	//
+	// Writes are refused, not absorbed. A file tool asked to write under this
+	// mount returns a refusal naming update_file and does not touch the guest
+	// filesystem. deliver_file refuses a path here too — it publishes nothing
+	// anywhere any more, but a file under this mount is not the run's own
+	// output, and attaching it would present somebody else's document as the
+	// thing the agent just produced. Writes the framework cannot intercept —
+	// a shell command, a python script — still land in the guest's own
+	// filesystem, and are still never published: neither the close-time flush
+	// nor the per-tool-call commit consults a non-writable mount.
+	//
+	// The refusal is deliberate. Accepting a write and quietly dropping it
+	// makes the agent report a document as updated that never changed, and
+	// nobody finds out until the user opens the file.
 	MountReadOnly MountMode = iota
 	// MountWriteOnly: sandbox → host only. The mount is not prefetched.
 	// Writes are published to the backend; reads come from the local

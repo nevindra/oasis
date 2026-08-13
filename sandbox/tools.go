@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nevindra/oasis/core"
 	oasis "github.com/nevindra/oasis/core"
@@ -47,10 +49,24 @@ type toolsConfig struct {
 	mounts    []MountSpec
 	manifest  *Manifest
 	noBrowser bool
+
+	// detector, when non-nil, turns on a commit after every tool call that
+	// could have written (see WithToolCallCommits). nil is the default and
+	// means the whole commit path is absent, not merely skipped.
+	detector ChangeDetector
+	// commitMu serialises those commits; see commitAfterToolCall.
+	commitMu sync.Mutex
 }
 
 // WithFileDelivery enables the deliver_file tool with a single legacy
 // FileDelivery destination.
+//
+// It is also the one place deliver_file still hands bytes anywhere. Everywhere
+// else that tool became attach-only, because a mount persists what the agent
+// wrote without being asked; a FileDelivery host has no mount, so the Deliver
+// call is both the store and the source of the url. Reached only when no
+// writable mount covers the path, and never for a path a read-only mount owns
+// — a refusal is not an invitation to try the next destination.
 //
 // Deprecated: Use WithMounts with a MountWriteOnly MountSpec instead.
 // This option remains for backward compatibility and is honored as a
@@ -77,6 +93,37 @@ func WithMounts(specs []MountSpec, manifest *Manifest) ToolsOption {
 		c.mounts = specs
 		c.manifest = manifest
 	}
+}
+
+// WithToolCallCommits makes every tool call that can write to the sandbox end
+// with a commit of whatever it changed, through the TransactionalMount
+// capability, using d to work out what that was.
+//
+// This is what makes an agent's work survive a mid-turn crash and what gives a
+// host something to show the user while the turn is still running: without it,
+// anything written by shell or execute_code exists only in the guest's
+// filesystem until the close-time flush.
+//
+// Pass NewStatHashDetector. Its cost per tool call is one glob round trip plus
+// one hash round trip per 256 candidate files, and no file bodies move except
+// for what actually changed. NewFullScanDetector is also accepted and downloads
+// the entire mount on every tool call — correct, and affordable only for a
+// workspace of a few small documents.
+//
+// Off by default, because a host has to decide that its backends are
+// transactional and its workspaces are the shape this suits, and because
+// committing more often is a change in observable behaviour: every commit is a
+// version, and a host that surfaces version history will surface more of it.
+//
+// With this unset, nothing about the tool layer changes: writes reach the
+// backend through Layer 2 tool interception and the close-time flush, exactly
+// as before.
+//
+// It has no effect on a mount whose backend does not implement
+// TransactionalMount, and none on a read-only mount. A nil detector leaves it
+// off.
+func WithToolCallCommits(d ChangeDetector) ToolsOption {
+	return func(c *toolsConfig) { c.detector = d }
 }
 
 // findMountForPath returns the deepest matching mount for an absolute
@@ -211,16 +258,22 @@ func Tools(sb Sandbox, opts ...ToolsOption) []oasis.AnyTool {
 		o(cfg)
 	}
 
+	// shell, execute_code and mcp_call run code that can write anywhere in the
+	// sandbox, so they are the calls that end with a commit (see
+	// commitAfterWrite). The file tools are not: each one writes the single
+	// path it was given and publishes it through Layer 2 as it goes, so a
+	// commit after them would re-publish bytes that are already at the
+	// backend, at the cost of a whole extra scan.
 	tools := []oasis.AnyTool{
-		shellTool(sb),
-		executeCodeTool(sb),
+		shellTool(sb, cfg),
+		executeCodeTool(sb, cfg),
 		fileReadTool(sb),
 		fileWriteTool(sb, cfg),
 		fileEditTool(sb, cfg),
 		fileSearchTool(sb),
 		httpFetchTool(sb),
 		workspaceInfoTool(sb),
-		mcpCallTool(sb),
+		mcpCallTool(sb, cfg),
 		webSearchTool(sb),
 	}
 
@@ -250,11 +303,11 @@ func hasWriteableMount(mounts []MountSpec) bool {
 	return false
 }
 
-func shellTool(sb Sandbox) toolImpl {
+func shellTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 	return newTool("shell",
 		"Execute a shell command in the sandbox. Use for builds, git, installing packages, and anything without a dedicated tool. Do NOT use it for file work — use file_read, file_write, file_edit, and file_search instead — or for fetching URLs (use http_fetch).",
 		string(core.DeriveSchema[shellArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		commitAfterWrite(sb, cfg, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 			var p shellArgs
 			if err := json.Unmarshal(args, &p); err != nil {
 				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
@@ -273,14 +326,14 @@ func shellTool(sb Sandbox) toolImpl {
 				output = "(exit 0, no output)"
 			}
 			return oasis.TextResult(output), nil
-		})
+		}))
 }
 
-func executeCodeTool(sb Sandbox) toolImpl {
+func executeCodeTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 	return newTool("execute_code",
 		"Execute code in a language runtime",
 		string(core.DeriveSchema[executeCodeArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		commitAfterWrite(sb, cfg, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 			var p executeCodeArgs
 			if err := json.Unmarshal(args, &p); err != nil {
 				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
@@ -307,7 +360,7 @@ func executeCodeTool(sb Sandbox) toolImpl {
 				output = "(ran successfully, no output)"
 			}
 			return oasis.TextResult(output), nil
-		})
+		}))
 }
 
 func fileReadTool(sb Sandbox) toolImpl {
@@ -339,6 +392,12 @@ func fileWriteTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 			if err := json.Unmarshal(args, &p); err != nil {
 				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
 			}
+			// Checked before the guest write, not after: leaving the agent's
+			// bytes on disk under a path it was just told it may not write
+			// makes the next file_read agree with the write it did not get.
+			if refusal := mountWriteRefusal(cfg, p.Path); refusal != nil {
+				return oasis.ToolResult{Error: refusal.Error()}, nil
+			}
 			if err := sb.WriteFile(ctx, WriteFileRequest{Path: p.Path, Content: p.Content}); err != nil {
 				return oasis.ToolResult{Error: err.Error()}, nil
 			}
@@ -349,26 +408,114 @@ func fileWriteTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 		})
 }
 
+// readOnlyMountError reports a write the framework refused because the mount
+// that owns the path does not publish.
+//
+// It exists because the alternative — accepting the write into the guest
+// filesystem and quietly not publishing it — is the worst outcome available.
+// The tool returns success, the agent tells the user the document was updated,
+// and the stored file it was talking about never changed. Nobody finds out
+// until someone opens the file. A refusal costs one wasted tool call; a silent
+// local write costs the user's trust in every "done, I've updated it" the
+// product ever prints.
+//
+// It carries the paths rather than a pre-rendered string so the message can
+// name where the model may write instead. A refusal that only says no sends a
+// model round the same loop with a different filename.
+type readOnlyMountError struct {
+	path      string // absolute sandbox path the tool was asked to write
+	mountPath string // root of the mount that covers it
+	writable  string // a mount root that would accept the write, "" if none
+}
+
+func (e *readOnlyMountError) Error() string {
+	return e.refusalWith("Nothing was written and nothing was saved.")
+}
+
+// refusalWith renders the refusal after a caller-supplied clause stating what
+// did and did not happen locally.
+//
+// The clause varies because the local truth does: file_write refuses before
+// touching the guest at all, while a browser capture has already written its
+// bytes there and only the publish was refused. Getting it wrong would leave
+// the model either re-doing work it already has on disk, or reaching for a file
+// that was never created — which is the same class of mistake this refusal
+// exists to stop, just pointed the other way.
+func (e *readOnlyMountError) refusalWith(lead string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s is inside %s, which is read-only. %s Nothing there changed, "+
+		"and this is a refusal rather than a failure — writing it again the same way will be refused again.\n",
+		e.path, e.mountPath, lead)
+	fmt.Fprintf(&b, "Files under %s belong to whoever put them there, not to this run. "+
+		"Replacing one has to be a deliberate act, not a side effect of where a script happened to save.\n", e.mountPath)
+	b.WriteString("What to do instead: ")
+	if e.writable != "" {
+		fmt.Fprintf(&b, "write your output under %s — that mount is writable and persists — and work from the copy there. ", e.writable)
+	} else {
+		b.WriteString("write your output to a path outside that mount and work from the copy there. ")
+	}
+	fmt.Fprintf(&b, "If replacing the stored %s is genuinely what the user asked for, use update_file "+
+		"with that file and the path you wrote; it is the only tool allowed to modify a file you did not create.", e.path)
+	return b.String()
+}
+
+// mountWriteRefusal returns the refusal for a path owned by a mount that does
+// not publish writes, or nil when the write may proceed. A path under no mount
+// at all is not refused: it is sandbox-local scratch (/tmp, /home) and always
+// was.
+func mountWriteRefusal(cfg *toolsConfig, p string) *readOnlyMountError {
+	if cfg == nil || len(cfg.mounts) == 0 {
+		return nil
+	}
+	mount, _ := findMountForPath(cfg.mounts, p)
+	if mount == nil || mount.Mode.Writable() {
+		return nil
+	}
+	return &readOnlyMountError{
+		path:      p,
+		mountPath: mount.Path,
+		writable:  writableMountHint(cfg.mounts),
+	}
+}
+
+// writableMountHint names a mount the model may actually write to. The
+// shallowest writable mount wins because it is the one anything can be joined
+// onto — pointing at a deep, narrow mount would trade one refusal for another.
+func writableMountHint(mounts []MountSpec) string {
+	best := ""
+	for i := range mounts {
+		m := &mounts[i]
+		if !m.Mode.Writable() {
+			continue
+		}
+		if best == "" || len(m.Path) < len(best) {
+			best = m.Path
+		}
+	}
+	return best
+}
+
 // publishToMount writes content to whichever mount covers path, if any.
-// Returns nil for paths that fall under no mount, or under read-only
-// mounts (which silently absorb the local write without persisting).
+// Returns nil for paths that fall under no mount. A path under a mount that
+// does not publish returns *readOnlyMountError — callers decide whether that
+// fails the tool call or is appended to a result whose work already happened.
 // Returns an error from the backend if the publish fails or conflicts.
 func publishToMount(ctx context.Context, cfg *toolsConfig, p string, content []byte) error {
 	if cfg == nil || len(cfg.mounts) == 0 {
 		return nil
 	}
+	if refusal := mountWriteRefusal(cfg, p); refusal != nil {
+		return refusal
+	}
 	mount, key := findMountForPath(cfg.mounts, p)
-	if mount == nil || !mount.Mode.Writable() {
+	if mount == nil {
 		return nil
 	}
 	ver := ""
 	if cfg.manifest != nil {
 		ver, _ = cfg.manifest.Version(mount.Path, key)
 	}
-	mimeType := mime.TypeByExtension(filepath.Ext(p))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
+	mimeType := mimeTypeForPath(p)
 	newVer, err := mount.Backend.Put(ctx, key, mimeType, int64(len(content)), bytes.NewReader(content), ver)
 	if err != nil {
 		return err
@@ -381,7 +528,24 @@ func publishToMount(ctx context.Context, cfg *toolsConfig, p string, content []b
 			Version:  newVer,
 		})
 	}
+	// These exact bytes are now at the backend. Telling the detector is what
+	// keeps the two write paths from writing twice: without it the next scan
+	// would see this file differ from what it last recorded, and commit the
+	// framework's own publish a second time under a new version. No-op when
+	// per-tool-call commits are off.
+	if cfg.detector != nil {
+		cfg.detector.Published(p, content)
+	}
 	return nil
+}
+
+// mimeTypeForPath guesses a content type from a path's extension, falling
+// back to octet-stream. Best-effort, as MountEntry.MimeType and Put both say.
+func mimeTypeForPath(p string) string {
+	if mimeType := mime.TypeByExtension(filepath.Ext(p)); mimeType != "" {
+		return mimeType
+	}
+	return "application/octet-stream"
 }
 
 // maxEditFileBytes caps the file size for file_edit's read-modify-write
@@ -402,6 +566,11 @@ func fileEditTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 			}
 			if p.OldString == p.NewString {
 				return oasis.ToolResult{Error: "old_string and new_string are identical"}, nil
+			}
+			// Before the read-modify-write, so a refused edit never leaves a
+			// half-applied file in the guest.
+			if refusal := mountWriteRefusal(cfg, p.Path); refusal != nil {
+				return oasis.ToolResult{Error: refusal.Error()}, nil
 			}
 			rc, err := sb.DownloadFile(ctx, p.Path)
 			if err != nil {
@@ -766,14 +935,26 @@ func browserTool(sb BrowserSandbox) toolImpl {
 // path, mirroring what file_write does for text content. The upload makes the
 // file available to shell/file tools inside the VM; the mount publish makes it
 // visible to the host application (and, through it, the user).
-func saveCapture(ctx context.Context, sb Sandbox, cfg *toolsConfig, path string, data []byte) error {
+//
+// A refused publish (the path belongs to a mount that does not accept writes)
+// comes back as a note rather than an error. The capture already happened and
+// the bytes are real — the screenshot is attached to the result the model is
+// about to read — so failing the call would make the model navigate and
+// re-capture to fix a problem re-capturing cannot fix. Same reasoning as
+// commit.go:noteCommitFailure, and the same shape of answer: keep the result,
+// tell the model plainly that the file was not saved and where to put it.
+func saveCapture(ctx context.Context, sb Sandbox, cfg *toolsConfig, path string, data []byte) (note string, err error) {
 	if err := sb.UploadFile(ctx, path, bytes.NewReader(data)); err != nil {
-		return fmt.Errorf("save to %s: %w", path, err)
+		return "", fmt.Errorf("save to %s: %w", path, err)
 	}
 	if err := publishToMount(ctx, cfg, path, data); err != nil {
-		return fmt.Errorf("saved to %s but publish failed: %w", path, err)
+		var refusal *readOnlyMountError
+		if errors.As(err, &refusal) {
+			return "[NOT SAVED. " + refusal.refusalWith("The capture is on the sandbox's local disk, but it was not saved to storage and the user cannot see it.") + "]", nil
+		}
+		return "", fmt.Errorf("saved to %s but publish failed: %w", path, err)
 	}
-	return nil
+	return "", nil
 }
 
 func browserReadTool(sb Sandbox, b BrowserSandbox, cfg *toolsConfig) toolImpl {
@@ -793,10 +974,14 @@ func browserReadTool(sb Sandbox, b BrowserSandbox, cfg *toolsConfig) toolImpl {
 				}
 				content := fmt.Sprintf("screenshot captured (%d bytes); the image is attached to this result", len(data))
 				if p.Path != "" {
-					if err := saveCapture(ctx, sb, cfg, p.Path, data); err != nil {
+					note, err := saveCapture(ctx, sb, cfg, p.Path, data)
+					if err != nil {
 						return oasis.ToolResult{Error: err.Error()}, nil
 					}
 					content = fmt.Sprintf("screenshot captured (%d bytes) and saved to %s; the image is attached to this result", len(data), p.Path)
+					if note != "" {
+						content += "\n\n" + note
+					}
 				}
 				return oasis.ToolResult{
 					Content:     content,
@@ -834,10 +1019,15 @@ func browserReadTool(sb Sandbox, b BrowserSandbox, cfg *toolsConfig) toolImpl {
 				if err != nil {
 					return oasis.ToolResult{Error: err.Error()}, nil
 				}
-				if err := saveCapture(ctx, sb, cfg, p.Path, data); err != nil {
+				note, err := saveCapture(ctx, sb, cfg, p.Path, data)
+				if err != nil {
 					return oasis.ToolResult{Error: err.Error()}, nil
 				}
-				return oasis.TextResult(fmt.Sprintf("pdf exported (%d bytes) and saved to %s", len(data), p.Path)), nil
+				out := fmt.Sprintf("pdf exported (%d bytes) and saved to %s", len(data), p.Path)
+				if note != "" {
+					out += "\n\n" + note
+				}
+				return oasis.TextResult(out), nil
 			default:
 				return oasis.ToolResult{Error: fmt.Sprintf("unknown action %q: use screenshot, snapshot, text, or pdf", p.Action)}, nil
 			}
@@ -873,11 +1063,14 @@ func webSearchTool(sb Sandbox) toolImpl {
 		})
 }
 
-func mcpCallTool(sb Sandbox) toolImpl {
+// mcp_call commits after itself for the same reason shell does: an MCP server
+// running inside the sandbox is arbitrary code with the same reach as a
+// command, and the framework sees none of what it writes.
+func mcpCallTool(sb Sandbox, cfg *toolsConfig) toolImpl {
 	return newTool("mcp_call",
 		"Invoke an MCP tool on a server in the sandbox",
 		string(core.DeriveSchema[mcpCallArgs]()),
-		func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
+		commitAfterWrite(sb, cfg, func(ctx context.Context, args json.RawMessage) (oasis.ToolResult, error) {
 			var p mcpCallArgs
 			if err := json.Unmarshal(args, &p); err != nil {
 				return oasis.ToolResult{Error: "invalid args: " + err.Error()}, nil
@@ -895,15 +1088,37 @@ func mcpCallTool(sb Sandbox) toolImpl {
 				return oasis.ToolResult{Error: res.Content}, nil
 			}
 			return oasis.TextResult(res.Content), nil
-		})
+		}))
 }
 
 // maxDeliverFileBytes caps the file size for deliver_file to prevent
 // unbounded memory allocation when reading sandbox files into memory.
 const maxDeliverFileBytes = 100 * 1024 * 1024 // 100 MB
 
-// deliverFile implements oasis.StreamingAnyTool so it can emit a file_attachment
-// event on the shared stream channel alongside the normal tool result.
+// deliverFile attaches a sandbox file to the conversation as a download. It
+// implements oasis.StreamingAnyTool so it can emit a file_attachment event on
+// the shared stream channel alongside the normal tool result.
+//
+// # It used to do two jobs
+//
+// It published the bytes to the mount backend *and* emitted the attachment
+// event, and only the second was ever its purpose. Persistence belongs to the
+// mount lifecycle: Layer 2 publishes what file_write and file_edit write,
+// WithToolCallCommits commits what a command wrote, and FlushMounts catches the
+// rest at close. Doing it here as well made deliver_file load-bearing for
+// storage, so a skill that needed a file *saved* had to call it even when the
+// user needed no download — a rule that can only live in prose and only works
+// while the model remembers to read it.
+//
+// # It still needs a destination
+//
+// Not to write through — it writes nothing — but because the url it emits has
+// to name a file the host can actually serve. A writable mount that covers the
+// path names one; a path under no mount at all is sandbox-local scratch that
+// nothing will ever store, and attaching it would hand the user a link to
+// bytes that are about to be thrown away. The deprecated FileDelivery is the
+// one remaining destination deliver_file still hands bytes to, because a host
+// wired that way has no mount to have stored them (see FileDelivery).
 type deliverFile struct {
 	def     oasis.ToolDefinition
 	sandbox Sandbox
@@ -914,9 +1129,10 @@ func deliverFileTool(sb Sandbox, cfg *toolsConfig) *deliverFile {
 	return &deliverFile{
 		def: oasis.ToolDefinition{
 			Name: "deliver_file",
-			Description: "Deliver a file from the sandbox to the user. The file will appear as a downloadable " +
-				"attachment in the conversation. Use this after creating a file the user needs (reports, charts, " +
-				"converted documents, generated code, etc).",
+			Description: "Attach a file from the sandbox to the conversation as a download. Call it when the user " +
+				"should be able to open or download the file — a report, a chart, a converted document, generated " +
+				"code. It is presentational only: it does not save the file, and files you write under a writable " +
+				"workspace path are stored for you whether or not you deliver them.",
 			Parameters: core.DeriveSchema[deliverFileArgs](),
 		},
 		sandbox: sb,
@@ -942,6 +1158,25 @@ func (t *deliverFile) executeDelivery(ctx context.Context, args json.RawMessage,
 	}
 	if p.Path == "" {
 		return oasis.ToolResult{Error: "path is required"}, nil
+	}
+
+	// A non-writable mount is still refused, even though nothing is written any
+	// more. Two reasons, both surviving the split:
+	//
+	//   - A file there is not this run's output. It belongs to whoever put it
+	//     in the mount, and the model reaching for deliver_file on such a path
+	//     is almost always the "I edited the input in place" mistake — the one
+	//     WC-9 exists to stop, arriving one tool call later. Attaching it would
+	//     print "here is your updated document" over content nothing updated.
+	//   - The url would name a key the mount never accepted, so the host has
+	//     nothing to resolve it to and the user gets a dead download.
+	//
+	// Checked before the download so the deprecated FileDelivery fallback below
+	// cannot catch the path on the rebound — falling through to a second
+	// destination is not what "this mount does not accept writes" means.
+	if refusal := mountWriteRefusal(t.cfg, p.Path); refusal != nil {
+		return oasis.ToolResult{Error: "deliver_file attaches a file as this run's output, and a read-only mount holds files this run did not produce. " +
+			refusal.refusalWith("Nothing was attached and nothing was saved.")}, nil
 	}
 
 	displayName := p.Name
@@ -975,23 +1210,20 @@ func (t *deliverFile) executeDelivery(ctx context.Context, args json.RawMessage,
 
 	// Routing: prefer an explicit mount that covers the path; fall back to
 	// the legacy FileDelivery; otherwise error out with a clear message.
+	//
+	// Nothing is published here. The identifier is derived from the path and
+	// the mount root alone — the same string the Put used to return a version
+	// for — and the host translates it into a real URL when it serves the file.
+	// Deliberately no Manifest.Record and no ChangeDetector.Published either:
+	// both state "the backend now holds these exact bytes", and after the split
+	// it does not. Recording the first would make the next commit assert a
+	// version the backend never assigned; recording the second would make the
+	// next scan skip the file, which is how a delivered-but-uncommitted
+	// document would end up never stored at all.
 	url := ""
 	if t.cfg != nil && len(t.cfg.mounts) > 0 {
 		mount, key := findMountForPath(t.cfg.mounts, p.Path)
 		if mount != nil && mount.Mode.Writable() {
-			ver := ""
-			if t.cfg.manifest != nil {
-				ver, _ = t.cfg.manifest.Version(mount.Path, key)
-			}
-			newVer, putErr := mount.Backend.Put(ctx, key, mimeType, size, bytes.NewReader(data), ver)
-			if putErr != nil {
-				return oasis.ToolResult{Error: "delivery failed: " + putErr.Error()}, nil
-			}
-			if t.cfg.manifest != nil {
-				t.cfg.manifest.Record(mount.Path, key, MountEntry{Key: key, Size: size, MimeType: mimeType, Version: newVer})
-			}
-			// The framework emits a stable identifier; the host app
-			// translates this to a real URL when serving the file.
 			url = mount.Path + "/" + key
 		}
 	}

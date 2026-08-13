@@ -148,7 +148,11 @@ once, after `Create` and before the agent executes. The manifest records each fi
 backend version so any future writes use the correct optimistic-concurrency precondition.
 
 Use `Include` and `Exclude` glob patterns to limit which files are copied. Without
-them, every key under the backend prefix is fetched.
+them, every key under the backend prefix is fetched. The patterns are doublestar
+globs, tested against the mount key and against its basename: `*` stays inside one
+path segment, `**` spans them (so `node_modules/**` excludes the whole tree), and
+the short `*.tmp` form still matches `sub/dir/file.tmp`. Full rules in
+[api.md](api.md#mountspec).
 
 ### Output mounts (flush)
 

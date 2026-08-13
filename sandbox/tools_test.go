@@ -982,6 +982,47 @@ func TestBrowserReadScreenshotPublishesToMount(t *testing.T) {
 	}
 }
 
+// TestBrowserReadScreenshotReadOnlyMountNotesWithoutFailing is the other half
+// of the refusal policy: where the work already happened and cannot be redone
+// by retrying, the refusal is appended to a successful result rather than
+// replacing it. Failing here would send the model back to navigate and
+// re-capture, which cannot fix a mount that does not accept writes — the same
+// reasoning commit.go:noteCommitFailure states for a successful shell.
+func TestBrowserReadScreenshotReadOnlyMountNotesWithoutFailing(t *testing.T) {
+	mount := newFakeMount()
+	sb := &mockSandbox{
+		uploads: map[string][]byte{},
+		screenshotFn: func(_ context.Context) ([]byte, error) {
+			return []byte("fake-png-data"), nil
+		},
+	}
+
+	tool := findToolByName(Tools(sb, WithMounts([]MountSpec{
+		{Path: "/workspace", Backend: newFakeMount(), Mode: MountReadWrite},
+		{Path: "/workspace/inputs", Backend: mount, Mode: MountReadOnly},
+	}, NewManifest())), "browser_read")
+	if tool == nil {
+		t.Fatal("browser_read tool not registered")
+	}
+
+	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"screenshot","path":"/workspace/inputs/shot.png"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("capture was turned into a failure: %s", result.Error)
+	}
+	if len(result.Attachments) != 1 {
+		t.Fatalf("attachments = %d, want the captured image kept on the result", len(result.Attachments))
+	}
+	if !strings.Contains(result.Content, "update_file") {
+		t.Errorf("content %q does not carry the refusal", result.Content)
+	}
+	if len(mount.entries) != 0 {
+		t.Errorf("read-only mount received %d entries", len(mount.entries))
+	}
+}
+
 func TestBrowserReadUnknownActionErrors(t *testing.T) {
 	tool := browserReadTestTool(t, &mockSandbox{})
 	result, err := tool.ExecuteRaw(context.Background(), json.RawMessage(`{"action":"dom"}`))
@@ -1264,33 +1305,92 @@ func TestDeliverFileToolNotRegisteredWithoutDelivery(t *testing.T) {
 	}
 }
 
-func TestDeliverFileRoutesThroughMount(t *testing.T) {
+// deliver_file attaches; it does not persist. The mount names where the file
+// lives so the host can serve it, and the backend must come out of the call
+// exactly as it went in — persistence is Layer 2's, the per-tool-call commit's
+// and the close-time flush's job, and doing it here as well is what made a
+// skill call deliver_file for storage reasons.
+func TestDeliverFileAttachesWithoutWritingToTheMount(t *testing.T) {
 	mount := newFakeMount()
+	manifest := NewManifest()
+	detector := &recordingDetector{}
 	sb := newRecordingSandbox()
 	sb.files["/workspace/output/chart.png"] = []byte("PNG-DATA")
 
-	tools := Tools(sb, WithMounts([]MountSpec{{
-		Path:    "/workspace/output",
-		Backend: mount,
-		Mode:    MountReadWrite,
-	}}, NewManifest()))
+	tools := Tools(sb,
+		WithMounts([]MountSpec{{
+			Path:    "/workspace/output",
+			Backend: mount,
+			Mode:    MountReadWrite,
+		}}, manifest),
+		WithToolCallCommits(detector),
+	)
 
 	deliver := findToolByName(tools, "deliver_file")
 	if deliver == nil {
 		t.Fatal("deliver_file tool not registered when WithMounts has writeable mount")
 	}
 
+	st, ok := deliver.(oasis.StreamingAnyTool)
+	if !ok {
+		t.Fatal("deliver_file does not implement StreamingAnyTool")
+	}
+	ch := make(chan oasis.StreamEvent, 4)
 	args := json.RawMessage(`{"path":"/workspace/output/chart.png"}`)
-	res, err := deliver.ExecuteRaw(context.Background(), args)
+	res, err := st.ExecuteStream(context.Background(), args, ch)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if res.Error != "" {
 		t.Fatalf("tool error: %s", res.Error)
 	}
-	if string(mount.entries["chart.png"].data) != "PNG-DATA" {
-		t.Errorf("backend chart.png = %q", mount.entries["chart.png"].data)
+
+	if len(mount.entries) != 0 {
+		t.Errorf("deliver_file wrote to the backend: %v", mount.entries)
 	}
+	// Recording either of these would claim the backend holds these bytes. The
+	// manifest version would become a precondition the backend never issued;
+	// the detector would skip the file on the next scan, which is exactly how
+	// a delivered file would end up never stored.
+	if _, tracked := manifest.Version("/workspace/output", "chart.png"); tracked {
+		t.Error("deliver_file recorded a manifest version for content it did not publish")
+	}
+	if len(detector.published) != 0 {
+		t.Errorf("deliver_file told the detector it published: %v", detector.published)
+	}
+
+	// The attachment still appears, pointing at the mount-rooted identifier
+	// the host resolves.
+	select {
+	case ev := <-ch:
+		if ev.Type != oasis.EventFileAttachment {
+			t.Fatalf("event type = %q, want %q", ev.Type, oasis.EventFileAttachment)
+		}
+		if !strings.Contains(ev.Content, `"url":"/workspace/output/chart.png"`) {
+			t.Errorf("attachment url wrong: %s", ev.Content)
+		}
+		if !strings.Contains(ev.Content, `"size":8`) {
+			t.Errorf("attachment size wrong: %s", ev.Content)
+		}
+	default:
+		t.Fatal("no file_attachment event emitted")
+	}
+}
+
+// recordingDetector is a ChangeDetector that only records what the framework
+// tells it, so a test can assert the tool layer's bookkeeping without running
+// a commit.
+type recordingDetector struct {
+	published []string
+	committed []ChangedFile
+}
+
+func (d *recordingDetector) Scan(context.Context, Sandbox, ChangeScan) ([]ChangedFile, error) {
+	return nil, nil
+}
+func (d *recordingDetector) Published(path string, _ []byte) { d.published = append(d.published, path) }
+func (d *recordingDetector) Committed(files []ChangedFile) {
+	d.committed = append(d.committed, files...)
 }
 
 func TestDeliverFileLegacyFileDeliveryShim(t *testing.T) {
@@ -1576,30 +1676,201 @@ func TestFileEditToolPublishesUnderWriteMount(t *testing.T) {
 	}
 }
 
-func TestFileWriteToolReadOnlyMountSilentlyAbsorbsLocally(t *testing.T) {
-	mount := newFakeMount()
+// readOnlyLayout mirrors athena's mount layout after WC-9: a writable
+// /workspace with a nested, read-only view of the global files table.
+func readOnlyLayout(workspace, inputs FilesystemMount) []MountSpec {
+	return []MountSpec{
+		{Path: "/workspace", Backend: workspace, Mode: MountReadWrite, FlushOnClose: true},
+		{Path: "/workspace/inputs", Backend: inputs, Mode: MountReadOnly},
+	}
+}
+
+// TestFileWriteToolRefusesReadOnlyMount is the inverted form of the old
+// "silently absorbs locally" test. Absorbing the write is what let an agent
+// report an uploaded document as updated while the stored file never moved;
+// WC-9 makes it an explicit refusal instead.
+func TestFileWriteToolRefusesReadOnlyMount(t *testing.T) {
+	workspace, inputs := newFakeMount(), newFakeMount()
 	sb := newRecordingSandbox()
 
-	tools := Tools(sb, WithMounts([]MountSpec{{
-		Path:    "/workspace/inputs",
-		Backend: mount,
-		Mode:    MountReadOnly,
-	}}, NewManifest()))
+	tools := Tools(sb, WithMounts(readOnlyLayout(workspace, inputs), NewManifest()))
 
 	write := findToolByName(tools, "file_write")
-	args := json.RawMessage(`{"path":"/workspace/inputs/scratch.txt","content":"local"}`)
+	args := json.RawMessage(`{"path":"/workspace/inputs/report.xlsx","content":"EDITED"}`)
 	res, err := write.ExecuteRaw(context.Background(), args)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	if res.Error == "" {
+		t.Fatal("write to a read-only mount succeeded; it must be refused")
+	}
+	if !strings.Contains(res.Error, "update_file") {
+		t.Errorf("refusal %q does not name update_file as the alternative", res.Error)
+	}
+	if !strings.Contains(res.Error, "/workspace") {
+		t.Errorf("refusal %q does not name a writable mount to use instead", res.Error)
+	}
+	if _, ok := sb.files["/workspace/inputs/report.xlsx"]; ok {
+		t.Error("a refused write still touched the guest filesystem")
+	}
+	if len(inputs.entries) != 0 {
+		t.Errorf("read-only mount should not publish, has %d entries", len(inputs.entries))
+	}
+	if len(workspace.entries) != 0 {
+		t.Errorf("the refused write leaked to the parent mount: %v", workspace.entries)
+	}
+}
+
+func TestFileEditToolRefusesReadOnlyMount(t *testing.T) {
+	workspace, inputs := newFakeMount(), newFakeMount()
+	inputs.seed("file-id-1", "ORIGINAL", "v1")
+	sb := newRecordingSandbox()
+	sb.files["/workspace/inputs/report.csv"] = []byte("ORIGINAL")
+
+	tools := Tools(sb, WithMounts(readOnlyLayout(workspace, inputs), NewManifest()))
+
+	edit := findToolByName(tools, "file_edit")
+	args := json.RawMessage(`{"path":"/workspace/inputs/report.csv","old_string":"ORIGINAL","new_string":"EDITED"}`)
+	res, err := edit.ExecuteRaw(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error == "" {
+		t.Fatal("edit of a read-only mount succeeded; it must be refused")
+	}
+	if !strings.Contains(res.Error, "update_file") {
+		t.Errorf("refusal %q does not name update_file as the alternative", res.Error)
+	}
+	if got := string(sb.files["/workspace/inputs/report.csv"]); got != "ORIGINAL" {
+		t.Errorf("guest file = %q; a refused edit must not half-apply", got)
+	}
+	if got := string(inputs.entries["file-id-1"].data); got != "ORIGINAL" {
+		t.Errorf("canonical file = %q, want ORIGINAL", got)
+	}
+}
+
+// TestDeliverFileRefusesReadOnlyMount keeps the refusal after deliver_file
+// stopped writing. The overwrite it originally closed is gone — the tool
+// publishes nothing anywhere — but two reasons survive: a file under a
+// read-only mount is not this run's output, so attaching it would present
+// somebody else's document as what the agent just produced; and the url would
+// name a key that mount never accepted, which the host has nothing to resolve.
+// No attachment event may escape either.
+func TestDeliverFileRefusesReadOnlyMount(t *testing.T) {
+	workspace, inputs := newFakeMount(), newFakeMount()
+	inputs.seed("file-id-1", "ORIGINAL", "v1")
+	sb := newRecordingSandbox()
+	sb.files["/workspace/inputs/report.xlsx"] = []byte("EDITED BY OPENPYXL")
+
+	tools := Tools(sb, WithMounts(readOnlyLayout(workspace, inputs), NewManifest()))
+
+	deliver := findToolByName(tools, "deliver_file")
+	if deliver == nil {
+		t.Fatal("deliver_file not registered")
+	}
+	ch := make(chan oasis.StreamEvent, 4)
+	res, err := deliver.(oasis.StreamingAnyTool).ExecuteStream(context.Background(),
+		json.RawMessage(`{"path":"/workspace/inputs/report.xlsx"}`), ch)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error == "" {
+		t.Fatal("deliver_file on a read-only mount succeeded; it must be refused")
+	}
+	if !strings.Contains(res.Error, "update_file") {
+		t.Errorf("refusal %q does not name update_file as the alternative", res.Error)
+	}
+	if got := string(inputs.entries["file-id-1"].data); got != "ORIGINAL" {
+		t.Errorf("deliver_file overwrote the canonical file: %q", got)
+	}
+	select {
+	case ev := <-ch:
+		t.Fatalf("a refused delivery still emitted an attachment: %+v", ev)
+	default:
+	}
+}
+
+// TestDeliverFileRefusalIsNotRoutedToLegacyDelivery guards the second half of
+// the same back door: a refused mount must not fall through to the deprecated
+// FileDelivery destination, which would persist the bytes anyway under a
+// different name.
+func TestDeliverFileRefusalIsNotRoutedToLegacyDelivery(t *testing.T) {
+	workspace, inputs := newFakeMount(), newFakeMount()
+	sb := newRecordingSandbox()
+	sb.files["/workspace/inputs/report.xlsx"] = []byte("EDITED")
+
+	calls := 0
+	fd := &mockFileDelivery{deliverFn: func(context.Context, string, string, int64, io.Reader) (string, error) {
+		calls++
+		return "https://example.test/leaked", nil
+	}}
+	tools := Tools(sb,
+		WithMounts(readOnlyLayout(workspace, inputs), NewManifest()),
+		WithFileDelivery(fd))
+
+	deliver := findToolByName(tools, "deliver_file")
+	res, err := deliver.ExecuteRaw(context.Background(), json.RawMessage(`{"path":"/workspace/inputs/report.xlsx"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error == "" {
+		t.Fatal("deliver_file on a read-only mount succeeded; it must be refused")
+	}
+	if calls != 0 {
+		t.Errorf("legacy FileDelivery was used as a fallback for a refused path (%d calls)", calls)
+	}
+}
+
+// TestWritesOutsideReadOnlyMountAreUnaffected pins that the refusal is scoped
+// to the mount that declared it: /workspace proper still publishes, and so
+// does a sibling path that merely shares a string prefix with the read-only
+// mount root.
+func TestWritesOutsideReadOnlyMountAreUnaffected(t *testing.T) {
+	workspace, inputs := newFakeMount(), newFakeMount()
+	sb := newRecordingSandbox()
+
+	tools := Tools(sb, WithMounts(readOnlyLayout(workspace, inputs), NewManifest()))
+	write := findToolByName(tools, "file_write")
+
+	for _, tc := range []struct{ path, key string }{
+		{"/workspace/report.xlsx", "report.xlsx"},
+		{"/workspace/inputs2/notes.md", "inputs2/notes.md"},
+	} {
+		res, err := write.ExecuteRaw(context.Background(), json.RawMessage(`{"path":"`+tc.path+`","content":"OUT"}`))
+		if err != nil {
+			t.Fatalf("Execute %s: %v", tc.path, err)
+		}
+		if res.Error != "" {
+			t.Fatalf("write to %s was refused: %s", tc.path, res.Error)
+		}
+		if got := string(workspace.entries[tc.key].data); got != "OUT" {
+			t.Errorf("workspace backend %q = %q, want OUT", tc.key, got)
+		}
+	}
+	if len(inputs.entries) != 0 {
+		t.Errorf("read-only mount received %d entries", len(inputs.entries))
+	}
+}
+
+// TestUnmountedPathsAreStillLocalScratch: /tmp is under no mount at all and
+// must keep behaving as sandbox-local scratch. The refusal is about mounts
+// that declined writes, not about every path with no backend.
+func TestUnmountedPathsAreStillLocalScratch(t *testing.T) {
+	workspace, inputs := newFakeMount(), newFakeMount()
+	sb := newRecordingSandbox()
+
+	tools := Tools(sb, WithMounts(readOnlyLayout(workspace, inputs), NewManifest()))
+	write := findToolByName(tools, "file_write")
+
+	res, err := write.ExecuteRaw(context.Background(), json.RawMessage(`{"path":"/tmp/scratch.txt","content":"junk"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
 	if res.Error != "" {
-		t.Fatalf("tool error: %s", res.Error)
+		t.Fatalf("write to /tmp was refused: %s", res.Error)
 	}
-	if string(sb.files["/workspace/inputs/scratch.txt"]) != "local" {
-		t.Error("local sandbox file should be written")
-	}
-	if len(mount.entries) != 0 {
-		t.Errorf("read-only mount should not publish, has %d entries", len(mount.entries))
+	if string(sb.files["/tmp/scratch.txt"]) != "junk" {
+		t.Error("/tmp write did not reach the guest filesystem")
 	}
 }
 

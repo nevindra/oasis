@@ -206,6 +206,23 @@ func (l *lazySandbox) GlobFiles(ctx context.Context, req GlobRequest) (GlobResul
 	return sb.GlobFiles(ctx, req)
 }
 
+// HashFiles forwards to the inner sandbox when it can hash, and reports
+// ErrHashUnsupported when it cannot. A lazy sandbox has to advertise
+// FileHasher — the capability is detected by type assertion, and asserting
+// against the wrapper is all a caller can do before the inner sandbox exists —
+// so the honest answer arrives here rather than at the assertion.
+func (l *lazySandbox) HashFiles(ctx context.Context, paths []string) ([]FileHash, error) {
+	sb, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	h, ok := sb.(FileHasher)
+	if !ok {
+		return nil, ErrHashUnsupported
+	}
+	return h.HashFiles(ctx, paths)
+}
+
 func (l *lazySandbox) GrepFiles(ctx context.Context, req GrepRequest) (GrepResult, error) {
 	sb, err := l.get(ctx)
 	if err != nil {

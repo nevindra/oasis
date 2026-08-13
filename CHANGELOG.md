@@ -6,6 +6,379 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+### Added
+
+- **`sandbox.TransactionalMount` — optional capability for all-or-nothing mount
+  writes.** A `FilesystemMount` backend MAY implement `StageContent` + `Commit`
+  so that a change touching several files lands as one unit and a writer whose
+  reads went stale is rejected instead of silently winning. The default path
+  publishes one `Put` per file, so a two-file change is two independent writes,
+  and `Put`'s `ifVersion` is a read-then-write on real backends. Detected by
+  type assertion (`sandbox.AsTransactional`) — a backend that does not
+  implement it keeps today's behaviour exactly. Its one caller is the
+  per-tool-call commit path below, which is opt-in.
+
+  Preconditions are per key (`MountChange.Expect` / `Have`), not per mount: two
+  agents changing different files in one workspace must not conflict, and a
+  version per `(mount, key)` is the only state `Manifest` holds. Rejection
+  returns `*sandbox.CommitConflictError`, which names every stale key with the
+  version the caller asserted and the version the backend now holds, and
+  matches both `ErrCommitConflict` and the existing `ErrVersionMismatch`.
+
+  New exports: `TransactionalMount`, `StagedContent`, `MountChange`, `ChangeOp`
+  (`OpPut`, `OpDelete`), `VersionExpectation` (`ExpectAny`, `ExpectVersion`,
+  `ExpectAbsent`), `CommitResult`, `KeyConflict`, `CommitConflictError`,
+  `ErrCommitConflict`, `AsTransactional`.
+
+- **`sandbox.WithToolCallCommits` — commit what a tool call wrote, before the
+  next one starts.** Layer 2 tool interception only sees the writes it performs
+  itself, so everything a *command* writes — every CLI toolchain an agent uses
+  — reaches the backend only at close, and a VM that dies mid-turn takes it.
+  With this option, `shell`, `execute_code` and `mcp_call` end with a commit of
+  whatever changed under each writable mount whose backend implements
+  `TransactionalMount`, respecting the mount's `Include`/`Exclude` and the
+  deepest-mount rule, with one precondition per key: `ExpectVersion` for a key
+  the manifest tracks, `ExpectAbsent` for a new file on a prefetched mount,
+  `ExpectAny` on a mount the framework has never read. A rejected commit applies
+  nothing and tells the detector nothing, so the same files are reported again
+  by the next scan; it notes itself in the tool result without failing the tool
+  call, and is retried by the next call. Deletions are never mirrored mid-turn —
+  that stays a `FlushMounts` decision under `MirrorDeletes`.
+
+  **Off by default**, because a host has to decide that its backends are
+  transactional and that its workspaces are the shape this suits, and because
+  committing more often is a change in observable behaviour: every commit is a
+  version, and a host that surfaces version history will surface more of it.
+  With the option unset the tool layer runs exactly the code it ran before;
+  nothing is scanned, and non-transactional and read-only mounts are skipped
+  even when it is set. `sandbox.ChangeDetector` is the seam that decides what
+  changed — pass `sandbox.NewStatHashDetector`, which transfers no file bodies
+  at all; see its entry below.
+
+  New exports: `WithToolCallCommits`, `ChangeDetector`, `ChangeScan`,
+  `ChangedFile`, `NewFullScanDetector`.
+
+- **A commit rejected by another writer now tells the model what the file says
+  now and what to do about it.** A rejection used to reach the model as a bare
+  version-mismatch string, which is not recoverable: the model either retries
+  with the same stale bytes and fails identically, or gives up and reports
+  failure to the user. The note under `WithToolCallCommits` now names every
+  conflicted file by its sandbox path, says whether it was **changed**,
+  **deleted**, or **already exists** — three different actions: merge, decide,
+  rename — carries the current stored content read back from the backend, and
+  instructs the model to re-read and re-apply before writing again. The content
+  has to be in the message because the copy inside the sandbox is the agent's
+  own uncommitted write: `file_read` on that path returns what the agent wrote,
+  not what the other writer stored.
+
+  Bounded throughout. Content is inlined for at most 3 files at 4 KB each, and
+  read from the backend under that same bound, so a 50 MB file costs one
+  bounded read rather than a 50 MB transfer. At most 10 files are named before
+  the rest become a count. Content that is not valid UTF-8, or that contains a
+  NUL byte, is never inlined — a conflicted `.xlsx` says so and points at
+  re-reading the file instead. A readback that fails degrades to naming the
+  conflict without the content rather than losing the message.
+
+  A commit failure that is *not* a conflict — the backend is down, a file the
+  guest could not serve — gets a different message and no re-read instruction:
+  nothing changed underneath the model and there is nothing for it to re-read.
+  Unchanged in both cases: a failed commit never turns a successful tool call
+  into a failure, because a model told its `shell` call failed re-runs it, and
+  re-running a build or a migration is worse than a failed save.
+
+  No API change. `*CommitConflictError` and its `KeyConflict` payload already
+  carried everything except which mount a key belongs to, which is now tracked
+  internally so that a key can be rendered as a sandbox path and read back
+  through the right backend.
+
+  The note is only half of what makes a rejection recoverable — the framework
+  also has to stop asserting the version it was just refused. See **A rejected
+  commit now adopts the versions it was rejected with** below.
+
+- **A rejected commit now adopts the versions it was rejected with, so a retry
+  can succeed.** Without this the loop cannot close: the manifest keeps
+  asserting the version the framework already knows is stale, so the model
+  re-reads the file, merges, writes again — and the framework sends the same
+  dead precondition, which the backend rejects for the same reason, forever. The
+  tool result was telling the model to fix something only the framework could
+  fix.
+
+  Per conflicted key, the rejection is now recorded. `Absent` forgets the key,
+  so the next attempt claims the name is free — which is now true — rather than
+  asserting a version of a file that no longer exists. A reported `Want` is
+  recorded as the version to assert next, with no round trip. A rejected
+  `ExpectAbsent` that named no version is resolved with one
+  `FilesystemMount.Stat`, since asking is the only way to learn one and without
+  it that key could never be written at all; those calls are bounded to 32 per
+  rejection, and a backend that will not answer leaves the key rejected rather
+  than getting an invented version. An entry adopted from `Want` carries the
+  version and nothing else — a `Size` from before the conflict describes content
+  the key no longer holds, and the change detector reads an equal size as
+  evidence of equal content.
+
+  **Adopting a version is not adopting content.** The file inside the sandbox is
+  still the model's own version; only the framework's belief about what the
+  backend currently holds moves forward. The next commit therefore says "I know
+  this key is at v2" and writes the model's bytes over it — an *informed*
+  overwrite, and informed is the whole promise, because the rejection note has
+  already shown the model what the file says now, named it, and told it to merge
+  before retrying. The protection stays live: a third writer landing between the
+  rejection and the retry moves the key to v3, and the retry — now asserting v2
+  — is rejected again. What is given up is that nothing *forces* the model to
+  read what it was shown, which is the trade every re-read-then-write loop
+  makes, against an alternative that never terminates. The note still tells the
+  model to stop and escalate to the user if the same file is rejected twice.
+
+  No API change; the manifest is the only thing that moves.
+
+- **The guest can now describe and hash files, so the framework can tell what
+  changed without moving bytes.** Two additive pieces of the sandbox protocol,
+  both optional, both detected rather than required:
+
+  `GlobResult.Entries` — a `[]GlobEntry` of `{Path, Size, ModTime}` for the paths
+  a glob just returned, from a guest-side stat in the round trip that already
+  carried the names. `Files` is unchanged, and a guest that predates the metadata
+  returns `Entries` nil, so every caller that only reads `Files` keeps working.
+  **Entries are not index-aligned with `Files`** — a path the guest could not
+  stat is still a path it found, so it stays in `Files` with no entry — which
+  means matching on `Path`, and reading a missing entry as *unknown* rather than
+  as *unchanged*.
+
+  `sandbox.FileHasher` — an optional `Sandbox` capability,
+  `HashFiles(ctx, paths) ([]FileHash, error)`, detected with
+  `sandbox.AsFileHasher`, the same shape `BrowserSandbox` and
+  `TransactionalMount` use. It returns the lower-case hex sha256 of each path computed **inside the
+  guest**: one round trip for any number of files, a few dozen bytes each, and
+  no file bodies over the wire. The digest is the scheme the framework hashes
+  with on the host and the one a content-addressed backend reports as a version,
+  so a guest digest, a host digest and a stored version are directly comparable —
+  which is what lets a flush skip a file it can prove the backend already holds.
+
+  Best-effort by contract: a path that was deleted, replaced by a directory, or
+  was never readable is **omitted** from the result rather than erroring or
+  coming back as a zero value, because these paths were enumerated a moment ago
+  by a caller racing whatever the tool call just started. `ErrHashUnsupported`
+  means the sandbox can never hash — an older guest, or a runtime without the
+  operation — and it is an error rather than a missing method because `Lazy` has
+  to advertise the capability before it knows what it wraps. `AsFileHasher`
+  returning true therefore means the call is *available*, not that it will
+  succeed, so a caller that treats `ErrHashUnsupported` exactly like a transport
+  failure — by falling back to reading the bytes — is already correct.
+
+  **Read `GlobEntry.ModTime`'s doc before comparing mtimes.** A non-zero
+  nanosecond component is proof the guest carried sub-second precision for that
+  file, which is what makes an equal-mtime comparison sound. A whole-second mtime
+  is ambiguous — a genuine whole-second timestamp is indistinguishable from a
+  truncated one — and an agent's write-run-rewrite loop puts two versions of a
+  file inside the same second routinely, so a caller that takes equal size plus
+  equal whole-second mtime for "unchanged" will lose that change until close.
+  Treat such a file as a hash candidate.
+
+  Implementing either is optional for a `Sandbox`. Nothing in the framework
+  requires them, and every path that uses them keeps a download-and-hash
+  fallback.
+
+  New exports: `GlobEntry`, `FileHasher`, `FileHash`, `AsFileHasher`,
+  `ErrHashUnsupported`, plus the new `GlobResult.Entries` field.
+
+- **`sandbox.NewStatHashDetector` — the change detector to use with
+  `WithToolCallCommits`.** It globs the mount root, discards every file whose
+  `GlobEntry` proves it was not touched, has the guest hash what survives, and
+  transfers **no file bodies at all**; the commit path then downloads only the
+  files it is about to stage. One glob round trip plus one hash round trip per
+  256 candidates. For the same tool call in a hundred-file workspace,
+  `NewFullScanDetector` costs that glob plus a hundred downloads and the whole
+  workspace over the wire — the difference between per-tool-call commits being
+  affordable and being a thing to leave switched off.
+
+  It degrades cleanly, per batch. Without `GlobResult.Entries`, every owned file
+  becomes a hash candidate — still no downloads, just more hashing. Without a
+  working `FileHasher` — absent, `ErrHashUnsupported`, a timeout, any error at
+  all — that batch is downloaded and hashed on the host, which is exactly what
+  `NewFullScanDetector` does and no worse. With neither, it *is* a full scan. It
+  is therefore always safe to pass, and it gets faster as the runtime underneath
+  it improves without anything having to be reconfigured.
+
+  **Know its blind spot before relying on mid-turn commits.** A rewrite that
+  preserves *both* the byte length and the mtime — `cp -p`, `shutil.copy2`,
+  `touch -r`, a tar extraction that restores timestamps — is indistinguishable
+  from no write at all and stays invisible to every scan in the turn. This is
+  the same trade rsync, make and git's stat cache make, for the same reason: the
+  alternative is hashing every byte of the workspace after every tool call. It
+  costs latency, never data — `FlushMounts` compares content rather than
+  metadata, so a change hidden from every scan is still published when the turn
+  ends; it lands late rather than mid-turn, and nothing downstream treats a late
+  commit differently.
+
+  `NewFullScanDetector` stays, unchanged, as the no-capability fallback: it asks
+  the guest for nothing beyond glob and download, and it is what the new detector
+  degrades into.
+
+  New exports: `NewStatHashDetector`.
+
+### Changed
+
+- **A write to a `MountReadOnly` mount is refused instead of silently absorbed.**
+  `file_write` and `file_edit` on a path a non-writable mount owns now return a
+  refusal and do **not** touch the guest filesystem; previously the write
+  succeeded locally and the publish was skipped without a word, so the agent
+  reported a document as updated that the user would later open unchanged. The
+  refusal names the mount, names a writable mount to use instead, and names
+  `update_file` as the one deliberate way to replace a file the agent did not
+  create.
+
+  `deliver_file` is refused the same way. When this landed it was for the same
+  reason — the tool resolved the deepest mount and `Put` through it, so refusing
+  only the file tools would have left the overwrite one tool call away. It no
+  longer writes at all (see the next entry), and the refusal stays for two
+  reasons that outlive the write: a file under a read-only mount is not the
+  run's own output, so attaching it would present somebody else's document as
+  what the agent just produced; and the emitted url would name a key that mount
+  never accepted, leaving the host nothing to resolve. A refused path is not
+  routed to the deprecated `FileDelivery` fallback either — falling through to
+  a second destination is not what "this mount does not accept writes" means.
+
+  `browser_read` with a `path` under such a mount keeps its result, image
+  attachment included, and carries the refusal as an appended note. The capture
+  already happened and retrying cannot fix a mount that does not accept writes,
+  which is the same reasoning a rejected commit note follows.
+
+  Paths under no mount at all (`/tmp`, `/home`) are unaffected — they are
+  sandbox-local scratch and always were. Writes the framework cannot intercept
+  (a `shell` command, a python script) still land in the guest filesystem and
+  are still never published: neither the close-time flush nor the per-tool-call
+  commit consults a non-writable mount.
+
+- **`deliver_file` attaches; it no longer persists.** It did two jobs — publish
+  the bytes through the mount that covered the path, and emit the
+  `file_attachment` event — and only the second was ever its purpose.
+  Persistence is the mount lifecycle's: Layer 2 publishes what `file_write` and
+  `file_edit` write, `WithToolCallCommits` commits what a command wrote, and
+  `FlushMounts` catches the rest at close. Doing it here as well made
+  `deliver_file` load-bearing for *storage*, so a skill that needed a file saved
+  had to call it even when the user wanted no download — a rule that can only
+  live in prose and only holds while the model remembers to read it.
+
+  What the call now does with a mount: resolve the deepest one covering the
+  path and emit `<mount root>/<key>` as the url, the same identifier the write
+  used to produce, for the host to translate when it serves the file. What it
+  no longer does: `Put`, `Manifest.Record`, or `ChangeDetector.Published`. The
+  last two are the subtle half — both assert "the backend now holds these exact
+  bytes", so keeping them would have made the next commit assert a version the
+  backend never issued, and made the next scan skip the very file that had just
+  been shown to the user.
+
+  A destination is still required, because the url has to name something the
+  host can serve: a writable mount that covers the path, or the deprecated
+  `FileDelivery`. A path under no mount at all is sandbox-local scratch and is
+  still an error.
+
+  **`FileDelivery` is the one exception and keeps its write.** A host wired
+  that way has no mount to have stored the file, so `Deliver` is both the store
+  and the source of the url; dropping the call would attach a link to bytes
+  nothing kept. It stays deprecated and supported, unchanged, per its own
+  doc's promise not to be removed before v2.0.0.
+
+  **Know before adopting:** with `WithToolCallCommits` off — the default —
+  anything a *command* wrote reaches the backend only at `FlushMounts`. The
+  file is still stored, but not until the session closes, so a host that
+  resolves the attachment url at the moment the event is emitted will not find
+  it yet, and a VM lost mid-session takes a delivered-but-unflushed file with
+  it. Previously `deliver_file` was what closed that window. Hosts that need
+  the file durable at delivery time should enable per-tool-call commits.
+
+### Fixed
+
+- **A mount's `Include`/`Exclude` globs now span path segments.** They were
+  matched with `filepath.Match`, which has no multi-segment wildcard at all —
+  `*` and `**` both stop at a path separator — so `node_modules/**` matched
+  `node_modules/pkg` and nothing deeper, and `**/__pycache__/**` matched only a
+  path of exactly those three segments. A mount that believed it excluded a
+  dependency tree walked it and republished the whole thing on every flush. The
+  patterns are now matched with
+  [doublestar](https://github.com/bmatcuk/doublestar), which is the language
+  callers were already writing them in and the one the shell speaks: `*` inside
+  a single path segment, `**` across them. The basename test is kept, so the
+  short `*.tmp` form still matches `sub/dir/file.tmp`.
+
+  **This changes what a mount publishes, and it is worth checking before you
+  upgrade.** An `Exclude` that silently matched nothing now matches, so files
+  that used to be flushed to the backend will stop being flushed — which is what
+  the pattern always said, and for a `node_modules` or `__pycache__` exclude it
+  is a large difference in what a session writes. An `Include` written the same
+  way now lets through paths it used to filter out. Read your lists as shell
+  globs and confirm that is what you meant.
+
+  Unchanged, but now explicit rather than an ignored error return: a malformed
+  pattern matches nothing, and deliberately never everything. The dangerous
+  direction is `Exclude` — one that matched everything would swallow the whole
+  mount and silently drop every file the caller asked to have published, where
+  matching nothing costs an over-eager flush of the files the typo meant to skip,
+  which is visible in the backend and recoverable. A malformed `Include`
+  therefore lets nothing through, so an empty mount points at the pattern instead
+  of looking like a mount that was never filtered. Matching is now also defined
+  on `/` regardless of the host's path separator, since these are mount keys
+  rather than host paths and `filepath.Match` split on the OS separator.
+
+  Adds a dependency on `github.com/bmatcuk/doublestar/v4`.
+
+- **`FlushMounts` no longer republishes files that nothing changed.** Every file
+  a mount owned was downloaded out of the guest and `Put` to the backend on
+  every flush, whatever it held — on a content-addressed backend that is a new
+  pointer and a history entry for a change nobody made, once per session, for
+  every prefetched file. The function's own doc claimed unchanged files were
+  skipped; nothing in the code did it.
+
+  A file is now skipped when the manifest's version for the key **is** the
+  sha256 of the bytes on disk. That is identity rather than evidence — a
+  content-addressed backend reports the content hash as the version, so there is
+  nothing left to publish — and it is the only comparison allowed to skip a
+  `Put` here. An empty version, or one in any other scheme (an ETag, a
+  generation counter, `"v1"`), proves nothing and the file is published exactly
+  as before. The rule is deliberately stricter than the per-tool-call detector's,
+  which also accepts an equal size: that detector's mistakes cost a late commit,
+  because this flush is its backstop, while flush has no later pass — a
+  same-length rewrite wrongly skipped here would never be published at all.
+
+  Where the sandbox implements `FileHasher`, those digests come from the guest
+  in one round trip per mount and the unchanged files are **never downloaded at
+  all** — on a prefetched workspace that is most of them, and the transfer is
+  the cost, the `Put` it also avoids being the smaller half. A guest that cannot
+  hash, or a hash call that fails for any reason, downloads the file and makes
+  the same comparison on the host: same outcome, more bytes. Ownership and
+  `Include`/`Exclude` are applied *before* the hash request, so the guest is
+  never asked about the tree the excludes just removed.
+
+  Expect fewer versions in a backend's history and a faster close on a large
+  prefetched mount. Nothing that changed is skipped: a file the framework cannot
+  *prove* unchanged is published, so the fallback is the old unconditional
+  behaviour rather than a dropped write.
+
+- **A nested mount's files are no longer published to its parent's backend.**
+  `FlushMounts` globbed `**/*` under each flushing mount and published everything
+  it found, with nothing excluding the paths a deeper mount owns. A layout with
+  `/workspace` over `/workspace/inputs` therefore had two code paths that
+  disagreed about what a file under `inputs/` *is*: tool interception resolved
+  the deepest mount and wrote to the nested backend, while the flush treated the
+  same file as an ordinary workspace file and published a **copy** to the parent
+  under the key `inputs/<name>`.
+
+  The visible damage was a duplicate. An agent that edited a staged input and
+  saved it back produced a second file at the parent — every time, whether or not
+  the original was also updated — so "edit this document" reliably created a near
+  copy beside the document. Reproduced against that exact layout in
+  `sandbox/nested_mount_repro_test.go`, which is now the regression test.
+
+  The flush and `MirrorDeletes` both now apply the rule tool interception always
+  used: the deepest spec covering a path owns it, via `findMountForPath`. A
+  nested mount publishes its own files if it has `FlushOnClose`, and a manifest
+  entry that has come to fall under a nested mount is left alone rather than
+  deleted from the parent. Single-mount layouts are unaffected.
+
+  If you were relying on the duplicate — a workflow that reads those parent-side
+  copies — it will stop appearing. That is the bug being fixed, not a feature
+  being removed.
+
 ## [0.35.0] - 2026-08-11
 
 ### Changed

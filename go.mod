@@ -3,6 +3,7 @@ module github.com/nevindra/oasis
 go 1.25.0
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2

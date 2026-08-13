@@ -183,8 +183,11 @@ result, _ := agent.Execute(ctx, oasis.AgentTask{
   the container.
 - `PrefetchMounts` does the actual download. Call it after `Create` but before
   the agent runs.
-- Because the mode is `ReadOnly`, tool writes to this path stay local — they do not
-  propagate back to S3. That is intentional: input files should not be overwritten.
+- Because the mode is `ReadOnly`, a tool write to this path is **refused** — the
+  file tools return a message telling the model to write elsewhere, and nothing
+  reaches S3 or the guest filesystem. That is intentional: input files should
+  not be overwritten, and an agent that thinks it saved one is worse than a
+  refused call.
 - `manifest` records the version of each prefetched file for optimistic concurrency
   on any future read-write scenario.
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
 )
 
 // Sandbox provides isolated access to a running container environment.
@@ -270,6 +271,58 @@ type GlobRequest struct {
 type GlobResult struct {
 	Files     []string
 	Truncated bool
+
+	// Entries carries per-file metadata for the paths in Files, when the guest
+	// reported it. It is additive: a guest that predates the metadata protocol
+	// returns Files with Entries nil, and every caller that only reads Files
+	// keeps working.
+	//
+	// Match entries to paths by GlobEntry.Path, never by index. Entries may be
+	// shorter than Files, because a path the guest could not stat is still a
+	// path it found — it stays in Files, and being unable to describe it is not
+	// a reason to hide it. A path present in Files and absent from Entries is
+	// unknown, which is not the same as unchanged.
+	//
+	// It exists so a caller can decide a file is unchanged without moving its
+	// bytes. See GlobEntry for what that decision may and may not conclude.
+	Entries []GlobEntry
+}
+
+// GlobEntry is one file's metadata from a glob, sourced from a guest-side stat
+// in the round trip that already returned the name.
+//
+// # What this can prove
+//
+// A differing Size proves the content changed. Nothing here proves it did not:
+// stat is a filter that cheaply eliminates candidates, and only a hash — see
+// FileHasher — answers the question. A caller that treats equal Size and equal
+// ModTime as "unchanged" is making an inference, and ModTime says how far that
+// inference can be trusted.
+type GlobEntry struct {
+	// Path is the absolute path inside the sandbox. It is how an entry is
+	// matched back to GlobResult.Files; the two slices are not index-aligned.
+	Path string
+
+	// Size is the file's byte length.
+	Size int64
+
+	// ModTime is the last-modified time at the finest resolution the guest
+	// could report, or the zero time when it reported none.
+	//
+	// The resolution matters, and is why this is a time.Time rather than a
+	// second count. An agent's write-run-rewrite loop puts two versions of a
+	// file inside the same second routinely, so a second-granular mtime cannot
+	// separate them: two writes in one second at the same byte length make
+	// equal-size-equal-mtime a false "unchanged", and the change is then lost
+	// until the close-time flush.
+	//
+	// A non-zero nanosecond component is proof the guest's clock and filesystem
+	// carried sub-second precision for this file, so equal ModTime is then
+	// strong evidence. A zero nanosecond component is ambiguous — a genuine
+	// whole-second timestamp is indistinguishable from a truncated one — and a
+	// caller that cares about correctness must treat that file as a candidate
+	// to hash rather than as unchanged.
+	ModTime time.Time
 }
 
 // GrepRequest is the input for GrepFiles.
@@ -354,6 +407,13 @@ type WorkspaceInfoResult struct {
 
 // FileDelivery persists a file from the sandbox and returns a download URL.
 // Implementations decide where to store (S3, disk, GCS, etc.).
+//
+// It is now the only destination deliver_file still writes to. On a mount that
+// tool became attach-only — the mount already persists what the agent wrote —
+// but a host wired this way has no mount, so Deliver is both the store and the
+// source of the url, and dropping the call would mean attaching a link to
+// bytes nothing kept. That is also why this interface takes the content and
+// returns a url while nothing else on the delivery path does either any more.
 //
 // Deprecated: Use FilesystemMount with MountWriteOnly mode instead.
 // FileDelivery remains supported and will not be removed before v2.0.0.
