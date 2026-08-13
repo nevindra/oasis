@@ -204,6 +204,17 @@ func FlushMounts(ctx context.Context, sb Sandbox, specs []MountSpec, manifest *M
 		seen := make(map[string]bool)
 		var owned []flushTarget
 		for _, fullPath := range res.Files {
+			// The guest's glob reports directories too, with a trailing slash.
+			// Downloading one fails, and because flush aggregates every error
+			// it hits, a single `mkdir` under the mount root made FlushMounts
+			// return non-nil on essentially every turn — which is worse than it
+			// sounds: the caller logs that as a warning, so a genuinely failed
+			// flush became indistinguishable from an agent creating a folder.
+			// The per-tool-call detector never had this problem; a directory is
+			// simply absent from the guest's hash response and skipped there.
+			if strings.HasSuffix(fullPath, "/") {
+				continue
+			}
 			if !mountIsDeepestFor(specs, spec.Path, fullPath) {
 				continue
 			}

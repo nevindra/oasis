@@ -107,6 +107,12 @@ type recordingSandbox struct {
 	Sandbox // embed nil to satisfy interface; we override what we need
 	mu      sync.Mutex
 	files   map[string][]byte
+
+	// dirs are paths the guest's glob reports but that cannot be downloaded —
+	// directories, which a real guest returns with a trailing slash. Kept out
+	// of files on purpose so DownloadFile fails on them exactly as it does in
+	// the VM, rather than quietly succeeding with empty bytes.
+	dirs []string
 }
 
 func newRecordingSandbox() *recordingSandbox {
@@ -139,6 +145,12 @@ func (s *recordingSandbox) GlobFiles(ctx context.Context, req GlobRequest) (Glob
 	defer s.mu.Unlock()
 	var out []string
 	for p := range s.files {
+		if req.Path != "" && !strings.HasPrefix(p, req.Path) {
+			continue
+		}
+		out = append(out, p)
+	}
+	for _, p := range s.dirs {
 		if req.Path != "" && !strings.HasPrefix(p, req.Path) {
 			continue
 		}
@@ -256,6 +268,38 @@ func TestFlushMountsPublishesNewFiles(t *testing.T) {
 	}
 	if string(mount.entries["report.md"].data) != "hello" {
 		t.Errorf("backend report.md = %q, want %q", mount.entries["report.md"].data, "hello")
+	}
+}
+
+// A directory under the mount root must not make the whole flush report an
+// error. Found against a live VM: the guest's glob returns directories with a
+// trailing slash, flushOne tried to download one, and because FlushMounts
+// aggregates every error it hits, a single `mkdir` under /workspace made the
+// flush return non-nil on effectively every turn. Nothing corrupt landed — the
+// download fails before the Put — but the caller logs that as "flush mounts
+// failed", so a real flush failure was indistinguishable from an agent making
+// a folder.
+func TestFlushMountsIgnoresDirectoryEntriesFromTheGuestGlob(t *testing.T) {
+	mount := newFakeMount()
+	sb := newRecordingSandbox()
+	sb.files["/workspace/output/data/inner.csv"] = []byte("a,b")
+	sb.dirs = []string{"/workspace/output/data/"}
+
+	specs := []MountSpec{{
+		Path:         "/workspace/output",
+		Backend:      mount,
+		Mode:         MountReadWrite,
+		FlushOnClose: true,
+	}}
+
+	if err := FlushMounts(context.Background(), sb, specs, NewManifest()); err != nil {
+		t.Fatalf("FlushMounts: %v", err)
+	}
+	if string(mount.entries["data/inner.csv"].data) != "a,b" {
+		t.Errorf("backend data/inner.csv = %q, want %q", mount.entries["data/inner.csv"].data, "a,b")
+	}
+	if _, ok := mount.entries["data/"]; ok {
+		t.Error("backend holds a key for the directory itself")
 	}
 }
 
