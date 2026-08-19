@@ -6,6 +6,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-08-19
+
+### Fixed
+
+- **A non-blocking `SendMessage` sometimes answered `completed` instead of
+  `working`.** The handler spawned the background run and only then read the
+  task to build its response, so the answer depended on whether the agent had
+  finished in the meantime. A fast agent — an echo, a cache hit — wins that
+  race often enough to be seen: it turned up as an intermittent CI failure in
+  `TestE2ENonBlockingPush`, which passed and failed on the same commit.
+
+  The snapshot is now taken before the `go` statement. The response describes
+  the state at the moment the request was accepted, which is always `working`;
+  the caller learns the outcome from the webhook, as it already did. This makes
+  the wrong answer unreachable by construction rather than merely rare.
+
 ## [0.36.0] - 2026-08-19
 
 ### Added

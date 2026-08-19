@@ -148,6 +148,13 @@ func (s *Server) handleMessageSend(ctx context.Context, raw json.RawMessage) (an
 		if err := s.store.Save(ctx, entry); err != nil {
 			return nil, &rpcError{Code: codeInternalError, Message: "save task: " + err.Error()}
 		}
+		// Snapshot BEFORE spawning the run. This response describes the state
+		// at the moment the request was accepted, which is always working —
+		// the caller learns the outcome from the webhook. Reading it after the
+		// `go` statement instead makes the answer depend on whether the agent
+		// happened to finish first, and a fast agent (an echo, a cache hit)
+		// wins that race often enough to be seen.
+		snapshot := s.snapshot(entry)
 		// The HTTP request ends here, but the run must continue — use the
 		// server-lifetime context so Close() can cancel background runs.
 		bg := s.baseCtx
@@ -159,7 +166,6 @@ func (s *Server) handleMessageSend(ctx context.Context, raw json.RawMessage) (an
 			}()
 			s.runTask(bg, entry, at)
 		}()
-		snapshot := s.snapshot(entry)
 		return sendResult{Task: &snapshot}, nil
 	}
 
