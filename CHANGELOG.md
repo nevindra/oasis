@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-08-19
+
 ### Added
 
 - **`sandbox.TransactionalMount` — optional capability for all-or-nothing mount
