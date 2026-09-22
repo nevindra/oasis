@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,11 @@ import (
 )
 
 var baseURL = "https://generativelanguage.googleapis.com/v1beta"
+
+// maxSSELine bounds a single SSE line. Image generation returns each image as
+// base64 inside one line, so a line can run to several megabytes; 16 MB
+// matches the openaicompat provider's cap.
+const maxSSELine = 16 * 1024 * 1024
 
 // Gemini implements oasis.Provider for Google Gemini models.
 type Gemini struct {
@@ -101,9 +107,9 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 	var safetyRatings []geminiSafetyRating
 
 	scanner := bufio.NewScanner(resp.Body)
-	// Large buffer for SSE payloads: image generation returns base64-encoded
-	// image data as a single chunk, which can easily reach 5-10 MB.
-	scanner.Buffer(make([]byte, 0, 16*1024*1024), 16*1024*1024)
+	// Start small and let the scanner grow on demand up to the cap: text
+	// streams never need more than the default, image streams need megabytes.
+	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELine)
 
 	var jsonBuf strings.Builder
 
@@ -139,6 +145,13 @@ func (g *Gemini) ChatStream(ctx context.Context, req oasis.ChatRequest, ch chan<
 			jsonBuf.Reset()
 			jsonBuf.WriteString(data)
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return oasis.ChatResponse{}, g.wrapErr(fmt.Sprintf("SSE line exceeds %d bytes", maxSSELine))
+		}
+		return oasis.ChatResponse{}, g.wrapErr("read stream: " + err.Error())
 	}
 
 	// Process any remaining buffered JSON.

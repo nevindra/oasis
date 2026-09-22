@@ -1,7 +1,9 @@
 package gemini
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -650,6 +652,61 @@ func TestChatStream_SplitPayloadSSE(t *testing.T) {
 	}
 	if events[0].Content != "hello" {
 		t.Errorf("expected event content 'hello', got %q", events[0].Content)
+	}
+}
+
+// streamFrom serves body as an SSE response and runs ChatStream against it.
+func streamFrom(t *testing.T, body string) (oasis.ChatResponse, error) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	orig := baseURL
+	baseURL = srv.URL
+	defer func() { baseURL = orig }()
+
+	g := New("test-key", "gemini-flash")
+	return g.ChatStream(context.Background(), oasis.ChatRequest{
+		Messages: []oasis.ChatMessage{{Role: "user", Content: "hi"}},
+	}, nil)
+}
+
+// A generated image arrives base64-encoded inside a single SSE line, which
+// can run to several megabytes. The scanner must accept it rather than stop
+// at bufio.ErrTooLong.
+func TestChatStream_LargeImageLine(t *testing.T) {
+	raw := make([]byte, 3*1024*1024) // 3 MB decoded, ~4 MB base64
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	chunk := `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"` +
+		base64.StdEncoding.EncodeToString(raw) + `"}}],"role":"model"}}]}`
+
+	result, err := streamFrom(t, "data: "+chunk+"\n\n")
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if len(result.Attachments) != 1 {
+		t.Fatalf("want 1 attachment, got %d", len(result.Attachments))
+	}
+	if !bytes.Equal(result.Attachments[0].Data, raw) {
+		t.Error("decoded image bytes mismatch")
+	}
+}
+
+// A line over the cap must surface as an error naming the bound, not as a
+// silently truncated response.
+func TestChatStream_LineOverCapReportsBound(t *testing.T) {
+	_, err := streamFrom(t, "data: "+strings.Repeat("x", maxSSELine+1)+"\n\n")
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "SSE line exceeds") {
+		t.Errorf("error should name the bound, got %q", err)
 	}
 }
 

@@ -1,8 +1,12 @@
 package openaicompat
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -577,5 +581,52 @@ func TestStreamSSE_NoSystemFingerprintNoMeta(t *testing.T) {
 
 	if resp.ProviderMeta != nil {
 		t.Errorf("expected nil ProviderMeta when no system_fingerprint, got %s", resp.ProviderMeta)
+	}
+}
+
+// A generated image arrives base64-encoded inside a single SSE line, which
+// can run to several megabytes. The scanner must accept it rather than fail
+// with bufio.ErrTooLong.
+func TestStreamSSE_LargeImageLine(t *testing.T) {
+	raw := make([]byte, 3*1024*1024) // 3 MB decoded, ~4 MB base64
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	uri := "data:image/png;base64," + base64.StdEncoding.EncodeToString(raw)
+	chunk, err := json.Marshal(ChatResponse{
+		Choices: []Choice{{
+			Delta: &ChoiceMessage{
+				Role:   "assistant",
+				Images: []ImageOut{{Type: "image_url", ImageURL: &ImageURL{URL: uri}}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := buildSSE(string(chunk), "[DONE]")
+
+	resp, err := StreamSSE(context.Background(), strings.NewReader(input), nil)
+	if err != nil {
+		t.Fatalf("StreamSSE: %v", err)
+	}
+	if len(resp.Attachments) != 1 {
+		t.Fatalf("want 1 attachment, got %d", len(resp.Attachments))
+	}
+	if !bytes.Equal(resp.Attachments[0].Data, raw) {
+		t.Error("decoded image bytes mismatch")
+	}
+}
+
+func TestStreamSSE_LineOverCapReportsBound(t *testing.T) {
+	line := strings.Repeat("x", maxSSELine+1)
+	input := buildSSE(line)
+
+	_, err := StreamSSE(context.Background(), strings.NewReader(input), nil)
+	if !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("want bufio.ErrTooLong, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "SSE line exceeds") {
+		t.Errorf("error should name the bound, got %q", err)
 	}
 }

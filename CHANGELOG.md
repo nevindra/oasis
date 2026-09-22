@@ -6,6 +6,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adhering to [Se
 
 ## [Unreleased]
 
+## [0.36.2] - 2026-09-22
+
+### Fixed
+
+- **Image generation through `openaicompat` failed with
+  `bufio.Scanner: token too long`.** An image-capable model (OpenRouter and
+  friends) returns each generated image as base64 inside a single SSE line,
+  and `StreamSSE` capped a line at 1 MB, so any image larger than a thumbnail
+  aborted the stream. The cap is now 16 MB, matching the Gemini provider, and
+  the buffer starts at 64 KB and grows on demand so text-only streams no
+  longer pre-allocate 1 MB per request. A line that still exceeds the cap
+  returns an error that names the bound instead of the bare scanner message.
+- **Gemini streams pre-allocated 16 MB per request and swallowed scanner
+  errors.** The buffer now starts at 64 KB and grows on demand, matching
+  `openaicompat`. `ChatStream` never checked `scanner.Err()`, so a read error
+  or an over-cap line ended the loop quietly and returned a truncated response
+  as success; it now returns an `ErrLLM` that says what went wrong.
+
 ## [0.36.1] - 2026-08-19
 
 ### Fixed

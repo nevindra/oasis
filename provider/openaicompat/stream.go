@@ -4,11 +4,18 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 
 	oasis "github.com/nevindra/oasis/core"
 )
+
+// maxSSELine bounds a single SSE line. Image-capable models return each
+// generated image as base64 inside one line, so a line can run to several
+// megabytes; 16 MB matches the Gemini provider's cap.
+const maxSSELine = 16 * 1024 * 1024
 
 // StreamSSE reads an SSE stream from body, sends text-delta events to ch, and
 // returns the fully accumulated response (content + tool calls + usage).
@@ -27,8 +34,9 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 	}
 
 	scanner := bufio.NewScanner(body)
-	// Increase buffer for large SSE payloads.
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	// Start small and let the scanner grow on demand up to the cap: text
+	// streams never need more than the default, image streams need megabytes.
+	scanner.Buffer(make([]byte, 0, 64*1024), maxSSELine)
 
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
@@ -190,6 +198,9 @@ func StreamSSE(ctx context.Context, body io.Reader, ch chan<- oasis.StreamEvent)
 	}
 
 	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return oasis.ChatResponse{}, fmt.Errorf("openaicompat: SSE line exceeds %d bytes: %w", maxSSELine, err)
+		}
 		return oasis.ChatResponse{}, err
 	}
 
